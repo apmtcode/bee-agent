@@ -1,4 +1,25 @@
 export {
+  OperatorCliApp,
+  parseSlashCommand,
+  type OperatorCliAppOptions,
+  type OperatorCliSlashCommand,
+} from "./cli/app.js";
+export {
+  OperatorCliConfigLoader,
+  deepMergeConfig,
+  type OperatorCliConfigEntry,
+  type OperatorCliConfigObject,
+  type OperatorCliConfigSource,
+  type OperatorCliConfigValue,
+  type OperatorCliRuntimeConfig,
+} from "./cli/config.js";
+export {
+  discoverPromptContext,
+  type OperatorCliContextFile,
+  type OperatorCliProjectContext,
+  type OperatorCliPromptContext,
+} from "./cli/prompt.js";
+export {
   OperatorEventBus,
   type OperatorEvent,
   type OperatorEventFilter,

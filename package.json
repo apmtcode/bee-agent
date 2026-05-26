@@ -7,6 +7,9 @@
   ],
   "type": "module",
   "main": "./dist/index.mjs",
+  "bin": {
+    "operator": "./dist/cli/entry.mjs"
+  },
   "types": "./dist/index.d.mts",
   "exports": {
     ".": {
@@ -16,6 +19,6 @@
     }
   },
   "scripts": {
-    "build": "tsdown src/index.ts --no-config --platform node --format esm --dts --out-dir dist --clean"
+    "build": "tsdown src/index.ts src/cli/entry.ts --no-config --platform node --format esm --dts --out-dir dist --clean"
   }
 }
