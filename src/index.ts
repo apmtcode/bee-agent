@@ -145,9 +145,17 @@ export {
 export type {
   MemoryItem,
   MemoryItemType,
+  MemoryRecallHit,
   PromotedSkill,
+  RecallHit,
+  RecallHitKind,
+  RecallMatchReason,
+  RecallReplayPreviewEvent,
+  RecallSummary,
   SkillCandidate,
   SkillCandidateStatus,
+  SkillRecallHit,
+  TrajectoryRecallHit,
 } from "./memory/types.js";
 export {
   buildExecutionGraph,
@@ -186,7 +194,6 @@ export {
   type ListPluginsParams,
   type OperatorRuntimeEventType,
   type RecoverBackgroundTasksParams,
-  type RecallSummary,
   type RecordTurnParams,
   type ReviewTrajectoryParams as RuntimeReviewTrajectoryParams,
   type SessionLifecycleEventType,

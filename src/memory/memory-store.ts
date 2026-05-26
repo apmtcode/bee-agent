@@ -1,6 +1,15 @@
 import { randomUUID } from "node:crypto";
 import { readJsonFile, writeJsonAtomic } from "../shared/fs.js";
-import type { MemoryItem, MemoryItemType, PromotedSkill, SkillCandidate, SkillCandidateStatus } from "./types.js";
+import type {
+  MemoryItem,
+  MemoryItemType,
+  MemoryRecallHit,
+  PromotedSkill,
+  RecallMatchReason,
+  SkillCandidate,
+  SkillCandidateStatus,
+  SkillRecallHit,
+} from "./types.js";
 
 export type MemoryStoreShape = {
   version: 1;
@@ -22,6 +31,28 @@ function nowIso(): string {
 
 function includesNeedle(value: string, needle: string): boolean {
   return value.toLowerCase().includes(needle.toLowerCase());
+}
+
+function scoreMatch(value: string | undefined, needle: string): number {
+  if (!value) {
+    return 0;
+  }
+  const haystack = value.toLowerCase();
+  const query = needle.toLowerCase();
+  if (haystack === query) {
+    return 6;
+  }
+  if (haystack.startsWith(query)) {
+    return 4;
+  }
+  return haystack.includes(query) ? 2 : 0;
+}
+
+function pushReason(reasons: RecallMatchReason[], reason: RecallMatchReason, score: number): number {
+  if (score > 0 && !reasons.includes(reason)) {
+    reasons.push(reason);
+  }
+  return score;
 }
 
 export class FileMemoryStore {
@@ -61,17 +92,62 @@ export class FileMemoryStore {
   }
 
   async search(query: string): Promise<MemoryItem[]> {
+    const results = await this.searchDetailed(query);
+    return results.map((hit) => hit.item);
+  }
+
+  async searchDetailed(query: string): Promise<MemoryRecallHit[]> {
     const needle = query.trim();
     if (!needle) {
       return [];
     }
     const store = await this.load();
-    return store.items.filter((item) => {
-      if (includesNeedle(item.summary, needle)) {
-        return true;
-      }
-      return item.tags?.some((tag) => includesNeedle(tag, needle)) ?? false;
-    });
+    return store.items
+      .map((item) => {
+        const reasons: RecallMatchReason[] = [];
+        let score = 0;
+        score += pushReason(reasons, "summary", scoreMatch(item.summary, needle));
+        for (const tag of item.tags ?? []) {
+          score += pushReason(reasons, "tag", scoreMatch(tag, needle));
+        }
+        if (score === 0) {
+          return null;
+        }
+        return {
+          kind: "memory",
+          score,
+          reasons,
+          item,
+        } satisfies MemoryRecallHit;
+      })
+      .filter((hit): hit is MemoryRecallHit => hit !== null)
+      .sort((a, b) => b.score - a.score || b.item.updatedAt.localeCompare(a.item.updatedAt));
+  }
+
+  async searchPromotedSkills(query: string): Promise<SkillRecallHit[]> {
+    const needle = query.trim();
+    if (!needle) {
+      return [];
+    }
+    const store = await this.load();
+    return store.promotedSkills
+      .map((skill) => {
+        const reasons: RecallMatchReason[] = [];
+        let score = 0;
+        score += pushReason(reasons, "title", scoreMatch(skill.title, needle));
+        score += pushReason(reasons, "summary", scoreMatch(skill.summary, needle));
+        if (score === 0) {
+          return null;
+        }
+        return {
+          kind: "skill",
+          score,
+          reasons,
+          skill,
+        } satisfies SkillRecallHit;
+      })
+      .filter((hit): hit is SkillRecallHit => hit !== null)
+      .sort((a, b) => b.score - a.score || b.skill.promotedAt.localeCompare(a.skill.promotedAt));
   }
 
   async listSkillCandidates(status?: SkillCandidateStatus): Promise<SkillCandidate[]> {

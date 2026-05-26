@@ -42,7 +42,7 @@ describe("FileTrajectoryStore", () => {
     await expect(new FileTrajectoryStore(filePath).get("traj-2")).resolves.toEqual(second);
   });
 
-  it("stores reviewed redactions and lists approved trajectories", async () => {
+  it("stores reviewed redactions, lists approved trajectories, and searches reviewed content", async () => {
     const dir = await makeTempDir();
     const filePath = path.join(dir, "trajectories.json");
     const store = new FileTrajectoryStore(filePath);
@@ -52,17 +52,25 @@ describe("FileTrajectoryStore", () => {
       sessionId: "sess-1",
       observations: [{ kind: "observation", ts: 1, source: "browser", summary: "opened billing" }],
       actions: [{ kind: "action", ts: 2, tool: "browser", summary: "clicked pay" }],
+      outcome: { status: "success", summary: "billing workflow fixed" },
+    });
+    const rejected = buildTrajectorySpan({
+      id: "traj-rejected",
+      sessionId: "sess-2",
+      observations: [{ kind: "observation", ts: 3, source: "browser", summary: "unsafe payment screen" }],
+      actions: [{ kind: "action", ts: 4, tool: "browser", summary: "clicked unsafe button" }],
     });
     await store.add(trajectory);
+    await store.add(rejected);
 
     await expect(
       store.review(trajectory.id, {
         status: "approved",
         reviewedBy: "reviewer",
         reviewNote: "safe subset",
-        redactedObservations: [{ ts: 11, source: "browser", summary: "opened reviewed screen" }],
-        redactedActions: [{ ts: 12, tool: "browser", summary: "clicked reviewed button" }],
-        redactedTranscript: [{ ts: 13, role: "assistant", content: "reviewed transcript" }],
+        redactedObservations: [{ ts: 11, source: "browser", summary: "opened reviewed billing screen" }],
+        redactedActions: [{ ts: 12, tool: "browser", summary: "clicked reviewed billing button" }],
+        redactedTranscript: [{ ts: 13, role: "assistant", content: "reviewed billing transcript" }],
       }),
     ).resolves.toMatchObject({
       id: trajectory.id,
@@ -71,15 +79,26 @@ describe("FileTrajectoryStore", () => {
         reviewedBy: "reviewer",
         reviewNote: "safe subset",
         reviewedAt: expect.any(String),
-        redactedObservations: [{ ts: 11, source: "browser", summary: "opened reviewed screen" }],
-        redactedActions: [{ ts: 12, tool: "browser", summary: "clicked reviewed button" }],
-        redactedTranscript: [{ ts: 13, role: "assistant", content: "reviewed transcript" }],
+        redactedObservations: [{ ts: 11, source: "browser", summary: "opened reviewed billing screen" }],
+        redactedActions: [{ ts: 12, tool: "browser", summary: "clicked reviewed billing button" }],
+        redactedTranscript: [{ ts: 13, role: "assistant", content: "reviewed billing transcript" }],
       },
+    });
+    await store.review(rejected.id, {
+      status: "rejected",
+      reviewedBy: "reviewer",
+      reviewNote: "unsafe",
     });
 
     await expect(store.listReviewed()).resolves.toEqual([
       expect.objectContaining({ id: trajectory.id, review: expect.objectContaining({ status: "approved" }) }),
     ]);
-    await expect(store.listReviewed("rejected")).resolves.toEqual([]);
+    await expect(store.listReviewed("rejected")).resolves.toEqual([
+      expect.objectContaining({ id: rejected.id, review: expect.objectContaining({ status: "rejected" }) }),
+    ]);
+    await expect(store.searchReviewed("billing")).resolves.toEqual([
+      expect.objectContaining({ trajectoryId: trajectory.id, reviewStatus: "approved", summary: "opened reviewed billing screen" }),
+    ]);
+    await expect(store.searchReviewed("unsafe")).resolves.toEqual([]);
   });
 });

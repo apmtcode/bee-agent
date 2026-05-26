@@ -158,7 +158,11 @@ describe("OperatorControlPlaneServer", () => {
     });
     await expect(server.handle({ method: "memory.recall", params: { query: "deploy" } })).resolves.toMatchObject({
       ok: true,
-      result: { memories: [{ sourceSessionId: session.id }] },
+      result: {
+        query: "deploy",
+        memories: [expect.objectContaining({ item: expect.objectContaining({ sourceSessionId: session.id }) })],
+        hits: expect.any(Array),
+      },
     });
     if (!recorded.skillCandidate) {
       throw new Error("expected skill candidate from recorded turn");

@@ -17,9 +17,22 @@ afterEach(async () => {
 });
 
 describe("FileMemoryStore", () => {
-  it("reviews, promotes, and lists skill candidates", async () => {
+  it("reviews, promotes, searches, and lists skill candidates", async () => {
     const dir = await makeTempDir();
     const store = new FileMemoryStore(path.join(dir, "memory.json"));
+
+    await store.addItem({
+      type: "session-summary",
+      summary: "Deploy workflow repaired and ready to reuse",
+      sourceSessionId: "sess-1",
+      sourceTrajectoryId: "traj-1",
+      tags: ["deploy", "release"],
+    });
+    await store.addItem({
+      type: "preference",
+      summary: "Prefer short release updates",
+      tags: ["status"],
+    });
 
     const candidate = await store.addSkillCandidate({
       title: "Deploy workflow",
@@ -43,6 +56,12 @@ describe("FileMemoryStore", () => {
       expect.objectContaining({ id: promoted?.id, sourceCandidateId: candidate.id }),
     ]);
     await expect(store.promoteSkill(candidate.id)).resolves.toMatchObject({ id: promoted?.id });
+    await expect(store.searchDetailed("deploy")).resolves.toEqual([
+      expect.objectContaining({ kind: "memory", item: expect.objectContaining({ sourceSessionId: "sess-1" }) }),
+    ]);
+    await expect(store.searchPromotedSkills("deploy")).resolves.toEqual([
+      expect.objectContaining({ kind: "skill", skill: expect.objectContaining({ id: promoted?.id, title: "Deploy workflow" }) }),
+    ]);
   });
 
   it("does not promote rejected candidates", async () => {

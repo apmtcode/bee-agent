@@ -44,7 +44,7 @@ import {
   type RegisteredPluginRecord,
 } from "../plugins/manifest-registry.js";
 import { OperatorPluginRuntimeManager } from "../plugins/runtime.js";
-import type { MemoryItem, PromotedSkill, SkillCandidate, SkillCandidateStatus } from "../memory/types.js";
+import type { PromotedSkill, RecallSummary, SkillCandidate, SkillCandidateStatus } from "../memory/types.js";
 import type { SessionRecord } from "../harness/types.js";
 import type { ReviewedExportManifest, TrainingMode } from "../training/export-manifest.js";
 import type { LocalTrainingJobManifest, LocalTrainingJobStatus } from "../training/job-manifest.js";
@@ -128,11 +128,6 @@ export type ReviewTrajectoryParams = {
   redactedObservations?: StoreReviewTrajectoryParams["redactedObservations"];
   redactedActions?: StoreReviewTrajectoryParams["redactedActions"];
   redactedTranscript?: StoreReviewTrajectoryParams["redactedTranscript"];
-};
-
-export type RecallSummary = {
-  memories: MemoryItem[];
-  skills: PromotedSkill[];
 };
 
 export type SessionLifecycleEventType =
@@ -729,13 +724,31 @@ export class StandaloneOperatorRuntime {
   }
 
   async recall(query: string): Promise<RecallSummary> {
-    const memories = await this.memory.search(query);
-    const skills = (await this.memory.listPromotedSkills()).filter(
-      (skill) =>
-        skill.title.toLowerCase().includes(query.toLowerCase()) ||
-        skill.summary.toLowerCase().includes(query.toLowerCase()),
-    );
-    return { memories, skills };
+    const memories = await this.memory.searchDetailed(query);
+    const skills = await this.memory.searchPromotedSkills(query);
+    const trajectories = await this.trajectories.searchReviewed(query);
+    const trajectoryHits = (
+      await Promise.all(
+        trajectories.map(async (trajectory) => {
+          const fullTrajectory = await this.trajectories.get(trajectory.trajectoryId);
+          if (!fullTrajectory) {
+            return null;
+          }
+          return {
+            ...trajectory,
+            preview: this.replays.buildTrajectoryPreview(fullTrajectory),
+          };
+        }),
+      )
+    ).filter((trajectory): trajectory is (typeof trajectories)[number] & { preview: ReturnType<ReplayRuntimeService["buildTrajectoryPreview"]> } => trajectory !== null);
+    const hits = [...memories, ...skills, ...trajectoryHits].sort((a, b) => b.score - a.score);
+    return {
+      query,
+      hits,
+      memories,
+      skills,
+      trajectories: trajectoryHits,
+    };
   }
 
   async listSkillCandidates(status?: SkillCandidateStatus): Promise<SkillCandidate[]> {

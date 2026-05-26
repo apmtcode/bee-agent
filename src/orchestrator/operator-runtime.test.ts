@@ -110,9 +110,31 @@ describe("StandaloneOperatorRuntime", () => {
       expect.objectContaining({ id: promoted?.id, sourceCandidateId: recorded.skillCandidate?.id }),
     ]);
 
+    await runtime.reviewTrajectory({
+      trajectoryId: recorded.trajectory.id,
+      status: "approved",
+      reviewedBy: "reviewer",
+      reviewNote: "safe deploy subset",
+      redactedObservations: [{ ts: 11, source: "operator", summary: "reviewed deploy screen" }],
+      redactedActions: [{ ts: 12, tool: "assistant-response", summary: "reviewed deploy action" }],
+      redactedTranscript: [{ ts: 13, role: "assistant", content: "reviewed deploy transcript" }],
+    });
+
     const recall = await runtime.recall("deploy");
-    expect(recall.memories.some((item) => item.summary.includes("Deploy workflow repaired"))).toBe(true);
-    expect(recall.skills.some((skill) => skill.summary.includes("Deploy workflow repaired"))).toBe(true);
+    expect(recall.memories.some((hit) => hit.item.summary.includes("Deploy workflow repaired"))).toBe(true);
+    expect(recall.skills.some((hit) => hit.skill.summary.includes("Deploy workflow repaired"))).toBe(true);
+    expect(recall.trajectories).toEqual([
+      expect.objectContaining({
+        trajectoryId: recorded.trajectory.id,
+        reviewStatus: "approved",
+        preview: expect.arrayContaining([
+          expect.objectContaining({ kind: "observation", summary: "reviewed deploy screen" }),
+          expect.objectContaining({ kind: "action", summary: "reviewed deploy action" }),
+          expect.objectContaining({ kind: "transcript", summary: "reviewed deploy transcript" }),
+        ]),
+      }),
+    ]);
+    expect(recall.hits[0]?.score).toBeGreaterThan(0);
     await expect(runtime.getReplay(session.id)).resolves.toMatchObject({
       sessionId: session.id,
       trajectoryIds: [recorded.trajectory.id],
