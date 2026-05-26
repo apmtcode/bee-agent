@@ -2,7 +2,11 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { OperatorCliConfigLoader, deepMergeConfig } from "./config.js";
+import {
+  OperatorCliConfigLoader,
+  deepMergeConfig,
+  resolveOperatorCliExecutionConfig,
+} from "./config.js";
 
 const tempDirs: string[] = [];
 
@@ -46,5 +50,39 @@ describe("OperatorCliConfigLoader", () => {
         { env: { B: "2" }, hooks: { PostToolUse: ["project"] } },
       ),
     ).toEqual({ env: { A: "1", B: "2" }, hooks: { PreToolUse: ["base"], PostToolUse: ["project"] } });
+  });
+
+  it("extracts execution policy settings from merged config", () => {
+    expect(
+      resolveOperatorCliExecutionConfig({
+        model: "opus",
+        permissionMode: "acceptEdits",
+        hooks: {
+          PreToolUse: ["echo pre"],
+          PostCommand: ["echo post"],
+          SessionStart: ["echo unsupported"],
+        },
+      }),
+    ).toEqual({
+      permissionMode: "acceptEdits",
+      hooks: {
+        PreCommand: ["echo pre"],
+        PostCommand: ["echo post"],
+      },
+      unsupportedHookKeys: ["SessionStart"],
+    });
+  });
+
+  it("surfaces invalid permission modes", () => {
+    expect(
+      resolveOperatorCliExecutionConfig({
+        permissionMode: "dangerously-unsupported",
+      }),
+    ).toEqual({
+      permissionMode: "default",
+      invalidPermissionMode: "dangerously-unsupported",
+      hooks: { PreCommand: [], PostCommand: [] },
+      unsupportedHookKeys: [],
+    });
   });
 });

@@ -68,6 +68,27 @@ The CLI loads settings in this order, with later files overriding earlier ones:
 
 Nested objects are deep-merged so project/local overrides can extend shared user config instead of replacing it entirely.
 
+## Execution policy
+
+The local CLI now interprets a narrow execution policy from merged settings:
+- `permissionMode`: `default`, `acceptEdits`, `bypassPermissions`, or `plan`
+- `hooks.PreCommand` / `hooks.PostCommand`
+- `hooks.PreToolUse` / `hooks.PostToolUse` as aliases for local command actions
+
+Covered command execution in this tranche:
+- `/background start <title> -- <command>`
+- executable skill `command` steps
+
+In `default` and `acceptEdits` modes, dangerous commands require approval before they run. The initial dangerous-command heuristic covers destructive filesystem commands, risky git mutation, privilege-escalation commands, fetch-and-exec pipelines, and shell redirection. Use `/approvals`, `/approve <id>`, and `/deny <id>` to manage pending approvals.
+
+Configured pre/post hooks run synchronously around covered command execution with these environment variables:
+- `OPERATOR_HOOK_EVENT`
+- `OPERATOR_ACTION_KIND`
+- `OPERATOR_SESSION_ID`
+- `OPERATOR_CWD`
+- `OPERATOR_COMMAND`
+- `OPERATOR_PERMISSION_MODE`
+
 ## Prompt and instruction discovery
 
 The CLI walks ancestor directories from the filesystem root to the working directory and loads instruction files in stable order from these locations when present:

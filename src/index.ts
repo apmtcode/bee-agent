@@ -7,12 +7,25 @@ export {
 export {
   OperatorCliConfigLoader,
   deepMergeConfig,
+  resolveOperatorCliExecutionConfig,
   type OperatorCliConfigEntry,
   type OperatorCliConfigObject,
   type OperatorCliConfigSource,
   type OperatorCliConfigValue,
+  type OperatorCliExecutionConfig,
+  type OperatorCliHookEvent,
+  type OperatorCliPermissionMode,
   type OperatorCliRuntimeConfig,
 } from "./cli/config.js";
+export {
+  buildOperatorExecutionFingerprint,
+  evaluateOperatorExecutionAction,
+  runOperatorCommandHooks,
+  type OperatorExecutionAction,
+  type OperatorExecutionActionKind,
+  type OperatorExecutionPolicyDecision,
+  type OperatorHookResult,
+} from "./cli/execution-policy.js";
 export {
   discoverPromptContext,
   type OperatorCliContextFile,

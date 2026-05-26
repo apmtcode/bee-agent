@@ -3,7 +3,11 @@ import process from "node:process";
 import { OperatorControlPlaneServer } from "../control-plane/server.js";
 import { StandaloneOperatorRuntime } from "../orchestrator/operator-runtime.js";
 import type { TranscriptRecord } from "../harness/transcript-store.js";
-import { OperatorCliConfigLoader, type OperatorCliRuntimeConfig } from "./config.js";
+import {
+  OperatorCliConfigLoader,
+  resolveOperatorCliExecutionConfig,
+  type OperatorCliRuntimeConfig,
+} from "./config.js";
 import { discoverPromptContext, type OperatorCliPromptContext } from "./prompt.js";
 
 export type OperatorCliSlashCommand =
@@ -55,6 +59,7 @@ export class OperatorCliApp {
   private readonly stdout: NodeJS.WritableStream;
   private readonly stderr: NodeJS.WritableStream;
   private activeSessionId?: string;
+  private readonly approvedCommandFingerprints = new Set<string>();
 
   constructor(private readonly options: OperatorCliAppOptions) {
     this.runtime = new StandaloneOperatorRuntime({ rootDir: options.rootDir });
@@ -243,8 +248,17 @@ export class OperatorCliApp {
           .join("\n");
       }
       case "approve": {
+        const approvals = await this.runtime.listApprovals();
+        const approval = approvals.find((item) => item.id === command.approvalId);
         const resolution = await this.runtime.resolveApproval(command.approvalId, "approved", "operator-cli");
-        return resolution ? `Approved ${command.approvalId}.` : `Unknown approval: ${command.approvalId}`;
+        if (!resolution) {
+          return `Unknown approval: ${command.approvalId}`;
+        }
+        const fingerprint = typeof approval?.metadata?.fingerprint === "string" ? approval.metadata.fingerprint : undefined;
+        if (fingerprint) {
+          this.approvedCommandFingerprints.add(fingerprint);
+        }
+        return `Approved ${command.approvalId}.`;
       }
       case "deny": {
         const resolution = await this.runtime.resolveApproval(command.approvalId, "denied", "operator-cli");
@@ -281,7 +295,13 @@ export class OperatorCliApp {
       }
       case "run-skill": {
         const activeSessionId = this.requireActiveSessionId(sessionId);
-        const run = await this.runtime.runExecutableSkill({ skillId: command.skillId, sessionId: activeSessionId });
+        const effectiveConfig = config ?? (await this.loadRuntimeConfig());
+        const run = await this.runtime.runExecutableSkill({
+          skillId: command.skillId,
+          sessionId: activeSessionId,
+          executionConfig: resolveOperatorCliExecutionConfig(effectiveConfig),
+          approvedCommandFingerprints: this.approvedCommandFingerprints,
+        });
         if (!run) {
           return `Unknown executable skill: ${command.skillId}`;
         }
@@ -297,13 +317,42 @@ export class OperatorCliApp {
       }
       case "background-start": {
         const activeSessionId = this.requireActiveSessionId(sessionId);
+        const effectiveConfig = config ?? (await this.loadRuntimeConfig());
+        const executionConfig = resolveOperatorCliExecutionConfig(effectiveConfig);
+        const authorization = await this.runtime.authorizeCommandExecution({
+          sessionId: activeSessionId,
+          cwd: this.cwd,
+          command: command.command,
+          title: command.title,
+          kind: "background.start",
+          source: "cli",
+          executionConfig,
+          approvedFingerprints: this.approvedCommandFingerprints,
+        });
+        if (!authorization.allowed) {
+          return authorization.message;
+        }
         const task = await this.runtime.startBackgroundTask({
           sessionId: activeSessionId,
           title: command.title,
           command: command.command,
           cwd: this.cwd,
         });
-        return `Started background task ${task.id} (${task.status}) ${task.title}`;
+        const postHookResults = await this.runtime.runPostCommandHooks({
+          sessionId: activeSessionId,
+          cwd: this.cwd,
+          command: command.command,
+          title: command.title,
+          kind: "background.start",
+          source: "cli",
+          executionConfig,
+        });
+        return [
+          `Started background task ${task.id} (${task.status}) ${task.title}`,
+          ...postHookResults.map((result) => formatHookResult(result)),
+        ]
+          .filter(Boolean)
+          .join("\n");
       }
       case "background-view": {
         const task = await this.runtime.syncBackgroundTask(command.taskId);
@@ -378,10 +427,16 @@ export class OperatorCliApp {
       }
       case "config": {
         const effectiveConfig = config ?? (await this.loadRuntimeConfig());
+        const executionConfig = resolveOperatorCliExecutionConfig(effectiveConfig);
         return [
           ...(effectiveConfig.loadedEntries.length === 0
             ? ["Loaded config files: <none>"]
             : ["Loaded config files:", ...effectiveConfig.loadedEntries.map((entry) => `- ${entry.source}: ${entry.path}`)]),
+          `permissionMode=${executionConfig.permissionMode}`,
+          ...(executionConfig.invalidPermissionMode ? [`invalidPermissionMode=${executionConfig.invalidPermissionMode}`] : []),
+          `hooks.PreCommand=${executionConfig.hooks.PreCommand.length}`,
+          `hooks.PostCommand=${executionConfig.hooks.PostCommand.length}`,
+          `unsupportedHooks=${executionConfig.unsupportedHookKeys.length === 0 ? "<none>" : executionConfig.unsupportedHookKeys.join(",")}`,
           "Merged config:",
           JSON.stringify(effectiveConfig.merged, null, 2),
         ].join("\n");
@@ -424,6 +479,11 @@ export class OperatorCliApp {
 
 function isTranscriptMessageRecord(record: TranscriptRecord): record is Extract<TranscriptRecord, { message: { role: string; content: string } }> {
   return "message" in record;
+}
+
+function formatHookResult(result: { event: string; command: string; stdout: string; stderr: string }): string {
+  const parts = [result.stdout, result.stderr].filter(Boolean).join(" ").trim();
+  return parts ? `[${result.event}] ${parts}` : `[${result.event}] ${result.command}`;
 }
 
 export function parseSlashCommand(input: string): OperatorCliSlashCommand | undefined {

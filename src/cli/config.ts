@@ -19,6 +19,23 @@ export type OperatorCliRuntimeConfig = {
   loadedEntries: OperatorCliConfigEntry[];
 };
 
+export type OperatorCliPermissionMode = "default" | "acceptEdits" | "bypassPermissions" | "plan";
+export type OperatorCliHookEvent = "PreCommand" | "PostCommand";
+
+export type OperatorCliExecutionConfig = {
+  permissionMode: OperatorCliPermissionMode;
+  invalidPermissionMode?: string;
+  hooks: Record<OperatorCliHookEvent, string[]>;
+  unsupportedHookKeys: string[];
+};
+
+const SUPPORTED_PERMISSION_MODES = new Set<OperatorCliPermissionMode>([
+  "default",
+  "acceptEdits",
+  "bypassPermissions",
+  "plan",
+]);
+
 export class OperatorCliConfigLoader {
   constructor(
     private readonly cwd: string,
@@ -50,6 +67,61 @@ export class OperatorCliConfigLoader {
   }
 }
 
+export function resolveOperatorCliExecutionConfig(
+  config?: OperatorCliRuntimeConfig | OperatorCliConfigObject,
+): OperatorCliExecutionConfig {
+  const merged = !config ? {} : "merged" in config ? config.merged : config;
+  const rawPermissionMode = merged.permissionMode;
+  const permissionMode =
+    typeof rawPermissionMode === "string" && SUPPORTED_PERMISSION_MODES.has(rawPermissionMode as OperatorCliPermissionMode)
+      ? (rawPermissionMode as OperatorCliPermissionMode)
+      : "default";
+
+  const hooks: Record<OperatorCliHookEvent, string[]> = {
+    PreCommand: [],
+    PostCommand: [],
+  };
+  const unsupportedHookKeys: string[] = [];
+  const rawHooks = merged.hooks;
+  if (isConfigObject(rawHooks)) {
+    for (const [key, value] of Object.entries(rawHooks)) {
+      const commands = readHookCommandList(value);
+      switch (key) {
+        case "PreCommand":
+        case "PreToolUse":
+          if (!commands) {
+            unsupportedHookKeys.push(`${key} (invalid)`);
+            continue;
+          }
+          hooks.PreCommand.push(...commands);
+          continue;
+        case "PostCommand":
+        case "PostToolUse":
+          if (!commands) {
+            unsupportedHookKeys.push(`${key} (invalid)`);
+            continue;
+          }
+          hooks.PostCommand.push(...commands);
+          continue;
+        default:
+          unsupportedHookKeys.push(key);
+      }
+    }
+  }
+
+  return {
+    permissionMode,
+    ...(typeof rawPermissionMode === "string" && !SUPPORTED_PERMISSION_MODES.has(rawPermissionMode as OperatorCliPermissionMode)
+      ? { invalidPermissionMode: rawPermissionMode }
+      : {}),
+    hooks: {
+      PreCommand: [...new Set(hooks.PreCommand)],
+      PostCommand: [...new Set(hooks.PostCommand)],
+    },
+    unsupportedHookKeys,
+  };
+}
+
 async function readOptionalConfigObject(filePath: string): Promise<OperatorCliConfigObject | undefined> {
   const value = await readJsonFile<unknown | undefined>(filePath, undefined);
   if (value === undefined) {
@@ -63,6 +135,16 @@ async function readOptionalConfigObject(filePath: string): Promise<OperatorCliCo
 
 function isConfigObject(value: OperatorCliConfigValue | undefined): value is OperatorCliConfigObject {
   return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function readHookCommandList(value: OperatorCliConfigValue | undefined): string[] | undefined {
+  if (typeof value === "string") {
+    return value.trim() ? [value.trim()] : [];
+  }
+  if (Array.isArray(value) && value.every((item) => typeof item === "string")) {
+    return value.map((item) => item.trim()).filter(Boolean);
+  }
+  return undefined;
 }
 
 export function deepMergeConfig(target: OperatorCliConfigObject, source: OperatorCliConfigObject): OperatorCliConfigObject {

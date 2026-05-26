@@ -2,6 +2,12 @@ import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { randomUUID } from "node:crypto";
+import type { OperatorCliExecutionConfig } from "../cli/config.js";
+import {
+  evaluateOperatorExecutionAction,
+  runOperatorCommandHooks,
+  type OperatorHookResult,
+} from "../cli/execution-policy.js";
 import { FileApprovalStore } from "../control-plane/approval-store.js";
 import {
   InMemoryApprovalManager,
@@ -78,6 +84,14 @@ export type StartSessionParams = {
   title?: string;
   cwd?: string;
   agentId?: string;
+};
+
+export type CommandExecutionPolicyResult = {
+  allowed: boolean;
+  pendingApprovalId?: string;
+  message: string;
+  preHookResults: OperatorHookResult[];
+  postHookResults: OperatorHookResult[];
 };
 
 export type ApprovalPromptParams = {
@@ -402,6 +416,103 @@ export class StandaloneOperatorRuntime {
       this.events.publish({ type: "background-task.failed", payload: task, ts: Date.now() });
     }
     return task;
+  }
+
+  async authorizeCommandExecution(params: {
+    sessionId?: string;
+    cwd: string;
+    command: string;
+    title?: string;
+    kind: "background.start" | "skill.command";
+    source: "cli" | "runtime" | "rpc";
+    executionConfig: OperatorCliExecutionConfig;
+    approvedFingerprints?: ReadonlySet<string>;
+  }): Promise<CommandExecutionPolicyResult> {
+    const action = {
+      kind: params.kind,
+      sessionId: params.sessionId,
+      cwd: params.cwd,
+      command: params.command,
+      ...(params.title ? { title: params.title } : {}),
+      source: params.source,
+    };
+    const decision = evaluateOperatorExecutionAction({
+      action,
+      config: params.executionConfig,
+      approvedFingerprints: params.approvedFingerprints,
+    });
+    if (decision.outcome === "deny") {
+      return { allowed: false, message: decision.reason, preHookResults: [], postHookResults: [] };
+    }
+    if (decision.outcome === "request-approval") {
+      const approval = await this.promptApproval({
+        sessionId: params.sessionId ?? "operator-cli",
+        title: "Approve local command execution",
+        summary: `${params.kind}: ${params.command}`,
+        scope: params.kind,
+        metadata: {
+          command: params.command,
+          cwd: params.cwd,
+          permissionMode: decision.permissionMode,
+          dangerousReasons: decision.dangerousReasons,
+          fingerprint: decision.fingerprint,
+        },
+      });
+      return {
+        allowed: false,
+        pendingApprovalId: approval.id,
+        message: `Approval required: ${approval.id}. Use /approve ${approval.id} or /deny ${approval.id} and rerun the command.`,
+        preHookResults: [],
+        postHookResults: [],
+      };
+    }
+    try {
+      const preHookResults = await runOperatorCommandHooks({
+        config: params.executionConfig,
+        event: "PreCommand",
+        action,
+      });
+      return { allowed: true, message: decision.reason, preHookResults, postHookResults: [] };
+    } catch (error) {
+      return {
+        allowed: false,
+        message: `Pre-command hook blocked execution: ${error instanceof Error ? error.message : String(error)}`,
+        preHookResults: [],
+        postHookResults: [],
+      };
+    }
+  }
+
+  async runPostCommandHooks(params: {
+    sessionId?: string;
+    cwd: string;
+    command: string;
+    title?: string;
+    kind: "background.start" | "skill.command";
+    source: "cli" | "runtime" | "rpc";
+    executionConfig: OperatorCliExecutionConfig;
+  }): Promise<OperatorHookResult[]> {
+    try {
+      return await runOperatorCommandHooks({
+        config: params.executionConfig,
+        event: "PostCommand",
+        action: {
+          kind: params.kind,
+          sessionId: params.sessionId,
+          cwd: params.cwd,
+          command: params.command,
+          ...(params.title ? { title: params.title } : {}),
+          source: params.source,
+        },
+      });
+    } catch (error) {
+      return [{
+        event: "PostCommand",
+        command: "<post-hook>",
+        stdout: "",
+        stderr: `post-command hook failed: ${error instanceof Error ? error.message : String(error)}`,
+      }];
+    }
   }
 
   async getBackgroundTask(taskId: string): Promise<BackgroundTaskRecord | undefined> {
@@ -804,6 +915,8 @@ export class StandaloneOperatorRuntime {
     skillId: string;
     sessionId?: string;
     parentRunId?: string;
+    executionConfig?: OperatorCliExecutionConfig;
+    approvedCommandFingerprints?: ReadonlySet<string>;
   }): Promise<ExecutableSkillRun | null> {
     const skill = await this.memory.getExecutableSkill(params.skillId);
     if (!skill) {
@@ -827,7 +940,7 @@ export class StandaloneOperatorRuntime {
         subagentRunId = subagent.runId;
       }
       const handled = await this.executeSkillStepWithPlugin(skill, step);
-      const result = handled ?? (await this.executeBuiltInSkillStep(skill, step));
+      const result = handled ?? (await this.executeBuiltInSkillStep(skill, step, params));
       stepResults.push({
         stepId: step.id,
         title: step.title,
@@ -921,7 +1034,17 @@ export class StandaloneOperatorRuntime {
     return await handler({ skillId: skill.id, step });
   }
 
-  private async executeBuiltInSkillStep(skill: ExecutableSkill, step: ExecutableSkillStep): Promise<{ output: string; commentOutputs?: string[] }> {
+  private async executeBuiltInSkillStep(
+    skill: ExecutableSkill,
+    step: ExecutableSkillStep,
+    params: {
+      skillId: string;
+      sessionId?: string;
+      parentRunId?: string;
+      executionConfig?: OperatorCliExecutionConfig;
+      approvedCommandFingerprints?: ReadonlySet<string>;
+    },
+  ): Promise<{ output: string; commentOutputs?: string[] }> {
     if (step.kind === "summary") {
       return { output: step.content ?? skill.summary };
     }
@@ -942,11 +1065,47 @@ export class StandaloneOperatorRuntime {
       if (!step.command) {
         return { output: "" };
       }
+      if (params.executionConfig) {
+        const authorization = await this.authorizeCommandExecution({
+          sessionId: params.sessionId,
+          cwd: this.rootDir,
+          command: step.command,
+          title: step.title,
+          kind: "skill.command",
+          source: "runtime",
+          executionConfig: params.executionConfig,
+          approvedFingerprints: params.approvedCommandFingerprints,
+        });
+        if (!authorization.allowed) {
+          return { output: authorization.message };
+        }
+      }
       const { stdout, stderr } = await execFileAsync("bash", ["-lc", step.command], { cwd: this.rootDir, maxBuffer: 1024 * 1024 });
-      return { output: [stdout, stderr].filter(Boolean).join("").trim() };
+      const postHookResults = params.executionConfig
+        ? await this.runPostCommandHooks({
+            sessionId: params.sessionId,
+            cwd: this.rootDir,
+            command: step.command,
+            title: step.title,
+            kind: "skill.command",
+            source: "runtime",
+            executionConfig: params.executionConfig,
+          })
+        : [];
+      return {
+        output: [[stdout, stderr].filter(Boolean).join("").trim(), ...postHookResults.map((result) => formatHookResult(result))]
+          .filter(Boolean)
+          .join("\n")
+          .trim(),
+      };
     }
     return { output: "" };
   }
+}
+
+function formatHookResult(result: OperatorHookResult): string {
+  const parts = [result.stdout, result.stderr].filter(Boolean).join(" ").trim();
+  return parts ? `[${result.event}] ${parts}` : `[${result.event}] ${result.command}`;
 }
 
 function splitIntoCommentOutputs(content: string, maxCharacters: number): string[] {

@@ -164,7 +164,8 @@ describe("OperatorCliApp", () => {
 
     const configOutput = await app.dispatchSlashCommand({ kind: "config" });
     expect(configOutput).toContain("Loaded config files");
-    expect(configOutput).toContain("Merged config");
+    expect(configOutput).toContain("permissionMode=default");
+    expect(configOutput).toContain("hooks.PreCommand=0");
 
     const promptOutput = await app.dispatchSlashCommand({ kind: "prompt" });
     expect(promptOutput).toContain(`cwd=${rootDir}`);
@@ -221,5 +222,101 @@ describe("OperatorCliApp", () => {
 
     const cronDelete = await app.dispatchSlashCommand({ kind: "cron-delete", jobId: job.id }, session.id);
     expect(cronDelete).toContain(`Deleted cron job ${job.id}`);
+  });
+
+  it("gates dangerous background commands and allows rerun after approval", async () => {
+    const rootDir = await makeTempDir();
+    await fs.mkdir(path.join(rootDir, ".claude"), { recursive: true });
+    await fs.writeFile(path.join(rootDir, ".claude", "settings.local.json"), '{"permissionMode":"default"}');
+    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    const session = await app.runtime.startSession({ title: "policy", cwd: rootDir, agentId: "operator-cli" });
+
+    const firstAttempt = await app.dispatchSlashCommand(
+      { kind: "background-start", title: "wipe", command: "rm -rf build" },
+      session.id,
+    );
+    expect(firstAttempt).toContain("Approval required:");
+    expect(await app.runtime.listBackgroundTasks(session.id)).toEqual([]);
+
+    const approvals = await app.runtime.listApprovals();
+    expect(approvals).toHaveLength(1);
+    const [approval] = approvals;
+    if (!approval) {
+      throw new Error("expected approval");
+    }
+
+    const approved = await app.dispatchSlashCommand({ kind: "approve", approvalId: approval.id });
+    expect(approved).toContain(`Approved ${approval.id}`);
+
+    const secondAttempt = await app.dispatchSlashCommand(
+      { kind: "background-start", title: "wipe", command: "rm -rf build" },
+      session.id,
+    );
+    expect(secondAttempt).toContain("Started background task");
+    expect(await app.runtime.listBackgroundTasks(session.id)).toHaveLength(1);
+  });
+
+  it("runs configured hooks and reports policy config", async () => {
+    const rootDir = await makeTempDir();
+    await fs.mkdir(path.join(rootDir, ".claude"), { recursive: true });
+    await fs.writeFile(
+      path.join(rootDir, ".claude", "settings.local.json"),
+      JSON.stringify({
+        permissionMode: "default",
+        hooks: {
+          PreCommand: ["printf 'pre:%s' \"$OPERATOR_ACTION_KIND\""],
+          PostCommand: ["printf 'post:%s' \"$OPERATOR_HOOK_EVENT\""],
+          SessionStart: ["printf unsupported"],
+        },
+      }),
+    );
+    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    const session = await app.runtime.startSession({ title: "hooks", cwd: rootDir, agentId: "operator-cli" });
+
+    const output = await app.dispatchSlashCommand(
+      { kind: "background-start", title: "smoke", command: "printf ok" },
+      session.id,
+    );
+    expect(output).toContain("Started background task");
+    expect(output).toContain("[PostCommand] post:PostCommand");
+
+    const configOutput = await app.dispatchSlashCommand({ kind: "config" }, session.id);
+    expect(configOutput).toContain("permissionMode=default");
+    expect(configOutput).toContain("hooks.PreCommand=1");
+    expect(configOutput).toContain("hooks.PostCommand=1");
+    expect(configOutput).toContain("unsupportedHooks=SessionStart");
+  });
+
+  it("gates dangerous executable skill command steps", async () => {
+    const rootDir = await makeTempDir();
+    await fs.mkdir(path.join(rootDir, ".claude"), { recursive: true });
+    await fs.writeFile(path.join(rootDir, ".claude", "settings.local.json"), '{"permissionMode":"default"}');
+    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    const session = await app.runtime.startSession({ title: "skill policy", cwd: rootDir, agentId: "operator-cli" });
+    const recorded = await app.runtime.recordTurn({
+      sessionId: session.id,
+      userText: "dangerous skill",
+      assistantText: "recorded",
+      trajectorySummary: "Dangerous skill workflow for CLI",
+    });
+    if (!recorded.skillCandidate) {
+      throw new Error("expected skill candidate");
+    }
+    await app.runtime.reviewSkillCandidate(recorded.skillCandidate.id, "reviewed", "reusable");
+    const promoted = await app.runtime.promoteSkill(recorded.skillCandidate.id);
+    if (!promoted) {
+      throw new Error("expected promoted skill");
+    }
+    const executable = await app.runtime.createExecutableSkillFromPromoted({
+      promotedSkillId: promoted.id,
+      steps: [{ id: "danger", title: "Danger", kind: "command", command: "rm -rf build" }],
+    });
+    if (!executable) {
+      throw new Error("expected executable skill");
+    }
+
+    const output = await app.dispatchSlashCommand({ kind: "run-skill", skillId: executable.id }, session.id);
+    expect(output).toContain("Approval required:");
+    expect((await app.runtime.listApprovals()).length).toBeGreaterThan(0);
   });
 });
