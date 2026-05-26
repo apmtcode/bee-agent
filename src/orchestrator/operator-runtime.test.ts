@@ -1,0 +1,615 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+import { StandaloneOperatorRuntime } from "./operator-runtime.js";
+import type { ReviewedExportManifest } from "../training/export-manifest.js";
+
+const tempDirs: string[] = [];
+
+async function makeTempDir(): Promise<string> {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "operator-runtime-"));
+  tempDirs.push(dir);
+  return dir;
+}
+
+afterEach(async () => {
+  await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
+});
+
+const exportManifest: ReviewedExportManifest = {
+  version: 1,
+  createdAt: "2026-01-01T00:00:00.000Z",
+  reviewedBy: "operator",
+  purpose: "local fine-tuning",
+  targetPlatform: "apple-silicon",
+  modes: ["sft", "rl"],
+  rawCaptureIncluded: false,
+  promotedSkills: [
+    {
+      id: "skill-1",
+      title: "Deploy workflow",
+      summary: "Deploy workflow repaired and ready to reuse",
+      sourceCandidateId: "candidate-1",
+      sourceTrajectoryIds: ["traj-1"],
+      promotedAt: "2026-01-01T00:10:00.000Z",
+      version: 1,
+    },
+  ],
+  memories: [
+    {
+      id: "memory-1",
+      type: "session-summary",
+      summary: "Deploy workflow repaired and ready to reuse",
+      sourceSessionId: "sess-1",
+      sourceTrajectoryId: "traj-1",
+      tags: ["deploy"],
+    },
+  ],
+  trajectories: [
+    {
+      id: "traj-1",
+      sessionId: "sess-1",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      captureTier: "operator",
+      observationCount: 1,
+      actionCount: 1,
+      outcomeStatus: "success",
+      reward: 1,
+    },
+  ],
+  replays: [
+    {
+      sessionId: "sess-1",
+      trajectoryIds: ["traj-1"],
+      eventCount: 2,
+      events: [
+        { kind: "observation", ts: 1, trajectoryId: "traj-1", source: "browser", summary: "opened deploy" },
+        { kind: "action", ts: 2, trajectoryId: "traj-1", tool: "browser", summary: "clicked deploy" },
+      ],
+    },
+  ],
+};
+
+describe("StandaloneOperatorRuntime", () => {
+  it("starts sessions, records turns, creates trajectories, and supports recall", async () => {
+    const runtime = new StandaloneOperatorRuntime({ rootDir: await makeTempDir() });
+    const session = await runtime.startSession({ title: "Deploy fix", cwd: "/tmp/repo", agentId: "main" });
+
+    const approval = await runtime.promptApproval({
+      sessionId: session.id,
+      title: "Deploy",
+      summary: "Push deploy button",
+      timeoutMs: 5_000,
+    });
+    expect(approval.sessionId).toBe(session.id);
+
+    const recorded = await runtime.recordTurn({
+      sessionId: session.id,
+      userText: "investigate deploy issue",
+      assistantText: "fixed deploy pipeline and verified the workflow",
+      trajectorySummary: "Deploy workflow repaired and ready to reuse",
+    });
+
+    expect(recorded.trajectory.sessionId).toBe(session.id);
+    expect(recorded.skillCandidate?.sourceTrajectoryIds).toEqual([recorded.trajectory.id]);
+    await expect(runtime.listTrajectories(session.id)).resolves.toHaveLength(1);
+    await expect(runtime.getLatestAssistantText(session.id)).resolves.toBe(
+      "fixed deploy pipeline and verified the workflow",
+    );
+    await expect(runtime.listSkillCandidates("candidate")).resolves.toEqual([
+      expect.objectContaining({ id: recorded.skillCandidate?.id, status: "candidate" }),
+    ]);
+    await expect(
+      runtime.reviewSkillCandidate(recorded.skillCandidate?.id ?? "missing", "reviewed", "reusable workflow"),
+    ).resolves.toMatchObject({ id: recorded.skillCandidate?.id, status: "reviewed", reviewNote: "reusable workflow" });
+
+    const promoted = await runtime.promoteSkill(recorded.skillCandidate?.id ?? "missing");
+    expect(promoted?.sourceTrajectoryIds).toEqual([recorded.trajectory.id]);
+    await expect(runtime.listPromotedSkills()).resolves.toEqual([
+      expect.objectContaining({ id: promoted?.id, sourceCandidateId: recorded.skillCandidate?.id }),
+    ]);
+
+    const recall = await runtime.recall("deploy");
+    expect(recall.memories.some((item) => item.summary.includes("Deploy workflow repaired"))).toBe(true);
+    expect(recall.skills.some((skill) => skill.summary.includes("Deploy workflow repaired"))).toBe(true);
+    await expect(runtime.getReplay(session.id)).resolves.toMatchObject({
+      sessionId: session.id,
+      trajectoryIds: [recorded.trajectory.id],
+      eventCount: 4,
+    });
+    await expect(runtime.listReplays()).resolves.toEqual([
+      expect.objectContaining({ sessionId: session.id, trajectoryIds: [recorded.trajectory.id] }),
+    ]);
+  });
+
+  it("updates session lifecycle state", async () => {
+    const runtime = new StandaloneOperatorRuntime({ rootDir: await makeTempDir() });
+    const session = await runtime.startSession({ title: "Lifecycle", agentId: "main" });
+
+    await expect(runtime.getSession(session.id)).resolves.toMatchObject({ status: "active" });
+    await expect(runtime.markSessionIdle(session.id)).resolves.toMatchObject({ status: "idle" });
+    await expect(runtime.resumeSession(session.id)).resolves.toMatchObject({ status: "active" });
+    await expect(runtime.completeSession(session.id)).resolves.toMatchObject({ status: "completed" });
+    await expect(runtime.failSession(session.id)).resolves.toMatchObject({ status: "failed" });
+    await expect(runtime.listSessions()).resolves.toHaveLength(1);
+  });
+
+  it("restores persisted approvals and trajectories across runtime instances", async () => {
+    const rootDir = await makeTempDir();
+    const runtime = new StandaloneOperatorRuntime({ rootDir });
+    const session = await runtime.startSession({ title: "Persisted", agentId: "main" });
+
+    const request = await runtime.promptApproval({
+      sessionId: session.id,
+      title: "Approve",
+      summary: "Run persisted action",
+      timeoutMs: 30_000,
+    });
+    await runtime.recordTurn({
+      sessionId: session.id,
+      userText: "do the thing",
+      assistantText: "done the thing with persistence",
+      trajectorySummary: "Persistent thing completed safely",
+    });
+
+    const restored = new StandaloneOperatorRuntime({ rootDir });
+    await expect(restored.listTrajectories(session.id)).resolves.toHaveLength(1);
+    await expect(restored.listApprovals()).resolves.toEqual([
+      expect.objectContaining({ id: request.id, sessionId: session.id }),
+    ]);
+  });
+
+  it("starts, syncs, recovers, lists, and cancels background tasks", async () => {
+    const runtime = new StandaloneOperatorRuntime({
+      rootDir: await makeTempDir(),
+      backgroundTaskIsProcessRunning: () => false,
+    });
+    const session = await runtime.startSession({ title: "Tasks", agentId: "main" });
+
+    const task = await runtime.startBackgroundTask({
+      sessionId: session.id,
+      title: "Collect logs",
+      command: "printf 'line-1\nline-2\n'",
+      kind: "task",
+    });
+    expect(task.status).toBe("running");
+    await expect(runtime.getBackgroundTask(task.id)).resolves.toMatchObject({
+      id: task.id,
+      sessionId: session.id,
+      kind: "task",
+      status: "running",
+    });
+    await expect(runtime.listBackgroundTasks(session.id)).resolves.toEqual([
+      expect.objectContaining({ id: task.id, sessionId: session.id }),
+    ]);
+
+    await runtime.backgroundTasks.executionService.writeState(task, {
+      version: 1,
+      taskId: task.id,
+      kind: "task",
+      status: "completed",
+      pid: task.execution.processId ?? 1234,
+      startedAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:10:00.000Z",
+      completedAt: "2026-01-01T00:10:00.000Z",
+      exitCode: 0,
+      outputFile: task.execution.outputFile,
+      cwd: task.cwd,
+      command: task.command,
+    });
+    await runtime.backgroundTasks.executionService.writeOutput(task, "line-1\nline-2\n");
+    await expect(runtime.getBackgroundTaskExecutionState(task.id)).resolves.toMatchObject({
+      taskId: task.id,
+      status: "completed",
+    });
+    await expect(runtime.getBackgroundTaskOutput(task.id, 1)).resolves.toEqual({ taskId: task.id, output: "line-2" });
+    await expect(runtime.syncBackgroundTask(task.id)).resolves.toMatchObject({
+      id: task.id,
+      status: "completed",
+      execution: { exitCode: 0 },
+    });
+
+    const recoverable = await runtime.startBackgroundTask({
+      sessionId: session.id,
+      title: "Watch logs",
+      command: "tail -f app.log",
+      kind: "monitor",
+    });
+    await runtime.backgroundTasks.executionService.writeState(recoverable, {
+      version: 1,
+      taskId: recoverable.id,
+      kind: "monitor",
+      status: "running",
+      pid: recoverable.execution.processId ?? 5678,
+      startedAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      outputFile: recoverable.execution.outputFile,
+      cwd: recoverable.cwd,
+      command: recoverable.command,
+    });
+    await expect(runtime.recoverBackgroundTask(recoverable.id)).resolves.toMatchObject({
+      task: { id: recoverable.id, status: "failed" },
+      reason: "missing-process",
+      changed: true,
+    });
+    await expect(
+      runtime.recoverBackgroundTasks({ sessionId: session.id, reasons: ["missing-process", "unchanged"] }),
+    ).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ task: expect.objectContaining({ id: recoverable.id }), reason: "unchanged", changed: false }),
+      ]),
+    );
+
+    const monitor = await runtime.startBackgroundTask({
+      sessionId: session.id,
+      title: "Watch logs",
+      command: "tail -f app.log",
+      kind: "monitor",
+    });
+    await runtime.backgroundTasks.executionService.writeState(monitor, {
+      version: 1,
+      taskId: monitor.id,
+      kind: "monitor",
+      status: "running",
+      pid: monitor.execution.processId ?? 5678,
+      startedAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      outputFile: monitor.execution.outputFile,
+      cwd: monitor.cwd,
+      command: monitor.command,
+    });
+    const originalKill = process.kill;
+    process.kill = (() => true) as typeof process.kill;
+    try {
+      await expect(runtime.cancelBackgroundTask(monitor.id)).resolves.toMatchObject({
+        id: monitor.id,
+        status: "cancelled",
+        execution: { signal: "SIGTERM" },
+      });
+    } finally {
+      process.kill = originalKill;
+    }
+  });
+
+  it("tracks runs and subagents", async () => {
+    const runtime = new StandaloneOperatorRuntime({ rootDir: await makeTempDir() });
+    const session = await runtime.startSession({ title: "Runs", agentId: "main" });
+    const childSession = await runtime.startSession({ title: "Child", agentId: "worker" });
+
+    const run = await runtime.startRun({ sessionId: session.id, title: "Investigate issue" });
+    expect(run.status).toBe("running");
+
+    await expect(runtime.updateRunStatus(run.id, "paused", { reason: "awaiting approval" })).resolves.toMatchObject({
+      status: "paused",
+      metadata: { reason: "awaiting approval" },
+    });
+    await expect(runtime.listRuns(session.id)).resolves.toEqual([
+      expect.objectContaining({ id: run.id, sessionId: session.id }),
+    ]);
+
+    const subagent = await runtime.registerSubagent({
+      sessionId: session.id,
+      parentRunId: run.id,
+      childSessionId: childSession.id,
+      title: "Collect logs",
+    });
+    expect(subagent.parentRunId).toBe(run.id);
+
+    await expect(runtime.updateSubagentStatus(subagent.runId, "running")).resolves.toMatchObject({
+      status: "running",
+    });
+    await expect(runtime.listSubagents(run.id)).resolves.toEqual([
+      expect.objectContaining({ runId: subagent.runId, childSessionId: childSession.id }),
+    ]);
+    await expect(runtime.listActiveSubagents()).resolves.toEqual([
+      expect.objectContaining({ runId: subagent.runId, status: "running" }),
+    ]);
+  });
+
+  it("reviews trajectories and creates reviewed exports", async () => {
+    const runtime = new StandaloneOperatorRuntime({ rootDir: await makeTempDir() });
+    const session = await runtime.startSession({ title: "Export review", agentId: "main" });
+    const recorded = await runtime.recordTurn({
+      sessionId: session.id,
+      userText: "open billing settings",
+      assistantText: "updated the billing workflow",
+      trajectorySummary: "Billing workflow updated and ready to reuse safely",
+    });
+    if (!recorded.skillCandidate) {
+      throw new Error("expected skill candidate from recorded turn");
+    }
+    await runtime.reviewSkillCandidate(recorded.skillCandidate.id, "reviewed", "safe to promote");
+    await runtime.promoteSkill(recorded.skillCandidate.id);
+
+    await expect(
+      runtime.reviewTrajectory({
+        trajectoryId: recorded.trajectory.id,
+        status: "approved",
+        reviewedBy: "reviewer",
+        redactedObservations: [{ ts: 11, source: "operator", summary: "reviewed observation" }],
+        redactedActions: [{ ts: 12, tool: "assistant-response", summary: "reviewed action" }],
+        redactedTranscript: [{ ts: 13, role: "assistant", content: "reviewed assistant" }],
+      }),
+    ).resolves.toMatchObject({
+      id: recorded.trajectory.id,
+      review: {
+        status: "approved",
+        reviewedBy: "reviewer",
+        reviewedAt: expect.any(String),
+      },
+    });
+    await expect(runtime.listReviewedTrajectories()).resolves.toEqual([
+      expect.objectContaining({ id: recorded.trajectory.id, review: expect.objectContaining({ status: "approved" }) }),
+    ]);
+
+    const exportFile = path.join(tempDirs[tempDirs.length - 1] ?? "", "reviewed-export.json");
+    await expect(
+      runtime.createReviewedExport({
+        reviewedBy: "operator",
+        purpose: "local fine-tuning",
+        outputFile: exportFile,
+        modes: ["sft", "rl"],
+      }),
+    ).resolves.toMatchObject({
+      reviewedBy: "operator",
+      trajectories: [
+        expect.objectContaining({
+          id: recorded.trajectory.id,
+          reviewedBy: "reviewer",
+          observationCount: 1,
+          actionCount: 1,
+        }),
+      ],
+      replays: [
+        expect.objectContaining({
+          sessionId: session.id,
+          trajectoryIds: [recorded.trajectory.id],
+        }),
+      ],
+    });
+    await expect(fs.readFile(exportFile, "utf8")).resolves.toContain("reviewed assistant");
+  });
+
+  it("creates and executes reviewed local training jobs", async () => {
+    const runtime = new StandaloneOperatorRuntime({ rootDir: await makeTempDir() });
+
+    const job = await runtime.createTrainingJob({ exportManifest, mode: "sft" });
+    expect(job.mode).toBe("sft");
+    await expect(runtime.getTrainingJob(job.id)).resolves.toMatchObject({ id: job.id, status: "planned" });
+    await expect(runtime.listTrainingJobs()).resolves.toEqual([
+      expect.objectContaining({ id: job.id, mode: "sft", status: "planned" }),
+    ]);
+    await expect(runtime.updateTrainingJobStatus(job.id, "ready")).resolves.toMatchObject({ id: job.id, status: "ready" });
+    await expect(runtime.prepareTrainingJob(job.id)).resolves.toMatchObject({
+      id: job.id,
+      status: "ready",
+      execution: {
+        workingDirectory: `training-jobs/${job.id}`,
+        logFile: `training-jobs/${job.id}/logs/sft.log`,
+        command: [
+          "python3",
+          "-m",
+          "mlx_lm.lora",
+          "--train",
+          "--data",
+          `training-jobs/${job.id}/dataset`,
+          "--adapter-path",
+          `training-jobs/${job.id}/artifacts`,
+          "--learning-rate",
+          "0.00001",
+          "--batch-size",
+          "1",
+          "--iters",
+          "3000",
+        ],
+        environment: { OPENCLAW_TRAINING_RUNTIME: "mlx" },
+      },
+    });
+    await expect(runtime.getTrainingJobPlan(job.id)).resolves.toMatchObject({
+      jobId: job.id,
+      runtime: "mlx",
+      outputPath: `training-jobs/${job.id}/artifacts/model.gguf`,
+      statePath: `training-jobs/${job.id}/state.json`,
+    });
+    await expect(runtime.getTrainingJobLaunchScript(job.id)).resolves.toContain("mlx_lm.lora");
+    await expect(runtime.getTrainingJobExecutionState(job.id)).resolves.toBeUndefined();
+    await expect(runtime.getTrainingJobLog(job.id)).resolves.toBeUndefined();
+    const preparedJob = await runtime.getTrainingJob(job.id);
+    if (!preparedJob?.execution) {
+      throw new Error("expected prepared execution");
+    }
+    await runtime.trainingJobs.executionService.writeState(preparedJob, {
+      version: 1,
+      jobId: job.id,
+      status: "completed",
+      pid: 1234,
+      startedAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:10:00.000Z",
+      completedAt: "2026-01-01T00:10:00.000Z",
+      exitCode: 0,
+      logFile: preparedJob.execution.logFile,
+      workingDirectory: preparedJob.execution.workingDirectory,
+      command: preparedJob.execution.command ?? [],
+    });
+    await runtime.trainingJobs.executionService.writeLog(preparedJob, "line-1\nline-2\n");
+    await expect(runtime.getTrainingJobExecutionState(job.id)).resolves.toMatchObject({
+      jobId: job.id,
+      status: "completed",
+      pid: 1234,
+    });
+    await expect(runtime.getTrainingJobLog(job.id, 1)).resolves.toEqual({ jobId: job.id, log: "line-2" });
+    await expect(runtime.syncTrainingJob(job.id)).resolves.toMatchObject({
+      id: job.id,
+      status: "completed",
+      execution: { outputModelRef: `training-jobs/${job.id}/artifacts/model.gguf` },
+    });
+    const restarted = await runtime.createTrainingJob({ exportManifest, mode: "sft" });
+    await runtime.prepareTrainingJob(restarted.id);
+    await expect(runtime.trainingJobs.markExecutionStarted(restarted.id, { pid: 1234 })).resolves.toMatchObject({
+      id: restarted.id,
+      status: "running",
+      execution: {
+        startedAt: expect.any(String),
+        processId: 1234,
+        steps: [
+          { id: "prepare-dataset", status: "completed" },
+          { id: "launch-training", status: "running" },
+          { id: "collect-artifacts", status: "pending" },
+          { id: "evaluate-replay", status: "pending" },
+        ],
+      },
+    });
+    await expect(runtime.completeTrainingJob(job.id, { outputModelRef: "artifacts/models/sft.gguf" })).resolves.toMatchObject({
+      id: job.id,
+      status: "completed",
+      execution: {
+        completedAt: expect.any(String),
+        outputModelRef: "artifacts/models/sft.gguf",
+      },
+    });
+
+    const restored = new StandaloneOperatorRuntime({ rootDir: tempDirs[tempDirs.length - 1] ?? "" });
+    await expect(restored.getTrainingJob(job.id)).resolves.toMatchObject({
+      id: job.id,
+      status: "completed",
+      execution: { outputModelRef: "artifacts/models/sft.gguf" },
+    });
+  });
+
+  it("records failed training executions", async () => {
+    const runtime = new StandaloneOperatorRuntime({ rootDir: await makeTempDir() });
+    const job = await runtime.createTrainingJob({ exportManifest, mode: "rl" });
+
+    await expect(runtime.failTrainingJob(job.id, { reason: "reward model unavailable" })).resolves.toMatchObject({
+      id: job.id,
+      status: "failed",
+      execution: {
+        failureReason: "reward model unavailable",
+        failedAt: expect.any(String),
+        logFile: `training-jobs/${job.id}/logs/rl.log`,
+      },
+    });
+  });
+
+  it("publishes a sync event when persisted execution state completes", async () => {
+    const runtime = new StandaloneOperatorRuntime({ rootDir: await makeTempDir() });
+    const stream = runtime.events.stream((event) => event.type === "training-job.synced")[Symbol.asyncIterator]();
+
+    const job = await runtime.createTrainingJob({ exportManifest, mode: "sft" });
+    const prepared = await runtime.prepareTrainingJob(job.id);
+    if (!prepared?.execution) {
+      throw new Error("expected prepared execution");
+    }
+
+    await runtime.trainingJobs.executionService.writeState(prepared, {
+      version: 1,
+      jobId: job.id,
+      status: "completed",
+      pid: 1234,
+      startedAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:10:00.000Z",
+      completedAt: "2026-01-01T00:10:00.000Z",
+      exitCode: 0,
+      logFile: prepared.execution.logFile,
+      workingDirectory: prepared.execution.workingDirectory,
+      command: prepared.execution.command ?? [],
+    });
+
+    await expect(runtime.syncTrainingJob(job.id)).resolves.toMatchObject({ id: job.id, status: "completed" });
+    const next = await stream.next();
+    expect(next.done).toBe(false);
+    expect(next.value).toMatchObject({ type: "training-job.synced", payload: { id: job.id, status: "completed" } });
+    await stream.return?.();
+  });
+
+  it("registers, lists, updates, and activates plugins", async () => {
+    const rootDir = await makeTempDir();
+    const runtime = new StandaloneOperatorRuntime({ rootDir });
+    const entrypoint = path.join(rootDir, "runtime-plugin.mjs");
+
+    await fs.writeFile(
+      entrypoint,
+      [
+        "export default {",
+        "  async activate() {",
+        "    globalThis.__runtimePluginActivations = (globalThis.__runtimePluginActivations ?? 0) + 1;",
+        "  },",
+        "};",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+
+    const plugin = await runtime.registerPlugin({
+      manifest: {
+        id: "runtime-plugin",
+        version: "1.0.0",
+        name: "Runtime Plugin",
+        description: "Provides a tool runtime",
+        entrypoint,
+        capabilities: ["tool"],
+      },
+    });
+
+    expect(plugin.enabled).toBe(true);
+    await expect(runtime.getPlugin("runtime-plugin")).resolves.toMatchObject({
+      manifest: { id: "runtime-plugin" },
+      enabled: true,
+    });
+    await expect(runtime.listPlugins({ capability: "tool" })).resolves.toEqual([
+      expect.objectContaining({ manifest: expect.objectContaining({ id: "runtime-plugin" }) }),
+    ]);
+    await expect(runtime.updatePluginEnabled("runtime-plugin", false)).resolves.toMatchObject({ enabled: false });
+    await runtime.activatePlugin("runtime-plugin");
+    expect((globalThis as Record<string, unknown>).__runtimePluginActivations).toBe(1);
+  });
+
+  it("creates capture consent and ingests browser, device, and os events", async () => {
+    const runtime = new StandaloneOperatorRuntime({ rootDir: await makeTempDir() });
+
+    const consent = await runtime.createCaptureConsent({ tier: "operator", purpose: "capture workflow" });
+    expect(consent.tier).toBe("operator");
+    await expect(runtime.listActiveCaptureConsents()).resolves.toEqual([
+      expect.objectContaining({ id: consent.id, tier: "operator" }),
+    ]);
+
+    await expect(
+      runtime.recordBrowserCapture({
+        sessionId: "sess-capture",
+        pageUrl: "https://example.test",
+        pageTitle: "Home",
+        visibleIndicator: true,
+        ts: 1,
+        action: { kind: "navigate", target: "https://example.test", ts: 2 },
+      }),
+    ).resolves.toMatchObject({ recorded: true, trajectory: { sessionId: "sess-capture" } });
+
+    await expect(
+      runtime.recordDeviceCapture({
+        sessionId: "sess-capture",
+        deviceId: "sim-1",
+        platform: "ios",
+        appId: "mobile-app",
+        appName: "Mobile App",
+        visibleIndicator: true,
+        ts: 3,
+        gesture: { kind: "tap", target: "Pay", ts: 4 },
+      }),
+    ).resolves.toMatchObject({ recorded: true, trajectory: { sessionId: "sess-capture" } });
+
+    await expect(
+      runtime.recordOsObservation({
+        sessionId: "sess-capture",
+        appId: "terminal",
+        visibleIndicator: true,
+        ts: 5,
+        event: "command-ran",
+        commandSummary: "pnpm build",
+      }),
+    ).resolves.toMatchObject({ recorded: true, trajectory: { sessionId: "sess-capture" } });
+
+    await expect(runtime.listTrajectories("sess-capture")).resolves.toHaveLength(3);
+    await expect(runtime.revokeCaptureConsent(consent.id)).resolves.toMatchObject({ id: consent.id, revokedAt: expect.any(String) });
+  });
+});
