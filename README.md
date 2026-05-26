@@ -32,14 +32,32 @@ The package now exposes an `operator` CLI via `dist/cli/entry.mjs`.
 Current slash commands:
 - `/help`
 - `/status`
+- `/sessions`
+- `/resume <sessionId>`
+- `/idle`
+- `/complete`
+- `/transcript [limit]`
 - `/approvals`
+- `/approve <approvalId>`
+- `/deny <approvalId>`
 - `/recall <query>`
 - `/skills`
 - `/run-skill <id>`
 - `/background`
+- `/background start <title> -- <command>`
+- `/background view <taskId> [lines]`
+- `/background sync <taskId>`
+- `/background cancel <taskId>`
 - `/training`
+- `/cron`
+- `/cron create <cronExpr> <prompt>`
+- `/cron runs [jobId]`
+- `/cron tick`
+- `/cron delete <jobId>`
+- `/config`
+- `/prompt`
 
-Freeform conversational turns are not implemented yet; the CLI currently acts as a thin operational shell over the existing runtime.
+Freeform conversational turns are not implemented yet, but the CLI now acts as a stateful local control shell over the existing runtime for session, approval, background-task, cron, and prompt/config inspection workflows.
 
 ## Settings precedence
 

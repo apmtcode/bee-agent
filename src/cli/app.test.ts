@@ -19,8 +19,49 @@ afterEach(async () => {
 describe("parseSlashCommand", () => {
   it("parses supported slash commands", () => {
     expect(parseSlashCommand("/status")).toEqual({ kind: "status" });
+    expect(parseSlashCommand("/sessions")).toEqual({ kind: "sessions" });
+    expect(parseSlashCommand("/resume session-1")).toEqual({ kind: "resume", sessionId: "session-1" });
+    expect(parseSlashCommand("/transcript 5")).toEqual({ kind: "transcript", limit: 5 });
+    expect(parseSlashCommand("/approve approval-1")).toEqual({ kind: "approve", approvalId: "approval-1" });
+    expect(parseSlashCommand("/deny approval-1")).toEqual({ kind: "deny", approvalId: "approval-1" });
     expect(parseSlashCommand("/recall deploy bug")).toEqual({ kind: "recall", query: "deploy bug" });
+    expect(parseSlashCommand("/background")).toEqual({ kind: "background-list" });
+    expect(parseSlashCommand("/background start smoke -- printf ok")).toEqual({
+      kind: "background-start",
+      title: "smoke",
+      command: "printf ok",
+    });
+    expect(parseSlashCommand("/background view task-1 25")).toEqual({ kind: "background-view", taskId: "task-1", lines: 25 });
+    expect(parseSlashCommand("/background sync task-1")).toEqual({ kind: "background-sync", taskId: "task-1" });
+    expect(parseSlashCommand("/background cancel task-1")).toEqual({ kind: "background-cancel", taskId: "task-1" });
+    expect(parseSlashCommand("/cron")).toEqual({ kind: "cron-list" });
+    expect(parseSlashCommand("/cron create */5 * * * * remind me")).toEqual({
+      kind: "cron-create",
+      cron: "*/5 * * * *",
+      prompt: "remind me",
+    });
+    expect(parseSlashCommand("/cron runs job-1")).toEqual({ kind: "cron-runs", jobId: "job-1" });
+    expect(parseSlashCommand("/cron tick")).toEqual({ kind: "cron-tick" });
+    expect(parseSlashCommand("/cron delete job-1")).toEqual({ kind: "cron-delete", jobId: "job-1" });
+    expect(parseSlashCommand("/config")).toEqual({ kind: "config" });
+    expect(parseSlashCommand("/prompt")).toEqual({ kind: "prompt" });
     expect(parseSlashCommand("hello")).toBeUndefined();
+  });
+
+  it("rejects malformed slash commands with usage help", () => {
+    expect(parseSlashCommand("/resume")).toEqual({ kind: "invalid", message: "Usage: /resume <sessionId>" });
+    expect(parseSlashCommand("/background start smoke")).toEqual({
+      kind: "invalid",
+      message: "Usage: /background start <title> -- <command>",
+    });
+    expect(parseSlashCommand("/background view")).toEqual({
+      kind: "invalid",
+      message: "Usage: /background view <taskId> [lines]",
+    });
+    expect(parseSlashCommand("/cron create * * *")).toEqual({
+      kind: "invalid",
+      message: "Usage: /cron create <cronExpr> <prompt>",
+    });
   });
 });
 
@@ -74,5 +115,111 @@ describe("OperatorCliApp", () => {
     const output = await app.dispatchSlashCommand({ kind: "run-skill", skillId: executable.id }, session.id);
     expect(output).toContain("completed");
     expect(output).toContain("deploy summary");
+  });
+
+  it("supports session lifecycle, transcript, approvals, config, and prompt commands", async () => {
+    const rootDir = await makeTempDir();
+    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    const firstSession = await app.runtime.startSession({ title: "first", cwd: rootDir, agentId: "operator-cli" });
+    const secondSession = await app.runtime.startSession({ title: "second", cwd: rootDir, agentId: "operator-cli" });
+
+    await app.runtime.recordTurn({
+      sessionId: secondSession.id,
+      userText: "hello",
+      assistantText: "world",
+      trajectorySummary: "Second session transcript",
+    });
+    const approval = await app.runtime.promptApproval({
+      sessionId: secondSession.id,
+      title: "Run command",
+      summary: "Allow command execution",
+      scope: "shell",
+    });
+
+    const sessionsOutput = await app.dispatchSlashCommand({ kind: "sessions" }, firstSession.id);
+    expect(sessionsOutput).toContain(firstSession.id);
+    expect(sessionsOutput).toContain(secondSession.id);
+
+    const resumeOutput = await app.dispatchSlashCommand({ kind: "resume", sessionId: secondSession.id }, firstSession.id);
+    expect(resumeOutput).toContain(secondSession.id);
+
+    const transcriptOutput = await app.dispatchSlashCommand({ kind: "transcript", limit: 2 });
+    expect(transcriptOutput).toContain("user: hello");
+    expect(transcriptOutput).toContain("assistant: world");
+
+    const approvalsOutput = await app.dispatchSlashCommand({ kind: "approvals" });
+    expect(approvalsOutput).toContain(approval.id);
+    expect(approvalsOutput).toContain("Allow command execution");
+
+    const approveOutput = await app.dispatchSlashCommand({ kind: "approve", approvalId: approval.id });
+    expect(approveOutput).toContain(`Approved ${approval.id}`);
+    expect(await app.dispatchSlashCommand({ kind: "approvals" })).toBe("No pending approvals.");
+
+    const idleOutput = await app.dispatchSlashCommand({ kind: "idle" });
+    expect(idleOutput).toContain(`Marked session ${secondSession.id} idle.`);
+
+    const statusOutput = await app.dispatchSlashCommand({ kind: "status" });
+    expect(statusOutput).toContain(`session=${secondSession.id}`);
+    expect(statusOutput).toContain("status=idle");
+
+    const configOutput = await app.dispatchSlashCommand({ kind: "config" });
+    expect(configOutput).toContain("Loaded config files");
+    expect(configOutput).toContain("Merged config");
+
+    const promptOutput = await app.dispatchSlashCommand({ kind: "prompt" });
+    expect(promptOutput).toContain(`cwd=${rootDir}`);
+    expect(promptOutput).toContain("instructionFiles=");
+  });
+
+  it("supports background task and cron commands", async () => {
+    const rootDir = await makeTempDir();
+    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    const session = await app.runtime.startSession({ title: "CLI ops", cwd: rootDir, agentId: "operator-cli" });
+
+    const startOutput = await app.dispatchSlashCommand(
+      { kind: "background-start", title: "smoke", command: "printf ok" },
+      session.id,
+    );
+    expect(startOutput).toContain("Started background task");
+
+    const tasks = await app.runtime.listBackgroundTasks(session.id);
+    expect(tasks).toHaveLength(1);
+    const [task] = tasks;
+    if (!task) {
+      throw new Error("expected background task");
+    }
+
+    const listOutput = await app.dispatchSlashCommand({ kind: "background-list" });
+    expect(listOutput).toContain(task.id);
+    expect(listOutput).toContain("smoke");
+
+    const syncOutput = await app.dispatchSlashCommand({ kind: "background-sync", taskId: task.id });
+    expect(syncOutput).toContain(task.id);
+
+    const viewOutput = await app.dispatchSlashCommand({ kind: "background-view", taskId: task.id, lines: 20 });
+    expect(viewOutput).toContain(task.id);
+    expect(viewOutput).toContain("ok");
+
+    const cronCreate = await app.dispatchSlashCommand({ kind: "cron-create", cron: "* * * * *", prompt: "check deploy" }, session.id);
+    expect(cronCreate).toContain("Created cron job");
+
+    const cronList = await app.dispatchSlashCommand({ kind: "cron-list" }, session.id);
+    expect(cronList).toContain("check deploy");
+
+    const cronJobs = await app.server.handle({ method: "cron.list" });
+    if (!cronJobs.ok || cronJobs.result.length === 0) {
+      throw new Error("expected cron job");
+    }
+    const [job] = cronJobs.result;
+    if (!job) {
+      throw new Error("expected first cron job");
+    }
+
+    await app.server.handle({ method: "cron.tick", params: { nowMs: Date.now() + 120_000 } });
+    const cronRuns = await app.dispatchSlashCommand({ kind: "cron-runs", jobId: job.id }, session.id);
+    expect(cronRuns).toContain(`job=${job.id}`);
+
+    const cronDelete = await app.dispatchSlashCommand({ kind: "cron-delete", jobId: job.id }, session.id);
+    expect(cronDelete).toContain(`Deleted cron job ${job.id}`);
   });
 });
