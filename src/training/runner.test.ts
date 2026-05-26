@@ -26,6 +26,8 @@ const exportManifest: ReviewedExportManifest = {
   targetPlatform: "apple-silicon",
   modes: ["sft", "rl"],
   rawCaptureIncluded: false,
+  executableSkills: [],
+  executableSkillRuns: [],
   promotedSkills: [
     {
       id: "skill-1",

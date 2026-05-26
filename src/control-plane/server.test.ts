@@ -28,6 +28,8 @@ const exportManifest: ReviewedExportManifest = {
   targetPlatform: "apple-silicon",
   modes: ["sft", "rl"],
   rawCaptureIncluded: false,
+  executableSkills: [],
+  executableSkillRuns: [],
   promotedSkills: [
     {
       id: "skill-1",
@@ -187,6 +189,61 @@ describe("OperatorControlPlaneServer", () => {
     await expect(server.handle({ method: "skills.list" })).resolves.toMatchObject({
       ok: true,
       result: [{ title: recorded.skillCandidate.title, sourceCandidateId: recorded.skillCandidate.id }],
+    });
+    const promotedSkills = await runtime.listPromotedSkills();
+    const promotedSkill = promotedSkills[0];
+    if (!promotedSkill) {
+      throw new Error("expected promoted skill");
+    }
+    await expect(
+      server.handle({
+        method: "skills.executable.create",
+        params: {
+          promotedSkillId: promotedSkill.id,
+          steps: [
+            { id: "summary", title: "Summarize", kind: "summary", content: "deploy summary" },
+            {
+              id: "x-post",
+              title: "Post update",
+              kind: "x-post",
+              content: "This update is intentionally longer than twenty characters.",
+              maxCharacters: 20,
+              overflowToComment: true,
+            },
+            { id: "command", title: "Verify", kind: "command", command: "printf 'verified'", agentRole: "worker" },
+          ],
+        },
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      result: { promotedSkillId: promotedSkill.id, usage: { executionCount: 0 } },
+    });
+    const executableSkills = await runtime.listExecutableSkills();
+    const executableSkill = executableSkills[0];
+    if (!executableSkill) {
+      throw new Error("expected executable skill");
+    }
+    await expect(server.handle({ method: "skills.executable.list" })).resolves.toMatchObject({
+      ok: true,
+      result: [{ id: executableSkill.id, promotedSkillId: promotedSkill.id }],
+    });
+    await expect(
+      server.handle({ method: "skills.executable.run", params: { skillId: executableSkill.id, sessionId: session.id, parentRunId: run?.id } }),
+    ).resolves.toMatchObject({
+      ok: true,
+      result: {
+        skillId: executableSkill.id,
+        parentRunId: run?.id,
+        stepResults: [
+          expect.objectContaining({ stepId: "summary", output: "deploy summary" }),
+          expect.objectContaining({ stepId: "x-post", commentOutputs: expect.any(Array) }),
+          expect.objectContaining({ stepId: "command", output: "verified", subagentRunId: expect.any(String) }),
+        ],
+      },
+    });
+    await expect(server.handle({ method: "skills.executable.runs", params: { skillId: executableSkill.id } })).resolves.toMatchObject({
+      ok: true,
+      result: [expect.objectContaining({ skillId: executableSkill.id, sourceTrajectoryIds: [recorded.trajectory.id] })],
     });
     const reviewedExportFile = path.join(runtime.rootDir, "reviewed-export.json");
     await expect(
@@ -677,10 +734,15 @@ describe("OperatorControlPlaneServer", () => {
       ok: true,
       result: { runId: subagent.runId, childSessionId: childSession.id, status: "pending" },
     });
-    await expect(server.handle({ method: "subagents.list", params: { parentRunId: run.id } })).resolves.toMatchObject({
-      ok: true,
-      result: [{ runId: subagent.runId, childSessionId: childSession.id, status: "pending" }],
-    });
+    const subagentsList = await server.handle({ method: "subagents.list", params: { parentRunId: run.id } });
+    expect(subagentsList.ok).toBe(true);
+    if (subagentsList.ok) {
+      expect(
+        subagentsList.result.some(
+          (item) => item.runId === subagent.runId && item.childSessionId === childSession.id && item.status === "pending",
+        ),
+      ).toBe(true);
+    }
     await expect(server.handle({ method: "subagents.active" })).resolves.toMatchObject({
       ok: true,
       result: [{ runId: subagent.runId, status: "pending" }],

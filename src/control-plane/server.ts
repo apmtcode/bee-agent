@@ -195,6 +195,25 @@ export class OperatorControlPlaneServer {
         }
         case "skills.list":
           return ok(await this.options.runtime.listPromotedSkills());
+        case "skills.executable.create": {
+          const executableSkill = await this.options.runtime.createExecutableSkillFromPromoted({
+            promotedSkillId: getString(request.params, "promotedSkillId"),
+            steps: getExecutableSkillSteps(request.params, "steps"),
+          });
+          return executableSkill ? ok(executableSkill) : notFound(`unknown promoted skill: ${getString(request.params, "promotedSkillId")}`);
+        }
+        case "skills.executable.list":
+          return ok(await this.options.runtime.listExecutableSkills());
+        case "skills.executable.run": {
+          const skillRun = await this.options.runtime.runExecutableSkill({
+            skillId: getString(request.params, "skillId"),
+            sessionId: getOptionalString(request.params, "sessionId"),
+            parentRunId: getOptionalString(request.params, "parentRunId"),
+          });
+          return skillRun ? ok(skillRun) : notFound(`unknown executable skill: ${getString(request.params, "skillId")}`);
+        }
+        case "skills.executable.runs":
+          return ok(await this.options.runtime.listExecutableSkillRuns(getOptionalString(request.params, "skillId")));
         case "background.tasks.start":
           return ok(
             await this.options.runtime.startBackgroundTask({
@@ -715,6 +734,45 @@ function getOptionalRecord(
     throw new Error(`Invalid object parameter: ${key}`);
   }
   return value as Record<string, unknown>;
+}
+
+function getExecutableSkillSteps(
+  params: Record<string, unknown> | undefined,
+  key: string,
+): Array<{
+  id: string;
+  title: string;
+  kind: "summary" | "x-post" | "command";
+  content?: string;
+  command?: string;
+  agentRole?: string;
+  maxCharacters?: number;
+  overflowToComment?: boolean;
+}> {
+  const value = params?.[key];
+  if (!Array.isArray(value)) {
+    throw new Error(`Invalid executable skill steps: ${key}`);
+  }
+  return value.map((item, index) => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) {
+      throw new Error(`Invalid executable skill step: ${key}[${index}]`);
+    }
+    const step = item as Record<string, unknown>;
+    const kind = step.kind;
+    if (kind !== "summary" && kind !== "x-post" && kind !== "command") {
+      throw new Error(`Invalid executable skill step kind: ${key}[${index}]`);
+    }
+    return {
+      id: typeof step.id === "string" ? step.id : `step-${index + 1}`,
+      title: typeof step.title === "string" ? step.title : `Step ${index + 1}`,
+      kind,
+      content: typeof step.content === "string" ? step.content : undefined,
+      command: typeof step.command === "string" ? step.command : undefined,
+      agentRole: typeof step.agentRole === "string" ? step.agentRole : undefined,
+      maxCharacters: typeof step.maxCharacters === "number" ? step.maxCharacters : undefined,
+      overflowToComment: typeof step.overflowToComment === "boolean" ? step.overflowToComment : undefined,
+    };
+  });
 }
 
 function getTranscriptReadOptions(params: Record<string, unknown> | undefined): TranscriptReadOptions {

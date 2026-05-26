@@ -1,4 +1,6 @@
 import path from "node:path";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { randomUUID } from "node:crypto";
 import { FileApprovalStore } from "../control-plane/approval-store.js";
 import {
@@ -44,7 +46,16 @@ import {
   type RegisteredPluginRecord,
 } from "../plugins/manifest-registry.js";
 import { OperatorPluginRuntimeManager } from "../plugins/runtime.js";
-import type { PromotedSkill, RecallSummary, SkillCandidate, SkillCandidateStatus } from "../memory/types.js";
+import type {
+  ExecutableSkill,
+  ExecutableSkillRun,
+  ExecutableSkillStep,
+  ExecutableSkillStepResult,
+  PromotedSkill,
+  RecallSummary,
+  SkillCandidate,
+  SkillCandidateStatus,
+} from "../memory/types.js";
 import type { SessionRecord } from "../harness/types.js";
 import type { ReviewedExportManifest, TrainingMode } from "../training/export-manifest.js";
 import type { LocalTrainingJobManifest, LocalTrainingJobStatus } from "../training/job-manifest.js";
@@ -105,6 +116,8 @@ export type CreateTrainingJobParams = {
   mode: TrainingMode;
 };
 
+const execFileAsync = promisify(execFile);
+
 export type ListPluginsParams = {
   capability?: OperatorPluginCapability;
 };
@@ -146,6 +159,7 @@ export type OperatorRuntimeEventType =
   | "training.export.created"
   | "skill.reviewed"
   | "skill.promoted"
+  | "skill.run.completed"
   | "run.started"
   | "run.updated"
   | "subagent.registered"
@@ -771,6 +785,80 @@ export class StandaloneOperatorRuntime {
     return await this.memory.listPromotedSkills();
   }
 
+  async listExecutableSkills(): Promise<ExecutableSkill[]> {
+    return await this.memory.listExecutableSkills();
+  }
+
+  async listExecutableSkillRuns(skillId?: string): Promise<ExecutableSkillRun[]> {
+    return await this.memory.listExecutableSkillRuns(skillId);
+  }
+
+  async createExecutableSkillFromPromoted(params: {
+    promotedSkillId: string;
+    steps: ExecutableSkillStep[];
+  }): Promise<ExecutableSkill | null> {
+    return await this.memory.createExecutableSkill(params);
+  }
+
+  async runExecutableSkill(params: {
+    skillId: string;
+    sessionId?: string;
+    parentRunId?: string;
+  }): Promise<ExecutableSkillRun | null> {
+    const skill = await this.memory.getExecutableSkill(params.skillId);
+    if (!skill) {
+      return null;
+    }
+    const stepResults: ExecutableSkillStepResult[] = [];
+    const startedAt = new Date().toISOString();
+    for (const step of skill.steps) {
+      const stepStartedAt = new Date().toISOString();
+      let subagentRunId: string | undefined;
+      if (params.sessionId && params.parentRunId && step.agentRole && step.agentRole !== "main") {
+        const childSession = await this.startSession({ title: `${skill.title} / ${step.title}`, agentId: step.agentRole });
+        const subagent = await this.registerSubagent({
+          sessionId: params.sessionId,
+          parentRunId: params.parentRunId,
+          childSessionId: childSession.id,
+          title: step.title,
+          metadata: { skillId: skill.id, stepId: step.id },
+        });
+        await this.updateSubagentStatus(subagent.runId, "completed");
+        subagentRunId = subagent.runId;
+      }
+      const handled = await this.executeSkillStepWithPlugin(skill, step);
+      const result = handled ?? (await this.executeBuiltInSkillStep(skill, step));
+      stepResults.push({
+        stepId: step.id,
+        title: step.title,
+        kind: step.kind,
+        status: "completed",
+        output: result.output,
+        startedAt: stepStartedAt,
+        completedAt: new Date().toISOString(),
+        ...(step.agentRole ? { agentRole: step.agentRole } : {}),
+        ...(subagentRunId ? { subagentRunId } : {}),
+        ...(result.commentOutputs?.length ? { commentOutputs: result.commentOutputs } : {}),
+      });
+    }
+    const preview = await this.buildSkillReplayPreview(skill.sourceTrajectoryIds);
+    const run: ExecutableSkillRun = {
+      id: randomUUID(),
+      skillId: skill.id,
+      ...(params.sessionId ? { sessionId: params.sessionId } : {}),
+      ...(params.parentRunId ? { parentRunId: params.parentRunId } : {}),
+      startedAt,
+      completedAt: new Date().toISOString(),
+      status: "completed",
+      sourceTrajectoryIds: [...skill.sourceTrajectoryIds],
+      replayPreview: preview,
+      stepResults,
+    };
+    await this.memory.addExecutableSkillRun(run);
+    this.events.publish({ type: "skill.run.completed", payload: run, ts: Date.now() });
+    return run;
+  }
+
   async promoteSkill(candidateId: string): Promise<PromotedSkill | null> {
     const skill = await this.memory.promoteSkill(candidateId);
     if (skill) {
@@ -814,4 +902,59 @@ export class StandaloneOperatorRuntime {
   async listReplays(): Promise<ReplayManifest[]> {
     return await this.replays.listSessionReplays();
   }
+
+  private async buildSkillReplayPreview(sourceTrajectoryIds: string[]) {
+    const previews = await Promise.all(
+      sourceTrajectoryIds.map(async (trajectoryId) => {
+        const trajectory = await this.trajectories.get(trajectoryId);
+        return trajectory ? this.replays.buildTrajectoryPreview(trajectory, 3) : [];
+      }),
+    );
+    return previews.flat().slice(0, 6);
+  }
+
+  private async executeSkillStepWithPlugin(skill: ExecutableSkill, step: ExecutableSkillStep) {
+    const handler = await this.pluginRuntime.getSkillStepHandler(step.kind);
+    if (!handler) {
+      return undefined;
+    }
+    return await handler({ skillId: skill.id, step });
+  }
+
+  private async executeBuiltInSkillStep(skill: ExecutableSkill, step: ExecutableSkillStep): Promise<{ output: string; commentOutputs?: string[] }> {
+    if (step.kind === "summary") {
+      return { output: step.content ?? skill.summary };
+    }
+    if (step.kind === "x-post") {
+      const content = (step.content ?? skill.summary).trim();
+      const maxCharacters = step.maxCharacters ?? 280;
+      if (content.length <= maxCharacters) {
+        return { output: content };
+      }
+      const head = content.slice(0, maxCharacters).trimEnd();
+      const tail = content.slice(maxCharacters).trim();
+      return {
+        output: head,
+        ...(step.overflowToComment && tail ? { commentOutputs: splitIntoCommentOutputs(tail, maxCharacters) } : {}),
+      };
+    }
+    if (step.kind === "command") {
+      if (!step.command) {
+        return { output: "" };
+      }
+      const { stdout, stderr } = await execFileAsync("bash", ["-lc", step.command], { cwd: this.rootDir, maxBuffer: 1024 * 1024 });
+      return { output: [stdout, stderr].filter(Boolean).join("").trim() };
+    }
+    return { output: "" };
+  }
+}
+
+function splitIntoCommentOutputs(content: string, maxCharacters: number): string[] {
+  const comments: string[] = [];
+  let remaining = content.trim();
+  while (remaining.length > 0) {
+    comments.push(remaining.slice(0, maxCharacters).trimEnd());
+    remaining = remaining.slice(maxCharacters).trim();
+  }
+  return comments;
 }

@@ -143,6 +143,11 @@ export {
   type MemoryStoreShape,
 } from "./memory/memory-store.js";
 export type {
+  ExecutableSkill,
+  ExecutableSkillRun,
+  ExecutableSkillStep,
+  ExecutableSkillStepKind,
+  ExecutableSkillStepResult,
   MemoryItem,
   MemoryItemType,
   MemoryRecallHit,
@@ -155,6 +160,7 @@ export type {
   SkillCandidate,
   SkillCandidateStatus,
   SkillRecallHit,
+  SkillUsageStats,
   TrajectoryRecallHit,
 } from "./memory/types.js";
 export {
@@ -162,6 +168,7 @@ export {
   type ExecutionGraphNode,
 } from "./orchestrator/execution-graph.js";
 export type {
+  OperatorExecutableSkillStepHandler,
   OperatorPluginCapability,
   OperatorPluginManifest,
   OperatorPluginRuntime,

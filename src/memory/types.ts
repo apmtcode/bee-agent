@@ -34,6 +34,11 @@ export type SkillCandidate = {
   promotedSkillId?: string;
 };
 
+export type SkillUsageStats = {
+  executionCount: number;
+  lastExecutedAt?: string;
+};
+
 export type PromotedSkill = {
   id: string;
   title: string;
@@ -42,6 +47,59 @@ export type PromotedSkill = {
   promotedAt: string;
   version: number;
   sourceCandidateId?: string;
+  usage?: SkillUsageStats;
+};
+
+export type ExecutableSkillStepKind = "summary" | "x-post" | "command";
+
+export type ExecutableSkillStep = {
+  id: string;
+  title: string;
+  kind: ExecutableSkillStepKind;
+  content?: string;
+  command?: string;
+  agentRole?: string;
+  maxCharacters?: number;
+  overflowToComment?: boolean;
+};
+
+export type ExecutableSkill = {
+  id: string;
+  promotedSkillId: string;
+  title: string;
+  summary: string;
+  version: number;
+  createdAt: string;
+  updatedAt: string;
+  sourceTrajectoryIds: string[];
+  steps: ExecutableSkillStep[];
+  usage: SkillUsageStats;
+};
+
+export type ExecutableSkillStepResult = {
+  stepId: string;
+  title: string;
+  kind: ExecutableSkillStepKind;
+  status: "completed";
+  output: string;
+  startedAt: string;
+  completedAt: string;
+  agentRole?: string;
+  subagentRunId?: string;
+  commentOutputs?: string[];
+};
+
+export type ExecutableSkillRun = {
+  id: string;
+  skillId: string;
+  sessionId?: string;
+  parentRunId?: string;
+  startedAt: string;
+  completedAt: string;
+  status: "completed";
+  sourceTrajectoryIds: string[];
+  replayPreview: RecallReplayPreviewEvent[];
+  stepResults: ExecutableSkillStepResult[];
 };
 
 export type RecallHitKind = "memory" | "skill" | "trajectory";
@@ -66,6 +124,7 @@ export type SkillRecallHit = {
   score: number;
   reasons: RecallMatchReason[];
   skill: PromotedSkill;
+  executableSkill?: ExecutableSkill;
 };
 
 export type TrajectoryRecallHit = {

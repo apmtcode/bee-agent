@@ -34,8 +34,14 @@ export class LocalTrainingExporter {
     const exportedSkills = skills.filter((skill) =>
       skill.sourceTrajectoryIds.length > 0 && skill.sourceTrajectoryIds.every((trajectoryId) => approvedTrajectoryIds.has(trajectoryId)),
     );
+    const exportedExecutableSkills = memories.executableSkills.filter((skill) =>
+      skill.sourceTrajectoryIds.length > 0 && skill.sourceTrajectoryIds.every((trajectoryId) => approvedTrajectoryIds.has(trajectoryId)),
+    );
 
-    const selectedTrajectoryIds = new Set(exportedSkills.flatMap((skill) => skill.sourceTrajectoryIds));
+    const selectedTrajectoryIds = new Set([
+      ...exportedSkills.flatMap((skill) => skill.sourceTrajectoryIds),
+      ...exportedExecutableSkills.flatMap((skill) => skill.sourceTrajectoryIds),
+    ]);
     const reviewedTrajectories = trajectories.filter((trajectory) => selectedTrajectoryIds.has(trajectory.id));
     const reviewedTrajectoryIds = new Set(reviewedTrajectories.map((trajectory) => trajectory.id));
 
@@ -91,7 +97,37 @@ export class LocalTrainingExporter {
         sourceTrajectoryIds: [...skill.sourceTrajectoryIds],
         promotedAt: skill.promotedAt,
         version: skill.version,
+        usage: skill.usage,
       })),
+      executableSkills: exportedExecutableSkills.map((skill) => ({
+        id: skill.id,
+        promotedSkillId: skill.promotedSkillId,
+        title: skill.title,
+        summary: skill.summary,
+        version: skill.version,
+        sourceTrajectoryIds: [...skill.sourceTrajectoryIds],
+        usage: { ...skill.usage },
+      })),
+      executableSkillRuns: memories.executableSkillRuns
+        .filter((run) => run.sourceTrajectoryIds.every((trajectoryId) => approvedTrajectoryIds.has(trajectoryId)))
+        .map((run) => ({
+          id: run.id,
+          skillId: run.skillId,
+          sessionId: run.sessionId,
+          parentRunId: run.parentRunId,
+          status: run.status,
+          sourceTrajectoryIds: [...run.sourceTrajectoryIds],
+          replayPreview: run.replayPreview.map((event) => ({ ...event })),
+          stepResults: run.stepResults.map((result) => ({
+            stepId: result.stepId,
+            title: result.title,
+            kind: result.kind,
+            output: result.output,
+            agentRole: result.agentRole,
+            subagentRunId: result.subagentRunId,
+            commentOutputs: result.commentOutputs ? [...result.commentOutputs] : undefined,
+          })),
+        })),
       memories: memories.items
         .filter((item) => !item.sourceTrajectoryId || reviewedTrajectoryIds.has(item.sourceTrajectoryId))
         .map((item) => ({

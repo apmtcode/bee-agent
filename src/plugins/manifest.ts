@@ -16,8 +16,23 @@ export type OperatorPluginManifest = {
   metadata?: Record<string, unknown>;
 };
 
+export type OperatorExecutableSkillStepHandler = (params: {
+  skillId: string;
+  step: {
+    id: string;
+    title: string;
+    kind: "summary" | "x-post" | "command";
+    content?: string;
+    command?: string;
+    agentRole?: string;
+    maxCharacters?: number;
+    overflowToComment?: boolean;
+  };
+}) => Promise<{ output: string; commentOutputs?: string[] }>;
+
 export type OperatorPluginRuntime = {
   activate(): Promise<void>;
+  getSkillStepHandler?(kind: "summary" | "x-post" | "command"): OperatorExecutableSkillStepHandler | undefined;
 };
 
 export function isOperatorPluginManifest(value: unknown): value is OperatorPluginManifest {

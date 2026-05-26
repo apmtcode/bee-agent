@@ -25,6 +25,8 @@ const exportManifest: ReviewedExportManifest = {
   targetPlatform: "apple-silicon",
   modes: ["sft", "rl"],
   rawCaptureIncluded: false,
+  executableSkills: [],
+  executableSkillRuns: [],
   promotedSkills: [
     {
       id: "skill-1",
@@ -329,9 +331,10 @@ describe("StandaloneOperatorRuntime", () => {
     ]);
   });
 
-  it("reviews trajectories and creates reviewed exports", async () => {
+  it("creates executable skills, runs them, and exports their provenance", async () => {
     const runtime = new StandaloneOperatorRuntime({ rootDir: await makeTempDir() });
     const session = await runtime.startSession({ title: "Export review", agentId: "main" });
+    const run = await runtime.startRun({ sessionId: session.id, title: "Skill run" });
     const recorded = await runtime.recordTurn({
       sessionId: session.id,
       userText: "open billing settings",
@@ -342,7 +345,10 @@ describe("StandaloneOperatorRuntime", () => {
       throw new Error("expected skill candidate from recorded turn");
     }
     await runtime.reviewSkillCandidate(recorded.skillCandidate.id, "reviewed", "safe to promote");
-    await runtime.promoteSkill(recorded.skillCandidate.id);
+    const promotedSkill = await runtime.promoteSkill(recorded.skillCandidate.id);
+    if (!promotedSkill) {
+      throw new Error("expected promoted skill");
+    }
 
     await expect(
       runtime.reviewTrajectory({
@@ -365,6 +371,46 @@ describe("StandaloneOperatorRuntime", () => {
       expect.objectContaining({ id: recorded.trajectory.id, review: expect.objectContaining({ status: "approved" }) }),
     ]);
 
+    const executableSkill = await runtime.createExecutableSkillFromPromoted({
+      promotedSkillId: promotedSkill.id,
+      steps: [
+        { id: "summary", title: "Summarize", kind: "summary", content: "billing summary" },
+        {
+          id: "x-post",
+          title: "Post update",
+          kind: "x-post",
+          content: "This update is intentionally longer than twenty characters.",
+          maxCharacters: 20,
+          overflowToComment: true,
+        },
+        { id: "command", title: "Verify", kind: "command", command: "printf 'verified'", agentRole: "worker" },
+      ],
+    });
+    expect(executableSkill).toMatchObject({ promotedSkillId: promotedSkill.id, usage: { executionCount: 0 } });
+    if (!executableSkill) {
+      throw new Error("expected executable skill");
+    }
+
+    await expect(runtime.listExecutableSkills()).resolves.toEqual([
+      expect.objectContaining({ id: executableSkill.id, promotedSkillId: promotedSkill.id }),
+    ]);
+    await expect(runtime.runExecutableSkill({ skillId: executableSkill.id, sessionId: session.id, parentRunId: run.id })).resolves.toMatchObject({
+      skillId: executableSkill.id,
+      parentRunId: run.id,
+      sourceTrajectoryIds: [recorded.trajectory.id],
+      stepResults: [
+        expect.objectContaining({ stepId: "summary", output: "billing summary" }),
+        expect.objectContaining({ stepId: "x-post", output: "This update is inten", commentOutputs: expect.any(Array) }),
+        expect.objectContaining({ stepId: "command", output: "verified", agentRole: "worker", subagentRunId: expect.any(String) }),
+      ],
+    });
+    await expect(runtime.listExecutableSkillRuns(executableSkill.id)).resolves.toEqual([
+      expect.objectContaining({ skillId: executableSkill.id, sourceTrajectoryIds: [recorded.trajectory.id] }),
+    ]);
+    await expect(runtime.listPromotedSkills()).resolves.toEqual([
+      expect.objectContaining({ id: promotedSkill.id, usage: expect.objectContaining({ executionCount: 1, lastExecutedAt: expect.any(String) }) }),
+    ]);
+
     const exportFile = path.join(tempDirs[tempDirs.length - 1] ?? "", "reviewed-export.json");
     await expect(
       runtime.createReviewedExport({
@@ -375,6 +421,8 @@ describe("StandaloneOperatorRuntime", () => {
       }),
     ).resolves.toMatchObject({
       reviewedBy: "operator",
+      executableSkills: [expect.objectContaining({ promotedSkillId: promotedSkill.id, usage: expect.objectContaining({ executionCount: 1 }) })],
+      executableSkillRuns: [expect.objectContaining({ skillId: executableSkill.id, sourceTrajectoryIds: [recorded.trajectory.id] })],
       trajectories: [
         expect.objectContaining({
           id: recorded.trajectory.id,

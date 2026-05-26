@@ -17,7 +17,7 @@ afterEach(async () => {
 });
 
 describe("FileMemoryStore", () => {
-  it("reviews, promotes, searches, and lists skill candidates", async () => {
+  it("reviews, promotes, stores executable skills, and records usage", async () => {
     const dir = await makeTempDir();
     const store = new FileMemoryStore(path.join(dir, "memory.json"));
 
@@ -51,16 +51,62 @@ describe("FileMemoryStore", () => {
     });
 
     const promoted = await store.promoteSkill(candidate.id);
-    expect(promoted).toMatchObject({ sourceCandidateId: candidate.id, sourceTrajectoryIds: ["traj-1"] });
+    expect(promoted).toMatchObject({ sourceCandidateId: candidate.id, sourceTrajectoryIds: ["traj-1"], usage: { executionCount: 0 } });
+    if (!promoted) {
+      throw new Error("expected promoted skill");
+    }
+    const executableSkill = await store.createExecutableSkill({
+      promotedSkillId: promoted.id,
+      steps: [
+        { id: "summary", title: "Summarize", kind: "summary", content: "deploy summary" },
+        { id: "x-post", title: "Post", kind: "x-post", content: "deploy post", maxCharacters: 280, overflowToComment: true },
+      ],
+    });
+    expect(executableSkill).toMatchObject({ promotedSkillId: promoted.id, usage: { executionCount: 0 } });
+    if (!executableSkill) {
+      throw new Error("expected executable skill" );
+    }
+    await store.addExecutableSkillRun({
+      id: "run-1",
+      skillId: executableSkill.id,
+      sessionId: "sess-1",
+      startedAt: "2026-01-01T00:00:00.000Z",
+      completedAt: "2026-01-01T00:01:00.000Z",
+      status: "completed",
+      sourceTrajectoryIds: ["traj-1"],
+      replayPreview: [{ kind: "observation", ts: 1, summary: "preview" }],
+      stepResults: [
+        {
+          stepId: "summary",
+          title: "Summarize",
+          kind: "summary",
+          status: "completed",
+          output: "deploy summary",
+          startedAt: "2026-01-01T00:00:00.000Z",
+          completedAt: "2026-01-01T00:00:10.000Z",
+        },
+      ],
+    });
+
     await expect(store.listPromotedSkills()).resolves.toEqual([
-      expect.objectContaining({ id: promoted?.id, sourceCandidateId: candidate.id }),
+      expect.objectContaining({ id: promoted.id, sourceCandidateId: candidate.id, usage: expect.objectContaining({ executionCount: 1 }) }),
     ]);
-    await expect(store.promoteSkill(candidate.id)).resolves.toMatchObject({ id: promoted?.id });
+    await expect(store.listExecutableSkills()).resolves.toEqual([
+      expect.objectContaining({ id: executableSkill.id, promotedSkillId: promoted.id, usage: expect.objectContaining({ executionCount: 1 }) }),
+    ]);
+    await expect(store.listExecutableSkillRuns(executableSkill.id)).resolves.toEqual([
+      expect.objectContaining({ id: "run-1", skillId: executableSkill.id }),
+    ]);
+    await expect(store.promoteSkill(candidate.id)).resolves.toMatchObject({ id: promoted.id });
     await expect(store.searchDetailed("deploy")).resolves.toEqual([
       expect.objectContaining({ kind: "memory", item: expect.objectContaining({ sourceSessionId: "sess-1" }) }),
     ]);
     await expect(store.searchPromotedSkills("deploy")).resolves.toEqual([
-      expect.objectContaining({ kind: "skill", skill: expect.objectContaining({ id: promoted?.id, title: "Deploy workflow" }) }),
+      expect.objectContaining({
+        kind: "skill",
+        skill: expect.objectContaining({ id: promoted.id, title: "Deploy workflow" }),
+        executableSkill: expect.objectContaining({ id: executableSkill.id }),
+      }),
     ]);
   });
 

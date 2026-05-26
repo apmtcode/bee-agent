@@ -99,7 +99,56 @@ describe("LocalTrainingExporter", () => {
       confidence: 0.7,
     });
     await memory.reviewSkillCandidate(includedCandidate.id, "reviewed", "approved for export");
-    await memory.promoteSkill(includedCandidate.id);
+    const promotedSkill = await memory.promoteSkill(includedCandidate.id);
+
+    if (!promotedSkill) {
+      throw new Error("expected promoted skill");
+    }
+    await memory.createExecutableSkill({
+      promotedSkillId: promotedSkill.id,
+      steps: [
+        { id: "summary", title: "Summarize", kind: "summary", content: "deploy summary" },
+        {
+          id: "x-post",
+          title: "Post update",
+          kind: "x-post",
+          content: "This update is intentionally longer than the short limit so comments are used.",
+          maxCharacters: 20,
+          overflowToComment: true,
+        },
+      ],
+    });
+    await memory.addExecutableSkillRun({
+      id: randomUUID(),
+      skillId: (await memory.listExecutableSkills())[0]!.id,
+      sessionId,
+      startedAt: "2026-01-01T00:20:00.000Z",
+      completedAt: "2026-01-01T00:21:00.000Z",
+      status: "completed",
+      sourceTrajectoryIds: [includedTrajectory.id],
+      replayPreview: [{ kind: "observation", ts: 21, summary: "preview observation" }],
+      stepResults: [
+        {
+          stepId: "summary",
+          title: "Summarize",
+          kind: "summary",
+          status: "completed",
+          output: "deploy summary",
+          startedAt: "2026-01-01T00:20:00.000Z",
+          completedAt: "2026-01-01T00:20:30.000Z",
+        },
+        {
+          stepId: "x-post",
+          title: "Post update",
+          kind: "x-post",
+          status: "completed",
+          output: "This update is inten",
+          startedAt: "2026-01-01T00:20:31.000Z",
+          completedAt: "2026-01-01T00:21:00.000Z",
+          commentOutputs: ["tionally longer tha", "n the short limit s", "o comments are used."],
+        },
+      ],
+    });
 
     const rejectedCandidate = await memory.addSkillCandidate({
       title: "Unsafe workflow",
@@ -122,6 +171,23 @@ describe("LocalTrainingExporter", () => {
     expect(manifest.modes).toEqual(["sft", "rl"]);
     expect(manifest.promotedSkills).toHaveLength(1);
     expect(manifest.promotedSkills[0]?.sourceCandidateId).toBe(includedCandidate.id);
+    expect(manifest.executableSkills).toEqual([
+      expect.objectContaining({
+        promotedSkillId: promotedSkill.id,
+        sourceTrajectoryIds: [includedTrajectory.id],
+        usage: expect.objectContaining({ executionCount: 1 }),
+      }),
+    ]);
+    expect(manifest.executableSkillRuns).toEqual([
+      expect.objectContaining({
+        sourceTrajectoryIds: [includedTrajectory.id],
+        replayPreview: [{ kind: "observation", ts: 21, summary: "preview observation" }],
+        stepResults: expect.arrayContaining([
+          expect.objectContaining({ stepId: "summary", output: "deploy summary" }),
+          expect.objectContaining({ stepId: "x-post", commentOutputs: expect.any(Array) }),
+        ]),
+      }),
+    ]);
     expect(manifest.replays).toEqual([
       expect.objectContaining({
         sessionId,

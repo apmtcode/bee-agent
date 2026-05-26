@@ -31,6 +31,10 @@ describe("OperatorPluginRuntimeManager", () => {
         "  async activate() {",
         "    globalThis.__operatorRuntimeActivations = (globalThis.__operatorRuntimeActivations ?? 0) + 1;",
         "  },",
+        "  getSkillStepHandler(kind) {",
+        "    if (kind !== 'summary') return undefined;",
+        "    return async ({ step }) => ({ output: step.content ?? 'plugin-summary' });",
+        "  },",
         "};",
         "",
       ].join("\n"),
@@ -44,12 +48,12 @@ describe("OperatorPluginRuntimeManager", () => {
         name: "Runtime Plugin",
         description: "Provides a standalone plugin runtime",
         entrypoint,
-        capabilities: ["tool"],
+        capabilities: ["skill-provider"],
       },
     });
 
     const manager = new OperatorPluginRuntimeManager(registry);
-    await expect(manager.listEnabledPlugins("tool")).resolves.toEqual([
+    await expect(manager.listEnabledPlugins("skill-provider")).resolves.toEqual([
       expect.objectContaining({ manifest: expect.objectContaining({ id: "runtime-plugin" }) }),
     ]);
 
@@ -58,5 +62,7 @@ describe("OperatorPluginRuntimeManager", () => {
 
     expect(manager.isActivated("runtime-plugin")).toBe(true);
     expect((globalThis as Record<string, unknown>).__operatorRuntimeActivations).toBe(1);
+    await expect(manager.getSkillStepHandler("summary")).resolves.toBeTypeOf("function");
+    await expect(manager.getSkillStepHandler("command")).resolves.toBeUndefined();
   });
 });

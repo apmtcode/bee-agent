@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { readJsonFile, writeJsonAtomic } from "../shared/fs.js";
 import type {
+  ExecutableSkill,
+  ExecutableSkillRun,
   MemoryItem,
   MemoryItemType,
   MemoryRecallHit,
@@ -16,6 +18,8 @@ export type MemoryStoreShape = {
   items: MemoryItem[];
   skillCandidates: SkillCandidate[];
   promotedSkills: PromotedSkill[];
+  executableSkills: ExecutableSkill[];
+  executableSkillRuns: ExecutableSkillRun[];
 };
 
 const EMPTY_STORE: MemoryStoreShape = {
@@ -23,6 +27,8 @@ const EMPTY_STORE: MemoryStoreShape = {
   items: [],
   skillCandidates: [],
   promotedSkills: [],
+  executableSkills: [],
+  executableSkillRuns: [],
 };
 
 function nowIso(): string {
@@ -136,6 +142,10 @@ export class FileMemoryStore {
         let score = 0;
         score += pushReason(reasons, "title", scoreMatch(skill.title, needle));
         score += pushReason(reasons, "summary", scoreMatch(skill.summary, needle));
+        const executableSkill = store.executableSkills.find((item) => item.promotedSkillId === skill.id);
+        if (executableSkill) {
+          score += pushReason(reasons, "summary", scoreMatch(executableSkill.summary, needle));
+        }
         if (score === 0) {
           return null;
         }
@@ -144,6 +154,7 @@ export class FileMemoryStore {
           score,
           reasons,
           skill,
+          ...(executableSkill ? { executableSkill } : {}),
         } satisfies SkillRecallHit;
       })
       .filter((hit): hit is SkillRecallHit => hit !== null)
@@ -208,6 +219,80 @@ export class FileMemoryStore {
     return [...store.promotedSkills].sort((a, b) => a.promotedAt.localeCompare(b.promotedAt));
   }
 
+  async getPromotedSkill(skillId: string): Promise<PromotedSkill | undefined> {
+    const store = await this.load();
+    return store.promotedSkills.find((skill) => skill.id === skillId);
+  }
+
+  async listExecutableSkills(): Promise<ExecutableSkill[]> {
+    const store = await this.load();
+    return [...store.executableSkills].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  }
+
+  async getExecutableSkill(skillId: string): Promise<ExecutableSkill | undefined> {
+    const store = await this.load();
+    return store.executableSkills.find((skill) => skill.id === skillId);
+  }
+
+  async createExecutableSkill(params: {
+    promotedSkillId: string;
+    steps: ExecutableSkill["steps"];
+  }): Promise<ExecutableSkill | null> {
+    const store = await this.load();
+    const promotedSkill = store.promotedSkills.find((skill) => skill.id === params.promotedSkillId);
+    if (!promotedSkill) {
+      return null;
+    }
+    const existing = store.executableSkills.find((skill) => skill.promotedSkillId === params.promotedSkillId);
+    const timestamp = nowIso();
+    const usage = existing?.usage ?? { executionCount: 0 };
+    const executableSkill: ExecutableSkill = {
+      id: existing?.id ?? randomUUID(),
+      promotedSkillId: promotedSkill.id,
+      title: promotedSkill.title,
+      summary: promotedSkill.summary,
+      version: existing ? existing.version + 1 : 1,
+      createdAt: existing?.createdAt ?? timestamp,
+      updatedAt: timestamp,
+      sourceTrajectoryIds: [...promotedSkill.sourceTrajectoryIds],
+      steps: params.steps.map((step) => ({ ...step })),
+      usage,
+    };
+    if (existing) {
+      const index = store.executableSkills.findIndex((skill) => skill.id === existing.id);
+      store.executableSkills[index] = executableSkill;
+    } else {
+      store.executableSkills.push(executableSkill);
+    }
+    await this.save(store);
+    return executableSkill;
+  }
+
+  async listExecutableSkillRuns(skillId?: string): Promise<ExecutableSkillRun[]> {
+    const store = await this.load();
+    const runs = skillId ? store.executableSkillRuns.filter((run) => run.skillId === skillId) : store.executableSkillRuns;
+    return [...runs].sort((a, b) => a.startedAt.localeCompare(b.startedAt));
+  }
+
+  async addExecutableSkillRun(run: ExecutableSkillRun): Promise<ExecutableSkillRun> {
+    const store = await this.load();
+    store.executableSkillRuns.push(run);
+    const executableSkill = store.executableSkills.find((skill) => skill.id === run.skillId);
+    if (executableSkill) {
+      executableSkill.usage.executionCount += 1;
+      executableSkill.usage.lastExecutedAt = run.completedAt;
+    }
+    const promotedSkill = store.promotedSkills.find((skill) => skill.id === executableSkill?.promotedSkillId);
+    if (promotedSkill) {
+      promotedSkill.usage = {
+        executionCount: executableSkill?.usage.executionCount ?? ((promotedSkill.usage?.executionCount ?? 0) + 1),
+        lastExecutedAt: run.completedAt,
+      };
+    }
+    await this.save(store);
+    return run;
+  }
+
   async promoteSkill(candidateId: string): Promise<PromotedSkill | null> {
     const store = await this.load();
     const candidate = store.skillCandidates.find((entry) => entry.id === candidateId);
@@ -229,6 +314,7 @@ export class FileMemoryStore {
       promotedAt: timestamp,
       version: 1,
       sourceCandidateId: candidate.id,
+      usage: { executionCount: 0 },
     };
     candidate.promotedSkillId = skill.id;
     store.promotedSkills.push(skill);

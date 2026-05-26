@@ -1,4 +1,4 @@
-import type { OperatorPluginCapability, OperatorPluginRuntime } from "./manifest.js";
+import type { OperatorExecutableSkillStepHandler, OperatorPluginCapability, OperatorPluginRuntime } from "./manifest.js";
 import {
   FilePluginManifestRegistry,
   type RegisteredPluginRecord,
@@ -29,6 +29,18 @@ export class OperatorPluginRuntimeManager {
     await runtime.activate();
     this.activated.set(pluginId, runtime);
     return runtime;
+  }
+
+  async getSkillStepHandler(kind: "summary" | "x-post" | "command"): Promise<OperatorExecutableSkillStepHandler | undefined> {
+    const plugins = await this.listEnabledPlugins("skill-provider");
+    for (const plugin of plugins) {
+      const runtime = await this.activate(plugin.manifest.id);
+      const handler = runtime.getSkillStepHandler?.(kind);
+      if (handler) {
+        return handler;
+      }
+    }
+    return undefined;
   }
 
   isActivated(pluginId: string): boolean {

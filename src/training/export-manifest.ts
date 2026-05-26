@@ -32,6 +32,46 @@ export type ExportedPromotedSkill = {
   sourceTrajectoryIds: string[];
   promotedAt: string;
   version: number;
+  usage?: {
+    executionCount: number;
+    lastExecutedAt?: string;
+  };
+};
+
+export type ExportedExecutableSkill = {
+  id: string;
+  promotedSkillId: string;
+  title: string;
+  summary: string;
+  version: number;
+  sourceTrajectoryIds: string[];
+  usage: {
+    executionCount: number;
+    lastExecutedAt?: string;
+  };
+};
+
+export type ExportedExecutableSkillRun = {
+  id: string;
+  skillId: string;
+  sessionId?: string;
+  parentRunId?: string;
+  status: "completed";
+  sourceTrajectoryIds: string[];
+  replayPreview: Array<{
+    kind: "transcript" | "observation" | "action";
+    ts: number;
+    summary: string;
+  }>;
+  stepResults: Array<{
+    stepId: string;
+    title: string;
+    kind: "summary" | "x-post" | "command";
+    output: string;
+    agentRole?: string;
+    subagentRunId?: string;
+    commentOutputs?: string[];
+  }>;
 };
 
 export type ExportedReplayManifest = {
@@ -72,6 +112,8 @@ export type ReviewedExportManifest = {
   modes: TrainingMode[];
   rawCaptureIncluded: false;
   promotedSkills: ExportedPromotedSkill[];
+  executableSkills: ExportedExecutableSkill[];
+  executableSkillRuns: ExportedExecutableSkillRun[];
   memories: ExportedMemoryReference[];
   trajectories: ExportedTrajectoryReference[];
   replays: ExportedReplayManifest[];
