@@ -4,6 +4,8 @@ export type SessionMetadata = {
   cwd?: string;
   title?: string;
   agentId?: string;
+  remoteId?: string;
+  remoteSource?: string;
   parentSessionId?: string;
   tags?: string[];
 };

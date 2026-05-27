@@ -86,7 +86,8 @@ Current gateway transport behavior in this tranche:
 - later connection-scoped requests are forwarded through the bound session stream without resupplying `sessionId`
 - live session-scoped runtime events are forwarded as transport event frames
 - transport message types are intentionally narrow: bootstrap, request, response, event, and error
-- this is still an in-process transport adapter in this tranche; pairing, remote identity routing, and broader channel delivery remain for later work
+- gateway bootstrap can now also carry a stable `remoteId` and `remoteSource` so reconnecting clients can reattach without already knowing `sessionId`
+- this is still an in-process transport adapter in this tranche; user-facing pairing/bootstrap UX and broader channel delivery remain for later work
 
 ## Settings precedence
 
@@ -168,8 +169,8 @@ This is still a narrow outbound-only pass. Cron expression handling remains plac
 
 The system is still incomplete relative to the long-term goal. Major missing tranches include:
 - richer Claude Code style command surface and hook execution
-- fuller OpenClaw-style channel/gateway runtime and remote transport beyond the current control-plane session-stream seam
-- pairing/bootstrap UX and remote identity routing on top of that session-stream foundation
+- fuller OpenClaw-style channel/gateway runtime and remote transport beyond the current minimal gateway transport
+- user-facing pairing/bootstrap UX and richer remote identity/account routing on top of the current remoteId continuity layer
 - richer delivery routing, retries, and transport semantics beyond local/webhook terminal notifications
 - richer tool-loop and broader command-surface parity in the CLI shell beyond the current local run/task watch surfaces
 

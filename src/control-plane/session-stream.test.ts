@@ -27,10 +27,12 @@ describe("OperatorControlPlaneSessionStream", () => {
     const server = new OperatorControlPlaneServer({ runtime });
     const stream = new OperatorControlPlaneSessionStream(server);
 
-    const bootstrapped = await stream.bootstrap({ title: "Remote session", agentId: "gateway" });
+    const bootstrapped = await stream.bootstrap({ title: "Remote session", agentId: "gateway", remoteId: "device-1", remoteSource: "gateway" });
     expect(bootstrapped.created).toBe(true);
     expect(bootstrapped.resumed).toBe(false);
     expect(bootstrapped.session.metadata.agentId).toBe("gateway");
+    expect(bootstrapped.session.metadata.remoteId).toBe("device-1");
+    expect(bootstrapped.session.metadata.remoteSource).toBe("gateway");
     expect(bootstrapped.approvals).toEqual([]);
     expect(stream.sessionId).toBe(bootstrapped.session.id);
 
@@ -116,5 +118,33 @@ describe("OperatorControlPlaneSessionStream", () => {
       throw new Error("expected bound approvals response");
     }
     expect(boundApprovals.result).toEqual([expect.objectContaining({ id: targetApproval.id, sessionId: targetSession.id })]);
+  });
+
+  it("reattaches by remoteId when sessionId is absent", async () => {
+    const runtime = new StandaloneOperatorRuntime({
+      rootDir: await makeTempDir(),
+      backgroundTaskIsProcessRunning: () => false,
+    });
+    const server = new OperatorControlPlaneServer({ runtime });
+    const firstStream = new OperatorControlPlaneSessionStream(server);
+    const initial = await firstStream.bootstrap({
+      title: "Remote identity session",
+      remoteId: "device-remote-1",
+      remoteSource: "gateway",
+      agentId: "gateway",
+    });
+    await runtime.markSessionIdle(initial.session.id);
+
+    const secondStream = new OperatorControlPlaneSessionStream(server);
+    const reattached = await secondStream.bootstrap({
+      remoteId: "device-remote-1",
+      remoteSource: "gateway",
+    });
+
+    expect(reattached.created).toBe(false);
+    expect(reattached.resumed).toBe(true);
+    expect(reattached.session.id).toBe(initial.session.id);
+    expect(reattached.session.metadata.remoteId).toBe("device-remote-1");
+    expect(secondStream.sessionId).toBe(initial.session.id);
   });
 });

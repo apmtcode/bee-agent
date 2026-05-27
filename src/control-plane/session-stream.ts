@@ -7,6 +7,8 @@ export type SessionStreamBootstrapParams = {
   title?: string;
   cwd?: string;
   agentId?: string;
+  remoteId?: string;
+  remoteSource?: string;
   resume?: boolean;
   runId?: string;
   family?: RuntimeEventFamily;

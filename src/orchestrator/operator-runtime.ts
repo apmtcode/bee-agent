@@ -85,6 +85,8 @@ export type StartSessionParams = {
   title?: string;
   cwd?: string;
   agentId?: string;
+  remoteId?: string;
+  remoteSource?: string;
 };
 
 export type CommandExecutionPolicyResult = {
@@ -295,6 +297,8 @@ export class StandaloneOperatorRuntime {
         ...(params.title ? { title: params.title } : {}),
         ...(params.cwd ? { cwd: params.cwd } : {}),
         ...(params.agentId ? { agentId: params.agentId } : {}),
+        ...(params.remoteId ? { remoteId: params.remoteId } : {}),
+        ...(params.remoteSource ? { remoteSource: params.remoteSource } : {}),
       },
     });
     this.events.publish({ type: "session.started", payload: session, ts: Date.now() });
@@ -307,6 +311,15 @@ export class StandaloneOperatorRuntime {
 
   async listSessions(): Promise<SessionRecord[]> {
     return await this.sessions.list();
+  }
+
+  async findSessionByRemoteId(remoteId: string): Promise<SessionRecord | undefined> {
+    const sessions = await this.sessions.list();
+    return sessions.find(
+      (session) =>
+        session.metadata.remoteId === remoteId &&
+        (session.status === "active" || session.status === "idle"),
+    );
   }
 
   async resumeSession(sessionId: string): Promise<SessionRecord | undefined> {

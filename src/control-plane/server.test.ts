@@ -146,6 +146,54 @@ describe("OperatorControlPlaneServer", () => {
       },
     });
 
+    const remoteBootstrappedSession = await server.handle({
+      method: "sessions.bootstrap",
+      params: { title: "Remote bootstrap", remoteId: "device-server-1", remoteSource: "gateway", agentId: "gateway" },
+    });
+    expect(remoteBootstrappedSession).toMatchObject({
+      ok: true,
+      result: {
+        created: true,
+        resumed: false,
+        session: {
+          metadata: { remoteId: "device-server-1", remoteSource: "gateway", agentId: "gateway" },
+        },
+      },
+    });
+    const remoteSessionId = remoteBootstrappedSession.ok ? remoteBootstrappedSession.result.session.id : undefined;
+    if (!remoteSessionId) {
+      throw new Error("expected remote bootstrapped session id");
+    }
+    await runtime.markSessionIdle(remoteSessionId);
+    await expect(
+      server.handle({
+        method: "sessions.bootstrap",
+        params: { remoteId: "device-server-1", remoteSource: "gateway" },
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      result: {
+        created: false,
+        resumed: true,
+        session: {
+          id: remoteSessionId,
+          metadata: { remoteId: "device-server-1", remoteSource: "gateway" },
+        },
+      },
+    });
+    await expect(
+      server.handle({
+        method: "sessions.bootstrap",
+        params: { sessionId: session.id, remoteId: "device-server-1", remoteSource: "gateway" },
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      result: {
+        created: false,
+        session: { id: session.id },
+      },
+    });
+
     const sessionsList = await server.handle({ method: "sessions.list" });
     expect(sessionsList.ok).toBe(true);
     if (sessionsList.ok) {

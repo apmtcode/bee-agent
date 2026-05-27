@@ -39,7 +39,7 @@ describe("OperatorGatewayTransportConnection", () => {
     await connection.receive({
       type: "bootstrap",
       id: "boot-1",
-      params: { title: "Gateway session", agentId: "gateway" },
+      params: { title: "Gateway session", agentId: "gateway", remoteId: "device-1", remoteSource: "gateway" },
       eventSubscription: { family: "run" },
     });
 
@@ -142,5 +142,43 @@ describe("OperatorGatewayTransportConnection", () => {
       throw new Error("expected approval event");
     }
     expect(approvalEvent.event.type).toBe("approval.resolved");
+  });
+
+  it("reattaches by remoteId across gateway connections", async () => {
+    const runtime = new StandaloneOperatorRuntime({
+      rootDir: await makeTempDir(),
+      backgroundTaskIsProcessRunning: () => false,
+    });
+    const server = new OperatorControlPlaneServer({ runtime });
+    const firstTransport = new InMemoryGatewayTransport();
+    const firstConnection = new OperatorGatewayTransportConnection(server, firstTransport);
+
+    await firstConnection.receive({
+      type: "bootstrap",
+      id: "boot-remote-1",
+      params: { title: "Gateway remote", remoteId: "device-gateway-1", remoteSource: "gateway", agentId: "gateway" },
+    });
+    const firstBootstrap = firstTransport.sent.find((message) => message.type === "bootstrap.ok" && message.id === "boot-remote-1");
+    if (!firstBootstrap || firstBootstrap.type !== "bootstrap.ok") {
+      throw new Error("expected first bootstrap");
+    }
+    await runtime.markSessionIdle(firstBootstrap.result.session.id);
+
+    const secondTransport = new InMemoryGatewayTransport();
+    const secondConnection = new OperatorGatewayTransportConnection(server, secondTransport);
+    await secondConnection.receive({
+      type: "bootstrap",
+      id: "boot-remote-2",
+      params: { remoteId: "device-gateway-1", remoteSource: "gateway" },
+    });
+
+    const secondBootstrap = secondTransport.sent.find((message) => message.type === "bootstrap.ok" && message.id === "boot-remote-2");
+    expect(secondBootstrap).toBeDefined();
+    if (!secondBootstrap || secondBootstrap.type !== "bootstrap.ok") {
+      throw new Error("expected second bootstrap");
+    }
+    expect(secondBootstrap.result.created).toBe(false);
+    expect(secondBootstrap.result.resumed).toBe(true);
+    expect(secondBootstrap.result.session.id).toBe(firstBootstrap.result.session.id);
   });
 });

@@ -79,20 +79,26 @@ export class OperatorControlPlaneServer {
         }
         case "sessions.bootstrap": {
           const requestedSessionId = getOptionalString(request.params, "sessionId");
+          const remoteId = getOptionalString(request.params, "remoteId");
+          const remoteSource = getOptionalString(request.params, "remoteSource");
           const title = getOptionalString(request.params, "title");
           const cwd = getOptionalString(request.params, "cwd");
           const agentId = getOptionalString(request.params, "agentId");
           const resume = getOptionalBoolean(request.params, "resume") ?? true;
           const session = requestedSessionId
             ? await this.options.runtime.getSession(requestedSessionId)
-            : await this.options.runtime.startSession({ title, cwd, agentId });
-          if (!session) {
+            : remoteId
+              ? await this.options.runtime.findSessionByRemoteId(remoteId)
+              : undefined;
+          const created = !session;
+          const resolvedSession = session ?? await this.options.runtime.startSession({ title, cwd, agentId, remoteId, remoteSource });
+          if (!resolvedSession) {
             return notFound(`unknown session: ${requestedSessionId}`);
           }
-          const resumed = Boolean(requestedSessionId && resume && session.status === "idle" && (await this.options.runtime.resumeSession(session.id)));
-          const effectiveSession = resumed ? await this.options.runtime.getSession(session.id) ?? session : session;
+          const resumed = Boolean(!created && resume && resolvedSession.status === "idle" && (await this.options.runtime.resumeSession(resolvedSession.id)));
+          const effectiveSession = resumed ? await this.options.runtime.getSession(resolvedSession.id) ?? resolvedSession : resolvedSession;
           return ok(await buildSessionBootstrapResult(this.options.runtime, effectiveSession, {
-            created: !requestedSessionId,
+            created,
             resumed,
             runId: getOptionalString(request.params, "runId"),
             family: getOptionalRuntimeEventFamily(request.params, "family"),
