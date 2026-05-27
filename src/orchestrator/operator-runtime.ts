@@ -128,6 +128,23 @@ export type RegisterSubagentParams = {
   metadata?: Record<string, unknown>;
 };
 
+export type SpawnSubagentParams = {
+  sessionId: string;
+  parentRunId: string;
+  title: string;
+  agentId?: string;
+  cwd?: string;
+  remoteId?: string;
+  remoteSource?: string;
+  metadata?: Record<string, unknown>;
+};
+
+export type SpawnSubagentResult = {
+  subagent: SubagentRunRecord;
+  childSession: SessionRecord;
+  childRun: OperatorRunRecord;
+};
+
 export type CreateTrainingJobParams = {
   exportManifest: ReviewedExportManifest;
   mode: TrainingMode;
@@ -442,6 +459,34 @@ export class StandaloneOperatorRuntime {
     const subagent = await this.subagents.register(params);
     this.events.publish({ type: "subagent.registered", payload: subagent, ts: Date.now() });
     return subagent;
+  }
+
+  async spawnSubagent(params: SpawnSubagentParams): Promise<SpawnSubagentResult> {
+    const childSession = await this.startSession({
+      title: params.title,
+      ...(params.cwd ? { cwd: params.cwd } : {}),
+      ...(params.agentId ? { agentId: params.agentId } : {}),
+      ...(params.remoteId ? { remoteId: params.remoteId } : {}),
+      ...(params.remoteSource ? { remoteSource: params.remoteSource } : {}),
+    });
+    const subagent = await this.registerSubagent({
+      sessionId: params.sessionId,
+      parentRunId: params.parentRunId,
+      childSessionId: childSession.id,
+      title: params.title,
+      metadata: params.metadata,
+    });
+    const childRun = await this.startRun({
+      sessionId: childSession.id,
+      parentRunId: subagent.runId,
+      title: params.title,
+      metadata: params.metadata,
+    });
+    const runningSubagent = await this.updateSubagentStatus(subagent.runId, "running");
+    if (!runningSubagent) {
+      throw new Error(`unknown subagent: ${subagent.runId}`);
+    }
+    return { subagent: runningSubagent, childSession, childRun };
   }
 
   async getSubagent(runId: string): Promise<SubagentRunRecord | undefined> {

@@ -956,6 +956,41 @@ describe("OperatorControlPlaneServer", () => {
       ok: true,
       result: { runId: subagent.runId, status: "running" },
     });
+    await expect(
+      server.handle({
+        method: "subagents.spawn",
+        params: {
+          sessionId: session.id,
+          parentRunId: run.id,
+          title: "Remote child work",
+          agentId: "worker",
+          remoteSource: "gateway",
+          metadata: { source: "remote" },
+        },
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      result: {
+        subagent: {
+          parentRunId: run.id,
+          sessionId: session.id,
+          title: "Remote child work",
+          status: "running",
+        },
+        childSession: {
+          metadata: {
+            title: "Remote child work",
+            agentId: "worker",
+            remoteSource: "gateway",
+          },
+        },
+        childRun: {
+          title: "Remote child work",
+          status: "running",
+          metadata: { source: "remote" },
+        },
+      },
+    });
   }, 120_000);
 
   it("streams runtime events through subscriptions", async () => {
@@ -978,6 +1013,20 @@ describe("OperatorControlPlaneServer", () => {
     const sessionB = await runtime.startSession({ title: "Session B" });
     const runA = await runtime.startRun({ sessionId: sessionA.id, title: "Run A" });
     const runB = await runtime.startRun({ sessionId: sessionB.id, title: "Run B" });
+    const childA = await runtime.startSession({ title: "Child A", agentId: "worker" });
+    const childB = await runtime.startSession({ title: "Child B", agentId: "worker" });
+    await runtime.registerSubagent({
+      sessionId: sessionA.id,
+      parentRunId: runA.id,
+      childSessionId: childA.id,
+      title: "Subagent A",
+    });
+    await runtime.registerSubagent({
+      sessionId: sessionB.id,
+      parentRunId: runB.id,
+      childSessionId: childB.id,
+      title: "Subagent B",
+    });
 
     runtime.publishRunProgress({
       runId: runA.id,
@@ -1026,6 +1075,11 @@ describe("OperatorControlPlaneServer", () => {
 
     const approvalEvents = runtime.events.snapshot(buildRuntimeEventFilter({ family: "approval" }));
     expect(approvalEvents).toEqual([]);
+
+    const subagentEvents = runtime.events.snapshot(buildRuntimeEventFilter({ family: "subagent", sessionId: sessionA.id }));
+    expect(subagentEvents).toEqual([
+      expect.objectContaining({ type: "subagent.registered", payload: expect.objectContaining({ sessionId: sessionA.id, title: "Subagent A" }) }),
+    ]);
   });
 
   it("handles cron methods", async () => {
@@ -1244,6 +1298,15 @@ describe("OperatorControlPlaneServer", () => {
     await expect(server.handle({ method: "sessions.remoteStatus", params: { identifier: "missing" } })).resolves.toEqual({
       ok: false,
       error: { code: "NOT_FOUND", message: "unknown remote or session: missing" },
+    });
+    await expect(
+      server.handle({
+        method: "subagents.spawn",
+        params: { sessionId: "missing", parentRunId: "run-missing", title: "Spawn" },
+      }),
+    ).resolves.toEqual({
+      ok: false,
+      error: { code: "NOT_FOUND", message: "unknown session: missing" },
     });
     await expect(server.handle({ method: "nope" })).resolves.toEqual({
       ok: false,

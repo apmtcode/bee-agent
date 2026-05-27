@@ -59,12 +59,81 @@ describe("OperatorControlPlaneSessionStream", () => {
     expect((nextEvent.value?.payload as { sessionId?: string }).sessionId).toBe(bootstrapped.session.id);
     await eventIterator.return?.();
 
+    const spawned = await stream.request<{
+      subagent: { parentRunId: string; sessionId: string; childSessionId: string; status: string };
+      childSession: { id: string; metadata: { agentId?: string; remoteSource?: string } };
+      childRun: { sessionId: string; parentRunId?: string; status: string };
+    }>({
+      method: "subagents.spawn",
+      params: { parentRunId: runResponse.result.id, title: "Remote child", agentId: "worker", remoteSource: "gateway" },
+    });
+    expect(spawned.ok).toBe(true);
+    if (!spawned.ok) {
+      throw new Error("expected spawned subagent response");
+    }
+    expect(spawned.result.subagent).toMatchObject({
+      parentRunId: runResponse.result.id,
+      sessionId: bootstrapped.session.id,
+      status: "running",
+    });
+    expect(spawned.result.childSession.metadata).toMatchObject({ agentId: "worker", remoteSource: "gateway" });
+    expect(spawned.result.childRun).toMatchObject({
+      sessionId: spawned.result.childSession.id,
+      parentRunId: spawned.result.subagent.runId,
+      status: "running",
+    });
+
     const approvals = await stream.request<Array<{ sessionId?: string; id: string }>>({ method: "approvals.list" });
     expect(approvals.ok).toBe(true);
     if (!approvals.ok) {
       throw new Error("expected approvals response");
     }
     expect(approvals.result).toEqual([]);
+  });
+
+  it("replays and streams subagent events for a bootstrapped session", async () => {
+    const runtime = new StandaloneOperatorRuntime({
+      rootDir: await makeTempDir(),
+      backgroundTaskIsProcessRunning: () => false,
+    });
+    const server = new OperatorControlPlaneServer({ runtime });
+    const session = await runtime.startSession({ title: "Parent", agentId: "gateway", remoteId: "device-subagent-1", remoteSource: "gateway" });
+    const run = await runtime.startRun({ sessionId: session.id, title: "Parent run" });
+
+    const stream = new OperatorControlPlaneSessionStream(server);
+    const bootstrapped = await stream.bootstrap({ sessionId: session.id, family: "subagent" });
+    expect(bootstrapped.events).toEqual([]);
+
+    const eventIterator = stream.events({ family: "subagent" })[Symbol.asyncIterator]();
+    const spawned = await stream.request<{
+      subagent: { runId: string; parentRunId: string; sessionId: string; title: string; status: string };
+      childSession: { id: string };
+      childRun: { id: string };
+    }>({ method: "subagents.spawn", params: { parentRunId: run.id, title: "Follow-up child" } });
+    expect(spawned.ok).toBe(true);
+    if (!spawned.ok) {
+      throw new Error("expected spawned subagent");
+    }
+    const registeredEvent = await eventIterator.next();
+    expect(registeredEvent.done).toBe(false);
+    expect(registeredEvent.value?.type).toBe("subagent.registered");
+    const updatedEvent = await eventIterator.next();
+    expect(updatedEvent.done).toBe(false);
+    expect(updatedEvent.value?.type).toBe("subagent.updated");
+    await eventIterator.return?.();
+
+    const replay = await stream.request<Array<{ type: string }>>({
+      method: "runs.events",
+      params: { family: "subagent" },
+    });
+    expect(replay.ok).toBe(true);
+    if (!replay.ok) {
+      throw new Error("expected replay");
+    }
+    expect(replay.result).toEqual([
+      expect.objectContaining({ type: "subagent.registered" }),
+      expect.objectContaining({ type: "subagent.updated" }),
+    ]);
   });
 
   it("reattaches to an idle session and returns only session-scoped bootstrap state", async () => {

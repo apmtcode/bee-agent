@@ -329,6 +329,33 @@ describe("StandaloneOperatorRuntime", () => {
     await expect(runtime.listActiveSubagents()).resolves.toEqual([
       expect.objectContaining({ runId: subagent.runId, status: "running" }),
     ]);
+
+    const spawned = await runtime.spawnSubagent({
+      sessionId: session.id,
+      parentRunId: run.id,
+      title: "Spawned child work",
+      agentId: "worker",
+      remoteSource: "gateway",
+      metadata: { source: "spawn" },
+    });
+    expect(spawned.subagent).toMatchObject({
+      parentRunId: run.id,
+      sessionId: session.id,
+      title: "Spawned child work",
+      status: "running",
+    });
+    expect(spawned.childSession.metadata).toMatchObject({
+      title: "Spawned child work",
+      agentId: "worker",
+      remoteSource: "gateway",
+    });
+    expect(spawned.childRun).toMatchObject({
+      sessionId: spawned.childSession.id,
+      parentRunId: spawned.subagent.runId,
+      title: "Spawned child work",
+      status: "running",
+      metadata: { source: "spawn" },
+    });
   });
 
   it("creates executable skills, runs them, and exports their provenance", async () => {

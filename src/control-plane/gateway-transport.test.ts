@@ -82,6 +82,21 @@ describe("OperatorGatewayTransportConnection", () => {
     }
     expect(eventMessage.event.type).toBe("run.progress");
     expect((eventMessage.event.payload as { sessionId?: string }).sessionId).toBe(sessionId);
+
+    await connection.receive({
+      type: "request",
+      id: "req-subagent-1",
+      request: { method: "subagents.spawn", params: { parentRunId: response.result.result.id, title: "Gateway child", agentId: "worker" } },
+    });
+    const spawnResponse = transport.sent.find((message) => message.type === "response" && message.id === "req-subagent-1");
+    expect(spawnResponse).toBeDefined();
+    if (!spawnResponse || spawnResponse.type !== "response" || !spawnResponse.result.ok) {
+      throw new Error("expected spawn response");
+    }
+    expect(spawnResponse.result.result).toMatchObject({
+      subagent: { parentRunId: response.result.result.id, sessionId, title: "Gateway child", status: "running" },
+      childSession: { metadata: { agentId: "worker" } },
+    });
   });
 
   it("rejects requests before bootstrap and filters unrelated events", async () => {
@@ -180,6 +195,35 @@ describe("OperatorGatewayTransportConnection", () => {
     expect(secondBootstrap.result.created).toBe(false);
     expect(secondBootstrap.result.resumed).toBe(true);
     expect(secondBootstrap.result.session.id).toBe(firstBootstrap.result.session.id);
+  });
+
+  it("forwards subagent-family events across the gateway", async () => {
+    const runtime = new StandaloneOperatorRuntime({
+      rootDir: await makeTempDir(),
+      backgroundTaskIsProcessRunning: () => false,
+    });
+    const server = new OperatorControlPlaneServer({ runtime });
+    const transport = new InMemoryGatewayTransport();
+    const connection = new OperatorGatewayTransportConnection(server, transport);
+    const session = await runtime.startSession({ title: "Gateway subagent", agentId: "gateway" });
+    const run = await runtime.startRun({ sessionId: session.id, title: "Gateway parent run" });
+
+    await connection.receive({
+      type: "bootstrap",
+      id: "boot-subagent-1",
+      params: { sessionId: session.id },
+      eventSubscription: { family: "subagent" },
+    });
+    await connection.receive({
+      type: "request",
+      id: "req-subagent-events",
+      request: { method: "subagents.spawn", params: { parentRunId: run.id, title: "Gateway spawned child" } },
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const subagentEvents = transport.sent.filter((message) => message.type === "event").map((message) => message.event.type);
+    expect(subagentEvents).toContain("subagent.registered");
+    expect(subagentEvents).toContain("subagent.updated");
   });
 
   it("passes pairingCode through gateway bootstrap", async () => {

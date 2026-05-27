@@ -89,6 +89,30 @@ export type SessionRemoteStatusResult = {
   recentEvents: OperatorEvent[];
 };
 
+export type SpawnSubagentResult = {
+  subagent: {
+    runId: string;
+    parentRunId: string;
+    sessionId: string;
+    childSessionId: string;
+    title: string;
+    createdAt: string;
+    updatedAt: string;
+    status: string;
+  };
+  childSession: SessionRecord;
+  childRun: {
+    id: string;
+    sessionId: string;
+    parentRunId?: string;
+    title: string;
+    status: string;
+    createdAt: string;
+    updatedAt: string;
+    metadata?: Record<string, unknown>;
+  };
+};
+
 export class OperatorControlPlaneServer {
   private readonly cron: OperatorCronService;
   private readonly pairing: FilePairingStore;
@@ -291,6 +315,33 @@ export class OperatorControlPlaneServer {
               metadata: getOptionalRecord(request.params, "metadata"),
             }),
           );
+        case "subagents.spawn": {
+          const sessionId = getString(request.params, "sessionId");
+          const parentRunId = getString(request.params, "parentRunId");
+          const session = await this.options.runtime.getSession(sessionId);
+          if (!session) {
+            return notFound(`unknown session: ${sessionId}`);
+          }
+          const parentRun = await this.options.runtime.getRun(parentRunId);
+          if (!parentRun) {
+            return notFound(`unknown run: ${parentRunId}`);
+          }
+          if (parentRun.sessionId !== sessionId) {
+            return invalidRequest(`run ${parentRunId} does not belong to session: ${sessionId}`);
+          }
+          return ok(
+            await this.options.runtime.spawnSubagent({
+              sessionId,
+              parentRunId,
+              title: getString(request.params, "title"),
+              agentId: getOptionalString(request.params, "agentId"),
+              cwd: getOptionalString(request.params, "cwd"),
+              remoteId: getOptionalString(request.params, "remoteId"),
+              remoteSource: getOptionalString(request.params, "remoteSource"),
+              metadata: getOptionalRecord(request.params, "metadata"),
+            }),
+          );
+        }
         case "subagents.get": {
           const runId = getString(request.params, "runId");
           const subagent = await this.options.runtime.getSubagent(runId);
@@ -586,7 +637,7 @@ function buildPairingStoreFilePath(rootDir: string): string {
 async function buildSessionBootstrapResult(
   runtime: StandaloneOperatorRuntime,
   session: SessionRecord,
-  options: { created: boolean; resumed: boolean; runId?: string; family?: "run" | "approval" | "background-task" | "skill" },
+  options: { created: boolean; resumed: boolean; runId?: string; family?: "run" | "approval" | "background-task" | "skill" | "subagent" },
 ): Promise<SessionBootstrapResult> {
   return {
     session,
@@ -736,12 +787,12 @@ function getOptionalSkillCandidateStatus(
 function getOptionalRuntimeEventFamily(
   params: Record<string, unknown> | undefined,
   key: string,
-): "run" | "approval" | "background-task" | "skill" | undefined {
+): "run" | "approval" | "background-task" | "skill" | "subagent" | undefined {
   const value = params?.[key];
   if (value == null) {
     return undefined;
   }
-  if (value === "run" || value === "approval" || value === "background-task" || value === "skill") {
+  if (value === "run" || value === "approval" || value === "background-task" || value === "skill" || value === "subagent") {
     return value;
   }
   throw new Error(`Invalid runtime event family: ${key}`);

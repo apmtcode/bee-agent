@@ -117,6 +117,7 @@ export {
   type PairingTicketResolveResult,
   type SessionBootstrapResult,
   type SessionRemoteStatusResult,
+  type SpawnSubagentResult,
 } from "./control-plane/server.js";
 export {
   FilePairingStore,
@@ -271,6 +272,8 @@ export {
   type RecoverBackgroundTasksParams,
   type RecordTurnParams,
   type ReviewTrajectoryParams as RuntimeReviewTrajectoryParams,
+  type SpawnSubagentParams,
+  type SpawnSubagentResult,
   type SessionLifecycleEventType,
   type StandaloneOperatorOptions,
   type StartSessionParams,

@@ -88,6 +88,7 @@ function requiresSessionBinding(method: string): boolean {
     method === "runs.active" ||
     method === "runs.events" ||
     method === "subagents.list" ||
+    method === "subagents.spawn" ||
     method === "background.tasks.start" ||
     method === "background.tasks.list" ||
     method === "background.tasks.active" ||

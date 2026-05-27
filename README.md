@@ -117,6 +117,17 @@ Current remote status behavior in this tranche:
 - remote status reports session-scoped pending approvals, the active run, the active background task, and recent runtime events
 - the operator CLI exposes this with `/remote status <remoteId|sessionId>` for read-only troubleshooting
 
+## Remote subagent spawn
+
+Operator now also has a first narrow remote child-work orchestration seam on top of the existing session stream and gateway transport.
+
+Current remote subagent behavior in this tranche:
+- the control plane exposes `subagents.spawn` to create a child session, register a subagent against a parent run, and start the child run in one request
+- bootstrapped session streams inherit the parent `sessionId` for `subagents.spawn`, so remotes can branch work without resupplying local session identity
+- runtime event subscriptions now support the `subagent` family for replay/live inspection of `subagent.registered` and `subagent.updated`
+- gateway transport forwards the new RPC and subagent event family through the existing bootstrap/request/event frames
+- richer cron fallback policy, account routing, and transport-specific child-channel semantics remain out of scope in this tranche
+
 ## Settings precedence
 
 The CLI loads settings in this order, with later files overriding earlier ones:
