@@ -77,6 +77,17 @@ Current remote session behavior in this tranche:
 - the same stream adapter can subscribe to live session-scoped runtime events for approvals, runs, skills, and background tasks
 - the seam is transport-agnostic and in-process in this tranche; it is intended to be mounted by a later gateway/channel transport layer
 
+## Gateway transport
+
+Operator now also has a first minimal gateway transport layer on top of that session-stream seam.
+
+Current gateway transport behavior in this tranche:
+- one remote connection can bootstrap or reattach to a single operator session
+- later connection-scoped requests are forwarded through the bound session stream without resupplying `sessionId`
+- live session-scoped runtime events are forwarded as transport event frames
+- transport message types are intentionally narrow: bootstrap, request, response, event, and error
+- this is still an in-process transport adapter in this tranche; pairing, remote identity routing, and broader channel delivery remain for later work
+
 ## Settings precedence
 
 The CLI loads settings in this order, with later files overriding earlier ones:

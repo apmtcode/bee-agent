@@ -367,9 +367,17 @@ export class StandaloneOperatorRuntime {
     resolvedBy?: string,
   ): Promise<ApprovalResolution | null> {
     await this.ensureApprovalsLoaded();
+    const request = this.approvals.list().find((item) => item.id === approvalId);
     const resolution = await this.approvals.resolve(approvalId, decision, resolvedBy);
     if (resolution) {
-      this.events.publish({ type: "approval.resolved", payload: resolution, ts: Date.now() });
+      this.events.publish({
+        type: "approval.resolved",
+        payload: {
+          ...resolution,
+          ...(request?.sessionId ? { sessionId: request.sessionId } : {}),
+        },
+        ts: Date.now(),
+      });
     }
     return resolution;
   }

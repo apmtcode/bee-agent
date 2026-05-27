@@ -120,6 +120,13 @@ export {
   type SessionStreamBootstrapParams,
 } from "./control-plane/session-stream.js";
 export {
+  OperatorGatewayTransportConnection,
+  type GatewayClientMessage,
+  type GatewayEventSubscription,
+  type GatewayServerMessage,
+  type GatewayTransport,
+} from "./control-plane/gateway-transport.js";
+export {
   buildRuntimeEventFilter,
   subscribeRuntimeEvents,
   type RuntimeEventFamily,
