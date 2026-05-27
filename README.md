@@ -40,6 +40,10 @@ Current slash commands:
 - `/approvals`
 - `/approve <approvalId>`
 - `/deny <approvalId>`
+- `/pairing [status]`
+- `/pairing create [source]`
+- `/pairing approve <code|id>`
+- `/pairing reject <code|id>`
 - `/recall <query>`
 - `/skills`
 - `/run-skill <id>`
@@ -87,7 +91,19 @@ Current gateway transport behavior in this tranche:
 - live session-scoped runtime events are forwarded as transport event frames
 - transport message types are intentionally narrow: bootstrap, request, response, event, and error
 - gateway bootstrap can now also carry a stable `remoteId` and `remoteSource` so reconnecting clients can reattach without already knowing `sessionId`
-- this is still an in-process transport adapter in this tranche; user-facing pairing/bootstrap UX and broader channel delivery remain for later work
+- bootstrap can also redeem an approved `pairingCode` into that same `remoteId` continuity path
+- this is still an in-process transport adapter in this tranche; broader channel delivery remains for later work
+
+## Pairing bootstrap
+
+Operator now has a first user-facing pairing/bootstrap seam on top of remote session continuity.
+
+Current pairing behavior in this tranche:
+- the control plane can create durable short-lived pairing tickets with a human-usable code plus `remoteId` and `remoteSource`
+- pairing tickets move through explicit states: `pending`, `approved`, `rejected`, `redeemed`, and `expired`
+- the operator CLI can list tickets and approve or reject pending claims with `/pairing`
+- `sessions.bootstrap` can redeem an approved `pairingCode` and continue through the existing session bootstrap path
+- redeemed codes are single-use and later reuse is rejected
 
 ## Settings precedence
 
@@ -170,7 +186,7 @@ This is still a narrow outbound-only pass. Cron expression handling remains plac
 The system is still incomplete relative to the long-term goal. Major missing tranches include:
 - richer Claude Code style command surface and hook execution
 - fuller OpenClaw-style channel/gateway runtime and remote transport beyond the current minimal gateway transport
-- user-facing pairing/bootstrap UX and richer remote identity/account routing on top of the current remoteId continuity layer
+- richer remote identity/account routing beyond the current first pairing-code bootstrap seam
 - richer delivery routing, retries, and transport semantics beyond local/webhook terminal notifications
 - richer tool-loop and broader command-surface parity in the CLI shell beyond the current local run/task watch surfaces
 

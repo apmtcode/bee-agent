@@ -1,6 +1,12 @@
 import type { ApprovalDecision, ApprovalRequest } from "./approvals.js";
 import { OperatorCronService } from "./cron-service.js";
 import type { CronDeliveryConfig, DeliveryTarget } from "./delivery.js";
+import {
+  FilePairingStore,
+  PairingTicketError,
+  type PairingTicket,
+  type PairingTicketStatus,
+} from "./pairing-store.js";
 import { buildRuntimeEventFilter } from "./subscriptions.js";
 import type { BackgroundTaskKind, BackgroundTaskRecoveryReason } from "../harness/background-tasks.js";
 import type { TranscriptReadOptions } from "../harness/transcript-store.js";
@@ -46,7 +52,12 @@ export type ControlPlaneResponse<T = unknown> = ControlPlaneSuccess<T> | Control
 export type ControlPlaneServerOptions = {
   runtime: StandaloneOperatorRuntime;
   cron?: OperatorCronService;
+  pairing?: FilePairingStore;
 };
+
+export type PairingTicketCreateResult = PairingTicket;
+
+export type PairingTicketResolveResult = PairingTicket;
 
 export type SessionBootstrapResult = {
   session: SessionRecord;
@@ -58,6 +69,7 @@ export type SessionBootstrapResult = {
 
 export class OperatorControlPlaneServer {
   private readonly cron: OperatorCronService;
+  private readonly pairing: FilePairingStore;
 
   get runtime(): StandaloneOperatorRuntime {
     return this.options.runtime;
@@ -65,6 +77,7 @@ export class OperatorControlPlaneServer {
 
   constructor(private readonly options: ControlPlaneServerOptions) {
     this.cron = options.cron ?? new OperatorCronService(options.runtime.rootDir, { runtime: options.runtime });
+    this.pairing = options.pairing ?? new FilePairingStore(buildPairingStoreFilePath(options.runtime.rootDir));
   }
 
   async handle(request: ControlPlaneRequest): Promise<ControlPlaneResponse> {
@@ -79,12 +92,25 @@ export class OperatorControlPlaneServer {
         }
         case "sessions.bootstrap": {
           const requestedSessionId = getOptionalString(request.params, "sessionId");
-          const remoteId = getOptionalString(request.params, "remoteId");
-          const remoteSource = getOptionalString(request.params, "remoteSource");
+          const pairingCode = getOptionalString(request.params, "pairingCode");
+          let remoteId = getOptionalString(request.params, "remoteId");
+          let remoteSource = getOptionalString(request.params, "remoteSource");
           const title = getOptionalString(request.params, "title");
           const cwd = getOptionalString(request.params, "cwd");
           const agentId = getOptionalString(request.params, "agentId");
           const resume = getOptionalBoolean(request.params, "resume") ?? true;
+          let pairingTicket: PairingTicket | undefined;
+          if (!requestedSessionId && pairingCode) {
+            pairingTicket = await this.pairing.getTicket(pairingCode);
+            if (!pairingTicket) {
+              return notFound(`unknown pairing ticket: ${pairingCode}`);
+            }
+            if (pairingTicket.status !== "approved") {
+              return invalidRequest(`pairing ticket is ${pairingTicket.status}: ${pairingCode}`);
+            }
+            remoteId = pairingTicket.remoteId;
+            remoteSource = pairingTicket.remoteSource;
+          }
           const session = requestedSessionId
             ? await this.options.runtime.getSession(requestedSessionId)
             : remoteId
@@ -94,6 +120,9 @@ export class OperatorControlPlaneServer {
           const resolvedSession = session ?? await this.options.runtime.startSession({ title, cwd, agentId, remoteId, remoteSource });
           if (!resolvedSession) {
             return notFound(`unknown session: ${requestedSessionId}`);
+          }
+          if (pairingTicket) {
+            await this.pairing.redeemTicket(pairingTicket.code, { sessionId: resolvedSession.id });
           }
           const resumed = Boolean(!created && resume && resolvedSession.status === "idle" && (await this.options.runtime.resumeSession(resolvedSession.id)));
           const effectiveSession = resumed ? await this.options.runtime.getSession(resolvedSession.id) ?? resolvedSession : resolvedSession;
@@ -123,6 +152,29 @@ export class OperatorControlPlaneServer {
           const sessionId = getString(request.params, "sessionId");
           const session = await this.options.runtime.failSession(sessionId);
           return session ? ok(session) : notFound(`unknown session: ${sessionId}`);
+        }
+        case "pairing.create": {
+          return ok(
+            await this.pairing.createTicket({
+              remoteSource: getOptionalString(request.params, "remoteSource") ?? "gateway",
+              remoteId: getOptionalString(request.params, "remoteId"),
+              expiresAt: getOptionalString(request.params, "expiresAt") ?? new Date(Date.now() + 10 * 60_000).toISOString(),
+            }),
+          );
+        }
+        case "pairing.list":
+          return ok(await this.pairing.listTickets(getOptionalPairingTicketStatus(request.params, "status")));
+        case "pairing.resolve": {
+          const identifier = getOptionalString(request.params, "ticketId") ?? getOptionalString(request.params, "code");
+          if (!identifier) {
+            return invalidRequest("pairing.resolve requires ticketId or code");
+          }
+          return ok(
+            await this.pairing.resolveTicket(identifier, {
+              decision: getPairingResolutionDecision(request.params, "decision"),
+              resolvedBy: getOptionalString(request.params, "resolvedBy"),
+            }),
+          );
         }
         case "transcript.get": {
           const sessionId = getString(request.params, "sessionId");
@@ -484,6 +536,11 @@ export class OperatorControlPlaneServer {
           return invalidRequest(`unknown method: ${request.method}`);
       }
     } catch (error) {
+      if (error instanceof PairingTicketError) {
+        return error.code === "NOT_FOUND"
+          ? notFound(error.message)
+          : invalidRequest(error.message);
+      }
       return {
         ok: false,
         error: {
@@ -493,6 +550,10 @@ export class OperatorControlPlaneServer {
       };
     }
   }
+}
+
+function buildPairingStoreFilePath(rootDir: string): string {
+  return `${rootDir}/pairing-tickets.json`;
 }
 
 async function buildSessionBootstrapResult(
@@ -603,6 +664,31 @@ function getOptionalRuntimeEventFamily(
     return value;
   }
   throw new Error(`Invalid runtime event family: ${key}`);
+}
+
+function getPairingResolutionDecision(
+  params: Record<string, unknown> | undefined,
+  key: string,
+): "approved" | "rejected" {
+  const value = params?.[key];
+  if (value === "approved" || value === "rejected") {
+    return value;
+  }
+  throw new Error(`Invalid pairing resolution decision: ${key}`);
+}
+
+function getOptionalPairingTicketStatus(
+  params: Record<string, unknown> | undefined,
+  key: string,
+): PairingTicketStatus | undefined {
+  const value = params?.[key];
+  if (value == null) {
+    return undefined;
+  }
+  if (value === "pending" || value === "approved" || value === "rejected" || value === "redeemed" || value === "expired") {
+    return value;
+  }
+  throw new Error(`Invalid pairing ticket status: ${key}`);
 }
 
 function getOptionalBoolean(

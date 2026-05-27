@@ -147,4 +147,27 @@ describe("OperatorControlPlaneSessionStream", () => {
     expect(reattached.session.metadata.remoteId).toBe("device-remote-1");
     expect(secondStream.sessionId).toBe(initial.session.id);
   });
+
+  it("redeems an approved pairing code through bootstrap", async () => {
+    const runtime = new StandaloneOperatorRuntime({
+      rootDir: await makeTempDir(),
+      backgroundTaskIsProcessRunning: () => false,
+    });
+    const server = new OperatorControlPlaneServer({ runtime });
+    const created = await server.handle({ method: "pairing.create", params: { remoteSource: "gateway" } });
+    if (!created.ok) {
+      throw new Error("expected pairing ticket");
+    }
+    await server.handle({
+      method: "pairing.resolve",
+      params: { code: created.result.code, decision: "approved", resolvedBy: "tester" },
+    });
+
+    const stream = new OperatorControlPlaneSessionStream(server);
+    const bootstrapped = await stream.bootstrap({ pairingCode: created.result.code, agentId: "gateway" });
+
+    expect(bootstrapped.created).toBe(true);
+    expect(bootstrapped.session.metadata.remoteId).toBe(created.result.remoteId);
+    expect(bootstrapped.session.metadata.remoteSource).toBe("gateway");
+  });
 });

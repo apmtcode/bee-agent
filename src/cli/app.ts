@@ -23,6 +23,10 @@ export type OperatorCliSlashCommand =
   | { kind: "approvals" }
   | { kind: "approve"; approvalId: string }
   | { kind: "deny"; approvalId: string }
+  | { kind: "pairing-list"; status?: "pending" | "approved" | "rejected" | "redeemed" | "expired" }
+  | { kind: "pairing-create"; remoteSource?: string }
+  | { kind: "pairing-approve"; identifier: string }
+  | { kind: "pairing-reject"; identifier: string }
   | { kind: "recall"; query: string }
   | { kind: "skills" }
   | { kind: "run-skill"; skillId: string }
@@ -175,6 +179,10 @@ export class OperatorCliApp {
           "  /approvals",
           "  /approve <approvalId>",
           "  /deny <approvalId>",
+          "  /pairing [status]",
+          "  /pairing create [source]",
+          "  /pairing approve <code|id>",
+          "  /pairing reject <code|id>",
           "  /recall <query>",
           "  /skills",
           "  /run-skill <id>",
@@ -287,6 +295,49 @@ export class OperatorCliApp {
       case "deny": {
         const resolution = await this.runtime.resolveApproval(command.approvalId, "denied", "operator-cli");
         return resolution ? `Denied ${command.approvalId}.` : `Unknown approval: ${command.approvalId}`;
+      }
+      case "pairing-list": {
+        const response = await this.server.handle({
+          method: "pairing.list",
+          ...(command.status ? { params: { status: command.status } } : {}),
+        });
+        if (!response.ok) {
+          return response.error.message;
+        }
+        return response.result.length === 0
+          ? "No pairing tickets."
+          : response.result
+              .map((ticket) => {
+                const resolved = ticket.resolvedAt ? ` resolved=${ticket.resolvedAt}` : "";
+                const resolvedBy = ticket.resolvedBy ? ` by=${ticket.resolvedBy}` : "";
+                const redeemed = ticket.redeemedSessionId ? ` session=${ticket.redeemedSessionId}` : "";
+                return `${ticket.code} ${ticket.status} source=${ticket.remoteSource} id=${ticket.id} expires=${ticket.expiresAt}${resolved}${resolvedBy}${redeemed}`;
+              })
+              .join("\n");
+      }
+      case "pairing-create": {
+        const response = await this.server.handle({
+          method: "pairing.create",
+          params: command.remoteSource ? { remoteSource: command.remoteSource } : {},
+        });
+        if (!response.ok) {
+          return response.error.message;
+        }
+        return `Created pairing ticket ${response.result.code} source=${response.result.remoteSource} expires=${response.result.expiresAt} id=${response.result.id}`;
+      }
+      case "pairing-approve": {
+        const response = await this.server.handle({
+          method: "pairing.resolve",
+          params: { code: command.identifier, decision: "approved", resolvedBy: "operator-cli" },
+        });
+        return response.ok ? `Approved pairing ticket ${response.result.code}.` : response.error.message;
+      }
+      case "pairing-reject": {
+        const response = await this.server.handle({
+          method: "pairing.resolve",
+          params: { code: command.identifier, decision: "rejected", resolvedBy: "operator-cli" },
+        });
+        return response.ok ? `Rejected pairing ticket ${response.result.code}.` : response.error.message;
       }
       case "recall": {
         const recall = await this.runtime.recall(command.query);
@@ -705,6 +756,8 @@ export function parseSlashCommand(input: string): OperatorCliSlashCommand | unde
       return tail ? { kind: "approve", approvalId: tail } : { kind: "invalid", message: "Usage: /approve <approvalId>" };
     case "deny":
       return tail ? { kind: "deny", approvalId: tail } : { kind: "invalid", message: "Usage: /deny <approvalId>" };
+    case "pairing":
+      return parsePairingCommand(tail);
     case "recall":
       return { kind: "recall", query: tail };
     case "skills":
@@ -758,6 +811,37 @@ function parseWatchCommand(tail: string): OperatorCliSlashCommand {
     return taskId ? { kind: "watch-task", taskId } : { kind: "invalid", message: "Usage: /watch task [taskId]" };
   }
   return { kind: "invalid", message: "Usage: /watch [active|run <runId>|task <taskId>]" };
+}
+
+function parsePairingCommand(tail: string): OperatorCliSlashCommand {
+  if (!tail) {
+    return { kind: "pairing-list" };
+  }
+  if (tail === "create") {
+    return { kind: "pairing-create" };
+  }
+  if (tail.startsWith("create ")) {
+    const remoteSource = tail.slice("create ".length).trim();
+    return remoteSource ? { kind: "pairing-create", remoteSource } : { kind: "invalid", message: "Usage: /pairing create [source]" };
+  }
+  if (tail === "approve") {
+    return { kind: "invalid", message: "Usage: /pairing approve <code|id>" };
+  }
+  if (tail === "reject") {
+    return { kind: "invalid", message: "Usage: /pairing reject <code|id>" };
+  }
+  if (tail.startsWith("approve ")) {
+    const identifier = tail.slice("approve ".length).trim();
+    return identifier ? { kind: "pairing-approve", identifier } : { kind: "invalid", message: "Usage: /pairing approve <code|id>" };
+  }
+  if (tail.startsWith("reject ")) {
+    const identifier = tail.slice("reject ".length).trim();
+    return identifier ? { kind: "pairing-reject", identifier } : { kind: "invalid", message: "Usage: /pairing reject <code|id>" };
+  }
+  if (tail === "pending" || tail === "approved" || tail === "rejected" || tail === "redeemed" || tail === "expired") {
+    return { kind: "pairing-list", status: tail };
+  }
+  return { kind: "invalid", message: "Usage: /pairing [create|approve|reject|pending|approved|rejected|redeemed|expired]" };
 }
 
 function parseBackgroundCommand(tail: string): OperatorCliSlashCommand {

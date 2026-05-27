@@ -113,8 +113,17 @@ export {
   type ControlPlaneResponse,
   type ControlPlaneServerOptions,
   type ControlPlaneSuccess,
+  type PairingTicketCreateResult,
+  type PairingTicketResolveResult,
   type SessionBootstrapResult,
 } from "./control-plane/server.js";
+export {
+  FilePairingStore,
+  PairingTicketError,
+  type PairingStoreShape,
+  type PairingTicket,
+  type PairingTicketStatus,
+} from "./control-plane/pairing-store.js";
 export {
   OperatorControlPlaneSessionStream,
   type SessionStreamBootstrapParams,

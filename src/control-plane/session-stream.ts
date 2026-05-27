@@ -4,6 +4,7 @@ import type { OperatorEvent } from "../kernel/event-bus.js";
 
 export type SessionStreamBootstrapParams = {
   sessionId?: string;
+  pairingCode?: string;
   title?: string;
   cwd?: string;
   agentId?: string;

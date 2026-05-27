@@ -181,4 +181,36 @@ describe("OperatorGatewayTransportConnection", () => {
     expect(secondBootstrap.result.resumed).toBe(true);
     expect(secondBootstrap.result.session.id).toBe(firstBootstrap.result.session.id);
   });
+
+  it("passes pairingCode through gateway bootstrap", async () => {
+    const runtime = new StandaloneOperatorRuntime({
+      rootDir: await makeTempDir(),
+      backgroundTaskIsProcessRunning: () => false,
+    });
+    const server = new OperatorControlPlaneServer({ runtime });
+    const created = await server.handle({ method: "pairing.create", params: { remoteSource: "gateway" } });
+    if (!created.ok) {
+      throw new Error("expected pairing ticket");
+    }
+    await server.handle({
+      method: "pairing.resolve",
+      params: { code: created.result.code, decision: "approved", resolvedBy: "tester" },
+    });
+    const transport = new InMemoryGatewayTransport();
+    const connection = new OperatorGatewayTransportConnection(server, transport);
+
+    await connection.receive({
+      type: "bootstrap",
+      id: "boot-pairing-1",
+      params: { pairingCode: created.result.code, agentId: "gateway" },
+    });
+
+    const bootstrapped = transport.sent.find((message) => message.type === "bootstrap.ok" && message.id === "boot-pairing-1");
+    expect(bootstrapped).toBeDefined();
+    if (!bootstrapped || bootstrapped.type !== "bootstrap.ok") {
+      throw new Error("expected paired bootstrap");
+    }
+    expect(bootstrapped.result.session.metadata.remoteId).toBe(created.result.remoteId);
+    expect(bootstrapped.result.session.metadata.remoteSource).toBe("gateway");
+  });
 });

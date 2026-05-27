@@ -194,6 +194,80 @@ describe("OperatorControlPlaneServer", () => {
       },
     });
 
+    const pairingCreate = await server.handle({
+      method: "pairing.create",
+      params: { remoteSource: "gateway" },
+    });
+    expect(pairingCreate).toMatchObject({
+      ok: true,
+      result: {
+        remoteSource: "gateway",
+        status: "pending",
+        code: expect.stringMatching(/^[A-Z0-9]{4}-[A-Z0-9]{4}$/),
+      },
+    });
+    if (!pairingCreate.ok) {
+      throw new Error("expected pairing ticket");
+    }
+    await expect(server.handle({ method: "pairing.list", params: { status: "pending" } })).resolves.toMatchObject({
+      ok: true,
+      result: [expect.objectContaining({ id: pairingCreate.result.id, code: pairingCreate.result.code, status: "pending" })],
+    });
+    await expect(
+      server.handle({
+        method: "pairing.resolve",
+        params: { code: pairingCreate.result.code, decision: "approved", resolvedBy: "tester" },
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      result: { id: pairingCreate.result.id, status: "approved", resolvedBy: "tester" },
+    });
+    const pairedBootstrap = await server.handle({
+      method: "sessions.bootstrap",
+      params: { pairingCode: pairingCreate.result.code, agentId: "gateway" },
+    });
+    expect(pairedBootstrap).toMatchObject({
+      ok: true,
+      result: {
+        session: {
+          metadata: {
+            remoteId: pairingCreate.result.remoteId,
+            remoteSource: "gateway",
+            agentId: "gateway",
+          },
+        },
+      },
+    });
+    await expect(server.handle({ method: "pairing.list", params: { status: "redeemed" } })).resolves.toMatchObject({
+      ok: true,
+      result: [expect.objectContaining({ id: pairingCreate.result.id, status: "redeemed" })],
+    });
+    await expect(
+      server.handle({
+        method: "sessions.bootstrap",
+        params: { pairingCode: pairingCreate.result.code },
+      }),
+    ).resolves.toEqual({
+      ok: false,
+      error: { code: "INVALID_REQUEST", message: `pairing ticket is redeemed: ${pairingCreate.result.code}` },
+    });
+    const rejectedPairing = await server.handle({
+      method: "pairing.create",
+      params: { remoteSource: "gateway" },
+    });
+    if (!rejectedPairing.ok) {
+      throw new Error("expected rejected pairing seed");
+    }
+    await expect(
+      server.handle({
+        method: "pairing.resolve",
+        params: { ticketId: rejectedPairing.result.id, decision: "rejected", resolvedBy: "tester" },
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      result: { id: rejectedPairing.result.id, status: "rejected" },
+    });
+
     const sessionsList = await server.handle({ method: "sessions.list" });
     expect(sessionsList.ok).toBe(true);
     if (sessionsList.ok) {

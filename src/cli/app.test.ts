@@ -24,6 +24,11 @@ describe("parseSlashCommand", () => {
     expect(parseSlashCommand("/transcript 5")).toEqual({ kind: "transcript", limit: 5 });
     expect(parseSlashCommand("/approve approval-1")).toEqual({ kind: "approve", approvalId: "approval-1" });
     expect(parseSlashCommand("/deny approval-1")).toEqual({ kind: "deny", approvalId: "approval-1" });
+    expect(parseSlashCommand("/pairing")).toEqual({ kind: "pairing-list" });
+    expect(parseSlashCommand("/pairing pending")).toEqual({ kind: "pairing-list", status: "pending" });
+    expect(parseSlashCommand("/pairing create gateway")).toEqual({ kind: "pairing-create", remoteSource: "gateway" });
+    expect(parseSlashCommand("/pairing approve code-1")).toEqual({ kind: "pairing-approve", identifier: "code-1" });
+    expect(parseSlashCommand("/pairing reject ticket-1")).toEqual({ kind: "pairing-reject", identifier: "ticket-1" });
     expect(parseSlashCommand("/recall deploy bug")).toEqual({ kind: "recall", query: "deploy bug" });
     expect(parseSlashCommand("/background")).toEqual({ kind: "background-list" });
     expect(parseSlashCommand("/background start smoke -- printf ok")).toEqual({
@@ -74,6 +79,14 @@ describe("parseSlashCommand", () => {
     expect(parseSlashCommand("/cron create * * *")).toEqual({
       kind: "invalid",
       message: "Usage: /cron create <cronExpr> <prompt> [--on-success <target>] [--on-failure <target>]",
+    });
+    expect(parseSlashCommand("/pairing approve")).toEqual({
+      kind: "invalid",
+      message: "Usage: /pairing approve <code|id>",
+    });
+    expect(parseSlashCommand("/pairing mystery")).toEqual({
+      kind: "invalid",
+      message: "Usage: /pairing [create|approve|reject|pending|approved|rejected|redeemed|expired]",
     });
     expect(parseSlashCommand("/watch nope")).toEqual({
       kind: "invalid",
@@ -208,7 +221,7 @@ describe("OperatorCliApp", () => {
     expect(watchOutput).toContain("Watching this run.");
   });
 
-  it("supports session lifecycle, transcript, approvals, config, and prompt commands", async () => {
+  it("supports session lifecycle, transcript, approvals, pairing, config, and prompt commands", async () => {
     const rootDir = await makeTempDir();
     const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
     const firstSession = await app.runtime.startSession({ title: "first", cwd: rootDir, agentId: "operator-cli" });
@@ -241,6 +254,22 @@ describe("OperatorCliApp", () => {
     const approvalsOutput = await app.dispatchSlashCommand({ kind: "approvals" });
     expect(approvalsOutput).toContain(approval.id);
     expect(approvalsOutput).toContain("Allow command execution");
+
+    const pairingCreateOutput = await app.dispatchSlashCommand({ kind: "pairing-create", remoteSource: "gateway" });
+    expect(pairingCreateOutput).toContain("Created pairing ticket");
+    expect(pairingCreateOutput).toContain("source=gateway");
+
+    const pairingListOutput = await app.dispatchSlashCommand({ kind: "pairing-list" });
+    expect(pairingListOutput).toContain("pending");
+    expect(pairingListOutput).toContain("source=gateway");
+    const pairingCodeMatch = pairingListOutput.match(/[A-Z0-9]{4}-[A-Z0-9]{4}/);
+    if (!pairingCodeMatch) {
+      throw new Error("expected pairing code");
+    }
+
+    const pairingApproveOutput = await app.dispatchSlashCommand({ kind: "pairing-approve", identifier: pairingCodeMatch[0] });
+    expect(pairingApproveOutput).toContain(`Approved pairing ticket ${pairingCodeMatch[0]}`);
+    expect(await app.dispatchSlashCommand({ kind: "pairing-list", status: "approved" })).toContain(pairingCodeMatch[0]);
 
     const approveOutput = await app.dispatchSlashCommand({ kind: "approve", approvalId: approval.id });
     expect(approveOutput).toContain(`Approved ${approval.id}`);
