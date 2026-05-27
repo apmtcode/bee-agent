@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import type { CronDeliveryConfig, DeliveryAttemptResult, DeliverySummaryStatus } from "./delivery.js";
 import { readJsonFile, writeJsonAtomic } from "../shared/fs.js";
 
 export type CronJobLastStatus = "success" | "error" | "interrupted";
@@ -12,10 +13,14 @@ export type CronJob = {
   recurring: boolean;
   durable: boolean;
   createdAt: string;
+  delivery?: CronDeliveryConfig;
   lastRunAt?: string;
   nextRunAt?: string;
   lastStatus?: CronJobLastStatus;
   lastError?: string;
+  lastDeliveryAt?: string;
+  lastDeliveryStatus?: DeliverySummaryStatus;
+  lastDeliveryError?: string;
 };
 
 export type CronRun = {
@@ -31,6 +36,7 @@ export type CronRun = {
   outcome?: CronRunOutcome;
   error?: string;
   summary?: string;
+  deliveryResults?: DeliveryAttemptResult[];
 };
 
 export type CronStoreShape = {
@@ -80,6 +86,7 @@ export class FileCronStore {
     recurring?: boolean;
     durable?: boolean;
     nextRunAt?: string;
+    delivery?: CronDeliveryConfig;
   }): Promise<CronJob> {
     const store = await this.load();
     const job: CronJob = {
@@ -90,6 +97,7 @@ export class FileCronStore {
       durable: params.durable ?? false,
       createdAt: nowIso(),
       ...(params.nextRunAt ? { nextRunAt: params.nextRunAt } : {}),
+      ...(params.delivery ? { delivery: params.delivery } : {}),
     };
     store.jobs.push(job);
     await this.save(store);
@@ -99,10 +107,14 @@ export class FileCronStore {
   async updateJob(
     jobId: string,
     params: {
+      delivery?: CronDeliveryConfig | null;
       lastRunAt?: string;
       nextRunAt?: string;
       lastStatus?: CronJobLastStatus;
       lastError?: string | null;
+      lastDeliveryAt?: string;
+      lastDeliveryStatus?: DeliverySummaryStatus;
+      lastDeliveryError?: string | null;
     },
   ): Promise<CronJob | undefined> {
     const store = await this.load();
@@ -115,12 +127,28 @@ export class FileCronStore {
       ...(params.lastRunAt ? { lastRunAt: params.lastRunAt } : {}),
       ...(params.nextRunAt ? { nextRunAt: params.nextRunAt } : {}),
       ...(params.lastStatus ? { lastStatus: params.lastStatus } : {}),
+      ...(params.lastDeliveryAt ? { lastDeliveryAt: params.lastDeliveryAt } : {}),
+      ...(params.lastDeliveryStatus ? { lastDeliveryStatus: params.lastDeliveryStatus } : {}),
     };
+    if (hasOwn(params, "delivery")) {
+      if (params.delivery) {
+        updated.delivery = params.delivery;
+      } else {
+        delete updated.delivery;
+      }
+    }
     if (hasOwn(params, "lastError")) {
       if (typeof params.lastError === "string") {
         updated.lastError = params.lastError;
       } else {
         delete updated.lastError;
+      }
+    }
+    if (hasOwn(params, "lastDeliveryError")) {
+      if (typeof params.lastDeliveryError === "string") {
+        updated.lastDeliveryError = params.lastDeliveryError;
+      } else {
+        delete updated.lastDeliveryError;
       }
     }
     store.jobs[index] = updated;
@@ -150,6 +178,7 @@ export class FileCronStore {
     outcome?: CronRunOutcome;
     error?: string;
     summary?: string;
+    deliveryResults?: DeliveryAttemptResult[];
   }): Promise<CronRun> {
     const store = await this.load();
     const run: CronRun = {
@@ -165,6 +194,7 @@ export class FileCronStore {
       ...(params.outcome ? { outcome: params.outcome } : {}),
       ...(params.error ? { error: params.error } : {}),
       ...(params.summary ? { summary: params.summary } : {}),
+      ...(params.deliveryResults ? { deliveryResults: params.deliveryResults } : {}),
     };
     store.runs.push(run);
     await this.save(store);
@@ -188,6 +218,7 @@ export class FileCronStore {
       outcome?: CronRunOutcome;
       error?: string | null;
       summary?: string | null;
+      deliveryResults?: DeliveryAttemptResult[] | null;
     },
   ): Promise<CronRun | undefined> {
     const store = await this.load();
@@ -217,6 +248,13 @@ export class FileCronStore {
         updated.summary = params.summary;
       } else {
         delete updated.summary;
+      }
+    }
+    if (hasOwn(params, "deliveryResults")) {
+      if (Array.isArray(params.deliveryResults)) {
+        updated.deliveryResults = params.deliveryResults;
+      } else {
+        delete updated.deliveryResults;
       }
     }
     store.runs[index] = updated;

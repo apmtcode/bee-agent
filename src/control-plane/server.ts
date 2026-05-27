@@ -1,5 +1,6 @@
 import type { ApprovalDecision } from "./approvals.js";
 import { OperatorCronService } from "./cron-service.js";
+import type { CronDeliveryConfig, DeliveryTarget } from "./delivery.js";
 import type { BackgroundTaskKind, BackgroundTaskRecoveryReason } from "../harness/background-tasks.js";
 import type { TranscriptReadOptions } from "../harness/transcript-store.js";
 import type { SkillCandidateStatus } from "../memory/types.js";
@@ -405,6 +406,7 @@ export class OperatorControlPlaneServer {
               prompt: getString(request.params, "prompt"),
               recurring: getOptionalBoolean(request.params, "recurring") ?? true,
               durable: getOptionalBoolean(request.params, "durable") ?? false,
+              delivery: getOptionalCronDeliveryConfig(request.params, "delivery"),
             }),
           );
         case "cron.delete": {
@@ -720,6 +722,70 @@ function getOptionalPluginCapability(
     return value;
   }
   throw new Error(`Invalid plugin capability: ${key}`);
+}
+
+function getOptionalCronDeliveryConfig(
+  params: Record<string, unknown> | undefined,
+  key: string,
+): CronDeliveryConfig | undefined {
+  const value = params?.[key];
+  if (value == null) {
+    return undefined;
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`Invalid cron delivery config: ${key}`);
+  }
+  const config = value as Record<string, unknown>;
+  return {
+    ...(config.onSuccess ? { onSuccess: getDeliveryTargets(config.onSuccess, `${key}.onSuccess`) } : {}),
+    ...(config.onFailure ? { onFailure: getDeliveryTargets(config.onFailure, `${key}.onFailure`) } : {}),
+  };
+}
+
+function getDeliveryTargets(value: unknown, key: string): DeliveryTarget[] {
+  if (!Array.isArray(value)) {
+    throw new Error(`Invalid delivery targets: ${key}`);
+  }
+  return value.map((item, index) => getDeliveryTarget(item, `${key}[${index}]`));
+}
+
+function getDeliveryTarget(value: unknown, key: string): DeliveryTarget {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`Invalid delivery target: ${key}`);
+  }
+  const target = value as Record<string, unknown>;
+  if (target.kind === "local") {
+    return { kind: "local" };
+  }
+  if (target.kind === "webhook") {
+    const url = typeof target.url === "string" && target.url.trim() ? target.url : undefined;
+    if (!url) {
+      throw new Error(`Invalid delivery target url: ${key}`);
+    }
+    return {
+      kind: "webhook",
+      url,
+      ...(target.headers ? { headers: getOptionalStringRecord(target.headers, `${key}.headers`) } : {}),
+    };
+  }
+  throw new Error(`Invalid delivery target kind: ${key}`);
+}
+
+function getOptionalStringRecord(value: unknown, key: string): Record<string, string> | undefined {
+  if (value == null) {
+    return undefined;
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`Invalid string record: ${key}`);
+  }
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>).map(([entryKey, entryValue]) => {
+      if (typeof entryValue !== "string") {
+        throw new Error(`Invalid string record value: ${key}.${entryKey}`);
+      }
+      return [entryKey, entryValue];
+    }),
+  );
 }
 
 function getOptionalRecord(

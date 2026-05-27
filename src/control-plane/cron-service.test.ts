@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { OperatorCronService } from "./cron-service.js";
+import { OperatorDeliveryService } from "./delivery.js";
 import { StandaloneOperatorRuntime } from "../orchestrator/operator-runtime.js";
 
 const tempDirs: string[] = [];
@@ -22,7 +23,11 @@ describe("OperatorCronService", () => {
     const rootDir = await makeTempDir();
     const runtime = new StandaloneOperatorRuntime({ rootDir });
     const service = new OperatorCronService(rootDir, { runtime });
-    const recurring = await service.createJob({ cron: "* * * * *", prompt: "do recurring" });
+    const recurring = await service.createJob({
+      cron: "* * * * *",
+      prompt: "do recurring",
+      delivery: { onSuccess: [{ kind: "local" }] },
+    });
     const oneShot = await service.createJob({ cron: "* * * * *", prompt: "do once", recurring: false });
 
     await expect(service.listJobs()).resolves.toHaveLength(2);
@@ -30,10 +35,17 @@ describe("OperatorCronService", () => {
     expect(runs).toHaveLength(2);
     expect(runs[0]).toMatchObject({ status: "completed", outcome: "success", sessionId: expect.any(String), operatorRunId: expect.any(String) });
     await expect(service.listRuns()).resolves.toHaveLength(2);
+    expect(runs[0]?.deliveryResults).toMatchObject([{ status: "sent", target: { kind: "local" } }]);
 
     const jobsAfterTick = await service.listJobs();
     const recurringAfterTick = jobsAfterTick.find((job) => job.id === recurring.id);
-    expect(recurringAfterTick).toMatchObject({ lastStatus: "success", lastRunAt: expect.any(String), nextRunAt: expect.any(String) });
+    expect(recurringAfterTick).toMatchObject({
+      lastStatus: "success",
+      lastRunAt: expect.any(String),
+      nextRunAt: expect.any(String),
+      lastDeliveryStatus: "sent",
+      lastDeliveryAt: expect.any(String),
+    });
     expect(jobsAfterTick.map((job) => job.id)).not.toContain(oneShot.id);
 
     const sessions = await runtime.listSessions();
@@ -60,17 +72,37 @@ describe("OperatorCronService", () => {
         throw new Error("cron dispatch failed");
       },
     });
-    const job = await service.createJob({ cron: "* * * * *", prompt: "break cron" });
+    const job = await service.createJob({
+      cron: "* * * * *",
+      prompt: "break cron",
+      delivery: { onFailure: [{ kind: "local" }] },
+    });
 
     const [failedRun] = await service.tick(new Date(Date.now() + 120_000));
-    expect(failedRun).toMatchObject({ status: "failed", outcome: "error", error: "cron dispatch failed" });
+    expect(failedRun).toMatchObject({
+      status: "failed",
+      outcome: "error",
+      error: "cron dispatch failed",
+      deliveryResults: [{ status: "sent", target: { kind: "local" } }],
+    });
     const failedJob = await service.store.getJob(job.id);
-    expect(failedJob).toMatchObject({ lastStatus: "error", lastError: "cron dispatch failed" });
+    expect(failedJob).toMatchObject({
+      lastStatus: "error",
+      lastError: "cron dispatch failed",
+      lastDeliveryStatus: "sent",
+    });
 
     const recoveryRoot = await makeTempDir();
     const recoveryRuntime = new StandaloneOperatorRuntime({ rootDir: recoveryRoot });
-    const recoveryService = new OperatorCronService(recoveryRoot, { runtime: recoveryRuntime });
-    const recoveryJob = await recoveryService.createJob({ cron: "* * * * *", prompt: "recover me" });
+    const recoveryDelivery = new OperatorDeliveryService(recoveryRoot, {
+      fetchImpl: async () => new Response(null, { status: 204 }),
+    });
+    const recoveryService = new OperatorCronService(recoveryRoot, { runtime: recoveryRuntime, delivery: recoveryDelivery });
+    const recoveryJob = await recoveryService.createJob({
+      cron: "* * * * *",
+      prompt: "recover me",
+      delivery: { onFailure: [{ kind: "webhook", url: "https://example.test/cron" }] },
+    });
     await recoveryService.store.updateJob(recoveryJob.id, {
       nextRunAt: new Date(Date.now() + 600_000).toISOString(),
     });
@@ -86,9 +118,14 @@ describe("OperatorCronService", () => {
 
     await recoveryService.tick(new Date(Date.now() + 120_000));
     const recovered = await recoveryService.store.getRun(staleRun.id);
-    expect(recovered).toMatchObject({ status: "failed", outcome: "interrupted", error: "Interrupted before completion." });
+    expect(recovered).toMatchObject({
+      status: "failed",
+      outcome: "interrupted",
+      error: "Interrupted before completion.",
+      deliveryResults: [{ status: "sent", target: { kind: "webhook", url: "https://example.test/cron" } }],
+    });
     await expect(recoveryRuntime.getRun(run.id)).resolves.toMatchObject({ status: "failed" });
     await expect(recoveryRuntime.getSession(session.id)).resolves.toMatchObject({ status: "failed" });
-    await expect(recoveryService.store.getJob(recoveryJob.id)).resolves.toMatchObject({ lastStatus: "interrupted" });
+    await expect(recoveryService.store.getJob(recoveryJob.id)).resolves.toMatchObject({ lastStatus: "interrupted", lastDeliveryStatus: "sent" });
   });
 });

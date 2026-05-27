@@ -32,7 +32,7 @@ export type OperatorCliSlashCommand =
   | { kind: "background" }
   | { kind: "training" }
   | { kind: "cron-list" }
-  | { kind: "cron-create"; cron: string; prompt: string }
+  | { kind: "cron-create"; cron: string; prompt: string; delivery?: { onSuccess?: string[]; onFailure?: string[] } }
   | { kind: "cron-runs"; jobId?: string }
   | { kind: "cron-tick" }
   | { kind: "cron-delete"; jobId: string }
@@ -387,16 +387,34 @@ export class OperatorCliApp {
         return response.result.length === 0
           ? "No cron jobs."
           : response.result
-              .map(
-                (job) =>
-                  `${job.id} ${job.cron} recurring=${job.recurring} next=${job.nextRunAt ?? "<none>"} last=${job.lastRunAt ?? "<none>"} status=${job.lastStatus ?? "<none>"} prompt=${job.prompt}${job.lastError ? ` error=${job.lastError}` : ""}`,
-              )
+              .map((job) => {
+                const deliveryTargets = [
+                  ...(job.delivery?.onSuccess?.map((target) => `success:${target.kind === "local" ? "local" : target.url}`) ?? []),
+                  ...(job.delivery?.onFailure?.map((target) => `failure:${target.kind === "local" ? "local" : target.url}`) ?? []),
+                ];
+                return `${job.id} ${job.cron} recurring=${job.recurring} next=${job.nextRunAt ?? "<none>"} last=${job.lastRunAt ?? "<none>"} status=${job.lastStatus ?? "<none>"} prompt=${job.prompt}${job.lastError ? ` error=${job.lastError}` : ""}${job.lastDeliveryStatus ? ` delivery=${job.lastDeliveryStatus}` : ""}${job.lastDeliveryError ? ` deliveryError=${job.lastDeliveryError}` : ""}${deliveryTargets.length > 0 ? ` targets=${deliveryTargets.join(",")}` : ""}`;
+              })
               .join("\n");
       }
       case "cron-create": {
         const response = await this.server.handle({
           method: "cron.create",
-          params: { cron: command.cron, prompt: command.prompt },
+          params: {
+            cron: command.cron,
+            prompt: command.prompt,
+            ...(command.delivery
+              ? {
+                  delivery: {
+                    ...(command.delivery.onSuccess?.length
+                      ? { onSuccess: command.delivery.onSuccess.map((target) => (target === "local" ? { kind: "local" } : { kind: "webhook", url: target })) }
+                      : {}),
+                    ...(command.delivery.onFailure?.length
+                      ? { onFailure: command.delivery.onFailure.map((target) => (target === "local" ? { kind: "local" } : { kind: "webhook", url: target })) }
+                      : {}),
+                  },
+                }
+              : {}),
+          },
         });
         if (!response.ok) {
           return response.error.message;
@@ -414,10 +432,10 @@ export class OperatorCliApp {
         return response.result.length === 0
           ? "No cron runs."
           : response.result
-              .map(
-                (run) =>
-                  `${run.id} job=${run.jobId} ${run.status}${run.outcome ? ` outcome=${run.outcome}` : ""}${run.sessionId ? ` session=${run.sessionId}` : ""}${run.operatorRunId ? ` run=${run.operatorRunId}` : ""}${run.summary ? ` summary=${run.summary}` : ""}${run.error ? ` error=${run.error}` : ""}`,
-              )
+              .map((run) => {
+                const delivery = run.deliveryResults?.map((result) => `${result.target.kind === "local" ? "local" : result.target.url}:${result.status}${result.error ? `:${result.error}` : ""}`).join(",");
+                return `${run.id} job=${run.jobId} ${run.status}${run.outcome ? ` outcome=${run.outcome}` : ""}${run.sessionId ? ` session=${run.sessionId}` : ""}${run.operatorRunId ? ` run=${run.operatorRunId}` : ""}${run.summary ? ` summary=${run.summary}` : ""}${run.error ? ` error=${run.error}` : ""}${delivery ? ` delivery=${delivery}` : ""}`;
+              })
               .join("\n");
       }
       case "cron-tick": {
@@ -428,10 +446,10 @@ export class OperatorCliApp {
         return response.result.length === 0
           ? "No due cron jobs."
           : response.result
-              .map(
-                (run) =>
-                  `${run.id} job=${run.jobId} ${run.status}${run.outcome ? ` outcome=${run.outcome}` : ""}${run.sessionId ? ` session=${run.sessionId}` : ""}${run.operatorRunId ? ` run=${run.operatorRunId}` : ""}${run.summary ? ` summary=${run.summary}` : ""}${run.error ? ` error=${run.error}` : ""}`,
-              )
+              .map((run) => {
+                const delivery = run.deliveryResults?.map((result) => `${result.target.kind === "local" ? "local" : result.target.url}:${result.status}${result.error ? `:${result.error}` : ""}`).join(",");
+                return `${run.id} job=${run.jobId} ${run.status}${run.outcome ? ` outcome=${run.outcome}` : ""}${run.sessionId ? ` session=${run.sessionId}` : ""}${run.operatorRunId ? ` run=${run.operatorRunId}` : ""}${run.summary ? ` summary=${run.summary}` : ""}${run.error ? ` error=${run.error}` : ""}${delivery ? ` delivery=${delivery}` : ""}`;
+              })
               .join("\n");
       }
       case "cron-delete": {
@@ -631,16 +649,52 @@ function parseCronCommand(tail: string): OperatorCliSlashCommand {
     return jobId ? { kind: "cron-delete", jobId } : { kind: "invalid", message: "Usage: /cron delete <jobId>" };
   }
   if (tail.startsWith("create ")) {
-    const tokens = tail.slice("create ".length).trim().split(/\s+/);
+    const rest = tail.slice("create ".length).trim();
+    const tokens = rest.split(/\s+/);
     if (tokens.length < 6) {
-      return { kind: "invalid", message: "Usage: /cron create <cronExpr> <prompt>" };
+      return { kind: "invalid", message: "Usage: /cron create <cronExpr> <prompt> [--on-success <target>] [--on-failure <target>]" };
     }
     const cron = tokens.slice(0, 5).join(" ");
-    const prompt = tokens.slice(5).join(" ").trim();
-    if (!prompt) {
-      return { kind: "invalid", message: "Usage: /cron create <cronExpr> <prompt>" };
+    const remainder = tokens.slice(5);
+    const promptTokens: string[] = [];
+    const onSuccess: string[] = [];
+    const onFailure: string[] = [];
+    let index = 0;
+    while (index < remainder.length) {
+      const token = remainder[index];
+      if (token === "--on-success" || token === "--on-failure") {
+        const target = remainder[index + 1];
+        if (!target) {
+          return { kind: "invalid", message: "Usage: /cron create <cronExpr> <prompt> [--on-success <target>] [--on-failure <target>]" };
+        }
+        if (token === "--on-success") {
+          onSuccess.push(target);
+        } else {
+          onFailure.push(target);
+        }
+        index += 2;
+        continue;
+      }
+      promptTokens.push(token);
+      index += 1;
     }
-    return { kind: "cron-create", cron, prompt };
+    const prompt = promptTokens.join(" ").trim();
+    if (!prompt) {
+      return { kind: "invalid", message: "Usage: /cron create <cronExpr> <prompt> [--on-success <target>] [--on-failure <target>]" };
+    }
+    return {
+      kind: "cron-create",
+      cron,
+      prompt,
+      ...((onSuccess.length > 0 || onFailure.length > 0)
+        ? {
+            delivery: {
+              ...(onSuccess.length > 0 ? { onSuccess } : {}),
+              ...(onFailure.length > 0 ? { onFailure } : {}),
+            },
+          }
+        : {}),
+    };
   }
   return { kind: "invalid", message: "Usage: /cron [create|runs|tick|delete] ..." };
 }

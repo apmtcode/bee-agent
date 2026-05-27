@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { OperatorControlPlaneServer } from "./server.js";
 import { OperatorCronService } from "./cron-service.js";
+import { OperatorDeliveryService } from "./delivery.js";
 import { subscribeRuntimeEvents } from "./subscriptions.js";
 import { StandaloneOperatorRuntime } from "../orchestrator/operator-runtime.js";
 import type { ReviewedExportManifest } from "../training/export-manifest.js";
@@ -770,28 +771,68 @@ describe("OperatorControlPlaneServer", () => {
   it("handles cron methods", async () => {
     const rootDir = await makeTempDir();
     const runtime = new StandaloneOperatorRuntime({ rootDir });
-    const cron = new OperatorCronService(rootDir, { runtime });
+    const delivery = new OperatorDeliveryService(rootDir, {
+      fetchImpl: async () => new Response(null, { status: 204 }),
+    });
+    const cron = new OperatorCronService(rootDir, { runtime, delivery });
     const server = new OperatorControlPlaneServer({ runtime, cron });
 
     const created = await server.handle({
       method: "cron.create",
-      params: { cron: "* * * * *", prompt: "run cron", recurring: false },
+      params: {
+        cron: "* * * * *",
+        prompt: "run cron",
+        recurring: false,
+        delivery: {
+          onSuccess: [{ kind: "local" }],
+          onFailure: [{ kind: "webhook", url: "https://example.test/hook" }],
+        },
+      },
     });
-    expect(created).toMatchObject({ ok: true, result: { prompt: "run cron", recurring: false } });
+    expect(created).toMatchObject({
+      ok: true,
+      result: {
+        prompt: "run cron",
+        recurring: false,
+        delivery: {
+          onSuccess: [{ kind: "local" }],
+          onFailure: [{ kind: "webhook", url: "https://example.test/hook" }],
+        },
+      },
+    });
 
     const list = await server.handle({ method: "cron.list" });
-    expect(list).toMatchObject({ ok: true, result: [{ prompt: "run cron" }] });
+    expect(list).toMatchObject({
+      ok: true,
+      result: [{ prompt: "run cron", delivery: { onSuccess: [{ kind: "local" }], onFailure: [{ kind: "webhook", url: "https://example.test/hook" }] } }],
+    });
 
     const tick = await server.handle({ method: "cron.tick", params: { nowMs: Date.now() + 120_000 } });
     expect(tick).toMatchObject({
       ok: true,
-      result: [{ status: "completed", outcome: "success", sessionId: expect.any(String), operatorRunId: expect.any(String) }],
+      result: [
+        {
+          status: "completed",
+          outcome: "success",
+          sessionId: expect.any(String),
+          operatorRunId: expect.any(String),
+          deliveryResults: [{ status: "sent", target: { kind: "local" } }],
+        },
+      ],
     });
 
     const runs = await server.handle({ method: "cron.runs" });
     expect(runs).toMatchObject({
       ok: true,
-      result: [{ status: "completed", outcome: "success", sessionId: expect.any(String), operatorRunId: expect.any(String) }],
+      result: [
+        {
+          status: "completed",
+          outcome: "success",
+          sessionId: expect.any(String),
+          operatorRunId: expect.any(String),
+          deliveryResults: [{ status: "sent", target: { kind: "local" } }],
+        },
+      ],
     });
 
     const jobs = await server.handle({ method: "cron.list" });

@@ -118,19 +118,29 @@ Current cron behavior in this tranche:
 - successful cron fires record a real transcript turn and complete the linked session/run
 - failed cron fires persist `lastStatus` / `lastError` on the job and fail the linked session/run
 - stale `scheduled` / `running` cron runs are recovered as interrupted failures on the next tick
+- cron jobs can optionally declare terminal-state delivery targets for success and failure paths
+- per-run delivery attempts are persisted independently from execution outcome
+
+Current delivery behavior in this tranche:
+- supported delivery targets are `local` and `webhook`
+- delivery runs only after a cron run reaches terminal state
+- delivery failure does not rewrite a successful cron execution into a failed execution
+- local delivery writes a durable local notification artifact
+- webhook delivery posts a small JSON envelope with no retries in this tranche
 
 Current CLI visibility for this tranche:
-- `/cron` now shows `next`, `last`, `status`, and any last error
-- `/cron runs [jobId]` and `/cron tick` show linked session/run ids plus terminal outcome details
+- `/cron` now shows `next`, `last`, `status`, delivery summary, and any last execution or delivery error
+- `/cron create <cronExpr> <prompt> [--on-success <target>] [--on-failure <target>]` can attach terminal delivery targets
+- `/cron runs [jobId]` and `/cron tick` show linked session/run ids plus terminal outcome and delivery details
 
-This is still a local first pass. Cron expression handling remains placeholder, and cron does not yet dispatch into channel/gateway transports.
+This is still a narrow outbound-only pass. Cron expression handling remains placeholder, and operator still does not have interactive channel/gateway runtime parity.
 
 ## Current gaps to parity
 
 The system is still incomplete relative to the long-term goal. Major missing tranches include:
 - richer Claude Code style command surface and hook execution
-- OpenClaw-style channel/gateway runtime and remote transport
-- more complete cron scheduling, delivery, and transport integration
+- fuller OpenClaw-style channel/gateway runtime and remote transport
+- richer delivery routing, retries, and transport semantics beyond local/webhook terminal notifications
 - more complete interactive assistant behavior in the CLI shell
 
 This README should be updated as each tranche lands so it remains the top-level project map.

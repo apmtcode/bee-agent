@@ -91,6 +91,16 @@ export {
   OperatorCronService,
 } from "./control-plane/cron-service.js";
 export {
+  OperatorDeliveryService,
+  summarizeDeliveryResults,
+  type CronDeliveryConfig,
+  type CronTerminalDeliveryPayload,
+  type DeliveryAttemptResult,
+  type DeliveryAttemptStatus,
+  type DeliverySummaryStatus,
+  type DeliveryTarget,
+} from "./control-plane/delivery.js";
+export {
   FileCronStore,
   type CronJob,
   type CronRun,

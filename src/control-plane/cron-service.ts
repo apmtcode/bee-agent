@@ -1,4 +1,10 @@
 import path from "node:path";
+import {
+  OperatorDeliveryService,
+  summarizeDeliveryResults,
+  type CronTerminalDeliveryPayload,
+  type DeliveryTarget,
+} from "./delivery.js";
 import { FileCronStore, type CronJob, type CronJobLastStatus, type CronRun } from "./cron-store.js";
 import { JsonlTranscriptStore } from "../harness/transcript-store.js";
 import type { StandaloneOperatorOptions, StandaloneOperatorRuntime } from "../orchestrator/operator-runtime.js";
@@ -44,18 +50,21 @@ export class OperatorCronService {
   readonly store: FileCronStore;
   private readonly runtime?: StandaloneOperatorRuntime;
   private readonly dispatchCronJob: OperatorCronDispatcher;
+  private readonly delivery: OperatorDeliveryService;
 
   constructor(
     rootDirOrOptions: string | StandaloneOperatorOptions,
     options: {
       runtime?: StandaloneOperatorRuntime;
       dispatchCronJob?: OperatorCronDispatcher;
+      delivery?: OperatorDeliveryService;
     } = {},
   ) {
     const rootDir = typeof rootDirOrOptions === "string" ? rootDirOrOptions : rootDirOrOptions.rootDir;
     this.store = new FileCronStore(path.join(rootDir, "cron.json"));
     this.runtime = options.runtime;
     this.dispatchCronJob = options.dispatchCronJob ?? defaultCronDispatcher;
+    this.delivery = options.delivery ?? new OperatorDeliveryService(rootDir);
   }
 
   async listJobs(): Promise<CronJob[]> {
@@ -67,6 +76,7 @@ export class OperatorCronService {
     prompt: string;
     recurring?: boolean;
     durable?: boolean;
+    delivery?: CronJob["delivery"];
   }): Promise<CronJob> {
     return await this.store.createJob({
       ...params,
@@ -93,6 +103,51 @@ export class OperatorCronService {
     return await this.store.listRuns(jobId);
   }
 
+  private buildDeliveryPayload(job: CronJob, run: CronRun): CronTerminalDeliveryPayload {
+    return {
+      kind: "cron-terminal-state",
+      cron: {
+        jobId: job.id,
+        runId: run.id,
+        cron: job.cron,
+        prompt: job.prompt,
+        recurring: job.recurring,
+        status: run.status,
+        ...(run.outcome ? { outcome: run.outcome } : {}),
+        ...(run.summary ? { summary: run.summary } : {}),
+        ...(run.error ? { error: run.error } : {}),
+        ...(run.scheduledFor ? { scheduledFor: run.scheduledFor } : {}),
+        ...(run.startedAt ? { startedAt: run.startedAt } : {}),
+        ...(run.finishedAt ? { finishedAt: run.finishedAt } : {}),
+        ...(run.sessionId ? { sessionId: run.sessionId } : {}),
+        ...(run.operatorRunId ? { operatorRunId: run.operatorRunId } : {}),
+      },
+    };
+  }
+
+  private getDeliveryTargets(job: CronJob, run: CronRun): DeliveryTarget[] {
+    if (run.outcome === "success") {
+      return job.delivery?.onSuccess ?? [];
+    }
+    return job.delivery?.onFailure ?? [];
+  }
+
+  private async persistDeliveryResults(job: CronJob, run: CronRun): Promise<CronRun> {
+    const targets = this.getDeliveryTargets(job, run);
+    if (targets.length === 0) {
+      return run;
+    }
+    const deliveryResults = await this.delivery.deliver(targets, this.buildDeliveryPayload(job, run));
+    const updatedRun = await this.store.updateRun(run.id, { deliveryResults });
+    const summary = summarizeDeliveryResults(deliveryResults);
+    await this.store.updateJob(job.id, {
+      lastDeliveryAt: deliveryResults[deliveryResults.length - 1]?.attemptedAt,
+      lastDeliveryStatus: summary.lastDeliveryStatus,
+      lastDeliveryError: summary.lastDeliveryError ?? null,
+    });
+    return updatedRun ?? { ...run, deliveryResults };
+  }
+
   private async recoverInterruptedRuns(): Promise<void> {
     if (!this.runtime) {
       return;
@@ -100,6 +155,7 @@ export class OperatorCronService {
     const runs = await this.store.listRuns();
     const staleRuns = runs.filter((run) => run.status === "scheduled" || run.status === "running");
     for (const run of staleRuns) {
+      const job = await this.store.getJob(run.jobId);
       if (run.operatorRunId) {
         const linkedRun = await this.runtime.getRun(run.operatorRunId);
         if (linkedRun && linkedRun.status !== "completed" && linkedRun.status !== "failed") {
@@ -115,7 +171,7 @@ export class OperatorCronService {
           await this.runtime.failSession(run.sessionId);
         }
       }
-      await this.store.updateRun(run.id, {
+      const interrupted = await this.store.updateRun(run.id, {
         status: "failed",
         outcome: "interrupted",
         error: "Interrupted before completion.",
@@ -125,6 +181,9 @@ export class OperatorCronService {
         lastStatus: "interrupted",
         lastError: "Interrupted before completion.",
       });
+      if (job && interrupted) {
+        await this.persistDeliveryResults(job, interrupted);
+      }
     }
   }
 
@@ -149,13 +208,14 @@ export class OperatorCronService {
         summary: buildCronSummary(`Cron executed prompt: ${job.prompt}`),
       });
       await this.updateJobOutcome(job.id, { lastStatus: "success", lastError: null });
-      if (!job.recurring) {
-        await this.store.deleteJob(job.id);
-      }
       if (!completed) {
         throw new Error(`Unable to finalize cron run: ${scheduled.id}`);
       }
-      return completed;
+      const delivered = await this.persistDeliveryResults(job, completed);
+      if (!job.recurring) {
+        await this.store.deleteJob(job.id);
+      }
+      return delivered;
     }
 
     const session = await this.runtime.startSession({
@@ -206,13 +266,14 @@ export class OperatorCronService {
         summary: buildCronSummary(dispatched.summary ?? dispatched.assistantText),
       });
       await this.updateJobOutcome(job.id, { lastStatus: "success", lastError: null });
-      if (!job.recurring) {
-        await this.store.deleteJob(job.id);
-      }
       if (!completed) {
         throw new Error(`Unable to finalize cron run: ${scheduled.id}`);
       }
-      return completed;
+      const delivered = await this.persistDeliveryResults(job, completed);
+      if (!job.recurring) {
+        await this.store.deleteJob(job.id);
+      }
+      return delivered;
     } catch (error) {
       const message = normalizeError(error);
       await this.runtime.updateRunStatus(operatorRun.id, "failed", {
@@ -242,13 +303,14 @@ export class OperatorCronService {
         summary: null,
       });
       await this.updateJobOutcome(job.id, { lastStatus: "error", lastError: message });
-      if (!job.recurring) {
-        await this.store.deleteJob(job.id);
-      }
       if (!failed) {
         throw new Error(`Unable to finalize failed cron run: ${scheduled.id}`);
       }
-      return failed;
+      const delivered = await this.persistDeliveryResults(job, failed);
+      if (!job.recurring) {
+        await this.store.deleteJob(job.id);
+      }
+      return delivered;
     }
   }
 

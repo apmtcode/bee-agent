@@ -40,6 +40,15 @@ describe("parseSlashCommand", () => {
       cron: "*/5 * * * *",
       prompt: "remind me",
     });
+    expect(parseSlashCommand("/cron create */5 * * * * remind me --on-success local --on-failure https://example.test/hook")).toEqual({
+      kind: "cron-create",
+      cron: "*/5 * * * *",
+      prompt: "remind me",
+      delivery: {
+        onSuccess: ["local"],
+        onFailure: ["https://example.test/hook"],
+      },
+    });
     expect(parseSlashCommand("/cron runs job-1")).toEqual({ kind: "cron-runs", jobId: "job-1" });
     expect(parseSlashCommand("/cron tick")).toEqual({ kind: "cron-tick" });
     expect(parseSlashCommand("/cron delete job-1")).toEqual({ kind: "cron-delete", jobId: "job-1" });
@@ -60,7 +69,7 @@ describe("parseSlashCommand", () => {
     });
     expect(parseSlashCommand("/cron create * * *")).toEqual({
       kind: "invalid",
-      message: "Usage: /cron create <cronExpr> <prompt>",
+      message: "Usage: /cron create <cronExpr> <prompt> [--on-success <target>] [--on-failure <target>]",
     });
   });
 });
@@ -201,12 +210,21 @@ describe("OperatorCliApp", () => {
     expect(viewOutput).toContain(task.id);
     expect(viewOutput).toContain("ok");
 
-    const cronCreate = await app.dispatchSlashCommand({ kind: "cron-create", cron: "* * * * *", prompt: "check deploy" }, session.id);
+    const cronCreate = await app.dispatchSlashCommand(
+      {
+        kind: "cron-create",
+        cron: "* * * * *",
+        prompt: "check deploy",
+        delivery: { onSuccess: ["local"], onFailure: ["https://example.test/hook"] },
+      },
+      session.id,
+    );
     expect(cronCreate).toContain("Created cron job");
 
     const cronList = await app.dispatchSlashCommand({ kind: "cron-list" }, session.id);
     expect(cronList).toContain("check deploy");
     expect(cronList).toContain("status=<none>");
+    expect(cronList).toContain("targets=success:local,failure:https://example.test/hook");
 
     const cronJobs = await app.server.handle({ method: "cron.list" });
     if (!cronJobs.ok || cronJobs.result.length === 0) {
@@ -224,6 +242,7 @@ describe("OperatorCliApp", () => {
     expect(cronRuns).toContain("outcome=success");
     expect(cronRuns).toContain("session=");
     expect(cronRuns).toContain("run=");
+    expect(cronRuns).toContain("delivery=local:sent");
 
     const cronDelete = await app.dispatchSlashCommand({ kind: "cron-delete", jobId: job.id }, session.id);
     expect(cronDelete).toContain(`Deleted cron job ${job.id}`);
