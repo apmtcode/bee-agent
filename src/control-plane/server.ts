@@ -67,6 +67,28 @@ export type SessionBootstrapResult = {
   events: OperatorEvent[];
 };
 
+export type SessionRemoteStatusResult = {
+  remoteId: string;
+  remoteSource?: string;
+  session: SessionRecord;
+  pairing?: PairingTicket;
+  approvals: ApprovalRequest[];
+  activeRun?: {
+    id: string;
+    title: string;
+    status: string;
+    updatedAt: string;
+  };
+  activeBackgroundTask?: {
+    id: string;
+    title: string;
+    kind: string;
+    status: string;
+    updatedAt: string;
+  };
+  recentEvents: OperatorEvent[];
+};
+
 export class OperatorControlPlaneServer {
   private readonly cron: OperatorCronService;
   private readonly pairing: FilePairingStore;
@@ -132,6 +154,11 @@ export class OperatorControlPlaneServer {
             runId: getOptionalString(request.params, "runId"),
             family: getOptionalRuntimeEventFamily(request.params, "family"),
           }));
+        }
+        case "sessions.remoteStatus": {
+          const identifier = getString(request.params, "identifier");
+          const status = await buildSessionRemoteStatusResult(this.options.runtime, this.pairing, identifier);
+          return status ? ok(status) : notFound(`unknown remote or session: ${identifier}`);
         }
         case "sessions.resume": {
           const sessionId = getString(request.params, "sessionId");
@@ -572,6 +599,60 @@ async function buildSessionBootstrapResult(
       ...(options.family ? { family: options.family } : {}),
     })),
   };
+}
+
+async function buildSessionRemoteStatusResult(
+  runtime: StandaloneOperatorRuntime,
+  pairing: FilePairingStore,
+  identifier: string,
+): Promise<SessionRemoteStatusResult | undefined> {
+  const session = await runtime.getSession(identifier) ?? await runtime.findSessionByRemoteId(identifier);
+  if (!session) {
+    return undefined;
+  }
+  const approvals = await runtime.listApprovals(session.id);
+  const activeRun = await runtime.getActiveRun(session.id);
+  const activeBackgroundTask = await runtime.getActiveBackgroundTask(session.id);
+  const pairingTicket = session.metadata.remoteId
+    ? await findLatestPairingTicket(pairing, session.metadata.remoteId)
+    : undefined;
+  return {
+    remoteId: session.metadata.remoteId ?? session.id,
+    ...(session.metadata.remoteSource ? { remoteSource: session.metadata.remoteSource } : {}),
+    session,
+    ...(pairingTicket ? { pairing: pairingTicket } : {}),
+    approvals,
+    ...(activeRun
+      ? {
+          activeRun: {
+            id: activeRun.id,
+            title: activeRun.title,
+            status: activeRun.status,
+            updatedAt: activeRun.updatedAt,
+          },
+        }
+      : {}),
+    ...(activeBackgroundTask
+      ? {
+          activeBackgroundTask: {
+            id: activeBackgroundTask.id,
+            title: activeBackgroundTask.title,
+            kind: activeBackgroundTask.kind,
+            status: activeBackgroundTask.status,
+            updatedAt: activeBackgroundTask.updatedAt,
+          },
+        }
+      : {}),
+    recentEvents: runtime.events.snapshot(buildRuntimeEventFilter({ sessionId: session.id })).slice(-5),
+  };
+}
+
+async function findLatestPairingTicket(
+  pairing: FilePairingStore,
+  remoteId: string,
+): Promise<PairingTicket | undefined> {
+  const tickets = await pairing.listTickets();
+  return tickets.find((ticket) => ticket.remoteId === remoteId);
 }
 
 function ok<T>(result: T): ControlPlaneSuccess<T> {

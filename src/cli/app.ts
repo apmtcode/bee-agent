@@ -27,6 +27,7 @@ export type OperatorCliSlashCommand =
   | { kind: "pairing-create"; remoteSource?: string }
   | { kind: "pairing-approve"; identifier: string }
   | { kind: "pairing-reject"; identifier: string }
+  | { kind: "remote-status"; identifier: string }
   | { kind: "recall"; query: string }
   | { kind: "skills" }
   | { kind: "run-skill"; skillId: string }
@@ -183,6 +184,7 @@ export class OperatorCliApp {
           "  /pairing create [source]",
           "  /pairing approve <code|id>",
           "  /pairing reject <code|id>",
+          "  /remote status <remoteId|sessionId>",
           "  /recall <query>",
           "  /skills",
           "  /run-skill <id>",
@@ -338,6 +340,16 @@ export class OperatorCliApp {
           params: { code: command.identifier, decision: "rejected", resolvedBy: "operator-cli" },
         });
         return response.ok ? `Rejected pairing ticket ${response.result.code}.` : response.error.message;
+      }
+      case "remote-status": {
+        const response = await this.server.handle({
+          method: "sessions.remoteStatus",
+          params: { identifier: command.identifier },
+        });
+        if (!response.ok) {
+          return response.error.message;
+        }
+        return formatRemoteStatus(response.result);
       }
       case "recall": {
         const recall = await this.runtime.recall(command.query);
@@ -728,6 +740,33 @@ function formatWatchEvent(event: { type: string; payload?: unknown }): string | 
   return undefined;
 }
 
+function formatRemoteStatus(status: {
+  remoteId: string;
+  remoteSource?: string;
+  session: { id: string; status: string; metadata: { agentId?: string } };
+  pairing?: { code: string; status: string; expiresAt: string };
+  approvals: Array<{ id: string; title: string }>;
+  activeRun?: { id: string; title: string; status: string; updatedAt: string };
+  activeBackgroundTask?: { id: string; title: string; kind: string; status: string; updatedAt: string };
+  recentEvents: Array<{ type: string }>;
+}): string {
+  return [
+    `remote=${status.remoteId} source=${status.remoteSource ?? "<unknown>"}`,
+    `session=${status.session.id} status=${status.session.status} agent=${status.session.metadata.agentId ?? "<none>"}`,
+    status.pairing
+      ? `pairing=${status.pairing.code} ${status.pairing.status} expires=${status.pairing.expiresAt}`
+      : "pairing=<none>",
+    `approvals=${status.approvals.length === 0 ? "<none>" : status.approvals.map((approval) => `${approval.id}:${approval.title}`).join(",")}`,
+    status.activeRun
+      ? `run=${status.activeRun.id} ${status.activeRun.status} ${status.activeRun.title} updated=${status.activeRun.updatedAt}`
+      : "run=<none>",
+    status.activeBackgroundTask
+      ? `task=${status.activeBackgroundTask.id} ${status.activeBackgroundTask.status} ${status.activeBackgroundTask.kind} ${status.activeBackgroundTask.title} updated=${status.activeBackgroundTask.updatedAt}`
+      : "task=<none>",
+    `events=${status.recentEvents.length === 0 ? "<none>" : status.recentEvents.map((event) => event.type).join(",")}`,
+  ].join("\n");
+}
+
 export function parseSlashCommand(input: string): OperatorCliSlashCommand | undefined {
   const trimmed = input.trim();
   if (!trimmed.startsWith("/")) {
@@ -758,6 +797,8 @@ export function parseSlashCommand(input: string): OperatorCliSlashCommand | unde
       return tail ? { kind: "deny", approvalId: tail } : { kind: "invalid", message: "Usage: /deny <approvalId>" };
     case "pairing":
       return parsePairingCommand(tail);
+    case "remote":
+      return parseRemoteCommand(tail);
     case "recall":
       return { kind: "recall", query: tail };
     case "skills":
@@ -842,6 +883,17 @@ function parsePairingCommand(tail: string): OperatorCliSlashCommand {
     return { kind: "pairing-list", status: tail };
   }
   return { kind: "invalid", message: "Usage: /pairing [create|approve|reject|pending|approved|rejected|redeemed|expired]" };
+}
+
+function parseRemoteCommand(tail: string): OperatorCliSlashCommand {
+  if (!tail || tail === "status") {
+    return { kind: "invalid", message: "Usage: /remote status <remoteId|sessionId>" };
+  }
+  if (tail.startsWith("status ")) {
+    const identifier = tail.slice("status ".length).trim();
+    return identifier ? { kind: "remote-status", identifier } : { kind: "invalid", message: "Usage: /remote status <remoteId|sessionId>" };
+  }
+  return { kind: "invalid", message: "Usage: /remote status <remoteId|sessionId>" };
 }
 
 function parseBackgroundCommand(tail: string): OperatorCliSlashCommand {

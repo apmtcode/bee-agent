@@ -193,7 +193,6 @@ describe("OperatorControlPlaneServer", () => {
         session: { id: session.id },
       },
     });
-
     const pairingCreate = await server.handle({
       method: "pairing.create",
       params: { remoteSource: "gateway" },
@@ -238,9 +237,46 @@ describe("OperatorControlPlaneServer", () => {
         },
       },
     });
+    if (!pairedBootstrap.ok) {
+      throw new Error("expected paired bootstrap session");
+    }
+    await runtime.promptApproval({
+      sessionId: pairedBootstrap.result.session.id,
+      title: "Remote approval",
+      summary: "Approve remote command",
+    });
+    const remoteRun = await runtime.startRun({ sessionId: pairedBootstrap.result.session.id, title: "Remote run" });
+    const remoteTask = await runtime.startBackgroundTask({
+      sessionId: pairedBootstrap.result.session.id,
+      title: "Remote task",
+      command: "printf 'remote'",
+      kind: "task",
+    });
     await expect(server.handle({ method: "pairing.list", params: { status: "redeemed" } })).resolves.toMatchObject({
       ok: true,
       result: [expect.objectContaining({ id: pairingCreate.result.id, status: "redeemed" })],
+    });
+    await expect(
+      server.handle({
+        method: "sessions.remoteStatus",
+        params: { identifier: pairingCreate.result.remoteId },
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      result: {
+        remoteId: pairingCreate.result.remoteId,
+        remoteSource: "gateway",
+        session: { id: expect.any(String), metadata: { remoteId: pairingCreate.result.remoteId, remoteSource: "gateway" } },
+        pairing: { code: pairingCreate.result.code, status: "redeemed" },
+        approvals: [expect.objectContaining({ title: "Remote approval", sessionId: expect.any(String) })],
+        activeRun: { id: remoteRun.id, title: "Remote run", status: "running" },
+        activeBackgroundTask: { id: remoteTask.id, title: "Remote task", kind: "task", status: "running" },
+        recentEvents: expect.arrayContaining([
+          expect.objectContaining({ type: "approval.requested" }),
+          expect.objectContaining({ type: "run.started" }),
+          expect.objectContaining({ type: "background-task.started" }),
+        ]),
+      },
     });
     await expect(
       server.handle({
@@ -288,7 +324,10 @@ describe("OperatorControlPlaneServer", () => {
     }
     await expect(server.handle({ method: "approvals.list" })).resolves.toMatchObject({
       ok: true,
-      result: [{ id: approval.id }],
+      result: expect.arrayContaining([
+        expect.objectContaining({ id: approval.id }),
+        expect.objectContaining({ title: "Remote approval" }),
+      ]),
     });
     await expect(server.handle({ method: "approvals.list", params: { sessionId: session.id } })).resolves.toMatchObject({
       ok: true,
@@ -1201,6 +1240,10 @@ describe("OperatorControlPlaneServer", () => {
     await expect(server.handle({ method: "capture.consents.revoke", params: { grantId: "missing" } })).resolves.toEqual({
       ok: false,
       error: { code: "NOT_FOUND", message: "unknown capture consent: missing" },
+    });
+    await expect(server.handle({ method: "sessions.remoteStatus", params: { identifier: "missing" } })).resolves.toEqual({
+      ok: false,
+      error: { code: "NOT_FOUND", message: "unknown remote or session: missing" },
     });
     await expect(server.handle({ method: "nope" })).resolves.toEqual({
       ok: false,

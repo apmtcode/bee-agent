@@ -44,6 +44,7 @@ Current slash commands:
 - `/pairing create [source]`
 - `/pairing approve <code|id>`
 - `/pairing reject <code|id>`
+- `/remote status <remoteId|sessionId>`
 - `/recall <query>`
 - `/skills`
 - `/run-skill <id>`
@@ -104,6 +105,17 @@ Current pairing behavior in this tranche:
 - the operator CLI can list tickets and approve or reject pending claims with `/pairing`
 - `sessions.bootstrap` can redeem an approved `pairingCode` and continue through the existing session bootstrap path
 - redeemed codes are single-use and later reuse is rejected
+
+## Remote status
+
+Operator now also has a first narrow remote diagnostics surface on top of pairing and remote session continuity.
+
+Current remote status behavior in this tranche:
+- the control plane exposes `sessions.remoteStatus` for a `remoteId` or `sessionId`
+- remote status resolves the bound local session plus `remoteSource`
+- remote status includes the latest pairing ticket for that remote when one exists
+- remote status reports session-scoped pending approvals, the active run, the active background task, and recent runtime events
+- the operator CLI exposes this with `/remote status <remoteId|sessionId>` for read-only troubleshooting
 
 ## Settings precedence
 

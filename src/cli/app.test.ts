@@ -29,6 +29,7 @@ describe("parseSlashCommand", () => {
     expect(parseSlashCommand("/pairing create gateway")).toEqual({ kind: "pairing-create", remoteSource: "gateway" });
     expect(parseSlashCommand("/pairing approve code-1")).toEqual({ kind: "pairing-approve", identifier: "code-1" });
     expect(parseSlashCommand("/pairing reject ticket-1")).toEqual({ kind: "pairing-reject", identifier: "ticket-1" });
+    expect(parseSlashCommand("/remote status device-1")).toEqual({ kind: "remote-status", identifier: "device-1" });
     expect(parseSlashCommand("/recall deploy bug")).toEqual({ kind: "recall", query: "deploy bug" });
     expect(parseSlashCommand("/background")).toEqual({ kind: "background-list" });
     expect(parseSlashCommand("/background start smoke -- printf ok")).toEqual({
@@ -87,6 +88,10 @@ describe("parseSlashCommand", () => {
     expect(parseSlashCommand("/pairing mystery")).toEqual({
       kind: "invalid",
       message: "Usage: /pairing [create|approve|reject|pending|approved|rejected|redeemed|expired]",
+    });
+    expect(parseSlashCommand("/remote")).toEqual({
+      kind: "invalid",
+      message: "Usage: /remote status <remoteId|sessionId>",
     });
     expect(parseSlashCommand("/watch nope")).toEqual({
       kind: "invalid",
@@ -271,9 +276,41 @@ describe("OperatorCliApp", () => {
     expect(pairingApproveOutput).toContain(`Approved pairing ticket ${pairingCodeMatch[0]}`);
     expect(await app.dispatchSlashCommand({ kind: "pairing-list", status: "approved" })).toContain(pairingCodeMatch[0]);
 
+    const pairedBootstrap = await app.server.handle({
+      method: "sessions.bootstrap",
+      params: { pairingCode: pairingCodeMatch[0], agentId: "gateway" },
+    });
+    if (!pairedBootstrap.ok) {
+      throw new Error("expected paired bootstrap");
+    }
+    await app.runtime.promptApproval({
+      sessionId: pairedBootstrap.result.session.id,
+      title: "Remote approval",
+      summary: "Allow remote action",
+    });
+    await app.runtime.startRun({ sessionId: pairedBootstrap.result.session.id, title: "Remote run" });
+    await app.runtime.startBackgroundTask({
+      sessionId: pairedBootstrap.result.session.id,
+      title: "Remote task",
+      command: "printf remote",
+      kind: "task",
+    });
+    const remoteStatusOutput = await app.dispatchSlashCommand({ kind: "remote-status", identifier: pairedBootstrap.result.session.metadata.remoteId ?? pairedBootstrap.result.session.id });
+    expect(remoteStatusOutput).toContain(`remote=${pairedBootstrap.result.session.metadata.remoteId}`);
+    expect(remoteStatusOutput).toContain(`session=${pairedBootstrap.result.session.id}`);
+    expect(remoteStatusOutput).toContain(`pairing=${pairingCodeMatch[0]} redeemed`);
+    expect(remoteStatusOutput).toContain("approvals=");
+    expect(remoteStatusOutput).toContain("Remote approval");
+    expect(remoteStatusOutput).toContain("run=");
+    expect(remoteStatusOutput).toContain("Remote run");
+    expect(remoteStatusOutput).toContain("task=");
+    expect(remoteStatusOutput).toContain("Remote task");
+
     const approveOutput = await app.dispatchSlashCommand({ kind: "approve", approvalId: approval.id });
     expect(approveOutput).toContain(`Approved ${approval.id}`);
-    expect(await app.dispatchSlashCommand({ kind: "approvals" })).toBe("No pending approvals.");
+    const approvalsAfterLocalApprove = await app.dispatchSlashCommand({ kind: "approvals" });
+    expect(approvalsAfterLocalApprove).toContain("Remote approval");
+    expect(approvalsAfterLocalApprove).not.toContain(approval.id);
 
     const idleOutput = await app.dispatchSlashCommand({ kind: "idle" });
     expect(idleOutput).toContain(`Marked session ${secondSession.id} idle.`);

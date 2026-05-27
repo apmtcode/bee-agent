@@ -116,6 +116,7 @@ export {
   type PairingTicketCreateResult,
   type PairingTicketResolveResult,
   type SessionBootstrapResult,
+  type SessionRemoteStatusResult,
 } from "./control-plane/server.js";
 export {
   FilePairingStore,
