@@ -113,7 +113,12 @@ export {
   type ControlPlaneResponse,
   type ControlPlaneServerOptions,
   type ControlPlaneSuccess,
+  type SessionBootstrapResult,
 } from "./control-plane/server.js";
+export {
+  OperatorControlPlaneSessionStream,
+  type SessionStreamBootstrapParams,
+} from "./control-plane/session-stream.js";
 export {
   buildRuntimeEventFilter,
   subscribeRuntimeEvents,

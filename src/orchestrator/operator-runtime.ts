@@ -355,9 +355,10 @@ export class StandaloneOperatorRuntime {
     return request;
   }
 
-  async listApprovals(): Promise<ApprovalRequest[]> {
+  async listApprovals(sessionId?: string): Promise<ApprovalRequest[]> {
     await this.ensureApprovalsLoaded();
-    return this.approvals.list();
+    const approvals = this.approvals.list();
+    return sessionId ? approvals.filter((approval) => approval.sessionId === sessionId) : approvals;
   }
 
   async resolveApproval(

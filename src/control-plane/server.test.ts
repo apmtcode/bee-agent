@@ -131,6 +131,21 @@ describe("OperatorControlPlaneServer", () => {
     const subagent = subagentCreate.ok ? subagentCreate.result : undefined;
     expect(subagent).toBeDefined();
 
+    const bootstrappedSession = await server.handle({
+      method: "sessions.bootstrap",
+      params: { sessionId: session.id, family: "approval" },
+    });
+    expect(bootstrappedSession).toMatchObject({
+      ok: true,
+      result: {
+        session: { id: session.id },
+        created: false,
+        resumed: false,
+        approvals: [expect.objectContaining({ id: approval.id, sessionId: session.id })],
+        events: [expect.objectContaining({ type: "approval.requested" })],
+      },
+    });
+
     const sessionsList = await server.handle({ method: "sessions.list" });
     expect(sessionsList.ok).toBe(true);
     if (sessionsList.ok) {
@@ -152,6 +167,10 @@ describe("OperatorControlPlaneServer", () => {
     await expect(server.handle({ method: "approvals.list" })).resolves.toMatchObject({
       ok: true,
       result: [{ id: approval.id }],
+    });
+    await expect(server.handle({ method: "approvals.list", params: { sessionId: session.id } })).resolves.toMatchObject({
+      ok: true,
+      result: [{ id: approval.id, sessionId: session.id }],
     });
     await expect(server.handle({ method: "trajectories.list", params: { sessionId: session.id } })).resolves.toMatchObject({
       ok: true,

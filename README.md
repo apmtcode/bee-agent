@@ -66,6 +66,17 @@ Local freeform turns now also emit live run-progress updates while they execute.
 
 The local shell now also has a first watch/follow surface for long-lived work. `/watch run`, `/watch task`, and `/watch active` let the operator inspect the current state of active runs and background tasks without falling back to manual polling workflows.
 
+## Remote session stream
+
+The control plane now also exposes a first remote session-stream seam for future gateway/channel work.
+
+Current remote session behavior in this tranche:
+- `sessions.bootstrap` can create or reattach to a session and optionally resume idle sessions
+- bootstrap returns session-scoped pending approvals plus a filtered replay of runtime events
+- `OperatorControlPlaneSessionStream` binds later session-scoped control-plane requests to the bootstrapped session
+- the same stream adapter can subscribe to live session-scoped runtime events for approvals, runs, skills, and background tasks
+- the seam is transport-agnostic and in-process in this tranche; it is intended to be mounted by a later gateway/channel transport layer
+
 ## Settings precedence
 
 The CLI loads settings in this order, with later files overriding earlier ones:
@@ -146,7 +157,8 @@ This is still a narrow outbound-only pass. Cron expression handling remains plac
 
 The system is still incomplete relative to the long-term goal. Major missing tranches include:
 - richer Claude Code style command surface and hook execution
-- fuller OpenClaw-style channel/gateway runtime and remote transport
+- fuller OpenClaw-style channel/gateway runtime and remote transport beyond the current control-plane session-stream seam
+- pairing/bootstrap UX and remote identity routing on top of that session-stream foundation
 - richer delivery routing, retries, and transport semantics beyond local/webhook terminal notifications
 - richer tool-loop and broader command-surface parity in the CLI shell beyond the current local run/task watch surfaces
 

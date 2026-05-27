@@ -1,9 +1,11 @@
-import type { ApprovalDecision } from "./approvals.js";
+import type { ApprovalDecision, ApprovalRequest } from "./approvals.js";
 import { OperatorCronService } from "./cron-service.js";
 import type { CronDeliveryConfig, DeliveryTarget } from "./delivery.js";
 import { buildRuntimeEventFilter } from "./subscriptions.js";
 import type { BackgroundTaskKind, BackgroundTaskRecoveryReason } from "../harness/background-tasks.js";
 import type { TranscriptReadOptions } from "../harness/transcript-store.js";
+import type { SessionRecord } from "../harness/types.js";
+import type { OperatorEvent } from "../kernel/event-bus.js";
 import type { SkillCandidateStatus } from "../memory/types.js";
 import type { StandaloneOperatorRuntime } from "../orchestrator/operator-runtime.js";
 import type { ReviewedExportManifest } from "../training/export-manifest.js";
@@ -46,8 +48,20 @@ export type ControlPlaneServerOptions = {
   cron?: OperatorCronService;
 };
 
+export type SessionBootstrapResult = {
+  session: SessionRecord;
+  created: boolean;
+  resumed: boolean;
+  approvals: ApprovalRequest[];
+  events: OperatorEvent[];
+};
+
 export class OperatorControlPlaneServer {
   private readonly cron: OperatorCronService;
+
+  get runtime(): StandaloneOperatorRuntime {
+    return this.options.runtime;
+  }
 
   constructor(private readonly options: ControlPlaneServerOptions) {
     this.cron = options.cron ?? new OperatorCronService(options.runtime.rootDir, { runtime: options.runtime });
@@ -62,6 +76,27 @@ export class OperatorControlPlaneServer {
           const sessionId = getString(request.params, "sessionId");
           const session = await this.options.runtime.getSession(sessionId);
           return session ? ok(session) : notFound(`unknown session: ${sessionId}`);
+        }
+        case "sessions.bootstrap": {
+          const requestedSessionId = getOptionalString(request.params, "sessionId");
+          const title = getOptionalString(request.params, "title");
+          const cwd = getOptionalString(request.params, "cwd");
+          const agentId = getOptionalString(request.params, "agentId");
+          const resume = getOptionalBoolean(request.params, "resume") ?? true;
+          const session = requestedSessionId
+            ? await this.options.runtime.getSession(requestedSessionId)
+            : await this.options.runtime.startSession({ title, cwd, agentId });
+          if (!session) {
+            return notFound(`unknown session: ${requestedSessionId}`);
+          }
+          const resumed = Boolean(requestedSessionId && resume && session.status === "idle" && (await this.options.runtime.resumeSession(session.id)));
+          const effectiveSession = resumed ? await this.options.runtime.getSession(session.id) ?? session : session;
+          return ok(await buildSessionBootstrapResult(this.options.runtime, effectiveSession, {
+            created: !requestedSessionId,
+            resumed,
+            runId: getOptionalString(request.params, "runId"),
+            family: getOptionalRuntimeEventFamily(request.params, "family"),
+          }));
         }
         case "sessions.resume": {
           const sessionId = getString(request.params, "sessionId");
@@ -89,7 +124,7 @@ export class OperatorControlPlaneServer {
           return ok(transcript);
         }
         case "approvals.list":
-          return ok(await this.options.runtime.listApprovals());
+          return ok(await this.options.runtime.listApprovals(getOptionalString(request.params, "sessionId")));
         case "approvals.resolve": {
           const approvalId = getString(request.params, "approvalId");
           const decision = getApprovalDecision(request.params, "decision");
@@ -452,6 +487,24 @@ export class OperatorControlPlaneServer {
       };
     }
   }
+}
+
+async function buildSessionBootstrapResult(
+  runtime: StandaloneOperatorRuntime,
+  session: SessionRecord,
+  options: { created: boolean; resumed: boolean; runId?: string; family?: "run" | "approval" | "background-task" | "skill" },
+): Promise<SessionBootstrapResult> {
+  return {
+    session,
+    created: options.created,
+    resumed: options.resumed,
+    approvals: await runtime.listApprovals(session.id),
+    events: runtime.events.snapshot(buildRuntimeEventFilter({
+      sessionId: session.id,
+      ...(options.runId ? { runId: options.runId } : {}),
+      ...(options.family ? { family: options.family } : {}),
+    })),
+  };
 }
 
 function ok<T>(result: T): ControlPlaneSuccess<T> {
