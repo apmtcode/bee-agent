@@ -8,6 +8,7 @@ import {
   resolveOperatorCliExecutionConfig,
   type OperatorCliRuntimeConfig,
 } from "./config.js";
+import { runOperatorCliConversationTurn } from "./conversation.js";
 import { discoverPromptContext, type OperatorCliPromptContext } from "./prompt.js";
 
 export type OperatorCliSlashCommand =
@@ -115,13 +116,23 @@ export class OperatorCliApp {
     const command = parseSlashCommand(input);
     if (!command) {
       const activeSessionId = this.requireActiveSessionId(sessionId);
+      const effectiveConfig = config ?? (await this.loadRuntimeConfig());
+      const result = await runOperatorCliConversationTurn({
+        runtime: this.runtime,
+        sessionId: activeSessionId,
+        cwd: this.cwd,
+        currentDate: this.currentDate,
+        input,
+        config: effectiveConfig,
+        approvedCommandFingerprints: this.approvedCommandFingerprints,
+      });
       await this.runtime.recordTurn({
         sessionId: activeSessionId,
         userText: input,
-        assistantText: "Interactive freeform turns are not implemented yet. Use slash commands.",
-        trajectorySummary: `CLI freeform input: ${input}`,
+        assistantText: result.assistantText,
+        trajectorySummary: result.trajectorySummary,
       });
-      return "Freeform chat is not implemented yet. Use /help.";
+      return result.assistantText;
     }
     return await this.dispatchSlashCommand(command, sessionId, config, promptContext);
   }

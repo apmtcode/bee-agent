@@ -57,7 +57,7 @@ Current slash commands:
 - `/config`
 - `/prompt`
 
-Freeform conversational turns are not implemented yet, but the CLI now acts as a stateful local control shell over the existing runtime for session, approval, background-task, cron, and prompt/config inspection workflows.
+Freeform conversational turns now run through a narrow local assistant path in the CLI. Each turn is grounded by prompt-context discovery plus recent session transcript history, persisted through the existing runtime/session/transcript flow, and can reuse the current approval, executable-skill, background-task, recall, and inspection surfaces without dropping back to synthetic placeholder responses.
 
 ## Settings precedence
 
@@ -141,6 +141,6 @@ The system is still incomplete relative to the long-term goal. Major missing tra
 - richer Claude Code style command surface and hook execution
 - fuller OpenClaw-style channel/gateway runtime and remote transport
 - richer delivery routing, retries, and transport semantics beyond local/webhook terminal notifications
-- more complete interactive assistant behavior in the CLI shell
+- richer tool-loop, streaming, and command-surface parity in the CLI shell
 
 This README should be updated as each tranche lands so it remains the top-level project map.

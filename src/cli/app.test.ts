@@ -95,6 +95,61 @@ describe("OperatorCliApp", () => {
     expect(recall).toContain("Deploy checked for recall");
   });
 
+  it("stores real freeform turns and reuses transcript context across resume", async () => {
+    const rootDir = await makeTempDir();
+    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    const session = await app.runtime.startSession({ title: "freeform", cwd: rootDir, agentId: "operator-cli" });
+
+    const firstTurn = await app.handleInput("hello", session.id);
+    expect(firstTurn).toContain(`Hello. I'm ready in ${rootDir}.`);
+    expect(firstTurn).not.toContain("Freeform chat is not implemented yet");
+
+    const transcriptAfterFirstTurn = await app.dispatchSlashCommand({ kind: "transcript", limit: 10 }, session.id);
+    expect(transcriptAfterFirstTurn).toContain("user: hello");
+    expect(transcriptAfterFirstTurn).toContain("assistant: Hello. I'm ready in");
+
+    const otherSession = await app.runtime.startSession({ title: "other", cwd: rootDir, agentId: "operator-cli" });
+    const resumeOutput = await app.dispatchSlashCommand({ kind: "resume", sessionId: session.id }, otherSession.id);
+    expect(resumeOutput).toContain(session.id);
+
+    const resumedTurn = await app.handleInput("what did i just say");
+    expect(resumedTurn).toBe("hello");
+
+    const sessionSummary = await app.handleInput("summarize this session");
+    expect(sessionSummary).toContain(`Session summary for ${rootDir}:`);
+    expect(sessionSummary).toContain("- user: hello");
+    expect(sessionSummary).toContain("- assistant: Hello. I'm ready in");
+
+    const runs = await app.runtime.listRuns(session.id);
+    expect(runs.some((run) => run.metadata.kind === "cli.freeform" && run.status === "completed")).toBe(true);
+  });
+
+  it("gates dangerous freeform background commands and reruns after approval", async () => {
+    const rootDir = await makeTempDir();
+    await fs.mkdir(path.join(rootDir, ".claude"), { recursive: true });
+    await fs.writeFile(path.join(rootDir, ".claude", "settings.local.json"), '{"permissionMode":"default"}');
+    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    const session = await app.runtime.startSession({ title: "freeform policy", cwd: rootDir, agentId: "operator-cli" });
+
+    const firstAttempt = await app.handleInput("start background wipe -- rm -rf build", session.id);
+    expect(firstAttempt).toContain("Approval required:");
+    expect(await app.runtime.listBackgroundTasks(session.id)).toEqual([]);
+
+    const approvals = await app.runtime.listApprovals();
+    expect(approvals).toHaveLength(1);
+    const [approval] = approvals;
+    if (!approval) {
+      throw new Error("expected approval");
+    }
+
+    const approved = await app.handleInput(`approve ${approval.id}`, session.id);
+    expect(approved).toContain(`Approved ${approval.id}`);
+
+    const secondAttempt = await app.handleInput("start background wipe -- rm -rf build", session.id);
+    expect(secondAttempt).toContain("Started background task");
+    expect(await app.runtime.listBackgroundTasks(session.id)).toHaveLength(1);
+  });
+
   it("runs executable skills from slash commands", async () => {
     const rootDir = await makeTempDir();
     const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
