@@ -139,6 +139,11 @@ export class OperatorControlPlaneServer {
         }
         case "runs.list":
           return ok(await this.options.runtime.listRuns(getOptionalString(request.params, "sessionId")));
+        case "runs.active": {
+          const sessionId = getOptionalString(request.params, "sessionId");
+          const run = await this.options.runtime.getActiveRun(sessionId);
+          return run ? ok(run) : notFound(`no active run${sessionId ? ` for session: ${sessionId}` : ""}`);
+        }
         case "runs.events": {
           const filter = buildRuntimeEventFilter({
             sessionId: getOptionalString(request.params, "sessionId"),
@@ -242,6 +247,11 @@ export class OperatorControlPlaneServer {
         }
         case "background.tasks.list":
           return ok(await this.options.runtime.listBackgroundTasks(getOptionalString(request.params, "sessionId")));
+        case "background.tasks.active": {
+          const sessionId = getOptionalString(request.params, "sessionId");
+          const task = await this.options.runtime.getActiveBackgroundTask(sessionId);
+          return task ? ok(task) : notFound(`no active background task${sessionId ? ` for session: ${sessionId}` : ""}`);
+        }
         case "background.tasks.sync": {
           const taskId = getString(request.params, "taskId");
           const task = await this.options.runtime.syncBackgroundTask(taskId);

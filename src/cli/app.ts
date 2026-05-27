@@ -26,6 +26,9 @@ export type OperatorCliSlashCommand =
   | { kind: "recall"; query: string }
   | { kind: "skills" }
   | { kind: "run-skill"; skillId: string }
+  | { kind: "watch-run"; runId?: string }
+  | { kind: "watch-task"; taskId?: string }
+  | { kind: "watch-active" }
   | { kind: "background-list" }
   | { kind: "background-start"; title: string; command: string }
   | { kind: "background-view"; taskId: string; lines?: number }
@@ -175,6 +178,9 @@ export class OperatorCliApp {
           "  /recall <query>",
           "  /skills",
           "  /run-skill <id>",
+          "  /watch run [runId]",
+          "  /watch task [taskId]",
+          "  /watch active",
           "  /background",
           "  /background start <title> -- <command>",
           "  /background view <taskId> [lines]",
@@ -324,6 +330,18 @@ export class OperatorCliApp {
           return `Unknown executable skill: ${command.skillId}`;
         }
         return [`run ${run.id} completed`, ...run.stepResults.map((step) => `- ${step.stepId}: ${step.output}`)].join("\n");
+      }
+      case "watch-run": {
+        const activeSessionId = this.requireActiveSessionId(sessionId);
+        return await this.watchRun(activeSessionId, command.runId);
+      }
+      case "watch-task": {
+        const activeSessionId = this.requireActiveSessionId(sessionId);
+        return await this.watchTask(activeSessionId, command.taskId);
+      }
+      case "watch-active": {
+        const activeSessionId = this.requireActiveSessionId(sessionId);
+        return await this.watchActive(activeSessionId);
       }
       case "background":
       case "background-list": {
@@ -543,6 +561,54 @@ export class OperatorCliApp {
     }
   }
 
+  private async watchActive(sessionId: string): Promise<string> {
+    const run = await this.runtime.getActiveRun(sessionId);
+    if (run) {
+      return await this.watchRun(sessionId, run.id);
+    }
+    const task = await this.runtime.getActiveBackgroundTask(sessionId);
+    if (task) {
+      return await this.watchTask(sessionId, task.id);
+    }
+    return `No active run or background task for session ${sessionId}.`;
+  }
+
+  private async watchRun(sessionId: string, requestedRunId?: string): Promise<string> {
+    const run = requestedRunId ? await this.runtime.getRun(requestedRunId) : await this.runtime.getActiveRun(sessionId);
+    if (!run) {
+      return requestedRunId ? `Unknown run: ${requestedRunId}` : `No active run for session ${sessionId}.`;
+    }
+    const snapshot = this.runtime.events.snapshot((event) => {
+      if ((event.type !== "run.progress" && event.type !== "run.updated" && event.type !== "run.started") || !event.payload || typeof event.payload !== "object") {
+        return false;
+      }
+      if (event.type === "run.progress") {
+        return (event.payload as { runId?: string }).runId === run.id;
+      }
+      return (event.payload as { id?: string }).id === run.id;
+    });
+    const lines = snapshot
+      .map((event) => formatWatchEvent(event))
+      .filter((line): line is string => Boolean(line));
+    if (lines.length === 0) {
+      lines.push(`[run ${run.id}] ${run.status} ${run.title}`);
+    }
+    return lines.join("\n");
+  }
+
+  private async watchTask(sessionId: string, requestedTaskId?: string): Promise<string> {
+    const task = requestedTaskId ? await this.runtime.getBackgroundTask(requestedTaskId) : await this.runtime.getActiveBackgroundTask(sessionId);
+    if (!task) {
+      return requestedTaskId ? `Unknown background task: ${requestedTaskId}` : `No active background task for session ${sessionId}.`;
+    }
+    const synced = await this.runtime.syncBackgroundTask(task.id) ?? task;
+    const output = await this.runtime.getBackgroundTaskOutput(task.id, { lineLimit: 200, offset: 0 });
+    return [
+      `[task ${synced.id}] ${synced.status} ${synced.title}`,
+      output?.output?.trim() ? output.output : "<no output>",
+    ].join("\n");
+  }
+
   private requireActiveSessionId(sessionId?: string): string {
     if (this.activeSessionId) {
       return this.activeSessionId;
@@ -587,6 +653,30 @@ function formatProgressEvent(event: { type: string; payload?: unknown }): string
   return related ? `${prefix} ${payload.message} ${related}` : `${prefix} ${payload.message}`;
 }
 
+function formatWatchEvent(event: { type: string; payload?: unknown }): string | undefined {
+  if (!event.payload || typeof event.payload !== "object") {
+    return undefined;
+  }
+  if (event.type === "run.progress") {
+    return formatProgressEvent(event);
+  }
+  if (event.type === "run.started" || event.type === "run.updated") {
+    const payload = event.payload as { id?: string; status?: string; title?: string };
+    if (!payload.id) {
+      return undefined;
+    }
+    return `[run ${payload.id}] ${payload.status ?? "unknown"}${payload.title ? ` ${payload.title}` : ""}`;
+  }
+  if (event.type.startsWith("background-task.")) {
+    const payload = event.payload as { id?: string; status?: string; title?: string };
+    if (!payload.id) {
+      return undefined;
+    }
+    return `[task ${payload.id}] ${payload.status ?? "unknown"}${payload.title ? ` ${payload.title}` : ""}`;
+  }
+  return undefined;
+}
+
 export function parseSlashCommand(input: string): OperatorCliSlashCommand | undefined {
   const trimmed = input.trim();
   if (!trimmed.startsWith("/")) {
@@ -621,6 +711,9 @@ export function parseSlashCommand(input: string): OperatorCliSlashCommand | unde
       return { kind: "skills" };
     case "run-skill":
       return { kind: "run-skill", skillId: tail };
+    case "watch":
+    case "follow":
+      return parseWatchCommand(tail);
     case "background":
       return parseBackgroundCommand(tail);
     case "training":
@@ -644,6 +737,27 @@ function parseTranscriptCommand(tail: string): OperatorCliSlashCommand {
   return typeof limit === "number"
     ? { kind: "transcript", limit }
     : { kind: "invalid", message: "Usage: /transcript [limit]" };
+}
+
+function parseWatchCommand(tail: string): OperatorCliSlashCommand {
+  if (!tail || tail === "active") {
+    return { kind: "watch-active" };
+  }
+  if (tail === "run") {
+    return { kind: "watch-run" };
+  }
+  if (tail === "task") {
+    return { kind: "watch-task" };
+  }
+  if (tail.startsWith("run ")) {
+    const runId = tail.slice("run ".length).trim();
+    return runId ? { kind: "watch-run", runId } : { kind: "invalid", message: "Usage: /watch run [runId]" };
+  }
+  if (tail.startsWith("task ")) {
+    const taskId = tail.slice("task ".length).trim();
+    return taskId ? { kind: "watch-task", taskId } : { kind: "invalid", message: "Usage: /watch task [taskId]" };
+  }
+  return { kind: "invalid", message: "Usage: /watch [active|run <runId>|task <taskId>]" };
 }
 
 function parseBackgroundCommand(tail: string): OperatorCliSlashCommand {

@@ -18,7 +18,7 @@ async function makeTempDir(): Promise<string> {
 }
 
 afterEach(async () => {
-  await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
+  await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })));
 });
 
 const exportManifest: ReviewedExportManifest = {
@@ -346,6 +346,10 @@ describe("OperatorControlPlaneServer", () => {
     await expect(server.handle({ method: "background.tasks.list", params: { sessionId: session.id } })).resolves.toMatchObject({
       ok: true,
       result: [expect.objectContaining({ id: backgroundTask.id, sessionId: session.id })],
+    });
+    await expect(server.handle({ method: "background.tasks.active", params: { sessionId: session.id } })).resolves.toMatchObject({
+      ok: true,
+      result: expect.objectContaining({ id: backgroundTask.id, sessionId: session.id }),
     });
     await expect(server.handle({ method: "background.tasks.state", params: { taskId: backgroundTask.id } })).resolves.toEqual({
       ok: false,
@@ -728,6 +732,10 @@ describe("OperatorControlPlaneServer", () => {
     if (!run || !subagent) {
       throw new Error("expected orchestration records to be created");
     }
+    await expect(server.handle({ method: "runs.active", params: { sessionId: session.id } })).resolves.toMatchObject({
+      ok: true,
+      result: expect.objectContaining({ id: run.id, sessionId: session.id }),
+    });
     await expect(server.handle({ method: "runs.events", params: { sessionId: session.id, family: "run" } })).resolves.toMatchObject({
       ok: true,
       result: expect.arrayContaining([

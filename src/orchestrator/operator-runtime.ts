@@ -34,6 +34,7 @@ import {
   type BackgroundTaskRecord,
   type BackgroundTaskRecoveryReason,
   type BackgroundTaskRecoveryResult,
+  type ReadBackgroundTaskOutputOptions,
   type StartBackgroundTaskParams,
 } from "../harness/background-tasks.js";
 import { FileSessionStore } from "../harness/session-store.js";
@@ -408,6 +409,13 @@ export class StandaloneOperatorRuntime {
     return sessionId ? await this.runs.listBySession(sessionId) : await this.runs.list();
   }
 
+  async getActiveRun(sessionId?: string): Promise<OperatorRunRecord | undefined> {
+    const runs = await this.listRuns(sessionId);
+    return [...runs].reverse().find(
+      (run) => !run.parentRunId && (run.status === "running" || run.status === "paused" || run.status === "pending"),
+    );
+  }
+
   async registerSubagent(params: RegisterSubagentParams): Promise<SubagentRunRecord> {
     const subagent = await this.subagents.register(params);
     this.events.publish({ type: "subagent.registered", payload: subagent, ts: Date.now() });
@@ -556,6 +564,11 @@ export class StandaloneOperatorRuntime {
     return sessionId ? await this.backgroundTasks.listBySession(sessionId) : await this.backgroundTasks.list();
   }
 
+  async getActiveBackgroundTask(sessionId?: string): Promise<BackgroundTaskRecord | undefined> {
+    const tasks = await this.listBackgroundTasks(sessionId);
+    return [...tasks].reverse().find((task) => task.status === "running" || task.status === "planned");
+  }
+
   async syncBackgroundTask(taskId: string): Promise<BackgroundTaskRecord | undefined> {
     const task = await this.backgroundTasks.sync(taskId);
     if (task && (task.status === "completed" || task.status === "failed" || task.status === "cancelled")) {
@@ -606,8 +619,12 @@ export class StandaloneOperatorRuntime {
     return filtered;
   }
 
-  async getBackgroundTaskOutput(taskId: string, lineLimit?: number): Promise<{ taskId: string; output: string } | undefined> {
-    const output = await this.backgroundTasks.getOutput(taskId, lineLimit);
+  async getBackgroundTaskOutput(
+    taskId: string,
+    options: number | ReadBackgroundTaskOutputOptions = {},
+  ): Promise<{ taskId: string; output: string } | undefined> {
+    const readOptions = typeof options === "number" ? { lineLimit: options } : options;
+    const output = await this.backgroundTasks.getOutput(taskId, readOptions);
     return typeof output === "string" ? { taskId, output } : undefined;
   }
 

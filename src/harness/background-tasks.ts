@@ -75,6 +75,7 @@ export type StopBackgroundTaskParams = {
 
 export type ReadBackgroundTaskOutputOptions = {
   lineLimit?: number;
+  offset?: number;
 };
 
 export type BackgroundTaskExecutionState = {
@@ -246,12 +247,14 @@ export class BackgroundTaskExecutionService {
     try {
       const content = await fs.readFile(path.join(this.rootDir, task.execution.outputFile), "utf8");
       const lineLimit = options.lineLimit ?? 200;
-      if (lineLimit <= 0) {
-        return "";
-      }
+      const offset = Math.max(0, options.offset ?? 0);
       const lines = content.split("\n");
       const trimmed = lines.at(-1) === "" ? lines.slice(0, -1) : lines;
-      return trimmed.slice(-lineLimit).join("\n");
+      if (lineLimit <= 0) {
+        return trimmed.slice(offset).join("\n");
+      }
+      const visible = trimmed.slice(offset);
+      return visible.slice(-lineLimit).join("\n");
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") {
         return undefined;
@@ -441,9 +444,13 @@ export class FileBackgroundTaskStore {
     return task ? await this.executionService.readState(task) : undefined;
   }
 
-  async getOutput(taskId: string, lineLimit?: number): Promise<string | undefined> {
+  async getOutput(taskId: string, options: number | ReadBackgroundTaskOutputOptions = {}): Promise<string | undefined> {
     const task = await this.get(taskId);
-    return task ? await this.executionService.readOutput(task, { lineLimit }) : undefined;
+    if (!task) {
+      return undefined;
+    }
+    const readOptions = typeof options === "number" ? { lineLimit: options } : options;
+    return await this.executionService.readOutput(task, readOptions);
   }
 
   private async reconcileTask(task: BackgroundTaskRecord): Promise<BackgroundTaskRecoveryResult> {

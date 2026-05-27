@@ -48,6 +48,9 @@ Current slash commands:
 - `/background view <taskId> [lines]`
 - `/background sync <taskId>`
 - `/background cancel <taskId>`
+- `/watch run [runId]`
+- `/watch task [taskId]`
+- `/watch active`
 - `/training`
 - `/cron`
 - `/cron create <cronExpr> <prompt>`
@@ -60,6 +63,8 @@ Current slash commands:
 Freeform conversational turns now run through a narrow local assistant path in the CLI. Each turn is grounded by prompt-context discovery plus recent session transcript history, persisted through the existing runtime/session/transcript flow, and can reuse the current approval, executable-skill, background-task, recall, and inspection surfaces without dropping back to synthetic placeholder responses.
 
 Local freeform turns now also emit live run-progress updates while they execute. The CLI surfaces in-flight progress for freeform handling, approval waits, skill execution, and background-task-backed actions before printing the final assistant response.
+
+The local shell now also has a first watch/follow surface for long-lived work. `/watch run`, `/watch task`, and `/watch active` let the operator inspect the current state of active runs and background tasks without falling back to manual polling workflows.
 
 ## Settings precedence
 
@@ -143,6 +148,6 @@ The system is still incomplete relative to the long-term goal. Major missing tra
 - richer Claude Code style command surface and hook execution
 - fuller OpenClaw-style channel/gateway runtime and remote transport
 - richer delivery routing, retries, and transport semantics beyond local/webhook terminal notifications
-- richer tool-loop and broader command-surface parity in the CLI shell beyond the current local run-progress streaming
+- richer tool-loop and broader command-surface parity in the CLI shell beyond the current local run/task watch surfaces
 
 This README should be updated as each tranche lands so it remains the top-level project map.

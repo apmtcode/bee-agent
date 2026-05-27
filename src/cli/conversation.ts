@@ -30,6 +30,9 @@ type ConversationIntent =
   | { kind: "recall"; query: string }
   | { kind: "skills-list" }
   | { kind: "run-skill"; skillId: string }
+  | { kind: "watch-run"; runId?: string }
+  | { kind: "watch-task"; taskId?: string }
+  | { kind: "watch-active" }
   | { kind: "approvals" }
   | { kind: "approve"; approvalId: string }
   | { kind: "deny"; approvalId: string }
@@ -175,6 +178,15 @@ async function respondToIntent(params: {
         config: params.config,
         approvedCommandFingerprints: params.approvedCommandFingerprints,
       });
+    case "watch-run":
+      publishProgress(params.runtime, { runId: params.runId, sessionId: params.sessionId, phase: "planning", message: `Watching run ${params.intent.runId ?? "active"}.` });
+      return await renderWatchRun(params.runtime, params.sessionId, params.intent.runId);
+    case "watch-task":
+      publishProgress(params.runtime, { runId: params.runId, sessionId: params.sessionId, phase: "planning", message: `Watching background task ${params.intent.taskId ?? "active"}.` });
+      return await renderWatchTask(params.runtime, params.sessionId, params.intent.taskId);
+    case "watch-active":
+      publishProgress(params.runtime, { runId: params.runId, sessionId: params.sessionId, phase: "planning", message: "Watching active work." });
+      return await renderWatchActive(params.runtime, params.sessionId);
     case "approvals":
       publishProgress(params.runtime, { runId: params.runId, sessionId: params.sessionId, phase: "approvals", message: "Listing pending approvals." });
       return await renderApprovals(params.runtime, params.sessionId);
@@ -247,6 +259,20 @@ function parseConversationIntent(input: string): ConversationIntent {
   const runSkillMatch = trimmed.match(/^(?:run|execute)\s+skill\s+(.+)$/i);
   if (runSkillMatch?.[1]) {
     return { kind: "run-skill", skillId: runSkillMatch[1].trim() };
+  }
+
+  const watchRunMatch = trimmed.match(/^(?:watch|follow)\s+run(?:\s+(.+))?$/i);
+  if (watchRunMatch) {
+    return watchRunMatch[1]?.trim() ? { kind: "watch-run", runId: watchRunMatch[1].trim() } : { kind: "watch-run" };
+  }
+
+  const watchTaskMatch = trimmed.match(/^(?:watch|follow)\s+(?:task|background)(?:\s+(.+))?$/i);
+  if (watchTaskMatch) {
+    return watchTaskMatch[1]?.trim() ? { kind: "watch-task", taskId: watchTaskMatch[1].trim() } : { kind: "watch-task" };
+  }
+
+  if (/^(?:watch|follow)\s+active(?:\s+(?:run|task|background))?$/i.test(trimmed)) {
+    return { kind: "watch-active" };
   }
 
   const approveMatch = trimmed.match(/^approve\s+([\w-]+)$/i);
@@ -477,6 +503,38 @@ async function renderApprovals(runtime: StandaloneOperatorRuntime, sessionId: st
   return approvals
     .map((approval) => `${approval.sessionId === sessionId ? "*" : "-"} ${approval.id} ${approval.title} (${approval.summary})`)
     .join("\n");
+}
+
+async function renderWatchRun(runtime: StandaloneOperatorRuntime, sessionId: string, runId?: string): Promise<string> {
+  const run = runId ? await runtime.getRun(runId) : await runtime.getActiveRun(sessionId);
+  if (!run) {
+    return runId ? `Unknown run: ${runId}` : `No active run for session ${sessionId}.`;
+  }
+  return `Watching run ${run.id}: ${run.status} ${run.title}`;
+}
+
+async function renderWatchTask(runtime: StandaloneOperatorRuntime, sessionId: string, taskId?: string): Promise<string> {
+  const task = taskId ? await runtime.getBackgroundTask(taskId) : await runtime.getActiveBackgroundTask(sessionId);
+  if (!task) {
+    return taskId ? `Unknown background task: ${taskId}` : `No active background task for session ${sessionId}.`;
+  }
+  const output = await runtime.getBackgroundTaskOutput(task.id, { lineLimit: 200, offset: 0 });
+  return [
+    `Watching background task ${task.id}: ${task.status} ${task.title}`,
+    output?.output?.trim() ? output.output : "<no output>",
+  ].join("\n");
+}
+
+async function renderWatchActive(runtime: StandaloneOperatorRuntime, sessionId: string): Promise<string> {
+  const run = await runtime.getActiveRun(sessionId);
+  if (run) {
+    return await renderWatchRun(runtime, sessionId, run.id);
+  }
+  const task = await runtime.getActiveBackgroundTask(sessionId);
+  if (task) {
+    return await renderWatchTask(runtime, sessionId, task.id);
+  }
+  return `No active run or background task for session ${sessionId}.`;
 }
 
 async function renderApprovalResolution(

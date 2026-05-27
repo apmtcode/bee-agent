@@ -13,7 +13,7 @@ async function makeTempDir(): Promise<string> {
 }
 
 afterEach(async () => {
-  await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
+  await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })));
 });
 
 describe("parseSlashCommand", () => {
@@ -34,6 +34,10 @@ describe("parseSlashCommand", () => {
     expect(parseSlashCommand("/background view task-1 25")).toEqual({ kind: "background-view", taskId: "task-1", lines: 25 });
     expect(parseSlashCommand("/background sync task-1")).toEqual({ kind: "background-sync", taskId: "task-1" });
     expect(parseSlashCommand("/background cancel task-1")).toEqual({ kind: "background-cancel", taskId: "task-1" });
+    expect(parseSlashCommand("/watch active")).toEqual({ kind: "watch-active" });
+    expect(parseSlashCommand("/watch run run-1")).toEqual({ kind: "watch-run", runId: "run-1" });
+    expect(parseSlashCommand("/watch task task-1")).toEqual({ kind: "watch-task", taskId: "task-1" });
+    expect(parseSlashCommand("/follow run run-2")).toEqual({ kind: "watch-run", runId: "run-2" });
     expect(parseSlashCommand("/cron")).toEqual({ kind: "cron-list" });
     expect(parseSlashCommand("/cron create */5 * * * * remind me")).toEqual({
       kind: "cron-create",
@@ -70,6 +74,10 @@ describe("parseSlashCommand", () => {
     expect(parseSlashCommand("/cron create * * *")).toEqual({
       kind: "invalid",
       message: "Usage: /cron create <cronExpr> <prompt> [--on-success <target>] [--on-failure <target>]",
+    });
+    expect(parseSlashCommand("/watch nope")).toEqual({
+      kind: "invalid",
+      message: "Usage: /watch [active|run <runId>|task <taskId>]",
     });
   });
 });
@@ -158,7 +166,7 @@ describe("OperatorCliApp", () => {
     expect(await app.runtime.listBackgroundTasks(session.id)).toHaveLength(1);
   });
 
-  it("runs executable skills from slash commands", async () => {
+  it("runs executable skills from slash commands and can watch runs", async () => {
     const rootDir = await makeTempDir();
     const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
     const session = await app.runtime.startSession({ title: "CLI skill", cwd: rootDir, agentId: "operator-cli" });
@@ -187,6 +195,17 @@ describe("OperatorCliApp", () => {
     const output = await app.dispatchSlashCommand({ kind: "run-skill", skillId: executable.id }, session.id);
     expect(output).toContain("completed");
     expect(output).toContain("deploy summary");
+
+    const run = await app.runtime.startRun({ sessionId: session.id, title: "Watchable run" });
+    app.runtime.publishRunProgress({
+      runId: run.id,
+      sessionId: session.id,
+      phase: "planning",
+      message: "Watching this run.",
+    });
+    const watchOutput = await app.dispatchSlashCommand({ kind: "watch-run", runId: run.id }, session.id);
+    expect(watchOutput).toContain(`[run ${run.id}]`);
+    expect(watchOutput).toContain("Watching this run.");
   });
 
   it("supports session lifecycle, transcript, approvals, config, and prompt commands", async () => {
@@ -244,7 +263,7 @@ describe("OperatorCliApp", () => {
     expect(promptOutput).toContain("instructionFiles=");
   });
 
-  it("supports background task and cron commands", async () => {
+  it("supports background task watch and cron commands", async () => {
     const rootDir = await makeTempDir();
     const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
     const session = await app.runtime.startSession({ title: "CLI ops", cwd: rootDir, agentId: "operator-cli" });
@@ -272,6 +291,13 @@ describe("OperatorCliApp", () => {
     const viewOutput = await app.dispatchSlashCommand({ kind: "background-view", taskId: task.id, lines: 20 });
     expect(viewOutput).toContain(task.id);
     expect(viewOutput).toContain("ok");
+
+    const watchTaskOutput = await app.dispatchSlashCommand({ kind: "watch-task", taskId: task.id }, session.id);
+    expect(watchTaskOutput).toContain(`[task ${task.id}]`);
+    expect(watchTaskOutput).toContain("ok");
+
+    const activeWatchOutput = await app.dispatchSlashCommand({ kind: "watch-active" }, session.id);
+    expect(activeWatchOutput).toContain(`[task ${task.id}]`);
 
     const cronCreate = await app.dispatchSlashCommand(
       {
