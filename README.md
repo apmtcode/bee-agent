@@ -108,12 +108,29 @@ When public/runtime/package surfaces change, rebuild with:
 
 `openclaw/node_modules/.bin/tsdown operator/src/index.ts operator/src/cli/entry.ts --tsconfig operator/tsconfig.json --no-config --platform node --format esm --dts --out-dir operator/dist --clean`
 
+## Cron dispatch
+
+Cron jobs now dispatch into real operator runtime artifacts instead of completing as synthetic bookkeeping rows.
+
+Current cron behavior in this tranche:
+- each due cron fire creates a fresh session and runtime run
+- cron runs record linked `sessionId` and `operatorRunId`
+- successful cron fires record a real transcript turn and complete the linked session/run
+- failed cron fires persist `lastStatus` / `lastError` on the job and fail the linked session/run
+- stale `scheduled` / `running` cron runs are recovered as interrupted failures on the next tick
+
+Current CLI visibility for this tranche:
+- `/cron` now shows `next`, `last`, `status`, and any last error
+- `/cron runs [jobId]` and `/cron tick` show linked session/run ids plus terminal outcome details
+
+This is still a local first pass. Cron expression handling remains placeholder, and cron does not yet dispatch into channel/gateway transports.
+
 ## Current gaps to parity
 
 The system is still incomplete relative to the long-term goal. Major missing tranches include:
 - richer Claude Code style command surface and hook execution
 - OpenClaw-style channel/gateway runtime and remote transport
-- richer cron dispatch into live session/channel execution
+- more complete cron scheduling, delivery, and transport integration
 - more complete interactive assistant behavior in the CLI shell
 
 This README should be updated as each tranche lands so it remains the top-level project map.

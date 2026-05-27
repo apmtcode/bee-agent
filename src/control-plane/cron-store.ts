@@ -1,6 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { readJsonFile, writeJsonAtomic } from "../shared/fs.js";
 
+export type CronJobLastStatus = "success" | "error" | "interrupted";
+export type CronRunStatus = "scheduled" | "running" | "completed" | "failed";
+export type CronRunOutcome = "success" | "error" | "interrupted";
+
 export type CronJob = {
   id: string;
   cron: string;
@@ -10,15 +14,23 @@ export type CronJob = {
   createdAt: string;
   lastRunAt?: string;
   nextRunAt?: string;
+  lastStatus?: CronJobLastStatus;
+  lastError?: string;
 };
 
 export type CronRun = {
   id: string;
   jobId: string;
-  status: "scheduled" | "running" | "completed";
+  status: CronRunStatus;
   createdAt: string;
+  scheduledFor?: string;
+  sessionId?: string;
+  operatorRunId?: string;
   startedAt?: string;
   finishedAt?: string;
+  outcome?: CronRunOutcome;
+  error?: string;
+  summary?: string;
 };
 
 export type CronStoreShape = {
@@ -35,6 +47,10 @@ const EMPTY_STORE: CronStoreShape = {
 
 function nowIso(): string {
   return new Date().toISOString();
+}
+
+function hasOwn<T extends object, K extends keyof T>(value: T, key: K): boolean {
+  return Object.prototype.hasOwnProperty.call(value, key);
 }
 
 export class FileCronStore {
@@ -80,7 +96,15 @@ export class FileCronStore {
     return job;
   }
 
-  async updateJob(jobId: string, params: { lastRunAt?: string; nextRunAt?: string }): Promise<CronJob | undefined> {
+  async updateJob(
+    jobId: string,
+    params: {
+      lastRunAt?: string;
+      nextRunAt?: string;
+      lastStatus?: CronJobLastStatus;
+      lastError?: string | null;
+    },
+  ): Promise<CronJob | undefined> {
     const store = await this.load();
     const index = store.jobs.findIndex((job) => job.id === jobId);
     if (index < 0) {
@@ -90,7 +114,15 @@ export class FileCronStore {
       ...store.jobs[index],
       ...(params.lastRunAt ? { lastRunAt: params.lastRunAt } : {}),
       ...(params.nextRunAt ? { nextRunAt: params.nextRunAt } : {}),
+      ...(params.lastStatus ? { lastStatus: params.lastStatus } : {}),
     };
+    if (hasOwn(params, "lastError")) {
+      if (typeof params.lastError === "string") {
+        updated.lastError = params.lastError;
+      } else {
+        delete updated.lastError;
+      }
+    }
     store.jobs[index] = updated;
     await this.save(store);
     return updated;
@@ -107,22 +139,56 @@ export class FileCronStore {
     return true;
   }
 
-  async addRun(jobId: string): Promise<CronRun> {
+  async addRun(params: {
+    jobId: string;
+    status?: CronRunStatus;
+    scheduledFor?: string;
+    sessionId?: string;
+    operatorRunId?: string;
+    startedAt?: string;
+    finishedAt?: string;
+    outcome?: CronRunOutcome;
+    error?: string;
+    summary?: string;
+  }): Promise<CronRun> {
     const store = await this.load();
     const run: CronRun = {
       id: randomUUID(),
-      jobId,
-      status: "scheduled",
+      jobId: params.jobId,
+      status: params.status ?? "scheduled",
       createdAt: nowIso(),
+      ...(params.scheduledFor ? { scheduledFor: params.scheduledFor } : {}),
+      ...(params.sessionId ? { sessionId: params.sessionId } : {}),
+      ...(params.operatorRunId ? { operatorRunId: params.operatorRunId } : {}),
+      ...(params.startedAt ? { startedAt: params.startedAt } : {}),
+      ...(params.finishedAt ? { finishedAt: params.finishedAt } : {}),
+      ...(params.outcome ? { outcome: params.outcome } : {}),
+      ...(params.error ? { error: params.error } : {}),
+      ...(params.summary ? { summary: params.summary } : {}),
     };
     store.runs.push(run);
     await this.save(store);
     return run;
   }
 
+  async getRun(runId: string): Promise<CronRun | undefined> {
+    const store = await this.load();
+    return store.runs.find((run) => run.id === runId);
+  }
+
   async updateRun(
     runId: string,
-    params: { status: CronRun["status"]; startedAt?: string; finishedAt?: string },
+    params: {
+      status?: CronRunStatus;
+      scheduledFor?: string;
+      sessionId?: string;
+      operatorRunId?: string;
+      startedAt?: string;
+      finishedAt?: string;
+      outcome?: CronRunOutcome;
+      error?: string | null;
+      summary?: string | null;
+    },
   ): Promise<CronRun | undefined> {
     const store = await this.load();
     const index = store.runs.findIndex((run) => run.id === runId);
@@ -131,10 +197,28 @@ export class FileCronStore {
     }
     const updated: CronRun = {
       ...store.runs[index],
-      status: params.status,
+      ...(params.status ? { status: params.status } : {}),
+      ...(params.scheduledFor ? { scheduledFor: params.scheduledFor } : {}),
+      ...(params.sessionId ? { sessionId: params.sessionId } : {}),
+      ...(params.operatorRunId ? { operatorRunId: params.operatorRunId } : {}),
       ...(params.startedAt ? { startedAt: params.startedAt } : {}),
       ...(params.finishedAt ? { finishedAt: params.finishedAt } : {}),
+      ...(params.outcome ? { outcome: params.outcome } : {}),
     };
+    if (hasOwn(params, "error")) {
+      if (typeof params.error === "string") {
+        updated.error = params.error;
+      } else {
+        delete updated.error;
+      }
+    }
+    if (hasOwn(params, "summary")) {
+      if (typeof params.summary === "string") {
+        updated.summary = params.summary;
+      } else {
+        delete updated.summary;
+      }
+    }
     store.runs[index] = updated;
     await this.save(store);
     return updated;

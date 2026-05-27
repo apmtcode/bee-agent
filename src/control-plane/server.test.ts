@@ -770,7 +770,7 @@ describe("OperatorControlPlaneServer", () => {
   it("handles cron methods", async () => {
     const rootDir = await makeTempDir();
     const runtime = new StandaloneOperatorRuntime({ rootDir });
-    const cron = new OperatorCronService(rootDir);
+    const cron = new OperatorCronService(rootDir, { runtime });
     const server = new OperatorControlPlaneServer({ runtime, cron });
 
     const created = await server.handle({
@@ -783,10 +783,19 @@ describe("OperatorControlPlaneServer", () => {
     expect(list).toMatchObject({ ok: true, result: [{ prompt: "run cron" }] });
 
     const tick = await server.handle({ method: "cron.tick", params: { nowMs: Date.now() + 120_000 } });
-    expect(tick).toMatchObject({ ok: true, result: [{ status: "completed" }] });
+    expect(tick).toMatchObject({
+      ok: true,
+      result: [{ status: "completed", outcome: "success", sessionId: expect.any(String), operatorRunId: expect.any(String) }],
+    });
 
     const runs = await server.handle({ method: "cron.runs" });
-    expect(runs).toMatchObject({ ok: true, result: [{ status: "completed" }] });
+    expect(runs).toMatchObject({
+      ok: true,
+      result: [{ status: "completed", outcome: "success", sessionId: expect.any(String), operatorRunId: expect.any(String) }],
+    });
+
+    const jobs = await server.handle({ method: "cron.list" });
+    expect(jobs).toMatchObject({ ok: true, result: [] });
 
     if (created.ok) {
       await expect(server.handle({ method: "cron.delete", params: { jobId: created.result.id } })).resolves.toEqual({

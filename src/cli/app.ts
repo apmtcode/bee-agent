@@ -387,7 +387,10 @@ export class OperatorCliApp {
         return response.result.length === 0
           ? "No cron jobs."
           : response.result
-              .map((job) => `${job.id} ${job.cron} recurring=${job.recurring} next=${job.nextRunAt ?? "<none>"} prompt=${job.prompt}`)
+              .map(
+                (job) =>
+                  `${job.id} ${job.cron} recurring=${job.recurring} next=${job.nextRunAt ?? "<none>"} last=${job.lastRunAt ?? "<none>"} status=${job.lastStatus ?? "<none>"} prompt=${job.prompt}${job.lastError ? ` error=${job.lastError}` : ""}`,
+              )
               .join("\n");
       }
       case "cron-create": {
@@ -410,7 +413,12 @@ export class OperatorCliApp {
         }
         return response.result.length === 0
           ? "No cron runs."
-          : response.result.map((run) => `${run.id} job=${run.jobId} ${run.status}`).join("\n");
+          : response.result
+              .map(
+                (run) =>
+                  `${run.id} job=${run.jobId} ${run.status}${run.outcome ? ` outcome=${run.outcome}` : ""}${run.sessionId ? ` session=${run.sessionId}` : ""}${run.operatorRunId ? ` run=${run.operatorRunId}` : ""}${run.summary ? ` summary=${run.summary}` : ""}${run.error ? ` error=${run.error}` : ""}`,
+              )
+              .join("\n");
       }
       case "cron-tick": {
         const response = await this.server.handle({ method: "cron.tick" });
@@ -419,7 +427,12 @@ export class OperatorCliApp {
         }
         return response.result.length === 0
           ? "No due cron jobs."
-          : response.result.map((run) => `${run.id} job=${run.jobId} ${run.status}`).join("\n");
+          : response.result
+              .map(
+                (run) =>
+                  `${run.id} job=${run.jobId} ${run.status}${run.outcome ? ` outcome=${run.outcome}` : ""}${run.sessionId ? ` session=${run.sessionId}` : ""}${run.operatorRunId ? ` run=${run.operatorRunId}` : ""}${run.summary ? ` summary=${run.summary}` : ""}${run.error ? ` error=${run.error}` : ""}`,
+              )
+              .join("\n");
       }
       case "cron-delete": {
         const response = await this.server.handle({ method: "cron.delete", params: { jobId: command.jobId } });

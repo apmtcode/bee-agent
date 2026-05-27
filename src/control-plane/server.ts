@@ -48,7 +48,7 @@ export class OperatorControlPlaneServer {
   private readonly cron: OperatorCronService;
 
   constructor(private readonly options: ControlPlaneServerOptions) {
-    this.cron = options.cron ?? new OperatorCronService(options.runtime.rootDir);
+    this.cron = options.cron ?? new OperatorCronService(options.runtime.rootDir, { runtime: options.runtime });
   }
 
   async handle(request: ControlPlaneRequest): Promise<ControlPlaneResponse> {
