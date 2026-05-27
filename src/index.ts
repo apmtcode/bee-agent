@@ -115,7 +115,9 @@ export {
   type ControlPlaneSuccess,
 } from "./control-plane/server.js";
 export {
+  buildRuntimeEventFilter,
   subscribeRuntimeEvents,
+  type RuntimeEventFamily,
   type RuntimeEventSubscriptionOptions,
 } from "./control-plane/subscriptions.js";
 export {

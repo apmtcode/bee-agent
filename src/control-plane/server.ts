@@ -1,6 +1,7 @@
 import type { ApprovalDecision } from "./approvals.js";
 import { OperatorCronService } from "./cron-service.js";
 import type { CronDeliveryConfig, DeliveryTarget } from "./delivery.js";
+import { buildRuntimeEventFilter } from "./subscriptions.js";
 import type { BackgroundTaskKind, BackgroundTaskRecoveryReason } from "../harness/background-tasks.js";
 import type { TranscriptReadOptions } from "../harness/transcript-store.js";
 import type { SkillCandidateStatus } from "../memory/types.js";
@@ -138,6 +139,14 @@ export class OperatorControlPlaneServer {
         }
         case "runs.list":
           return ok(await this.options.runtime.listRuns(getOptionalString(request.params, "sessionId")));
+        case "runs.events": {
+          const filter = buildRuntimeEventFilter({
+            sessionId: getOptionalString(request.params, "sessionId"),
+            runId: getOptionalString(request.params, "runId"),
+            family: getOptionalRuntimeEventFamily(request.params, "family"),
+          });
+          return ok(this.options.runtime.events.snapshot(filter));
+        }
         case "runs.update": {
           const runId = getString(request.params, "runId");
           const run = await this.options.runtime.updateRunStatus(
@@ -511,6 +520,20 @@ function getOptionalSkillCandidateStatus(
     return value;
   }
   throw new Error(`Invalid skill candidate status: ${key}`);
+}
+
+function getOptionalRuntimeEventFamily(
+  params: Record<string, unknown> | undefined,
+  key: string,
+): "run" | "approval" | "background-task" | "skill" | undefined {
+  const value = params?.[key];
+  if (value == null) {
+    return undefined;
+  }
+  if (value === "run" || value === "approval" || value === "background-task" || value === "skill") {
+    return value;
+  }
+  throw new Error(`Invalid runtime event family: ${key}`);
 }
 
 function getOptionalBoolean(

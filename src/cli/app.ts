@@ -1,5 +1,6 @@
 import readline from "node:readline/promises";
 import process from "node:process";
+import { subscribeRuntimeEvents } from "../control-plane/subscriptions.js";
 import { OperatorControlPlaneServer } from "../control-plane/server.js";
 import { StandaloneOperatorRuntime } from "../orchestrator/operator-runtime.js";
 import type { TranscriptRecord } from "../harness/transcript-store.js";
@@ -117,22 +118,28 @@ export class OperatorCliApp {
     if (!command) {
       const activeSessionId = this.requireActiveSessionId(sessionId);
       const effectiveConfig = config ?? (await this.loadRuntimeConfig());
-      const result = await runOperatorCliConversationTurn({
-        runtime: this.runtime,
-        sessionId: activeSessionId,
-        cwd: this.cwd,
-        currentDate: this.currentDate,
-        input,
-        config: effectiveConfig,
-        approvedCommandFingerprints: this.approvedCommandFingerprints,
+      let progressOutput = "";
+      const streamPromise = this.collectRunProgress(activeSessionId, async () => {
+        const result = await runOperatorCliConversationTurn({
+          runtime: this.runtime,
+          sessionId: activeSessionId,
+          cwd: this.cwd,
+          currentDate: this.currentDate,
+          input,
+          config: effectiveConfig,
+          approvedCommandFingerprints: this.approvedCommandFingerprints,
+        });
+        await this.runtime.recordTurn({
+          sessionId: activeSessionId,
+          userText: input,
+          assistantText: result.assistantText,
+          trajectorySummary: result.trajectorySummary,
+        });
+        return result;
       });
-      await this.runtime.recordTurn({
-        sessionId: activeSessionId,
-        userText: input,
-        assistantText: result.assistantText,
-        trajectorySummary: result.trajectorySummary,
-      });
-      return result.assistantText;
+      const { result, progressLines } = await streamPromise;
+      progressOutput = progressLines.join("\n");
+      return progressOutput ? `${progressOutput}\n${result.assistantText}` : result.assistantText;
     }
     return await this.dispatchSlashCommand(command, sessionId, config, promptContext);
   }
@@ -507,6 +514,35 @@ export class OperatorCliApp {
     this.stderr.write(`${message}\n`);
   }
 
+  private async collectRunProgress<T>(
+    sessionId: string,
+    action: () => Promise<T>,
+  ): Promise<{ result: T; progressLines: string[] }> {
+    const events = subscribeRuntimeEvents(this.runtime, { sessionId, family: "run" })[Symbol.asyncIterator]();
+    const progressLines: string[] = [];
+    let cancelled = false;
+    const collector = (async () => {
+      while (!cancelled) {
+        const next = await events.next();
+        if (next.done) {
+          break;
+        }
+        const line = formatProgressEvent(next.value);
+        if (line) {
+          progressLines.push(line);
+        }
+      }
+    })();
+    try {
+      const result = await action();
+      return { result, progressLines };
+    } finally {
+      cancelled = true;
+      await events.return?.();
+      await collector;
+    }
+  }
+
   private requireActiveSessionId(sessionId?: string): string {
     if (this.activeSessionId) {
       return this.activeSessionId;
@@ -526,6 +562,29 @@ function isTranscriptMessageRecord(record: TranscriptRecord): record is Extract<
 function formatHookResult(result: { event: string; command: string; stdout: string; stderr: string }): string {
   const parts = [result.stdout, result.stderr].filter(Boolean).join(" ").trim();
   return parts ? `[${result.event}] ${parts}` : `[${result.event}] ${result.command}`;
+}
+
+function formatProgressEvent(event: { type: string; payload?: unknown }): string | undefined {
+  if (event.type !== "run.progress" || !event.payload || typeof event.payload !== "object") {
+    return undefined;
+  }
+  const payload = event.payload as {
+    runId?: string;
+    message?: string;
+    relatedApprovalId?: string;
+    relatedTaskId?: string;
+    relatedSkillId?: string;
+  };
+  if (!payload.message) {
+    return undefined;
+  }
+  const prefix = payload.runId ? `[run ${payload.runId}]` : "[run]";
+  const related = [
+    payload.relatedApprovalId ? `approval=${payload.relatedApprovalId}` : undefined,
+    payload.relatedTaskId ? `task=${payload.relatedTaskId}` : undefined,
+    payload.relatedSkillId ? `skill=${payload.relatedSkillId}` : undefined,
+  ].filter(Boolean).join(" ");
+  return related ? `${prefix} ${payload.message} ${related}` : `${prefix} ${payload.message}`;
 }
 
 export function parseSlashCommand(input: string): OperatorCliSlashCommand | undefined {

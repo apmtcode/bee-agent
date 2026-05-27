@@ -95,12 +95,15 @@ describe("OperatorCliApp", () => {
     expect(recall).toContain("Deploy checked for recall");
   });
 
-  it("stores real freeform turns and reuses transcript context across resume", async () => {
+  it("streams in-flight freeform run updates and reuses transcript context across resume", async () => {
     const rootDir = await makeTempDir();
     const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
     const session = await app.runtime.startSession({ title: "freeform", cwd: rootDir, agentId: "operator-cli" });
 
     const firstTurn = await app.handleInput("hello", session.id);
+    expect(firstTurn).toContain("[run ");
+    expect(firstTurn).toContain("Handling freeform greeting request.");
+    expect(firstTurn).toContain("Freeform turn completed.");
     expect(firstTurn).toContain(`Hello. I'm ready in ${rootDir}.`);
     expect(firstTurn).not.toContain("Freeform chat is not implemented yet");
 
@@ -113,7 +116,10 @@ describe("OperatorCliApp", () => {
     expect(resumeOutput).toContain(session.id);
 
     const resumedTurn = await app.handleInput("what did i just say");
-    expect(resumedTurn).toBe("hello");
+    expect(resumedTurn).toContain("[run ");
+    expect(resumedTurn).toContain("Looking up the last user message.");
+    expect(resumedTurn).toContain("Freeform turn completed.");
+    expect(resumedTurn).toContain("hello");
 
     const sessionSummary = await app.handleInput("summarize this session");
     expect(sessionSummary).toContain(`Session summary for ${rootDir}:`);
@@ -132,6 +138,7 @@ describe("OperatorCliApp", () => {
     const session = await app.runtime.startSession({ title: "freeform policy", cwd: rootDir, agentId: "operator-cli" });
 
     const firstAttempt = await app.handleInput("start background wipe -- rm -rf build", session.id);
+    expect(firstAttempt).toContain("Awaiting approval");
     expect(firstAttempt).toContain("Approval required:");
     expect(await app.runtime.listBackgroundTasks(session.id)).toEqual([]);
 
@@ -147,6 +154,7 @@ describe("OperatorCliApp", () => {
 
     const secondAttempt = await app.handleInput("start background wipe -- rm -rf build", session.id);
     expect(secondAttempt).toContain("Started background task");
+    expect(secondAttempt).toContain("task=");
     expect(await app.runtime.listBackgroundTasks(session.id)).toHaveLength(1);
   });
 

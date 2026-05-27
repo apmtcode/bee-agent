@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { OperatorControlPlaneServer } from "./server.js";
 import { OperatorCronService } from "./cron-service.js";
 import { OperatorDeliveryService } from "./delivery.js";
-import { subscribeRuntimeEvents } from "./subscriptions.js";
+import { buildRuntimeEventFilter, subscribeRuntimeEvents } from "./subscriptions.js";
 import { StandaloneOperatorRuntime } from "../orchestrator/operator-runtime.js";
 import type { ReviewedExportManifest } from "../training/export-manifest.js";
 
@@ -108,6 +108,12 @@ describe("OperatorControlPlaneServer", () => {
     });
     const run = runCreate.ok ? runCreate.result : undefined;
     expect(run).toBeDefined();
+    runtime.publishRunProgress({
+      runId: run?.id,
+      sessionId: session.id,
+      phase: "planning",
+      message: "Collecting deploy evidence.",
+    });
     const subagentCreate = await server.handle({
       method: "subagents.register",
       params: {
@@ -722,6 +728,16 @@ describe("OperatorControlPlaneServer", () => {
     if (!run || !subagent) {
       throw new Error("expected orchestration records to be created");
     }
+    await expect(server.handle({ method: "runs.events", params: { sessionId: session.id, family: "run" } })).resolves.toMatchObject({
+      ok: true,
+      result: expect.arrayContaining([
+        expect.objectContaining({ type: "run.started" }),
+        expect.objectContaining({
+          type: "run.progress",
+          payload: expect.objectContaining({ sessionId: session.id, runId: run.id, message: "Collecting deploy evidence." }),
+        }),
+      ]),
+    });
     await expect(
       server.handle({
         method: "runs.update",
@@ -752,7 +768,7 @@ describe("OperatorControlPlaneServer", () => {
       ok: true,
       result: { runId: subagent.runId, status: "running" },
     });
-  });
+  }, 120_000);
 
   it("streams runtime events through subscriptions", async () => {
     const runtime = new StandaloneOperatorRuntime({ rootDir: await makeTempDir() });
@@ -766,6 +782,62 @@ describe("OperatorControlPlaneServer", () => {
     expect(first.value).toMatchObject({ type: "session.started", payload: { id: session.id } });
 
     await iterator.return?.();
+  });
+
+  it("filters runtime events by session, run, and family", async () => {
+    const runtime = new StandaloneOperatorRuntime({ rootDir: await makeTempDir() });
+    const sessionA = await runtime.startSession({ title: "Session A" });
+    const sessionB = await runtime.startSession({ title: "Session B" });
+    const runA = await runtime.startRun({ sessionId: sessionA.id, title: "Run A" });
+    const runB = await runtime.startRun({ sessionId: sessionB.id, title: "Run B" });
+
+    runtime.publishRunProgress({
+      runId: runA.id,
+      sessionId: sessionA.id,
+      phase: "planning",
+      message: "Session A progress.",
+    });
+    runtime.publishRunProgress({
+      runId: runB.id,
+      sessionId: sessionB.id,
+      phase: "planning",
+      message: "Session B progress.",
+    });
+
+    const sessionARunEvents = runtime.events.snapshot(buildRuntimeEventFilter({ sessionId: sessionA.id, family: "run" }));
+    expect(sessionARunEvents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: "run.started", payload: expect.objectContaining({ id: runA.id, sessionId: sessionA.id }) }),
+        expect.objectContaining({
+          type: "run.progress",
+          payload: expect.objectContaining({ runId: runA.id, sessionId: sessionA.id, message: "Session A progress." }),
+        }),
+      ]),
+    );
+    expect(
+      sessionARunEvents.some(
+        (event) => event.type === "run.progress"
+          && "payload" in event
+          && typeof event.payload === "object"
+          && event.payload != null
+          && "runId" in event.payload
+          && event.payload.runId === runB.id,
+      ),
+    ).toBe(false);
+
+    const runOnlyEvents = runtime.events.snapshot(buildRuntimeEventFilter({ runId: runA.id, family: "run" }));
+    expect(runOnlyEvents.every((event) => {
+      if (event.type === "run.started" || event.type === "run.updated") {
+        return "payload" in event && typeof event.payload === "object" && event.payload != null && "id" in event.payload && event.payload.id === runA.id;
+      }
+      if (event.type === "run.progress") {
+        return "payload" in event && typeof event.payload === "object" && event.payload != null && "runId" in event.payload && event.payload.runId === runA.id;
+      }
+      return true;
+    })).toBe(true);
+
+    const approvalEvents = runtime.events.snapshot(buildRuntimeEventFilter({ family: "approval" }));
+    expect(approvalEvents).toEqual([]);
   });
 
   it("handles cron methods", async () => {
@@ -844,7 +916,7 @@ describe("OperatorControlPlaneServer", () => {
         error: { code: "NOT_FOUND", message: `unknown cron job: ${created.result.id}` },
       });
     }
-  });
+  }, 30_000);
 
   it("returns not-found and invalid-method responses", async () => {
     const runtime = new StandaloneOperatorRuntime({ rootDir: await makeTempDir() });

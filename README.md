@@ -59,6 +59,8 @@ Current slash commands:
 
 Freeform conversational turns now run through a narrow local assistant path in the CLI. Each turn is grounded by prompt-context discovery plus recent session transcript history, persisted through the existing runtime/session/transcript flow, and can reuse the current approval, executable-skill, background-task, recall, and inspection surfaces without dropping back to synthetic placeholder responses.
 
+Local freeform turns now also emit live run-progress updates while they execute. The CLI surfaces in-flight progress for freeform handling, approval waits, skill execution, and background-task-backed actions before printing the final assistant response.
+
 ## Settings precedence
 
 The CLI loads settings in this order, with later files overriding earlier ones:
@@ -141,6 +143,6 @@ The system is still incomplete relative to the long-term goal. Major missing tra
 - richer Claude Code style command surface and hook execution
 - fuller OpenClaw-style channel/gateway runtime and remote transport
 - richer delivery routing, retries, and transport semantics beyond local/webhook terminal notifications
-- richer tool-loop, streaming, and command-surface parity in the CLI shell
+- richer tool-loop and broader command-surface parity in the CLI shell beyond the current local run-progress streaming
 
 This README should be updated as each tranche lands so it remains the top-level project map.

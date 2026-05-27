@@ -164,6 +164,34 @@ export type SessionLifecycleEventType =
   | "session.completed"
   | "session.failed";
 
+export type OperatorRunProgressPhase =
+  | "planning"
+  | "status"
+  | "recall"
+  | "session-summary"
+  | "approvals"
+  | "approval-resolution"
+  | "executing-skill"
+  | "starting-background-task"
+  | "syncing-background-task"
+  | "cancelling-background-task"
+  | "training"
+  | "config"
+  | "prompt"
+  | "awaiting-approval"
+  | "completed"
+  | "failed";
+
+export type OperatorRunProgressEvent = {
+  runId?: string;
+  sessionId: string;
+  phase: OperatorRunProgressPhase;
+  message: string;
+  relatedApprovalId?: string;
+  relatedTaskId?: string;
+  relatedSkillId?: string;
+};
+
 export type OperatorRuntimeEventType =
   | SessionLifecycleEventType
   | "approval.requested"
@@ -176,6 +204,7 @@ export type OperatorRuntimeEventType =
   | "skill.run.completed"
   | "run.started"
   | "run.updated"
+  | "run.progress"
   | "subagent.registered"
   | "subagent.updated"
   | "training-job.created"
@@ -369,6 +398,10 @@ export class StandaloneOperatorRuntime {
       this.events.publish({ type: "run.updated", payload: run, ts: Date.now() });
     }
     return run;
+  }
+
+  publishRunProgress(event: OperatorRunProgressEvent): void {
+    this.events.publish({ type: "run.progress", payload: event, ts: Date.now() });
   }
 
   async listRuns(sessionId?: string): Promise<OperatorRunRecord[]> {

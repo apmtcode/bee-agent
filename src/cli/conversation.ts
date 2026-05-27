@@ -1,6 +1,6 @@
 import { resolveOperatorCliExecutionConfig, type OperatorCliRuntimeConfig } from "./config.js";
 import { discoverPromptContext, type OperatorCliPromptContext } from "./prompt.js";
-import type { StandaloneOperatorRuntime } from "../orchestrator/operator-runtime.js";
+import type { OperatorRunProgressPhase, StandaloneOperatorRuntime } from "../orchestrator/operator-runtime.js";
 import type { TranscriptMessageRecord, TranscriptRecord } from "../harness/transcript-store.js";
 
 export type OperatorCliConversationTurnParams = {
@@ -67,9 +67,16 @@ export async function runOperatorCliConversationTurn(
   });
 
   try {
+    publishProgress(params.runtime, {
+      runId: run.id,
+      sessionId: params.sessionId,
+      phase: "planning",
+      message: `Handling freeform ${intent.kind} request.`,
+    });
     const assistantText = await respondToIntent({
       runtime: params.runtime,
       sessionId: params.sessionId,
+      runId: run.id,
       cwd: params.cwd,
       input: params.input,
       config: params.config,
@@ -79,6 +86,12 @@ export async function runOperatorCliConversationTurn(
       approvedCommandFingerprints: params.approvedCommandFingerprints,
     });
     const trajectorySummary = buildTrajectorySummary(intent, params.input, assistantText);
+    publishProgress(params.runtime, {
+      runId: run.id,
+      sessionId: params.sessionId,
+      phase: "completed",
+      message: "Freeform turn completed.",
+    });
     await params.runtime.updateRunStatus(run.id, "completed", {
       kind: "cli.freeform",
       input: params.input,
@@ -94,6 +107,12 @@ export async function runOperatorCliConversationTurn(
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
+    publishProgress(params.runtime, {
+      runId: run.id,
+      sessionId: params.sessionId,
+      phase: "failed",
+      message: `Freeform turn failed: ${message}`,
+    });
     await params.runtime.updateRunStatus(run.id, "failed", {
       kind: "cli.freeform",
       input: params.input,
@@ -112,6 +131,7 @@ export async function runOperatorCliConversationTurn(
 async function respondToIntent(params: {
   runtime: StandaloneOperatorRuntime;
   sessionId: string;
+  runId: string;
   cwd: string;
   input: string;
   config?: OperatorCliRuntimeConfig;
@@ -122,46 +142,71 @@ async function respondToIntent(params: {
 }): Promise<string> {
   switch (params.intent.kind) {
     case "greeting":
+      publishProgress(params.runtime, { runId: params.runId, sessionId: params.sessionId, phase: "planning", message: "Preparing greeting." });
       return renderGreeting(params.promptContext, params.history);
     case "help":
+      publishProgress(params.runtime, { runId: params.runId, sessionId: params.sessionId, phase: "planning", message: "Preparing help response." });
       return renderHelp();
     case "status":
+      publishProgress(params.runtime, { runId: params.runId, sessionId: params.sessionId, phase: "status", message: "Collecting session status." });
       return await renderStatus(params.runtime, params.sessionId, params.promptContext);
     case "last-user":
+      publishProgress(params.runtime, { runId: params.runId, sessionId: params.sessionId, phase: "session-summary", message: "Looking up the last user message." });
       return renderPreviousMessage(params.history, "user", "You have not sent an earlier message in this session yet.");
     case "last-assistant":
+      publishProgress(params.runtime, { runId: params.runId, sessionId: params.sessionId, phase: "session-summary", message: "Looking up the last assistant message." });
       return renderPreviousMessage(params.history, "assistant", "I have not responded earlier in this session yet.");
     case "session-summary":
+      publishProgress(params.runtime, { runId: params.runId, sessionId: params.sessionId, phase: "session-summary", message: "Summarizing the current session." });
       return renderSessionSummary(params.promptContext, params.history);
     case "recall":
+      publishProgress(params.runtime, { runId: params.runId, sessionId: params.sessionId, phase: "recall", message: `Searching recall for \"${params.intent.query}\".` });
       return await renderRecall(params.runtime, params.intent.query);
     case "skills-list":
+      publishProgress(params.runtime, { runId: params.runId, sessionId: params.sessionId, phase: "executing-skill", message: "Listing available skills." });
       return await renderSkills(params.runtime);
     case "run-skill":
+      publishProgress(params.runtime, { runId: params.runId, sessionId: params.sessionId, phase: "executing-skill", message: `Running skill ${params.intent.skillId}.`, relatedSkillId: params.intent.skillId });
       return await renderExecutableSkillRun({
         runtime: params.runtime,
         sessionId: params.sessionId,
+        runId: params.runId,
         skillId: params.intent.skillId,
         config: params.config,
         approvedCommandFingerprints: params.approvedCommandFingerprints,
       });
     case "approvals":
+      publishProgress(params.runtime, { runId: params.runId, sessionId: params.sessionId, phase: "approvals", message: "Listing pending approvals." });
       return await renderApprovals(params.runtime, params.sessionId);
     case "approve":
+      publishProgress(params.runtime, { runId: params.runId, sessionId: params.sessionId, phase: "approval-resolution", message: `Resolving approval ${params.intent.approvalId}.`, relatedApprovalId: params.intent.approvalId });
       return await renderApprovalResolution(
         params.runtime,
+        params.sessionId,
+        params.runId,
         params.intent.approvalId,
         "approved",
         params.approvedCommandFingerprints,
       );
     case "deny":
-      return await renderApprovalResolution(params.runtime, params.intent.approvalId, "denied", params.approvedCommandFingerprints);
+      publishProgress(params.runtime, { runId: params.runId, sessionId: params.sessionId, phase: "approval-resolution", message: `Resolving approval ${params.intent.approvalId}.`, relatedApprovalId: params.intent.approvalId });
+      return await renderApprovalResolution(
+        params.runtime,
+        params.sessionId,
+        params.runId,
+        params.intent.approvalId,
+        "denied",
+        params.approvedCommandFingerprints,
+      );
     case "background-list":
+      publishProgress(params.runtime, { runId: params.runId, sessionId: params.sessionId, phase: "starting-background-task", message: "Listing background tasks." });
       return await renderBackgroundTasks(params.runtime, params.sessionId);
     case "background-start":
+      publishProgress(params.runtime, { runId: params.runId, sessionId: params.sessionId, phase: "starting-background-task", message: `Starting background task ${params.intent.title}.` });
       return await renderBackgroundStart({
         runtime: params.runtime,
         sessionId: params.sessionId,
+        runId: params.runId,
         cwd: params.cwd,
         title: params.intent.title,
         command: params.intent.command,
@@ -169,18 +214,25 @@ async function respondToIntent(params: {
         approvedCommandFingerprints: params.approvedCommandFingerprints,
       });
     case "background-view":
-      return await renderBackgroundView(params.runtime, params.intent.taskId, params.intent.lines);
+      publishProgress(params.runtime, { runId: params.runId, sessionId: params.sessionId, phase: "syncing-background-task", message: `Reading background task ${params.intent.taskId}.`, relatedTaskId: params.intent.taskId });
+      return await renderBackgroundView(params.runtime, params.sessionId, params.runId, params.intent.taskId, params.intent.lines);
     case "background-sync":
-      return await renderBackgroundSync(params.runtime, params.intent.taskId);
+      publishProgress(params.runtime, { runId: params.runId, sessionId: params.sessionId, phase: "syncing-background-task", message: `Syncing background task ${params.intent.taskId}.`, relatedTaskId: params.intent.taskId });
+      return await renderBackgroundSync(params.runtime, params.sessionId, params.runId, params.intent.taskId);
     case "background-cancel":
-      return await renderBackgroundCancel(params.runtime, params.intent.taskId);
+      publishProgress(params.runtime, { runId: params.runId, sessionId: params.sessionId, phase: "cancelling-background-task", message: `Cancelling background task ${params.intent.taskId}.`, relatedTaskId: params.intent.taskId });
+      return await renderBackgroundCancel(params.runtime, params.sessionId, params.runId, params.intent.taskId);
     case "training":
+      publishProgress(params.runtime, { runId: params.runId, sessionId: params.sessionId, phase: "training", message: "Listing training jobs." });
       return await renderTrainingJobs(params.runtime);
     case "config":
+      publishProgress(params.runtime, { runId: params.runId, sessionId: params.sessionId, phase: "config", message: "Inspecting CLI config." });
       return renderConfig(params.promptContext.config);
     case "prompt":
+      publishProgress(params.runtime, { runId: params.runId, sessionId: params.sessionId, phase: "prompt", message: "Inspecting prompt context." });
       return renderPromptContext(params.promptContext);
     case "fallback":
+      publishProgress(params.runtime, { runId: params.runId, sessionId: params.sessionId, phase: "planning", message: "Preparing contextual fallback response." });
       return renderFallback(params.promptContext, params.history, params.input);
   }
 }
@@ -396,6 +448,7 @@ async function renderSkills(runtime: StandaloneOperatorRuntime): Promise<string>
 async function renderExecutableSkillRun(params: {
   runtime: StandaloneOperatorRuntime;
   sessionId: string;
+  runId: string;
   skillId: string;
   config?: OperatorCliRuntimeConfig;
   approvedCommandFingerprints?: Set<string>;
@@ -403,6 +456,7 @@ async function renderExecutableSkillRun(params: {
   const run = await params.runtime.runExecutableSkill({
     skillId: params.skillId,
     sessionId: params.sessionId,
+    parentRunId: params.runId,
     executionConfig: resolveOperatorCliExecutionConfig(params.config),
     approvedCommandFingerprints: params.approvedCommandFingerprints,
   });
@@ -427,6 +481,8 @@ async function renderApprovals(runtime: StandaloneOperatorRuntime, sessionId: st
 
 async function renderApprovalResolution(
   runtime: StandaloneOperatorRuntime,
+  sessionId: string,
+  runId: string,
   approvalId: string,
   decision: "approved" | "denied",
   approvedCommandFingerprints?: Set<string>,
@@ -441,6 +497,13 @@ async function renderApprovalResolution(
   if (decision === "approved" && fingerprint) {
     approvedCommandFingerprints?.add(fingerprint);
   }
+  publishProgress(runtime, {
+    runId,
+    sessionId,
+    phase: "approval-resolution",
+    message: `${decision === "approved" ? "Approved" : "Denied"} ${approvalId}.`,
+    relatedApprovalId: approvalId,
+  });
   return `${decision === "approved" ? "Approved" : "Denied"} ${approvalId}.`;
 }
 
@@ -455,6 +518,7 @@ async function renderBackgroundTasks(runtime: StandaloneOperatorRuntime, session
 async function renderBackgroundStart(params: {
   runtime: StandaloneOperatorRuntime;
   sessionId: string;
+  runId: string;
   cwd: string;
   title: string;
   command: string;
@@ -473,6 +537,16 @@ async function renderBackgroundStart(params: {
     approvedFingerprints: params.approvedCommandFingerprints,
   });
   if (!authorization.allowed) {
+    const pendingApprovalId = authorization.pendingApprovalId;
+    publishProgress(params.runtime, {
+      runId: params.runId,
+      sessionId: params.sessionId,
+      phase: "awaiting-approval",
+      message: pendingApprovalId
+        ? `Awaiting approval ${pendingApprovalId} for background task ${params.title}.`
+        : authorization.message,
+      ...(pendingApprovalId ? { relatedApprovalId: pendingApprovalId } : {}),
+    });
     return authorization.message;
   }
   const task = await params.runtime.startBackgroundTask({
@@ -480,6 +554,13 @@ async function renderBackgroundStart(params: {
     title: params.title,
     command: params.command,
     cwd: params.cwd,
+  });
+  publishProgress(params.runtime, {
+    runId: params.runId,
+    sessionId: params.sessionId,
+    phase: "starting-background-task",
+    message: `Started background task ${task.id} (${task.status}) ${task.title}`,
+    relatedTaskId: task.id,
   });
   const postHookResults = await params.runtime.runPostCommandHooks({
     sessionId: params.sessionId,
@@ -500,6 +581,8 @@ async function renderBackgroundStart(params: {
 
 async function renderBackgroundView(
   runtime: StandaloneOperatorRuntime,
+  sessionId: string,
+  runId: string,
   taskId: string,
   lines?: number,
 ): Promise<string> {
@@ -507,6 +590,13 @@ async function renderBackgroundView(
   if (!task) {
     return `Unknown background task: ${taskId}`;
   }
+  publishProgress(runtime, {
+    runId,
+    sessionId,
+    phase: "syncing-background-task",
+    message: `Background task ${task.id} is ${task.status}.`,
+    relatedTaskId: task.id,
+  });
   const output = await runtime.getBackgroundTaskOutput(taskId, lines ?? 50);
   return [
     `${task.id} ${task.status} ${task.title}`,
@@ -514,13 +604,41 @@ async function renderBackgroundView(
   ].join("\n");
 }
 
-async function renderBackgroundSync(runtime: StandaloneOperatorRuntime, taskId: string): Promise<string> {
+async function renderBackgroundSync(
+  runtime: StandaloneOperatorRuntime,
+  sessionId: string,
+  runId: string,
+  taskId: string,
+): Promise<string> {
   const task = await runtime.syncBackgroundTask(taskId);
+  if (task) {
+    publishProgress(runtime, {
+      runId,
+      sessionId,
+      phase: "syncing-background-task",
+      message: `Background task ${task.id} is ${task.status}.`,
+      relatedTaskId: task.id,
+    });
+  }
   return task ? `${task.id} ${task.status} ${task.title}` : `Unknown background task: ${taskId}`;
 }
 
-async function renderBackgroundCancel(runtime: StandaloneOperatorRuntime, taskId: string): Promise<string> {
+async function renderBackgroundCancel(
+  runtime: StandaloneOperatorRuntime,
+  sessionId: string,
+  runId: string,
+  taskId: string,
+): Promise<string> {
   const task = await runtime.cancelBackgroundTask(taskId);
+  if (task) {
+    publishProgress(runtime, {
+      runId,
+      sessionId,
+      phase: "cancelling-background-task",
+      message: `Cancelled background task ${task.id}.`,
+      relatedTaskId: task.id,
+    });
+  }
   return task ? `Cancelled background task ${task.id}.` : `Unknown background task: ${taskId}`;
 }
 
@@ -577,6 +695,21 @@ function renderFallback(
 
 function buildTrajectorySummary(intent: ConversationIntent, input: string, assistantText: string): string {
   return truncateSingleLine(`Freeform ${intent.kind}: ${input} -> ${assistantText}`, 240);
+}
+
+function publishProgress(
+  runtime: StandaloneOperatorRuntime,
+  params: {
+    runId?: string;
+    sessionId: string;
+    phase: OperatorRunProgressPhase;
+    message: string;
+    relatedApprovalId?: string;
+    relatedTaskId?: string;
+    relatedSkillId?: string;
+  },
+): void {
+  runtime.publishRunProgress(params);
 }
 
 function buildRunTitle(input: string): string {
