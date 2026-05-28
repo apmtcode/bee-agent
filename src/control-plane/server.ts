@@ -138,6 +138,55 @@ export type SessionRemoteRepairResult = {
   };
 };
 
+export type SessionRemoteInventoryItem = {
+  remoteId: string;
+  remoteSource?: string;
+  session?: {
+    id: string;
+    status: string;
+    agentId?: string;
+    updatedAt: string;
+  };
+  pairing?: {
+    code: string;
+    status: PairingTicketStatus;
+    expiresAt: string;
+  };
+  control?: {
+    state: "active" | "paused" | "degraded";
+    reason?: string;
+  };
+  diagnostics?: {
+    cause: string;
+    recoverable: boolean;
+    taskId?: string;
+    recommendedAction?: string;
+  };
+  activeRun?: {
+    id: string;
+    title: string;
+    status: string;
+    updatedAt: string;
+  };
+  activeBackgroundTask?: {
+    id: string;
+    title: string;
+    kind: string;
+    status: string;
+    updatedAt: string;
+  };
+  gateway?: {
+    state: GatewaySessionHealth["state"];
+    updatedAt: number;
+    lastClientActivityAt?: number;
+    lastServerEventAt?: number;
+  };
+};
+
+export type SessionRemoteInventoryResult = {
+  items: SessionRemoteInventoryItem[];
+};
+
 export type GatewaySessionHealth = {
   connectionId: string;
   sessionId: string;
@@ -261,6 +310,13 @@ export class OperatorControlPlaneServer {
           const status = await buildSessionRemoteStatusResult(this.options.runtime, this.pairing, identifier, this.getGatewaySessionHealth.bind(this));
           return status ? ok(status) : notFound(`unknown remote or session: ${identifier}`);
         }
+        case "sessions.remoteInventory":
+          return ok(await buildSessionRemoteInventoryResult(
+            this.options.runtime,
+            this.pairing,
+            this.getGatewaySessionHealth.bind(this),
+            getOptionalString(request.params, "remoteSource"),
+          ));
         case "sessions.remoteControl": {
           const identifier = getString(request.params, "identifier");
           const action = getRemoteControlAction(request.params, "action");
@@ -830,6 +886,104 @@ async function buildSessionRemoteStatusResult(
         }
       : {}),
     recentEvents,
+  };
+}
+
+async function buildSessionRemoteInventoryResult(
+  runtime: StandaloneOperatorRuntime,
+  pairing: FilePairingStore,
+  getGatewaySessionHealth?: (sessionId: string) => GatewaySessionHealth | undefined,
+  remoteSource?: string,
+): Promise<SessionRemoteInventoryResult> {
+  const items = new Map<string, SessionRemoteInventoryItem>();
+  const sessions = await runtime.listSessions();
+  for (const session of sessions) {
+    if (!session.metadata.remoteId || (session.status !== "active" && session.status !== "idle")) {
+      continue;
+    }
+    if (remoteSource && session.metadata.remoteSource !== remoteSource) {
+      continue;
+    }
+    const status = await buildSessionRemoteStatusResult(runtime, pairing, session.id, getGatewaySessionHealth);
+    if (!status || items.has(status.remoteId)) {
+      continue;
+    }
+    items.set(status.remoteId, buildInventoryItemFromStatus(status, getGatewaySessionHealth?.(session.id)));
+  }
+
+  const tickets = await pairing.listTickets();
+  for (const ticket of tickets) {
+    if (ticket.status !== "pending" && ticket.status !== "approved") {
+      continue;
+    }
+    if (remoteSource && ticket.remoteSource !== remoteSource) {
+      continue;
+    }
+    if (items.has(ticket.remoteId)) {
+      continue;
+    }
+    items.set(ticket.remoteId, {
+      remoteId: ticket.remoteId,
+      remoteSource: ticket.remoteSource,
+      pairing: {
+        code: ticket.code,
+        status: ticket.status,
+        expiresAt: ticket.expiresAt,
+      },
+    });
+  }
+
+  return {
+    items: [...items.values()].sort((a, b) => {
+      const sourceCompare = (a.remoteSource ?? "").localeCompare(b.remoteSource ?? "");
+      if (sourceCompare !== 0) {
+        return sourceCompare;
+      }
+      return a.remoteId.localeCompare(b.remoteId);
+    }),
+  };
+}
+
+function buildInventoryItemFromStatus(
+  status: SessionRemoteStatusResult,
+  gatewaySession?: GatewaySessionHealth,
+): SessionRemoteInventoryItem {
+  return {
+    remoteId: status.remoteId,
+    ...(status.remoteSource ? { remoteSource: status.remoteSource } : {}),
+    session: {
+      id: status.session.id,
+      status: status.session.status,
+      ...(status.session.metadata.agentId ? { agentId: status.session.metadata.agentId } : {}),
+      updatedAt: status.session.updatedAt,
+    },
+    ...(status.pairing
+      ? {
+          pairing: {
+            code: status.pairing.code,
+            status: status.pairing.status,
+            expiresAt: status.pairing.expiresAt,
+          },
+        }
+      : {}),
+    control: status.control,
+    ...(status.diagnostics ? { diagnostics: status.diagnostics } : {}),
+    ...(status.activeRun ? { activeRun: status.activeRun } : {}),
+    ...(status.activeBackgroundTask ? { activeBackgroundTask: status.activeBackgroundTask } : {}),
+    ...(gatewaySession
+      ? {
+          gateway: {
+            state: gatewaySession.state,
+            updatedAt: gatewaySession.updatedAt,
+            ...(typeof gatewaySession.lastClientActivityAt === "number"
+              ? { lastClientActivityAt: gatewaySession.lastClientActivityAt }
+              : {}),
+            ...(typeof gatewaySession.lastServerEventAt === "number"
+              ? { lastServerEventAt: gatewaySession.lastServerEventAt }
+              : {}),
+          },
+        }
+      : {}),
   };
 }
 

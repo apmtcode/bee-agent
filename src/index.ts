@@ -117,6 +117,8 @@ export {
   type PairingTicketCreateResult,
   type PairingTicketResolveResult,
   type SessionBootstrapResult,
+  type SessionRemoteInventoryItem,
+  type SessionRemoteInventoryResult,
   type SessionRemoteRepairResult,
   type SessionRemoteStatusResult,
   type SpawnSubagentResult,

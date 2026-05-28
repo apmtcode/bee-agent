@@ -29,6 +29,8 @@ describe("parseSlashCommand", () => {
     expect(parseSlashCommand("/pairing create gateway")).toEqual({ kind: "pairing-create", remoteSource: "gateway" });
     expect(parseSlashCommand("/pairing approve code-1")).toEqual({ kind: "pairing-approve", identifier: "code-1" });
     expect(parseSlashCommand("/pairing reject ticket-1")).toEqual({ kind: "pairing-reject", identifier: "ticket-1" });
+    expect(parseSlashCommand("/remote list")).toEqual({ kind: "remote-list" });
+    expect(parseSlashCommand("/remote list gateway")).toEqual({ kind: "remote-list", remoteSource: "gateway" });
     expect(parseSlashCommand("/remote status device-1")).toEqual({ kind: "remote-status", identifier: "device-1" });
     expect(parseSlashCommand("/remote pause device-1 gateway unhealthy")).toEqual({
       kind: "remote-pause",
@@ -101,15 +103,15 @@ describe("parseSlashCommand", () => {
     });
     expect(parseSlashCommand("/remote")).toEqual({
       kind: "invalid",
-      message: "Usage: /remote <status|pause|repair> <remoteId|sessionId> [reason|missing-process|missing-state]",
+      message: "Usage: /remote <list [source]|status|pause|repair> <remoteId|sessionId> [reason|missing-process|missing-state]",
     });
     expect(parseSlashCommand("/remote pause")).toEqual({
       kind: "invalid",
-      message: "Usage: /remote <status|pause|repair> <remoteId|sessionId> [reason|missing-process|missing-state]",
+      message: "Usage: /remote <list [source]|status|pause|repair> <remoteId|sessionId> [reason|missing-process|missing-state]",
     });
     expect(parseSlashCommand("/remote repair device-1 bad-reason")).toEqual({
       kind: "invalid",
-      message: "Usage: /remote <status|pause|repair> <remoteId|sessionId> [reason|missing-process|missing-state]",
+      message: "Usage: /remote <list [source]|status|pause|repair> <remoteId|sessionId> [reason|missing-process|missing-state]",
     });
     expect(parseSlashCommand("/watch nope")).toEqual({
       kind: "invalid",
@@ -326,6 +328,18 @@ describe("OperatorCliApp", () => {
       command: "printf drift",
       kind: "task",
     });
+    const remoteListOutput = await app.dispatchSlashCommand({ kind: "remote-list" });
+    expect(remoteListOutput).toContain(`remote=${pairedBootstrap.result.session.metadata.remoteId}`);
+    expect(remoteListOutput).toContain("source=gateway");
+    expect(remoteListOutput).toContain(`pairing=redeemed:${pairingCodeMatch[0]}`);
+    expect(remoteListOutput).toContain(`session=${pairedBootstrap.result.session.id}:active`);
+    expect(remoteListOutput).toContain("run=running:Remote run");
+    expect(remoteListOutput).toContain("task=running:Remote task");
+    expect(remoteListOutput).toContain("gateway=<none>");
+
+    const remoteListFilteredOutput = await app.dispatchSlashCommand({ kind: "remote-list", remoteSource: "gateway" });
+    expect(remoteListFilteredOutput).toContain(`remote=${pairedBootstrap.result.session.metadata.remoteId}`);
+
     const remoteStatusOutput = await app.dispatchSlashCommand({ kind: "remote-status", identifier: pairedBootstrap.result.session.metadata.remoteId ?? pairedBootstrap.result.session.id });
     expect(remoteStatusOutput).toContain(`remote=${pairedBootstrap.result.session.metadata.remoteId}`);
     expect(remoteStatusOutput).toContain(`session=${pairedBootstrap.result.session.id}`);
@@ -364,6 +378,14 @@ describe("OperatorCliApp", () => {
       command: degradedTask.command,
     });
     await app.runtime.syncBackgroundTask(degradedTask.id);
+
+    const degradedRemoteListOutput = await app.dispatchSlashCommand({
+      kind: "remote-list",
+      remoteSource: "gateway",
+    });
+    expect(degradedRemoteListOutput).toContain(`remote=${degradedBootstrap.result.session.metadata.remoteId}`);
+    expect(degradedRemoteListOutput).toContain("control=degraded:background task failed");
+    expect(degradedRemoteListOutput).toContain("diagnostics=background task failed");
 
     const degradedRemoteStatusOutput = await app.dispatchSlashCommand({
       kind: "remote-status",

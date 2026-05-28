@@ -44,6 +44,7 @@ Current slash commands:
 - `/pairing create [source]`
 - `/pairing approve <code|id>`
 - `/pairing reject <code|id>`
+- `/remote list [source]`
 - `/remote status <remoteId|sessionId>`
 - `/remote pause <remoteId|sessionId> [reason]`
 - `/remote repair <remoteId|sessionId> [missing-process|missing-state]`
@@ -115,11 +116,12 @@ Current pairing behavior in this tranche:
 Operator now also has a first narrow remote diagnostics surface on top of pairing and remote session continuity.
 
 Current remote status behavior in this tranche:
-- the control plane exposes `sessions.remoteStatus` for a `remoteId` or `sessionId`
+- the control plane exposes `sessions.remoteInventory` for fleet-style remote summaries and `sessions.remoteStatus` for per-remote drill-down
+- remote inventory summarizes known remotes from active/idle sessions plus pending or approved-unredeemed pairing claims, with optional `remoteSource` filtering
 - remote status resolves the bound local session plus `remoteSource`
 - remote status includes the latest pairing ticket for that remote when one exists
 - remote status reports session-scoped pending approvals, the active run, the active background task, and recent runtime events
-- the operator CLI exposes this with `/remote status <remoteId|sessionId>` for read-only troubleshooting
+- the operator CLI exposes fleet summaries with `/remote list [source]` and drill-down troubleshooting with `/remote status <remoteId|sessionId>`
 
 ## Remote subagent spawn
 

@@ -349,6 +349,58 @@ describe("OperatorControlPlaneServer", () => {
         },
       },
     });
+    const inventoryPairing = await server.handle({
+      method: "pairing.create",
+      params: { remoteSource: "gateway" },
+    });
+    if (!inventoryPairing.ok) {
+      throw new Error("expected inventory pairing seed");
+    }
+    await expect(
+      server.handle({
+        method: "pairing.resolve",
+        params: { ticketId: inventoryPairing.result.id, decision: "approved", resolvedBy: "tester" },
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      result: { id: inventoryPairing.result.id, status: "approved" },
+    });
+    const remoteInventory = await server.handle({
+      method: "sessions.remoteInventory",
+    });
+    expect(remoteInventory.ok).toBe(true);
+    if (!remoteInventory.ok) {
+      throw new Error("expected remote inventory");
+    }
+    expect(remoteInventory.result.items).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        remoteId: pairingCreate.result.remoteId,
+        remoteSource: "gateway",
+        control: { state: "paused", reason: "gateway unhealthy" },
+        pairing: expect.objectContaining({ code: pairingCreate.result.code, status: "redeemed" }),
+        session: expect.objectContaining({ id: pairedBootstrap.result.session.id, status: pairedBootstrap.result.session.status }),
+        activeRun: expect.objectContaining({ id: remoteRun.id, status: "paused", title: "Remote run" }),
+        activeBackgroundTask: expect.objectContaining({ id: remoteTask.id, status: "running", title: "Remote task" }),
+        gateway: expect.objectContaining({ state: "healthy" }),
+      }),
+      expect.objectContaining({
+        remoteId: inventoryPairing.result.remoteId,
+        remoteSource: "gateway",
+        pairing: expect.objectContaining({ status: "approved", code: inventoryPairing.result.code }),
+      }),
+    ]));
+    const filteredRemoteInventory = await server.handle({
+      method: "sessions.remoteInventory",
+      params: { remoteSource: "gateway" },
+    });
+    expect(filteredRemoteInventory.ok).toBe(true);
+    if (!filteredRemoteInventory.ok) {
+      throw new Error("expected filtered remote inventory");
+    }
+    expect(filteredRemoteInventory.result.items).toEqual(expect.arrayContaining([
+      expect.objectContaining({ remoteId: pairingCreate.result.remoteId, remoteSource: "gateway" }),
+      expect.objectContaining({ remoteId: inventoryPairing.result.remoteId, remoteSource: "gateway" }),
+    ]));
 
     const driftingRootDir = await makeTempDir();
     const driftingRuntime = new StandaloneOperatorRuntime({
@@ -424,23 +476,6 @@ describe("OperatorControlPlaneServer", () => {
       ok: false,
       error: { code: "INVALID_REQUEST", message: `pairing ticket is redeemed: ${pairingCreate.result.code}` },
     });
-    const rejectedPairing = await server.handle({
-      method: "pairing.create",
-      params: { remoteSource: "gateway" },
-    });
-    if (!rejectedPairing.ok) {
-      throw new Error("expected rejected pairing seed");
-    }
-    await expect(
-      server.handle({
-        method: "pairing.resolve",
-        params: { ticketId: rejectedPairing.result.id, decision: "rejected", resolvedBy: "tester" },
-      }),
-    ).resolves.toMatchObject({
-      ok: true,
-      result: { id: rejectedPairing.result.id, status: "rejected" },
-    });
-
     const sessionsList = await server.handle({ method: "sessions.list" });
     expect(sessionsList.ok).toBe(true);
     if (sessionsList.ok) {
