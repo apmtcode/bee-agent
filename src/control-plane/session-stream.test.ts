@@ -112,6 +112,22 @@ describe("OperatorControlPlaneSessionStream", () => {
       control: { state: "paused", reason: "gateway unhealthy" },
       activeRun: { status: "paused" },
     });
+
+    const repair = await stream.request<{ repaired: { action: string; changed: boolean; results: Array<{ reason: string }> } }>({
+      method: "sessions.remoteRepair",
+      params: { action: "recover-background-tasks", reasons: ["missing-process"] },
+    });
+    expect(repair.ok).toBe(true);
+    if (!repair.ok) {
+      throw new Error("expected remote repair response");
+    }
+    expect(repair.result).toMatchObject({
+      repaired: {
+        action: "recover-background-tasks",
+        changed: false,
+        results: [],
+      },
+    });
   });
 
   it("replays and streams subagent events for a bootstrapped session", async () => {

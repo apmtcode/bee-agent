@@ -273,4 +273,137 @@ describe("OperatorGatewayTransportConnection", () => {
     expect(bootstrapped.result.session.metadata.remoteId).toBe(created.result.remoteId);
     expect(bootstrapped.result.session.metadata.remoteSource).toBe("gateway");
   });
+
+  it("sends heartbeat pings, marks stale without pong, and reports stale remote status", async () => {
+    const runtime = new StandaloneOperatorRuntime({
+      rootDir: await makeTempDir(),
+      backgroundTaskIsProcessRunning: () => false,
+    });
+    const server = new OperatorControlPlaneServer({ runtime });
+    const transport = new InMemoryGatewayTransport();
+    const connection = new OperatorGatewayTransportConnection(server, transport, {
+      heartbeatIntervalMs: 5,
+      heartbeatTimeoutMs: 5,
+    });
+
+    await connection.receive({
+      type: "bootstrap",
+      id: "boot-heartbeat-1",
+      params: { title: "Gateway heartbeat", remoteId: "device-heartbeat-1", remoteSource: "gateway", agentId: "gateway" },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(transport.sent.some((message) => message.type === "ping")).toBe(true);
+    await expect(
+      server.handle({ method: "sessions.remoteStatus", params: { identifier: "device-heartbeat-1" } }),
+    ).resolves.toMatchObject({
+      ok: true,
+      result: {
+        remoteId: "device-heartbeat-1",
+        control: { state: "degraded", reason: "gateway heartbeat stale" },
+        diagnostics: {
+          cause: "gateway heartbeat stale",
+          recoverable: true,
+          recommendedAction: "Reconnect remote device-heartbeat-1",
+        },
+      },
+    });
+
+    await connection.receive({
+      type: "request",
+      id: "req-after-stale",
+      request: { method: "approvals.list" },
+    });
+    expect(transport.sent).toContainEqual({
+      type: "error",
+      id: "req-after-stale",
+      message: "Connection is closed.",
+    });
+  });
+
+  it("replays only missed events after reconnect cursor and clears stale health after pong", async () => {
+    const runtime = new StandaloneOperatorRuntime({
+      rootDir: await makeTempDir(),
+      backgroundTaskIsProcessRunning: () => false,
+    });
+    const server = new OperatorControlPlaneServer({ runtime });
+    const firstTransport = new InMemoryGatewayTransport();
+    const firstConnection = new OperatorGatewayTransportConnection(server, firstTransport, {
+      heartbeatIntervalMs: 5,
+      heartbeatTimeoutMs: 20,
+    });
+
+    await firstConnection.receive({
+      type: "bootstrap",
+      id: "boot-reconnect-1",
+      params: { title: "Gateway reconnect", remoteId: "device-reconnect-1", remoteSource: "gateway", agentId: "gateway" },
+      eventSubscription: { family: "run" },
+    });
+    const firstBootstrap = firstTransport.sent.find((message) => message.type === "bootstrap.ok" && message.id === "boot-reconnect-1");
+    if (!firstBootstrap || firstBootstrap.type !== "bootstrap.ok") {
+      throw new Error("expected first reconnect bootstrap");
+    }
+
+    const firstRun = await runtime.startRun({ sessionId: firstBootstrap.result.session.id, title: "First run" });
+    runtime.publishRunProgress({
+      runId: firstRun.id,
+      sessionId: firstBootstrap.result.session.id,
+      phase: "planning",
+      message: "First progress",
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const lastSeenTs = firstTransport.sent
+      .filter((message) => message.type === "event")
+      .map((message) => message.event.ts)
+      .at(-1);
+    if (typeof lastSeenTs !== "number") {
+      throw new Error("expected first event timestamp");
+    }
+
+    await firstConnection.close();
+
+    const secondRun = await runtime.startRun({ sessionId: firstBootstrap.result.session.id, title: "Second run" });
+    runtime.publishRunProgress({
+      runId: secondRun.id,
+      sessionId: firstBootstrap.result.session.id,
+      phase: "planning",
+      message: "Second progress",
+    });
+
+    const secondTransport = new InMemoryGatewayTransport();
+    const secondConnection = new OperatorGatewayTransportConnection(server, secondTransport, {
+      heartbeatIntervalMs: 5,
+      heartbeatTimeoutMs: 20,
+    });
+    await secondConnection.receive({
+      type: "bootstrap",
+      id: "boot-reconnect-2",
+      params: { remoteId: "device-reconnect-1", remoteSource: "gateway", afterTs: lastSeenTs },
+      eventSubscription: { family: "run" },
+    });
+    const secondBootstrap = secondTransport.sent.find((message) => message.type === "bootstrap.ok" && message.id === "boot-reconnect-2");
+    if (!secondBootstrap || secondBootstrap.type !== "bootstrap.ok") {
+      throw new Error("expected second reconnect bootstrap");
+    }
+    expect(secondBootstrap.result.session.id).toBe(firstBootstrap.result.session.id);
+    expect(secondBootstrap.result.events.every((event) => event.ts > lastSeenTs)).toBe(true);
+    expect(secondBootstrap.result.events.some((event) => event.type === "run.progress" && (event.payload as { message?: string }).message === "Second progress")).toBe(true);
+    expect(secondBootstrap.result.events.some((event) => event.type === "run.progress" && (event.payload as { message?: string }).message === "First progress")).toBe(false);
+
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    const ping = secondTransport.sent.find((message) => message.type === "ping");
+    if (!ping || ping.type !== "ping") {
+      throw new Error("expected ping");
+    }
+    await secondConnection.receive({ type: "pong", id: ping.id });
+    await expect(
+      server.handle({ method: "sessions.remoteStatus", params: { identifier: "device-reconnect-1" } }),
+    ).resolves.toMatchObject({
+      ok: true,
+      result: {
+        remoteId: "device-reconnect-1",
+        control: { state: "active" },
+      },
+    });
+  });
 });

@@ -77,6 +77,12 @@ export type SessionRemoteStatusResult = {
     state: "active" | "paused" | "degraded";
     reason?: string;
   };
+  diagnostics?: {
+    cause: string;
+    recoverable: boolean;
+    taskId?: string;
+    recommendedAction?: string;
+  };
   activeRun?: {
     id: string;
     title: string;
@@ -91,6 +97,55 @@ export type SessionRemoteStatusResult = {
     updatedAt: string;
   };
   recentEvents: OperatorEvent[];
+};
+
+export type SessionRemoteRepairResult = {
+  remoteId: string;
+  remoteSource?: string;
+  session: SessionRecord;
+  repaired: {
+    action: "recover-background-tasks";
+    reasons?: BackgroundTaskRecoveryReason[];
+    results: Array<{
+      task: {
+        id: string;
+        title: string;
+        kind: string;
+        status: string;
+        updatedAt: string;
+      };
+      changed: boolean;
+      reason: BackgroundTaskRecoveryReason;
+    }>;
+    changed: boolean;
+  };
+  control: {
+    state: "active" | "paused" | "degraded";
+    reason?: string;
+  };
+  diagnostics?: {
+    cause: string;
+    recoverable: boolean;
+    taskId?: string;
+    recommendedAction?: string;
+  };
+  activeBackgroundTask?: {
+    id: string;
+    title: string;
+    kind: string;
+    status: string;
+    updatedAt: string;
+  };
+};
+
+export type GatewaySessionHealth = {
+  connectionId: string;
+  sessionId: string;
+  remoteId?: string;
+  state: "healthy" | "stale" | "closed";
+  updatedAt: number;
+  lastClientActivityAt?: number;
+  lastServerEventAt?: number;
 };
 
 export type SpawnSubagentResult = {
@@ -120,6 +175,7 @@ export type SpawnSubagentResult = {
 export class OperatorControlPlaneServer {
   private readonly cron: OperatorCronService;
   private readonly pairing: FilePairingStore;
+  private readonly gatewaySessions = new Map<string, GatewaySessionHealth>();
 
   get runtime(): StandaloneOperatorRuntime {
     return this.options.runtime;
@@ -128,6 +184,22 @@ export class OperatorControlPlaneServer {
   constructor(private readonly options: ControlPlaneServerOptions) {
     this.cron = options.cron ?? new OperatorCronService(options.runtime.rootDir, { runtime: options.runtime });
     this.pairing = options.pairing ?? new FilePairingStore(buildPairingStoreFilePath(options.runtime.rootDir));
+  }
+
+  registerGatewaySessionConnection(params: GatewaySessionHealth): void {
+    this.gatewaySessions.set(params.sessionId, params);
+  }
+
+  updateGatewaySessionHealth(params: GatewaySessionHealth): void {
+    const current = this.gatewaySessions.get(params.sessionId);
+    if (current && current.connectionId !== params.connectionId) {
+      return;
+    }
+    this.gatewaySessions.set(params.sessionId, params);
+  }
+
+  getGatewaySessionHealth(sessionId: string): GatewaySessionHealth | undefined {
+    return this.gatewaySessions.get(sessionId);
   }
 
   async handle(request: ControlPlaneRequest): Promise<ControlPlaneResponse> {
@@ -181,11 +253,12 @@ export class OperatorControlPlaneServer {
             resumed,
             runId: getOptionalString(request.params, "runId"),
             family: getOptionalRuntimeEventFamily(request.params, "family"),
+            afterTs: getOptionalNumber(request.params, "afterTs"),
           }));
         }
         case "sessions.remoteStatus": {
           const identifier = getString(request.params, "identifier");
-          const status = await buildSessionRemoteStatusResult(this.options.runtime, this.pairing, identifier);
+          const status = await buildSessionRemoteStatusResult(this.options.runtime, this.pairing, identifier, this.getGatewaySessionHealth.bind(this));
           return status ? ok(status) : notFound(`unknown remote or session: ${identifier}`);
         }
         case "sessions.remoteControl": {
@@ -204,8 +277,39 @@ export class OperatorControlPlaneServer {
               return notFound(`no active run for remote or session: ${identifier}`);
             }
           }
-          const status = await buildSessionRemoteStatusResult(this.options.runtime, this.pairing, session.id);
+          const status = await buildSessionRemoteStatusResult(this.options.runtime, this.pairing, session.id, this.getGatewaySessionHealth.bind(this));
           return status ? ok(status) : notFound(`unknown remote or session: ${identifier}`);
+        }
+        case "sessions.remoteRepair": {
+          const identifier = getString(request.params, "identifier");
+          const action = getRemoteRepairAction(request.params, "action");
+          const session = await resolveSessionByIdentifier(this.options.runtime, identifier);
+          if (!session) {
+            return notFound(`unknown remote or session: ${identifier}`);
+          }
+          const repaired = await this.options.runtime.recoverBackgroundTasks({
+            sessionId: session.id,
+            reasons: getOptionalRecoverableBackgroundTaskRecoveryReasons(request.params, "reasons"),
+          });
+          const status = await buildSessionRemoteStatusResult(this.options.runtime, this.pairing, session.id, this.getGatewaySessionHealth.bind(this));
+          if (!status) {
+            return notFound(`unknown remote or session: ${identifier}`);
+          }
+          return ok(buildSessionRemoteRepairResult(
+            status,
+            action,
+            repaired.map((item) => ({
+              task: {
+                id: item.task.id,
+                title: item.task.title,
+                kind: item.task.kind,
+                status: item.task.status,
+                updatedAt: item.task.updatedAt,
+              },
+              changed: item.changed,
+              reason: item.reason,
+            })),
+          ));
         }
         case "sessions.resume": {
           const sessionId = getString(request.params, "sessionId");
@@ -660,18 +764,19 @@ function buildPairingStoreFilePath(rootDir: string): string {
 async function buildSessionBootstrapResult(
   runtime: StandaloneOperatorRuntime,
   session: SessionRecord,
-  options: { created: boolean; resumed: boolean; runId?: string; family?: "run" | "approval" | "background-task" | "skill" | "subagent" },
+  options: { created: boolean; resumed: boolean; runId?: string; family?: "run" | "approval" | "background-task" | "skill" | "subagent"; afterTs?: number },
 ): Promise<SessionBootstrapResult> {
+  const events = runtime.events.snapshot(buildRuntimeEventFilter({
+    sessionId: session.id,
+    ...(options.runId ? { runId: options.runId } : {}),
+    ...(options.family ? { family: options.family } : {}),
+  }));
   return {
     session,
     created: options.created,
     resumed: options.resumed,
     approvals: await runtime.listApprovals(session.id),
-    events: runtime.events.snapshot(buildRuntimeEventFilter({
-      sessionId: session.id,
-      ...(options.runId ? { runId: options.runId } : {}),
-      ...(options.family ? { family: options.family } : {}),
-    })),
+    events: typeof options.afterTs === "number" ? events.filter((event) => event.ts > options.afterTs!) : events,
   };
 }
 
@@ -679,6 +784,7 @@ async function buildSessionRemoteStatusResult(
   runtime: StandaloneOperatorRuntime,
   pairing: FilePairingStore,
   identifier: string,
+  getGatewaySessionHealth?: (sessionId: string) => GatewaySessionHealth | undefined,
 ): Promise<SessionRemoteStatusResult | undefined> {
   const session = await resolveSessionByIdentifier(runtime, identifier);
   if (!session) {
@@ -691,13 +797,17 @@ async function buildSessionRemoteStatusResult(
     ? await findLatestPairingTicket(pairing, session.metadata.remoteId)
     : undefined;
   const recentEvents = runtime.events.snapshot(buildRuntimeEventFilter({ sessionId: session.id })).slice(-5);
+  const gatewaySession = getGatewaySessionHealth?.(session.id);
+  const diagnostics = await deriveRemoteDiagnostics(runtime, { session, activeRun, activeBackgroundTask, recentEvents, gatewaySession });
+  const control = deriveRemoteControlStatus({ session, activeRun, diagnostics });
   return {
     remoteId: session.metadata.remoteId ?? session.id,
     ...(session.metadata.remoteSource ? { remoteSource: session.metadata.remoteSource } : {}),
     session,
     ...(pairingTicket ? { pairing: pairingTicket } : {}),
     approvals,
-    control: deriveRemoteControlStatus({ session, activeRun, activeBackgroundTask, recentEvents }),
+    control,
+    ...(diagnostics ? { diagnostics } : {}),
     ...(activeRun
       ? {
           activeRun: {
@@ -723,6 +833,30 @@ async function buildSessionRemoteStatusResult(
   };
 }
 
+function buildSessionRemoteRepairResult(
+  status: SessionRemoteStatusResult,
+  action: "recover-background-tasks",
+  results: Array<{ task: { id: string; title: string; kind: string; status: string; updatedAt: string }; changed: boolean; reason: BackgroundTaskRecoveryReason }>,
+): SessionRemoteRepairResult {
+  const clearBackgroundTaskDiagnostics =
+    status.diagnostics?.recoverable === true ||
+    (status.diagnostics?.cause.startsWith("background task") === true && !status.activeBackgroundTask);
+  return {
+    remoteId: status.remoteId,
+    ...(status.remoteSource ? { remoteSource: status.remoteSource } : {}),
+    session: status.session,
+    repaired: {
+      action,
+      ...(results.length > 0 ? { reasons: [...new Set(results.map((item) => item.reason))] } : {}),
+      results,
+      changed: results.some((item) => item.changed),
+    },
+    control: clearBackgroundTaskDiagnostics ? { state: "active" } : status.control,
+    ...(!clearBackgroundTaskDiagnostics && status.diagnostics ? { diagnostics: status.diagnostics } : {}),
+    ...(status.activeBackgroundTask ? { activeBackgroundTask: status.activeBackgroundTask } : {}),
+  };
+}
+
 async function resolveSessionByIdentifier(
   runtime: StandaloneOperatorRuntime,
   identifier: string,
@@ -733,8 +867,7 @@ async function resolveSessionByIdentifier(
 function deriveRemoteControlStatus(params: {
   session: SessionRecord;
   activeRun?: { status: string; metadata?: Record<string, unknown> };
-  activeBackgroundTask?: { status: string };
-  recentEvents: OperatorEvent[];
+  diagnostics?: SessionRemoteStatusResult["diagnostics"];
 }): { state: "active" | "paused" | "degraded"; reason?: string } {
   if (params.activeRun?.status === "paused") {
     const remoteControlSource = typeof params.activeRun.metadata?.remoteControlSource === "string"
@@ -748,32 +881,96 @@ function deriveRemoteControlStatus(params: {
       ...(remoteControlReason ? { reason: remoteControlReason } : {}),
     };
   }
+  return params.diagnostics
+    ? { state: "degraded", reason: params.diagnostics.cause }
+    : { state: "active" };
+}
+
+async function deriveRemoteDiagnostics(
+  runtime: StandaloneOperatorRuntime,
+  params: {
+    session: SessionRecord;
+    activeRun?: { status: string; metadata?: Record<string, unknown> };
+    activeBackgroundTask?: { id: string; status: string };
+    recentEvents: OperatorEvent[];
+    gatewaySession?: GatewaySessionHealth;
+  },
+): Promise<SessionRemoteStatusResult["diagnostics"]> {
+  if (
+    params.activeRun?.status === "paused" &&
+    params.activeRun.metadata?.remoteControlSource !== "remote-control"
+  ) {
+    return {
+      cause: "run paused outside remote control",
+      recoverable: false,
+    };
+  }
   if (params.session.status !== "active") {
-    return { state: "degraded", reason: `session ${params.session.status}` };
+    return {
+      cause: `session ${params.session.status}`,
+      recoverable: false,
+    };
   }
-  if (params.activeBackgroundTask?.status === "failed") {
-    return { state: "degraded", reason: "background task failed" };
+  if (params.gatewaySession?.state === "stale") {
+    return {
+      cause: "gateway heartbeat stale",
+      recoverable: true,
+      recommendedAction: `Reconnect remote ${params.session.metadata.remoteId ?? params.session.id}`,
+    };
   }
-  const degradedEvent = [...params.recentEvents].reverse().find((event) => {
-    if ((event.type !== "background-task.failed" && event.type !== "background-task.recovered") || !event.payload || typeof event.payload !== "object") {
-      return false;
+
+  const activeBackgroundTask = params.activeBackgroundTask
+    ? await runtime.getBackgroundTask(params.activeBackgroundTask.id)
+    : undefined;
+  if (activeBackgroundTask) {
+    const state = await runtime.backgroundTasks.executionService.readState(activeBackgroundTask);
+    if (state?.status === "running" && !runtime.backgroundTasks.executionService.isProcessRunning(state.pid)) {
+      return {
+        cause: "background task missing-process",
+        recoverable: true,
+        taskId: activeBackgroundTask.id,
+        recommendedAction: `Run /remote repair ${params.session.metadata.remoteId ?? params.session.id} missing-process`,
+      };
     }
-    if (event.type === "background-task.failed") {
-      return true;
+  }
+
+  const failedTaskEvent = [...params.recentEvents].reverse().find((event) => {
+    return event.type === "background-task.failed" && event.payload && typeof event.payload === "object";
+  });
+  if (failedTaskEvent?.payload && typeof failedTaskEvent.payload === "object") {
+    const taskId = "id" in failedTaskEvent.payload && typeof failedTaskEvent.payload.id === "string"
+      ? failedTaskEvent.payload.id
+      : undefined;
+    return {
+      cause: "background task failed",
+      recoverable: false,
+      ...(taskId ? { taskId } : {}),
+    };
+  }
+
+  const recoveredTaskEvent = [...params.recentEvents].reverse().find((event) => {
+    if (event.type !== "background-task.recovered" || !event.payload || typeof event.payload !== "object") {
+      return false;
     }
     const reason = "reason" in event.payload ? event.payload.reason : undefined;
     return reason === "missing-process" || reason === "missing-state";
   });
-  if (degradedEvent?.type === "background-task.failed") {
-    return { state: "degraded", reason: "background task failed" };
-  }
-  if (degradedEvent?.type === "background-task.recovered" && degradedEvent.payload && typeof degradedEvent.payload === "object") {
-    const reason = "reason" in degradedEvent.payload ? degradedEvent.payload.reason : undefined;
+  if (recoveredTaskEvent?.payload && typeof recoveredTaskEvent.payload === "object") {
+    const reason = "reason" in recoveredTaskEvent.payload ? recoveredTaskEvent.payload.reason : undefined;
+    const recoveredTask = "task" in recoveredTaskEvent.payload && recoveredTaskEvent.payload.task && typeof recoveredTaskEvent.payload.task === "object"
+      ? recoveredTaskEvent.payload.task as { id?: string }
+      : undefined;
     if (reason === "missing-process" || reason === "missing-state") {
-      return { state: "degraded", reason: `background task ${reason}` };
+      return {
+        cause: `background task ${reason}`,
+        recoverable: true,
+        ...(typeof recoveredTask?.id === "string" ? { taskId: recoveredTask.id } : {}),
+        recommendedAction: `Run /remote repair ${params.session.metadata.remoteId ?? params.session.id} ${reason}`,
+      };
     }
   }
-  return { state: "active" };
+
+  return undefined;
 }
 
 async function findLatestPairingTicket(
@@ -885,6 +1082,17 @@ function getRemoteControlAction(
     return value;
   }
   throw new Error(`Invalid remote control action: ${key}`);
+}
+
+function getRemoteRepairAction(
+  params: Record<string, unknown> | undefined,
+  key: string,
+): "recover-background-tasks" {
+  const value = params?.[key];
+  if (value === "recover-background-tasks") {
+    return value;
+  }
+  throw new Error(`Invalid remote repair action: ${key}`);
 }
 
 function getPairingResolutionDecision(
@@ -1001,6 +1209,22 @@ function getOptionalBackgroundTaskRecoveryReasons(
       return item;
     }
     throw new Error(`Invalid background task recovery reason: ${key}`);
+  });
+}
+
+function getOptionalRecoverableBackgroundTaskRecoveryReasons(
+  params: Record<string, unknown> | undefined,
+  key: string,
+): Array<"missing-process" | "missing-state"> | undefined {
+  const reasons = getOptionalBackgroundTaskRecoveryReasons(params, key);
+  if (!reasons) {
+    return undefined;
+  }
+  return reasons.map((reason) => {
+    if (reason === "missing-process" || reason === "missing-state") {
+      return reason;
+    }
+    throw new Error(`Invalid remote repair recovery reason: ${key}`);
   });
 }
 

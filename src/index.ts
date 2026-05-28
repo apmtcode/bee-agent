@@ -113,9 +113,11 @@ export {
   type ControlPlaneResponse,
   type ControlPlaneServerOptions,
   type ControlPlaneSuccess,
+  type GatewaySessionHealth,
   type PairingTicketCreateResult,
   type PairingTicketResolveResult,
   type SessionBootstrapResult,
+  type SessionRemoteRepairResult,
   type SessionRemoteStatusResult,
   type SpawnSubagentResult,
 } from "./control-plane/server.js";
@@ -136,6 +138,7 @@ export {
   type GatewayEventSubscription,
   type GatewayServerMessage,
   type GatewayTransport,
+  type OperatorGatewayTransportConnectionOptions,
 } from "./control-plane/gateway-transport.js";
 export {
   buildRuntimeEventFilter,

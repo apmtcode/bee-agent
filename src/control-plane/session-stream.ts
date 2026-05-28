@@ -13,6 +13,7 @@ export type SessionStreamBootstrapParams = {
   resume?: boolean;
   runId?: string;
   family?: RuntimeEventFamily;
+  afterTs?: number;
 };
 
 export class OperatorControlPlaneSessionStream {
@@ -57,7 +58,7 @@ export class OperatorControlPlaneSessionStream {
     if (!this.boundSessionId) {
       return params;
     }
-    if (method === "sessions.remoteStatus" || method === "sessions.remoteControl") {
+    if (method === "sessions.remoteStatus" || method === "sessions.remoteControl" || method === "sessions.remoteRepair") {
       return {
         ...(params ?? {}),
         identifier: params?.identifier ?? this.boundSessionId,

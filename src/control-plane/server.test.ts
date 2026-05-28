@@ -145,6 +145,18 @@ describe("OperatorControlPlaneServer", () => {
         events: [expect.objectContaining({ type: "approval.requested" })],
       },
     });
+    const approvalReplayCursor = Date.now();
+    const filteredBootstrap = await server.handle({
+      method: "sessions.bootstrap",
+      params: { sessionId: session.id, family: "approval", afterTs: approvalReplayCursor },
+    });
+    expect(filteredBootstrap).toMatchObject({
+      ok: true,
+      result: {
+        session: { id: session.id },
+        events: [],
+      },
+    });
 
     const remoteBootstrappedSession = await server.handle({
       method: "sessions.bootstrap",
@@ -256,6 +268,14 @@ describe("OperatorControlPlaneServer", () => {
       ok: true,
       result: [expect.objectContaining({ id: pairingCreate.result.id, status: "redeemed" })],
     });
+    server.registerGatewaySessionConnection({
+      connectionId: "gateway-healthy-1",
+      sessionId: pairedBootstrap.result.session.id,
+      remoteId: pairingCreate.result.remoteId,
+      state: "healthy",
+      updatedAt: Date.now(),
+      lastClientActivityAt: Date.now(),
+    });
     await expect(
       server.handle({
         method: "sessions.remoteStatus",
@@ -279,6 +299,39 @@ describe("OperatorControlPlaneServer", () => {
         ]),
       },
     });
+    server.updateGatewaySessionHealth({
+      connectionId: "gateway-healthy-1",
+      sessionId: pairedBootstrap.result.session.id,
+      remoteId: pairingCreate.result.remoteId,
+      state: "stale",
+      updatedAt: Date.now(),
+      lastClientActivityAt: Date.now(),
+    });
+    await expect(
+      server.handle({
+        method: "sessions.remoteStatus",
+        params: { identifier: pairingCreate.result.remoteId },
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      result: {
+        remoteId: pairingCreate.result.remoteId,
+        control: { state: "degraded", reason: "gateway heartbeat stale" },
+        diagnostics: {
+          cause: "gateway heartbeat stale",
+          recoverable: true,
+          recommendedAction: `Reconnect remote ${pairingCreate.result.remoteId}`,
+        },
+      },
+    });
+    server.updateGatewaySessionHealth({
+      connectionId: "gateway-healthy-1",
+      sessionId: pairedBootstrap.result.session.id,
+      remoteId: pairingCreate.result.remoteId,
+      state: "healthy",
+      updatedAt: Date.now(),
+      lastClientActivityAt: Date.now(),
+    });
     await expect(
       server.handle({
         method: "sessions.remoteControl",
@@ -294,6 +347,72 @@ describe("OperatorControlPlaneServer", () => {
           title: "Remote run",
           status: "paused",
         },
+      },
+    });
+
+    const driftingRootDir = await makeTempDir();
+    const driftingRuntime = new StandaloneOperatorRuntime({
+      rootDir: driftingRootDir,
+      backgroundTaskIsProcessRunning: () => false,
+    });
+    const driftingServer = new OperatorControlPlaneServer({ runtime: driftingRuntime });
+    const driftingBootstrap = await driftingServer.handle({
+      method: "sessions.bootstrap",
+      params: { title: "Drifting remote", remoteId: "device-drift-1", remoteSource: "gateway", agentId: "gateway" },
+    });
+    if (!driftingBootstrap.ok) {
+      throw new Error("expected drifting bootstrap");
+    }
+    const driftingTask = await driftingRuntime.startBackgroundTask({
+      sessionId: driftingBootstrap.result.session.id,
+      title: "Drifting remote task",
+      command: "printf 'drift'",
+      kind: "task",
+    });
+    await driftingRuntime.backgroundTasks.executionService.writeState(driftingTask, {
+      version: 1,
+      taskId: driftingTask.id,
+      kind: "task",
+      status: "running",
+      pid: driftingTask.execution.processId ?? 9999,
+      startedAt: driftingTask.execution.startedAt ?? driftingTask.updatedAt,
+      updatedAt: driftingTask.updatedAt,
+      outputFile: driftingTask.execution.outputFile,
+      cwd: driftingTask.cwd,
+      command: driftingTask.command,
+    });
+    await driftingRuntime.syncBackgroundTask(driftingTask.id);
+    const degradedRemoteStatus = await driftingServer.handle({
+      method: "sessions.remoteStatus",
+      params: { identifier: "device-drift-1" },
+    });
+    expect(degradedRemoteStatus).toMatchObject({
+      ok: true,
+      result: {
+        remoteId: "device-drift-1",
+        control: { state: "degraded", reason: "background task failed" },
+        diagnostics: {
+          cause: "background task failed",
+          recoverable: false,
+          taskId: driftingTask.id,
+        },
+      },
+    });
+    await expect(
+      driftingServer.handle({
+        method: "sessions.remoteRepair",
+        params: { identifier: "device-drift-1", action: "recover-background-tasks", reasons: ["missing-process"] },
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      result: {
+        remoteId: "device-drift-1",
+        repaired: {
+          action: "recover-background-tasks",
+          changed: false,
+          results: [],
+        },
+        control: { state: "active" },
       },
     });
     await expect(
@@ -1321,6 +1440,15 @@ describe("OperatorControlPlaneServer", () => {
       server.handle({
         method: "sessions.remoteControl",
         params: { identifier: "missing", action: "pause" },
+      }),
+    ).resolves.toEqual({
+      ok: false,
+      error: { code: "NOT_FOUND", message: "unknown remote or session: missing" },
+    });
+    await expect(
+      server.handle({
+        method: "sessions.remoteRepair",
+        params: { identifier: "missing", action: "recover-background-tasks" },
       }),
     ).resolves.toEqual({
       ok: false,

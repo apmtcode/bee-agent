@@ -35,6 +35,11 @@ describe("parseSlashCommand", () => {
       identifier: "device-1",
       reason: "gateway unhealthy",
     });
+    expect(parseSlashCommand("/remote repair device-1 missing-process missing-state")).toEqual({
+      kind: "remote-repair",
+      identifier: "device-1",
+      reasons: ["missing-process", "missing-state"],
+    });
     expect(parseSlashCommand("/recall deploy bug")).toEqual({ kind: "recall", query: "deploy bug" });
     expect(parseSlashCommand("/background")).toEqual({ kind: "background-list" });
     expect(parseSlashCommand("/background start smoke -- printf ok")).toEqual({
@@ -96,11 +101,15 @@ describe("parseSlashCommand", () => {
     });
     expect(parseSlashCommand("/remote")).toEqual({
       kind: "invalid",
-      message: "Usage: /remote <status|pause> <remoteId|sessionId> [reason]",
+      message: "Usage: /remote <status|pause|repair> <remoteId|sessionId> [reason|missing-process|missing-state]",
     });
     expect(parseSlashCommand("/remote pause")).toEqual({
       kind: "invalid",
-      message: "Usage: /remote <status|pause> <remoteId|sessionId> [reason]",
+      message: "Usage: /remote <status|pause|repair> <remoteId|sessionId> [reason|missing-process|missing-state]",
+    });
+    expect(parseSlashCommand("/remote repair device-1 bad-reason")).toEqual({
+      kind: "invalid",
+      message: "Usage: /remote <status|pause|repair> <remoteId|sessionId> [reason|missing-process|missing-state]",
     });
     expect(parseSlashCommand("/watch nope")).toEqual({
       kind: "invalid",
@@ -298,10 +307,23 @@ describe("OperatorCliApp", () => {
       summary: "Allow remote action",
     });
     const remoteRun = await app.runtime.startRun({ sessionId: pairedBootstrap.result.session.id, title: "Remote run" });
-    await app.runtime.startBackgroundTask({
+    const remoteTask = await app.runtime.startBackgroundTask({
       sessionId: pairedBootstrap.result.session.id,
       title: "Remote task",
       command: "printf remote",
+      kind: "task",
+    });
+    const degradedBootstrap = await app.server.handle({
+      method: "sessions.bootstrap",
+      params: { title: "Degraded remote", remoteId: "device-cli-drift-1", remoteSource: "gateway", agentId: "gateway" },
+    });
+    if (!degradedBootstrap.ok) {
+      throw new Error("expected degraded bootstrap");
+    }
+    const degradedTask = await app.runtime.startBackgroundTask({
+      sessionId: degradedBootstrap.result.session.id,
+      title: "Degraded remote task",
+      command: "printf drift",
       kind: "task",
     });
     const remoteStatusOutput = await app.dispatchSlashCommand({ kind: "remote-status", identifier: pairedBootstrap.result.session.metadata.remoteId ?? pairedBootstrap.result.session.id });
@@ -328,6 +350,37 @@ describe("OperatorCliApp", () => {
     const pausedRemoteStatusOutput = await app.dispatchSlashCommand({ kind: "remote-status", identifier: pairedBootstrap.result.session.metadata.remoteId ?? pairedBootstrap.result.session.id });
     expect(pausedRemoteStatusOutput).toContain("control=paused reason=gateway unhealthy");
     expect(pausedRemoteStatusOutput).toContain(`run=${remoteRun.id} paused Remote run`);
+
+    await app.runtime.backgroundTasks.executionService.writeState(degradedTask, {
+      version: 1,
+      taskId: degradedTask.id,
+      kind: "task",
+      status: "running",
+      pid: 999999,
+      startedAt: degradedTask.execution.startedAt ?? degradedTask.updatedAt,
+      updatedAt: degradedTask.updatedAt,
+      outputFile: degradedTask.execution.outputFile,
+      cwd: degradedTask.cwd,
+      command: degradedTask.command,
+    });
+    await app.runtime.syncBackgroundTask(degradedTask.id);
+
+    const degradedRemoteStatusOutput = await app.dispatchSlashCommand({
+      kind: "remote-status",
+      identifier: degradedBootstrap.result.session.metadata.remoteId ?? degradedBootstrap.result.session.id,
+    });
+    expect(degradedRemoteStatusOutput).toContain("control=degraded reason=background task failed");
+    expect(degradedRemoteStatusOutput).toContain(`diagnostics cause=background task failed recoverable=false task=${degradedTask.id}`);
+
+    const remoteRepairOutput = await app.dispatchSlashCommand({
+      kind: "remote-repair",
+      identifier: degradedBootstrap.result.session.metadata.remoteId ?? degradedBootstrap.result.session.id,
+      reasons: ["missing-process"],
+    });
+    expect(remoteRepairOutput).toContain(`Repaired remote ${degradedBootstrap.result.session.metadata.remoteId}`);
+    expect(remoteRepairOutput).toContain("changed=false");
+    expect(remoteRepairOutput).toContain("control=active");
+    expect(remoteRepairOutput).toContain("tasks=<none>");
 
     const approveOutput = await app.dispatchSlashCommand({ kind: "approve", approvalId: approval.id });
     expect(approveOutput).toContain(`Approved ${approval.id}`);

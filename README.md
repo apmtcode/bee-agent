@@ -46,6 +46,7 @@ Current slash commands:
 - `/pairing reject <code|id>`
 - `/remote status <remoteId|sessionId>`
 - `/remote pause <remoteId|sessionId> [reason]`
+- `/remote repair <remoteId|sessionId> [missing-process|missing-state]`
 - `/recall <query>`
 - `/skills`
 - `/run-skill <id>`
@@ -91,10 +92,12 @@ Current gateway transport behavior in this tranche:
 - one remote connection can bootstrap or reattach to a single operator session
 - later connection-scoped requests are forwarded through the bound session stream without resupplying `sessionId`
 - live session-scoped runtime events are forwarded as transport event frames
-- transport message types are intentionally narrow: bootstrap, request, response, event, and error
+- transport message types remain intentionally narrow and now include heartbeat `ping` / `pong` alongside bootstrap, request, response, event, and error
 - gateway bootstrap can now also carry a stable `remoteId` and `remoteSource` so reconnecting clients can reattach without already knowing `sessionId`
+- reconnecting clients can optionally provide an event replay cursor so bootstrap only replays missed session-scoped events
+- stale gateway heartbeats now surface through remote status as recoverable transport degradation instead of silently dropping continuity
 - bootstrap can also redeem an approved `pairingCode` into that same `remoteId` continuity path
-- this is still an in-process transport adapter in this tranche; broader channel delivery remains for later work
+- this is still an in-process transport adapter in this tranche; broader channel delivery, platform routing, and circuit-breaker policy remain for later work
 
 ## Pairing bootstrap
 
@@ -129,7 +132,7 @@ Current remote subagent behavior in this tranche:
 - gateway transport forwards the new RPC and subagent event family through the existing bootstrap/request/event frames
 - richer cron fallback policy, account routing, and transport-specific child-channel semantics remain out of scope in this tranche
 
-## Remote pause and degraded control
+## Remote pause, degraded control, and repair
 
 Operator now also has a first narrow remote-control seam on top of remote status diagnostics.
 
@@ -138,8 +141,10 @@ Current remote control behavior in this tranche:
 - pausing acts on the active top-level run for that remote session and records remote-control metadata on the run
 - `/remote pause <remoteId|sessionId> [reason]` lets the operator stop delegated progress and immediately inspect the updated state
 - `sessions.remoteStatus` and `/remote status` now surface a derived `control` summary with `active`, `paused`, or `degraded`
-- degraded status is derived from current session/run/task/runtime evidence such as non-active sessions, failed background tasks, and missing-process or missing-state recovery signals
-- process suspension, platform-specific routing, and broader circuit-breaker policy remain out of scope in this tranche
+- degraded status can now include a small diagnostics block with the current cause, whether it is recoverable, the relevant task when known, and a recommended repair command
+- the control plane also exposes `sessions.remoteRepair` for scoped `recover-background-tasks` against the resolved remote session
+- `/remote repair <remoteId|sessionId> [missing-process|missing-state]` reuses existing background-task recovery and reports repaired tasks plus refreshed control state
+- this repair path is intentionally limited to background-task drift recovery; process suspension, platform-specific routing, and broader circuit-breaker policy remain out of scope in this tranche
 
 ## Settings precedence
 
@@ -221,7 +226,7 @@ This is still a narrow outbound-only pass. Cron expression handling remains plac
 
 The system is still incomplete relative to the long-term goal. Major missing tranches include:
 - richer Claude Code style command surface and hook execution
-- fuller OpenClaw-style channel/gateway runtime and remote transport beyond the current minimal gateway transport
+- fuller OpenClaw-style channel/gateway runtime and remote transport beyond the current heartbeat/reconnect-aware gateway transport
 - richer remote identity/account routing beyond the current first pairing-code bootstrap seam
 - richer delivery routing, retries, and transport semantics beyond local/webhook terminal notifications
 - richer tool-loop and broader command-surface parity in the CLI shell beyond the current local run/task watch surfaces
