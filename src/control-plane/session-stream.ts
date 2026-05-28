@@ -57,6 +57,12 @@ export class OperatorControlPlaneSessionStream {
     if (!this.boundSessionId) {
       return params;
     }
+    if (method === "sessions.remoteStatus" || method === "sessions.remoteControl") {
+      return {
+        ...(params ?? {}),
+        identifier: params?.identifier ?? this.boundSessionId,
+      };
+    }
     if (!requiresSessionBinding(method)) {
       return params;
     }

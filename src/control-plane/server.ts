@@ -73,6 +73,10 @@ export type SessionRemoteStatusResult = {
   session: SessionRecord;
   pairing?: PairingTicket;
   approvals: ApprovalRequest[];
+  control: {
+    state: "active" | "paused" | "degraded";
+    reason?: string;
+  };
   activeRun?: {
     id: string;
     title: string;
@@ -182,6 +186,25 @@ export class OperatorControlPlaneServer {
         case "sessions.remoteStatus": {
           const identifier = getString(request.params, "identifier");
           const status = await buildSessionRemoteStatusResult(this.options.runtime, this.pairing, identifier);
+          return status ? ok(status) : notFound(`unknown remote or session: ${identifier}`);
+        }
+        case "sessions.remoteControl": {
+          const identifier = getString(request.params, "identifier");
+          const action = getRemoteControlAction(request.params, "action");
+          const session = await resolveSessionByIdentifier(this.options.runtime, identifier);
+          if (!session) {
+            return notFound(`unknown remote or session: ${identifier}`);
+          }
+          if (action === "pause") {
+            const pausedRun = await this.options.runtime.pauseActiveRun(
+              session.id,
+              getOptionalString(request.params, "reason"),
+            );
+            if (!pausedRun) {
+              return notFound(`no active run for remote or session: ${identifier}`);
+            }
+          }
+          const status = await buildSessionRemoteStatusResult(this.options.runtime, this.pairing, session.id);
           return status ? ok(status) : notFound(`unknown remote or session: ${identifier}`);
         }
         case "sessions.resume": {
@@ -657,7 +680,7 @@ async function buildSessionRemoteStatusResult(
   pairing: FilePairingStore,
   identifier: string,
 ): Promise<SessionRemoteStatusResult | undefined> {
-  const session = await runtime.getSession(identifier) ?? await runtime.findSessionByRemoteId(identifier);
+  const session = await resolveSessionByIdentifier(runtime, identifier);
   if (!session) {
     return undefined;
   }
@@ -667,12 +690,14 @@ async function buildSessionRemoteStatusResult(
   const pairingTicket = session.metadata.remoteId
     ? await findLatestPairingTicket(pairing, session.metadata.remoteId)
     : undefined;
+  const recentEvents = runtime.events.snapshot(buildRuntimeEventFilter({ sessionId: session.id })).slice(-5);
   return {
     remoteId: session.metadata.remoteId ?? session.id,
     ...(session.metadata.remoteSource ? { remoteSource: session.metadata.remoteSource } : {}),
     session,
     ...(pairingTicket ? { pairing: pairingTicket } : {}),
     approvals,
+    control: deriveRemoteControlStatus({ session, activeRun, activeBackgroundTask, recentEvents }),
     ...(activeRun
       ? {
           activeRun: {
@@ -694,8 +719,61 @@ async function buildSessionRemoteStatusResult(
           },
         }
       : {}),
-    recentEvents: runtime.events.snapshot(buildRuntimeEventFilter({ sessionId: session.id })).slice(-5),
+    recentEvents,
   };
+}
+
+async function resolveSessionByIdentifier(
+  runtime: StandaloneOperatorRuntime,
+  identifier: string,
+): Promise<SessionRecord | undefined> {
+  return await runtime.getSession(identifier) ?? await runtime.findSessionByRemoteId(identifier);
+}
+
+function deriveRemoteControlStatus(params: {
+  session: SessionRecord;
+  activeRun?: { status: string; metadata?: Record<string, unknown> };
+  activeBackgroundTask?: { status: string };
+  recentEvents: OperatorEvent[];
+}): { state: "active" | "paused" | "degraded"; reason?: string } {
+  if (params.activeRun?.status === "paused") {
+    const remoteControlSource = typeof params.activeRun.metadata?.remoteControlSource === "string"
+      ? params.activeRun.metadata.remoteControlSource
+      : undefined;
+    const remoteControlReason = typeof params.activeRun.metadata?.remoteControlReason === "string"
+      ? params.activeRun.metadata.remoteControlReason
+      : undefined;
+    return {
+      state: remoteControlSource === "remote-control" ? "paused" : "degraded",
+      ...(remoteControlReason ? { reason: remoteControlReason } : {}),
+    };
+  }
+  if (params.session.status !== "active") {
+    return { state: "degraded", reason: `session ${params.session.status}` };
+  }
+  if (params.activeBackgroundTask?.status === "failed") {
+    return { state: "degraded", reason: "background task failed" };
+  }
+  const degradedEvent = [...params.recentEvents].reverse().find((event) => {
+    if ((event.type !== "background-task.failed" && event.type !== "background-task.recovered") || !event.payload || typeof event.payload !== "object") {
+      return false;
+    }
+    if (event.type === "background-task.failed") {
+      return true;
+    }
+    const reason = "reason" in event.payload ? event.payload.reason : undefined;
+    return reason === "missing-process" || reason === "missing-state";
+  });
+  if (degradedEvent?.type === "background-task.failed") {
+    return { state: "degraded", reason: "background task failed" };
+  }
+  if (degradedEvent?.type === "background-task.recovered" && degradedEvent.payload && typeof degradedEvent.payload === "object") {
+    const reason = "reason" in degradedEvent.payload ? degradedEvent.payload.reason : undefined;
+    if (reason === "missing-process" || reason === "missing-state") {
+      return { state: "degraded", reason: `background task ${reason}` };
+    }
+  }
+  return { state: "active" };
 }
 
 async function findLatestPairingTicket(
@@ -796,6 +874,17 @@ function getOptionalRuntimeEventFamily(
     return value;
   }
   throw new Error(`Invalid runtime event family: ${key}`);
+}
+
+function getRemoteControlAction(
+  params: Record<string, unknown> | undefined,
+  key: string,
+): "pause" {
+  const value = params?.[key];
+  if (value === "pause") {
+    return value;
+  }
+  throw new Error(`Invalid remote control action: ${key}`);
 }
 
 function getPairingResolutionDecision(

@@ -455,6 +455,18 @@ export class StandaloneOperatorRuntime {
     );
   }
 
+  async pauseActiveRun(sessionId: string, reason?: string): Promise<OperatorRunRecord | undefined> {
+    const run = await this.getActiveRun(sessionId);
+    if (!run) {
+      return undefined;
+    }
+    return await this.updateRunStatus(run.id, "paused", {
+      remoteControlAction: "pause",
+      remoteControlSource: "remote-control",
+      ...(reason ? { remoteControlReason: reason } : {}),
+    });
+  }
+
   async registerSubagent(params: RegisterSubagentParams): Promise<SubagentRunRecord> {
     const subagent = await this.subagents.register(params);
     this.events.publish({ type: "subagent.registered", payload: subagent, ts: Date.now() });

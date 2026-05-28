@@ -308,6 +308,16 @@ describe("StandaloneOperatorRuntime", () => {
       status: "paused",
       metadata: { reason: "awaiting approval" },
     });
+    await expect(runtime.pauseActiveRun(session.id, "gateway unhealthy")).resolves.toMatchObject({
+      id: run.id,
+      status: "paused",
+      metadata: {
+        reason: "awaiting approval",
+        remoteControlAction: "pause",
+        remoteControlSource: "remote-control",
+        remoteControlReason: "gateway unhealthy",
+      },
+    });
     await expect(runtime.listRuns(session.id)).resolves.toEqual([
       expect.objectContaining({ id: run.id, sessionId: session.id }),
     ]);

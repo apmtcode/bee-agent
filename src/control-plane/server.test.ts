@@ -269,6 +269,7 @@ describe("OperatorControlPlaneServer", () => {
         session: { id: expect.any(String), metadata: { remoteId: pairingCreate.result.remoteId, remoteSource: "gateway" } },
         pairing: { code: pairingCreate.result.code, status: "redeemed" },
         approvals: [expect.objectContaining({ title: "Remote approval", sessionId: expect.any(String) })],
+        control: { state: "active" },
         activeRun: { id: remoteRun.id, title: "Remote run", status: "running" },
         activeBackgroundTask: { id: remoteTask.id, title: "Remote task", kind: "task", status: "running" },
         recentEvents: expect.arrayContaining([
@@ -276,6 +277,23 @@ describe("OperatorControlPlaneServer", () => {
           expect.objectContaining({ type: "run.started" }),
           expect.objectContaining({ type: "background-task.started" }),
         ]),
+      },
+    });
+    await expect(
+      server.handle({
+        method: "sessions.remoteControl",
+        params: { identifier: pairingCreate.result.remoteId, action: "pause", reason: "gateway unhealthy" },
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      result: {
+        remoteId: pairingCreate.result.remoteId,
+        control: { state: "paused", reason: "gateway unhealthy" },
+        activeRun: {
+          id: remoteRun.id,
+          title: "Remote run",
+          status: "paused",
+        },
       },
     });
     await expect(
@@ -1296,6 +1314,15 @@ describe("OperatorControlPlaneServer", () => {
       error: { code: "NOT_FOUND", message: "unknown capture consent: missing" },
     });
     await expect(server.handle({ method: "sessions.remoteStatus", params: { identifier: "missing" } })).resolves.toEqual({
+      ok: false,
+      error: { code: "NOT_FOUND", message: "unknown remote or session: missing" },
+    });
+    await expect(
+      server.handle({
+        method: "sessions.remoteControl",
+        params: { identifier: "missing", action: "pause" },
+      }),
+    ).resolves.toEqual({
       ok: false,
       error: { code: "NOT_FOUND", message: "unknown remote or session: missing" },
     });

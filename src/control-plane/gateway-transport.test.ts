@@ -97,6 +97,22 @@ describe("OperatorGatewayTransportConnection", () => {
       subagent: { parentRunId: response.result.result.id, sessionId, title: "Gateway child", status: "running" },
       childSession: { metadata: { agentId: "worker" } },
     });
+
+    await connection.receive({
+      type: "request",
+      id: "req-remote-pause",
+      request: { method: "sessions.remoteControl", params: { action: "pause", reason: "gateway unhealthy" } },
+    });
+    const pauseResponse = transport.sent.find((message) => message.type === "response" && message.id === "req-remote-pause");
+    expect(pauseResponse).toBeDefined();
+    if (!pauseResponse || pauseResponse.type !== "response" || !pauseResponse.result.ok) {
+      throw new Error("expected remote pause response");
+    }
+    expect(pauseResponse.result.result).toMatchObject({
+      remoteId: "device-1",
+      control: { state: "paused", reason: "gateway unhealthy" },
+      activeRun: { status: "paused" },
+    });
   });
 
   it("rejects requests before bootstrap and filters unrelated events", async () => {

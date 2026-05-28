@@ -28,6 +28,7 @@ export type OperatorCliSlashCommand =
   | { kind: "pairing-approve"; identifier: string }
   | { kind: "pairing-reject"; identifier: string }
   | { kind: "remote-status"; identifier: string }
+  | { kind: "remote-pause"; identifier: string; reason?: string }
   | { kind: "recall"; query: string }
   | { kind: "skills" }
   | { kind: "run-skill"; skillId: string }
@@ -185,6 +186,7 @@ export class OperatorCliApp {
           "  /pairing approve <code|id>",
           "  /pairing reject <code|id>",
           "  /remote status <remoteId|sessionId>",
+          "  /remote pause <remoteId|sessionId> [reason]",
           "  /recall <query>",
           "  /skills",
           "  /run-skill <id>",
@@ -350,6 +352,20 @@ export class OperatorCliApp {
           return response.error.message;
         }
         return formatRemoteStatus(response.result);
+      }
+      case "remote-pause": {
+        const response = await this.server.handle({
+          method: "sessions.remoteControl",
+          params: {
+            identifier: command.identifier,
+            action: "pause",
+            ...(command.reason ? { reason: command.reason } : {}),
+          },
+        });
+        if (!response.ok) {
+          return response.error.message;
+        }
+        return `Paused remote ${response.result.remoteId} control=${response.result.control.state}${response.result.control.reason ? ` reason=${response.result.control.reason}` : ""}`;
       }
       case "recall": {
         const recall = await this.runtime.recall(command.query);
@@ -746,6 +762,7 @@ function formatRemoteStatus(status: {
   session: { id: string; status: string; metadata: { agentId?: string } };
   pairing?: { code: string; status: string; expiresAt: string };
   approvals: Array<{ id: string; title: string }>;
+  control: { state: "active" | "paused" | "degraded"; reason?: string };
   activeRun?: { id: string; title: string; status: string; updatedAt: string };
   activeBackgroundTask?: { id: string; title: string; kind: string; status: string; updatedAt: string };
   recentEvents: Array<{ type: string }>;
@@ -753,6 +770,7 @@ function formatRemoteStatus(status: {
   return [
     `remote=${status.remoteId} source=${status.remoteSource ?? "<unknown>"}`,
     `session=${status.session.id} status=${status.session.status} agent=${status.session.metadata.agentId ?? "<none>"}`,
+    `control=${status.control.state}${status.control.reason ? ` reason=${status.control.reason}` : ""}`,
     status.pairing
       ? `pairing=${status.pairing.code} ${status.pairing.status} expires=${status.pairing.expiresAt}`
       : "pairing=<none>",
@@ -886,14 +904,26 @@ function parsePairingCommand(tail: string): OperatorCliSlashCommand {
 }
 
 function parseRemoteCommand(tail: string): OperatorCliSlashCommand {
-  if (!tail || tail === "status") {
-    return { kind: "invalid", message: "Usage: /remote status <remoteId|sessionId>" };
+  if (!tail || tail === "status" || tail === "pause") {
+    return { kind: "invalid", message: "Usage: /remote <status|pause> <remoteId|sessionId> [reason]" };
   }
   if (tail.startsWith("status ")) {
     const identifier = tail.slice("status ".length).trim();
-    return identifier ? { kind: "remote-status", identifier } : { kind: "invalid", message: "Usage: /remote status <remoteId|sessionId>" };
+    return identifier ? { kind: "remote-status", identifier } : { kind: "invalid", message: "Usage: /remote <status|pause> <remoteId|sessionId> [reason]" };
   }
-  return { kind: "invalid", message: "Usage: /remote status <remoteId|sessionId>" };
+  if (tail.startsWith("pause ")) {
+    const rest = tail.slice("pause ".length).trim();
+    if (!rest) {
+      return { kind: "invalid", message: "Usage: /remote <status|pause> <remoteId|sessionId> [reason]" };
+    }
+    const [identifier, ...reasonParts] = rest.split(/\s+/);
+    return {
+      kind: "remote-pause",
+      identifier,
+      ...(reasonParts.length > 0 ? { reason: reasonParts.join(" ") } : {}),
+    };
+  }
+  return { kind: "invalid", message: "Usage: /remote <status|pause> <remoteId|sessionId> [reason]" };
 }
 
 function parseBackgroundCommand(tail: string): OperatorCliSlashCommand {

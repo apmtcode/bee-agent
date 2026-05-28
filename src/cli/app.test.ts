@@ -30,6 +30,11 @@ describe("parseSlashCommand", () => {
     expect(parseSlashCommand("/pairing approve code-1")).toEqual({ kind: "pairing-approve", identifier: "code-1" });
     expect(parseSlashCommand("/pairing reject ticket-1")).toEqual({ kind: "pairing-reject", identifier: "ticket-1" });
     expect(parseSlashCommand("/remote status device-1")).toEqual({ kind: "remote-status", identifier: "device-1" });
+    expect(parseSlashCommand("/remote pause device-1 gateway unhealthy")).toEqual({
+      kind: "remote-pause",
+      identifier: "device-1",
+      reason: "gateway unhealthy",
+    });
     expect(parseSlashCommand("/recall deploy bug")).toEqual({ kind: "recall", query: "deploy bug" });
     expect(parseSlashCommand("/background")).toEqual({ kind: "background-list" });
     expect(parseSlashCommand("/background start smoke -- printf ok")).toEqual({
@@ -91,7 +96,11 @@ describe("parseSlashCommand", () => {
     });
     expect(parseSlashCommand("/remote")).toEqual({
       kind: "invalid",
-      message: "Usage: /remote status <remoteId|sessionId>",
+      message: "Usage: /remote <status|pause> <remoteId|sessionId> [reason]",
+    });
+    expect(parseSlashCommand("/remote pause")).toEqual({
+      kind: "invalid",
+      message: "Usage: /remote <status|pause> <remoteId|sessionId> [reason]",
     });
     expect(parseSlashCommand("/watch nope")).toEqual({
       kind: "invalid",
@@ -288,7 +297,7 @@ describe("OperatorCliApp", () => {
       title: "Remote approval",
       summary: "Allow remote action",
     });
-    await app.runtime.startRun({ sessionId: pairedBootstrap.result.session.id, title: "Remote run" });
+    const remoteRun = await app.runtime.startRun({ sessionId: pairedBootstrap.result.session.id, title: "Remote run" });
     await app.runtime.startBackgroundTask({
       sessionId: pairedBootstrap.result.session.id,
       title: "Remote task",
@@ -298,6 +307,7 @@ describe("OperatorCliApp", () => {
     const remoteStatusOutput = await app.dispatchSlashCommand({ kind: "remote-status", identifier: pairedBootstrap.result.session.metadata.remoteId ?? pairedBootstrap.result.session.id });
     expect(remoteStatusOutput).toContain(`remote=${pairedBootstrap.result.session.metadata.remoteId}`);
     expect(remoteStatusOutput).toContain(`session=${pairedBootstrap.result.session.id}`);
+    expect(remoteStatusOutput).toContain("control=active");
     expect(remoteStatusOutput).toContain(`pairing=${pairingCodeMatch[0]} redeemed`);
     expect(remoteStatusOutput).toContain("approvals=");
     expect(remoteStatusOutput).toContain("Remote approval");
@@ -305,6 +315,19 @@ describe("OperatorCliApp", () => {
     expect(remoteStatusOutput).toContain("Remote run");
     expect(remoteStatusOutput).toContain("task=");
     expect(remoteStatusOutput).toContain("Remote task");
+
+    const remotePauseOutput = await app.dispatchSlashCommand({
+      kind: "remote-pause",
+      identifier: pairedBootstrap.result.session.metadata.remoteId ?? pairedBootstrap.result.session.id,
+      reason: "gateway unhealthy",
+    });
+    expect(remotePauseOutput).toContain(`Paused remote ${pairedBootstrap.result.session.metadata.remoteId}`);
+    expect(remotePauseOutput).toContain("control=paused");
+    expect(remotePauseOutput).toContain("reason=gateway unhealthy");
+
+    const pausedRemoteStatusOutput = await app.dispatchSlashCommand({ kind: "remote-status", identifier: pairedBootstrap.result.session.metadata.remoteId ?? pairedBootstrap.result.session.id });
+    expect(pausedRemoteStatusOutput).toContain("control=paused reason=gateway unhealthy");
+    expect(pausedRemoteStatusOutput).toContain(`run=${remoteRun.id} paused Remote run`);
 
     const approveOutput = await app.dispatchSlashCommand({ kind: "approve", approvalId: approval.id });
     expect(approveOutput).toContain(`Approved ${approval.id}`);

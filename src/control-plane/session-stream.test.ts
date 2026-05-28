@@ -89,6 +89,29 @@ describe("OperatorControlPlaneSessionStream", () => {
       throw new Error("expected approvals response");
     }
     expect(approvals.result).toEqual([]);
+
+    const remoteStatus = await stream.request<{ remoteId: string; control: { state: string } }>({
+      method: "sessions.remoteStatus",
+      params: {},
+    });
+    expect(remoteStatus.ok).toBe(true);
+    if (!remoteStatus.ok) {
+      throw new Error("expected remote status response");
+    }
+    expect(remoteStatus.result).toMatchObject({ remoteId: "device-1", control: { state: "active" } });
+
+    const paused = await stream.request<{ control: { state: string; reason?: string }; activeRun?: { status: string } }>({
+      method: "sessions.remoteControl",
+      params: { action: "pause", reason: "gateway unhealthy" },
+    });
+    expect(paused.ok).toBe(true);
+    if (!paused.ok) {
+      throw new Error("expected paused remote response");
+    }
+    expect(paused.result).toMatchObject({
+      control: { state: "paused", reason: "gateway unhealthy" },
+      activeRun: { status: "paused" },
+    });
   });
 
   it("replays and streams subagent events for a bootstrapped session", async () => {

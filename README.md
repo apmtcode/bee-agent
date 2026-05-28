@@ -45,6 +45,7 @@ Current slash commands:
 - `/pairing approve <code|id>`
 - `/pairing reject <code|id>`
 - `/remote status <remoteId|sessionId>`
+- `/remote pause <remoteId|sessionId> [reason]`
 - `/recall <query>`
 - `/skills`
 - `/run-skill <id>`
@@ -127,6 +128,18 @@ Current remote subagent behavior in this tranche:
 - runtime event subscriptions now support the `subagent` family for replay/live inspection of `subagent.registered` and `subagent.updated`
 - gateway transport forwards the new RPC and subagent event family through the existing bootstrap/request/event frames
 - richer cron fallback policy, account routing, and transport-specific child-channel semantics remain out of scope in this tranche
+
+## Remote pause and degraded control
+
+Operator now also has a first narrow remote-control seam on top of remote status diagnostics.
+
+Current remote control behavior in this tranche:
+- the control plane exposes `sessions.remoteControl` for `pause` against a resolved `remoteId` or `sessionId`
+- pausing acts on the active top-level run for that remote session and records remote-control metadata on the run
+- `/remote pause <remoteId|sessionId> [reason]` lets the operator stop delegated progress and immediately inspect the updated state
+- `sessions.remoteStatus` and `/remote status` now surface a derived `control` summary with `active`, `paused`, or `degraded`
+- degraded status is derived from current session/run/task/runtime evidence such as non-active sessions, failed background tasks, and missing-process or missing-state recovery signals
+- process suspension, platform-specific routing, and broader circuit-breaker policy remain out of scope in this tranche
 
 ## Settings precedence
 
