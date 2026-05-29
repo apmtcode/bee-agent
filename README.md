@@ -49,6 +49,10 @@ Current slash commands:
 - `/remote pause <remoteId|sessionId> [reason]`
 - `/remote resume <remoteId|sessionId>`
 - `/remote repair <remoteId|sessionId> [missing-process|missing-state]`
+- `/platform list`
+- `/platform status <platform>`
+- `/platform pause <platform> [reason]`
+- `/platform resume <platform>`
 - `/recall <query>`
 - `/skills`
 - `/run-skill <id>`
@@ -125,6 +129,19 @@ Current remote status behavior in this tranche:
 - remote status and inventory now project a derived remote `control` state of `active`, `paused`, `quarantined`, or `degraded`
 - quarantined remotes also surface a recoverable diagnostics block with a recommended `/remote resume <remoteId|sessionId>` action
 - the operator CLI exposes fleet summaries with `/remote list [source]` and drill-down troubleshooting with `/remote status <remoteId|sessionId>`
+
+## Platform fleet view
+
+Operator now also has a first grouped platform surface on top of remote status and control.
+
+Current platform behavior in this tranche:
+- the control plane exposes `sessions.platformInventory`, `sessions.platformStatus`, and `sessions.platformControl`
+- platforms are currently derived from existing remote `remoteSource` values rather than a new durable routing model
+- platform inventory summarizes grouped remote count plus an aggregate `control` state
+- platform status returns the member remotes for a platform and can surface a grouped `mixed` state when members differ
+- platform pause and resume fan out over the existing per-remote control primitives instead of introducing a separate executor path
+- the operator CLI exposes `/platform list`, `/platform status <platform>`, `/platform pause <platform> [reason]`, and `/platform resume <platform>`
+- richer platform routing, account selection, and durable platform identity remain out of scope in this tranche
 
 ## Remote subagent spawn
 

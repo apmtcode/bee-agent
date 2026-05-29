@@ -198,6 +198,44 @@ export type SessionRemoteInventoryResult = {
   items: SessionRemoteInventoryItem[];
 };
 
+export type SessionPlatformControlState = SessionRemoteControlState | "mixed";
+
+export type SessionPlatformInventoryItem = {
+  platform: string;
+  remoteCount: number;
+  control: {
+    state: SessionPlatformControlState;
+    reason?: string;
+  };
+};
+
+export type SessionPlatformInventoryResult = {
+  items: SessionPlatformInventoryItem[];
+};
+
+export type SessionPlatformStatusResult = SessionPlatformInventoryItem & {
+  remotes: SessionRemoteInventoryItem[];
+};
+
+export type SessionPlatformControlResult = SessionPlatformStatusResult & {
+  action: "pause" | "resume";
+  results: Array<
+    | {
+        remoteId: string;
+        ok: true;
+        control: {
+          state: SessionRemoteControlState;
+          reason?: string;
+        };
+      }
+    | {
+        remoteId: string;
+        ok: false;
+        error: string;
+      }
+  >;
+};
+
 export type GatewaySessionHealth = {
   connectionId: string;
   sessionId: string;
@@ -363,6 +401,107 @@ export class OperatorControlPlaneServer {
             this.getRemoteQuarantine.bind(this),
             getOptionalString(request.params, "remoteSource"),
           ));
+        case "sessions.platformInventory":
+          return ok(buildSessionPlatformInventoryResult(
+            await buildSessionRemoteInventoryResult(
+              this.options.runtime,
+              this.pairing,
+              this.getGatewaySessionHealth.bind(this),
+              this.getRemoteQuarantine.bind(this),
+            ),
+          ));
+        case "sessions.platformStatus": {
+          const platform = getString(request.params, "platform");
+          const status = buildSessionPlatformStatusResult(
+            await buildSessionRemoteInventoryResult(
+              this.options.runtime,
+              this.pairing,
+              this.getGatewaySessionHealth.bind(this),
+              this.getRemoteQuarantine.bind(this),
+            ),
+            platform,
+          );
+          return status ? ok(status) : notFound(`unknown platform: ${platform}`);
+        }
+        case "sessions.platformControl": {
+          const platform = getString(request.params, "platform");
+          const action = getRemoteControlAction(request.params, "action");
+          const remoteInventory = await buildSessionRemoteInventoryResult(
+            this.options.runtime,
+            this.pairing,
+            this.getGatewaySessionHealth.bind(this),
+            this.getRemoteQuarantine.bind(this),
+          );
+          const status = buildSessionPlatformStatusResult(remoteInventory, platform);
+          if (!status) {
+            return notFound(`unknown platform: ${platform}`);
+          }
+          const results: SessionPlatformControlResult["results"] = [];
+          for (const remote of status.remotes) {
+            const sessionIdentifier = remote.session?.id ?? remote.remoteId;
+            const session = await resolveSessionByIdentifier(this.options.runtime, sessionIdentifier);
+            if (!session) {
+              results.push({
+                remoteId: remote.remoteId,
+                ok: false,
+                error: `unknown remote or session: ${sessionIdentifier}`,
+              });
+              continue;
+            }
+            if (action === "pause") {
+              const pausedRun = await this.options.runtime.pauseActiveRun(
+                session.id,
+                getOptionalString(request.params, "reason"),
+              );
+              if (!pausedRun) {
+                results.push({
+                  remoteId: remote.remoteId,
+                  ok: false,
+                  error: `no active run for remote or session: ${remote.remoteId}`,
+                });
+                continue;
+              }
+            }
+            if (action === "resume") {
+              this.clearRemoteQuarantine(session.metadata.remoteId ?? session.id);
+              await this.options.runtime.resumeSession(session.id);
+            }
+            const refreshedStatus = await buildSessionRemoteStatusResult(
+              this.options.runtime,
+              this.pairing,
+              session.id,
+              this.getGatewaySessionHealth.bind(this),
+              this.getRemoteQuarantine.bind(this),
+            );
+            if (!refreshedStatus) {
+              results.push({
+                remoteId: remote.remoteId,
+                ok: false,
+                error: `unknown remote or session: ${remote.remoteId}`,
+              });
+              continue;
+            }
+            results.push({
+              remoteId: refreshedStatus.remoteId,
+              ok: true,
+              control: refreshedStatus.control,
+            });
+          }
+          const refreshedInventory = await buildSessionRemoteInventoryResult(
+            this.options.runtime,
+            this.pairing,
+            this.getGatewaySessionHealth.bind(this),
+            this.getRemoteQuarantine.bind(this),
+          );
+          const refreshedStatus = buildSessionPlatformStatusResult(refreshedInventory, platform);
+          return refreshedStatus
+            ? ok({
+                ...refreshedStatus,
+                action,
+                results,
+              })
+            : notFound(`unknown platform: ${platform}`);
+        }
         case "sessions.remoteControl": {
           const identifier = getString(request.params, "identifier");
           const action = getRemoteControlAction(request.params, "action");
@@ -1007,6 +1146,79 @@ async function buildSessionRemoteInventoryResult(
       }
       return a.remoteId.localeCompare(b.remoteId);
     }),
+  };
+}
+
+function buildSessionPlatformInventoryResult(
+  remoteInventory: SessionRemoteInventoryResult,
+): SessionPlatformInventoryResult {
+  return {
+    items: buildPlatformStatusItems(remoteInventory).map((item) => ({
+      platform: item.platform,
+      remoteCount: item.remoteCount,
+      control: item.control,
+    })),
+  };
+}
+
+function buildSessionPlatformStatusResult(
+  remoteInventory: SessionRemoteInventoryResult,
+  platform: string,
+): SessionPlatformStatusResult | undefined {
+  const normalizedPlatform = normalizePlatformName(platform);
+  return buildPlatformStatusItems(remoteInventory).find((item) => item.platform === normalizedPlatform);
+}
+
+function buildPlatformStatusItems(
+  remoteInventory: SessionRemoteInventoryResult,
+): SessionPlatformStatusResult[] {
+  const grouped = new Map<string, SessionRemoteInventoryItem[]>();
+  for (const item of remoteInventory.items) {
+    const platform = getPlatformFromRemoteInventoryItem(item);
+    const bucket = grouped.get(platform);
+    if (bucket) {
+      bucket.push(item);
+      continue;
+    }
+    grouped.set(platform, [item]);
+  }
+  return [...grouped.entries()]
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([platform, remotes]) => ({
+      platform,
+      remoteCount: remotes.length,
+      control: derivePlatformControlStatus(remotes),
+      remotes: remotes.slice().sort((a, b) => a.remoteId.localeCompare(b.remoteId)),
+    }));
+}
+
+function getPlatformFromRemoteInventoryItem(item: SessionRemoteInventoryItem): string {
+  return normalizePlatformName(item.remoteSource);
+}
+
+function normalizePlatformName(value?: string): string {
+  return value?.trim() ? value : "unknown";
+}
+
+function derivePlatformControlStatus(
+  remotes: SessionRemoteInventoryItem[],
+): { state: SessionPlatformControlState; reason?: string } {
+  const controls = remotes.map((remote) => remote.control).filter(Boolean);
+  if (controls.length === 0) {
+    return { state: "active" };
+  }
+  const [firstControl] = controls;
+  if (!firstControl) {
+    return { state: "active" };
+  }
+  const sameState = controls.every((control) => control.state === firstControl.state);
+  if (!sameState) {
+    return { state: "mixed" };
+  }
+  const sameReason = controls.every((control) => control.reason === firstControl.reason);
+  return {
+    state: firstControl.state,
+    ...(sameReason && firstControl.reason ? { reason: firstControl.reason } : {}),
   };
 }
 

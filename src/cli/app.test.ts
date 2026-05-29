@@ -46,6 +46,14 @@ describe("parseSlashCommand", () => {
       identifier: "device-1",
       reasons: ["missing-process", "missing-state"],
     });
+    expect(parseSlashCommand("/platform list")).toEqual({ kind: "platform-list" });
+    expect(parseSlashCommand("/platform status gateway")).toEqual({ kind: "platform-status", platform: "gateway" });
+    expect(parseSlashCommand("/platform pause gateway gateway unhealthy")).toEqual({
+      kind: "platform-pause",
+      platform: "gateway",
+      reason: "gateway unhealthy",
+    });
+    expect(parseSlashCommand("/platform resume gateway")).toEqual({ kind: "platform-resume", platform: "gateway" });
     expect(parseSlashCommand("/recall deploy bug")).toEqual({ kind: "recall", query: "deploy bug" });
     expect(parseSlashCommand("/background")).toEqual({ kind: "background-list" });
     expect(parseSlashCommand("/background start smoke -- printf ok")).toEqual({
@@ -116,6 +124,14 @@ describe("parseSlashCommand", () => {
     expect(parseSlashCommand("/remote repair device-1 bad-reason")).toEqual({
       kind: "invalid",
       message: "Usage: /remote <list [source]|status|pause|resume|repair> <remoteId|sessionId> [reason|missing-process|missing-state]",
+    });
+    expect(parseSlashCommand("/platform")).toEqual({
+      kind: "invalid",
+      message: "Usage: /platform <list|status|pause|resume> <platform> [reason]",
+    });
+    expect(parseSlashCommand("/platform pause")).toEqual({
+      kind: "invalid",
+      message: "Usage: /platform <list|status|pause|resume> <platform> [reason]",
     });
     expect(parseSlashCommand("/watch nope")).toEqual({
       kind: "invalid",
@@ -307,6 +323,13 @@ describe("OperatorCliApp", () => {
     if (!pairedBootstrap.ok) {
       throw new Error("expected paired bootstrap");
     }
+    const secondGatewayBootstrap = await app.server.handle({
+      method: "sessions.bootstrap",
+      params: { title: "Second gateway remote", remoteId: "device-cli-2", remoteSource: "gateway", agentId: "gateway" },
+    });
+    if (!secondGatewayBootstrap.ok) {
+      throw new Error("expected second gateway bootstrap");
+    }
     await app.runtime.promptApproval({
       sessionId: pairedBootstrap.result.session.id,
       title: "Remote approval",
@@ -343,6 +366,18 @@ describe("OperatorCliApp", () => {
 
     const remoteListFilteredOutput = await app.dispatchSlashCommand({ kind: "remote-list", remoteSource: "gateway" });
     expect(remoteListFilteredOutput).toContain(`remote=${pairedBootstrap.result.session.metadata.remoteId}`);
+
+    const platformListOutput = await app.dispatchSlashCommand({ kind: "platform-list" });
+    expect(platformListOutput).toContain("platform=gateway");
+    expect(platformListOutput).toContain("remotes=3");
+    expect(platformListOutput).toContain("control=active");
+
+    const platformStatusOutput = await app.dispatchSlashCommand({ kind: "platform-status", platform: "gateway" });
+    expect(platformStatusOutput).toContain("platform=gateway remotes=3");
+    expect(platformStatusOutput).toContain(`members=${pairedBootstrap.result.session.metadata.remoteId}`);
+    expect(platformStatusOutput).toContain(`control=active`);
+    expect(platformStatusOutput).toContain(`device-cli-2 control=active`);
+    expect(platformStatusOutput).toContain(`device-cli-drift-1 control=active`);
 
     const remoteStatusOutput = await app.dispatchSlashCommand({ kind: "remote-status", identifier: pairedBootstrap.result.session.metadata.remoteId ?? pairedBootstrap.result.session.id });
     expect(remoteStatusOutput).toContain(`remote=${pairedBootstrap.result.session.metadata.remoteId}`);
@@ -387,6 +422,21 @@ describe("OperatorCliApp", () => {
     });
     expect(remoteResumeOutput).toContain(`Resumed remote ${pairedBootstrap.result.session.metadata.remoteId}`);
     expect(remoteResumeOutput).toContain("control=active");
+
+    const platformPauseOutput = await app.dispatchSlashCommand({
+      kind: "platform-pause",
+      platform: "gateway",
+      reason: "platform unhealthy",
+    });
+    expect(platformPauseOutput).toContain("Paused platform gateway");
+    expect(platformPauseOutput).toContain("control=mixed");
+    expect(platformPauseOutput).toContain(`${pairedBootstrap.result.session.metadata.remoteId}:paused:platform unhealthy`);
+    expect(platformPauseOutput).toContain("device-cli-2:error:no active run for remote or session: device-cli-2");
+    expect(platformPauseOutput).toContain("device-cli-drift-1:error:no active run for remote or session: device-cli-drift-1");
+
+    const platformStatusAfterPause = await app.dispatchSlashCommand({ kind: "platform-status", platform: "gateway" });
+    expect(platformStatusAfterPause).toContain("control=mixed");
+    expect(platformStatusAfterPause).toContain(`${pairedBootstrap.result.session.metadata.remoteId} control=paused:platform unhealthy`);
 
     const remotePauseOutput = await app.dispatchSlashCommand({
       kind: "remote-pause",
@@ -439,6 +489,17 @@ describe("OperatorCliApp", () => {
     expect(remoteRepairOutput).toContain("changed=false");
     expect(remoteRepairOutput).toContain("control=active");
     expect(remoteRepairOutput).toContain("tasks=<none>");
+
+    const mixedPlatformStatusOutput = await app.dispatchSlashCommand({ kind: "platform-status", platform: "gateway" });
+    expect(mixedPlatformStatusOutput).toContain("control=mixed");
+    expect(mixedPlatformStatusOutput).toContain("diagnostics=background task failed");
+
+    const platformResumeOutput = await app.dispatchSlashCommand({ kind: "platform-resume", platform: "gateway" });
+    expect(platformResumeOutput).toContain("Resumed platform gateway");
+    expect(platformResumeOutput).toContain("control=mixed");
+    expect(platformResumeOutput).toContain(`${pairedBootstrap.result.session.metadata.remoteId}:paused:gateway unhealthy`);
+    expect(platformResumeOutput).toContain("device-cli-2:active");
+    expect(platformResumeOutput).toContain("device-cli-drift-1:degraded:background task failed");
 
     const approveOutput = await app.dispatchSlashCommand({ kind: "approve", approvalId: approval.id });
     expect(approveOutput).toContain(`Approved ${approval.id}`);

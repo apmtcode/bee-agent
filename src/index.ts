@@ -123,6 +123,11 @@ export {
   type SessionRemoteQuarantine,
   type SessionRemoteRepairResult,
   type SessionRemoteStatusResult,
+  type SessionPlatformControlResult,
+  type SessionPlatformControlState,
+  type SessionPlatformInventoryItem,
+  type SessionPlatformInventoryResult,
+  type SessionPlatformStatusResult,
   type SpawnSubagentResult,
 } from "./control-plane/server.js";
 export {

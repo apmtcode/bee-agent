@@ -32,6 +32,10 @@ export type OperatorCliSlashCommand =
   | { kind: "remote-pause"; identifier: string; reason?: string }
   | { kind: "remote-resume"; identifier: string }
   | { kind: "remote-repair"; identifier: string; reasons?: Array<"missing-process" | "missing-state"> }
+  | { kind: "platform-list" }
+  | { kind: "platform-status"; platform: string }
+  | { kind: "platform-pause"; platform: string; reason?: string }
+  | { kind: "platform-resume"; platform: string }
   | { kind: "recall"; query: string }
   | { kind: "skills" }
   | { kind: "run-skill"; skillId: string }
@@ -193,6 +197,10 @@ export class OperatorCliApp {
           "  /remote pause <remoteId|sessionId> [reason]",
           "  /remote resume <remoteId|sessionId>",
           "  /remote repair <remoteId|sessionId> [missing-process|missing-state]",
+          "  /platform list",
+          "  /platform status <platform>",
+          "  /platform pause <platform> [reason]",
+          "  /platform resume <platform>",
           "  /recall <query>",
           "  /skills",
           "  /run-skill <id>",
@@ -412,6 +420,50 @@ export class OperatorCliApp {
           ? "<none>"
           : response.result.repaired.results.map((item) => `${item.task.id}:${item.reason}:${item.task.status}${item.changed ? ":changed" : ""}`).join(",");
         return `Repaired remote ${response.result.remoteId} changed=${response.result.repaired.changed} control=${response.result.control.state}${response.result.control.reason ? ` reason=${response.result.control.reason}` : ""} tasks=${repairedTasks}`;
+      }
+      case "platform-list": {
+        const response = await this.server.handle({ method: "sessions.platformInventory" });
+        if (!response.ok) {
+          return response.error.message;
+        }
+        return formatPlatformInventory(response.result.items);
+      }
+      case "platform-status": {
+        const response = await this.server.handle({
+          method: "sessions.platformStatus",
+          params: { platform: command.platform },
+        });
+        if (!response.ok) {
+          return response.error.message;
+        }
+        return formatPlatformStatus(response.result);
+      }
+      case "platform-pause": {
+        const response = await this.server.handle({
+          method: "sessions.platformControl",
+          params: {
+            platform: command.platform,
+            action: "pause",
+            ...(command.reason ? { reason: command.reason } : {}),
+          },
+        });
+        if (!response.ok) {
+          return response.error.message;
+        }
+        return formatPlatformControlResult(response.result, "Paused");
+      }
+      case "platform-resume": {
+        const response = await this.server.handle({
+          method: "sessions.platformControl",
+          params: {
+            platform: command.platform,
+            action: "resume",
+          },
+        });
+        if (!response.ok) {
+          return response.error.message;
+        }
+        return formatPlatformControlResult(response.result, "Resumed");
       }
       case "recall": {
         const recall = await this.runtime.recall(command.query);
@@ -870,6 +922,72 @@ function formatRemoteStatus(status: {
   ].join("\n");
 }
 
+function formatPlatformInventory(items: Array<{
+  platform: string;
+  remoteCount: number;
+  control: { state: "active" | "paused" | "quarantined" | "degraded" | "mixed"; reason?: string };
+}>): string {
+  if (items.length === 0) {
+    return "No platform inventory.";
+  }
+  return items
+    .map((item) => `platform=${item.platform} remotes=${item.remoteCount} control=${item.control.state}${item.control.reason ? `:${item.control.reason}` : ""}`)
+    .join("\n");
+}
+
+function formatPlatformStatus(status: {
+  platform: string;
+  remoteCount: number;
+  control: { state: "active" | "paused" | "quarantined" | "degraded" | "mixed"; reason?: string };
+  remotes: Array<{
+    remoteId: string;
+    remoteSource?: string;
+    control?: { state: "active" | "paused" | "quarantined" | "degraded"; reason?: string };
+    diagnostics?: { cause: string; recoverable: boolean; taskId?: string; recommendedAction?: string };
+    session?: { id: string; status: string; agentId?: string; updatedAt: string };
+    activeRun?: { id: string; title: string; status: string; updatedAt: string };
+    activeBackgroundTask?: { id: string; title: string; kind: string; status: string; updatedAt: string };
+  }>;
+}): string {
+  return [
+    `platform=${status.platform} remotes=${status.remoteCount}`,
+    `control=${status.control.state}${status.control.reason ? ` reason=${status.control.reason}` : ""}`,
+    `members=${status.remotes.length === 0 ? "<none>" : status.remotes.map((remote) => {
+      const parts = [
+        `${remote.remoteId}`,
+        `control=${remote.control?.state ?? "<none>"}${remote.control?.reason ? `:${remote.control.reason}` : ""}`,
+        remote.session ? `session=${remote.session.id}:${remote.session.status}` : "session=<none>",
+        remote.activeRun ? `run=${remote.activeRun.status}:${remote.activeRun.title}` : "run=<none>",
+        remote.activeBackgroundTask ? `task=${remote.activeBackgroundTask.status}:${remote.activeBackgroundTask.title}` : "task=<none>",
+      ];
+      if (remote.diagnostics?.cause) {
+        parts.push(`diagnostics=${remote.diagnostics.cause}`);
+      }
+      if (remote.diagnostics?.recommendedAction) {
+        parts.push(`action=${remote.diagnostics.recommendedAction}`);
+      }
+      return parts.join(" ");
+    }).join(" | ")}`,
+  ].join("\n");
+}
+
+function formatPlatformControlResult(
+  result: {
+    platform: string;
+    remoteCount: number;
+    control: { state: "active" | "paused" | "quarantined" | "degraded" | "mixed"; reason?: string };
+    remotes: Array<{ remoteId: string }>;
+    results: Array<{ remoteId: string; ok: true; control: { state: "active" | "paused" | "quarantined" | "degraded"; reason?: string } } | { remoteId: string; ok: false; error: string }>;
+  },
+  verb: "Paused" | "Resumed",
+): string {
+  const summary = `${verb} platform ${result.platform} remotes=${result.remoteCount} control=${result.control.state}${result.control.reason ? ` reason=${result.control.reason}` : ""}`;
+  const details = result.results.length === 0
+    ? "results=<none>"
+    : `results=${result.results.map((entry) => entry.ok ? `${entry.remoteId}:${entry.control.state}${entry.control.reason ? `:${entry.control.reason}` : ""}` : `${entry.remoteId}:error:${entry.error}`).join(",")}`;
+  return [summary, details].join("\n");
+}
+
 export function parseSlashCommand(input: string): OperatorCliSlashCommand | undefined {
   const trimmed = input.trim();
   if (!trimmed.startsWith("/")) {
@@ -902,6 +1020,8 @@ export function parseSlashCommand(input: string): OperatorCliSlashCommand | unde
       return parsePairingCommand(tail);
     case "remote":
       return parseRemoteCommand(tail);
+    case "platform":
+      return parsePlatformCommand(tail);
     case "recall":
       return { kind: "recall", query: tail };
     case "skills":
@@ -1037,6 +1157,37 @@ function parseRemoteCommand(tail: string): OperatorCliSlashCommand {
       identifier,
       ...(reasonParts.length > 0 ? { reasons: [...new Set(reasonParts)] as Array<"missing-process" | "missing-state"> } : {}),
     };
+  }
+  return { kind: "invalid", message: usage };
+}
+
+function parsePlatformCommand(tail: string): OperatorCliSlashCommand {
+  const usage = "Usage: /platform <list|status|pause|resume> <platform> [reason]";
+  if (!tail || tail === "list") {
+    return tail ? { kind: "platform-list" } : { kind: "invalid", message: usage };
+  }
+  if (tail === "status" || tail === "pause" || tail === "resume") {
+    return { kind: "invalid", message: usage };
+  }
+  if (tail.startsWith("status ")) {
+    const platform = tail.slice("status ".length).trim();
+    return platform ? { kind: "platform-status", platform } : { kind: "invalid", message: usage };
+  }
+  if (tail.startsWith("pause ")) {
+    const rest = tail.slice("pause ".length).trim();
+    if (!rest) {
+      return { kind: "invalid", message: usage };
+    }
+    const [platform, ...reasonParts] = rest.split(/\s+/);
+    return {
+      kind: "platform-pause",
+      platform,
+      ...(reasonParts.length > 0 ? { reason: reasonParts.join(" ") } : {}),
+    };
+  }
+  if (tail.startsWith("resume ")) {
+    const platform = tail.slice("resume ".length).trim();
+    return platform ? { kind: "platform-resume", platform } : { kind: "invalid", message: usage };
   }
   return { kind: "invalid", message: usage };
 }

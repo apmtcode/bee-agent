@@ -378,6 +378,18 @@ describe("OperatorControlPlaneServer", () => {
         },
       },
     });
+    const secondRemoteBootstrap = await server.handle({
+      method: "sessions.bootstrap",
+      params: { title: "Second gateway remote", remoteId: "device-server-2", remoteSource: "gateway", agentId: "gateway" },
+    });
+    expect(secondRemoteBootstrap).toMatchObject({
+      ok: true,
+      result: {
+        session: {
+          metadata: { remoteId: "device-server-2", remoteSource: "gateway", agentId: "gateway" },
+        },
+      },
+    });
     const inventoryPairing = await server.handle({
       method: "pairing.create",
       params: { remoteSource: "gateway" },
@@ -430,6 +442,74 @@ describe("OperatorControlPlaneServer", () => {
       expect.objectContaining({ remoteId: pairingCreate.result.remoteId, remoteSource: "gateway" }),
       expect.objectContaining({ remoteId: inventoryPairing.result.remoteId, remoteSource: "gateway" }),
     ]));
+    await expect(server.handle({ method: "sessions.platformInventory" })).resolves.toMatchObject({
+      ok: true,
+      result: {
+        items: [
+          {
+            platform: "gateway",
+            remoteCount: 4,
+            control: { state: "mixed" },
+          },
+        ],
+      },
+    });
+    await expect(
+      server.handle({ method: "sessions.platformStatus", params: { platform: "gateway" } }),
+    ).resolves.toMatchObject({
+      ok: true,
+      result: {
+        platform: "gateway",
+        remoteCount: 4,
+        control: { state: "mixed" },
+        remotes: expect.arrayContaining([
+          expect.objectContaining({
+            remoteId: pairingCreate.result.remoteId,
+            control: { state: "paused", reason: "gateway unhealthy" },
+          }),
+          expect.objectContaining({
+            remoteId: "device-server-2",
+            control: { state: "active" },
+          }),
+          expect.objectContaining({
+            remoteId: inventoryPairing.result.remoteId,
+          }),
+        ]),
+      },
+    });
+    await expect(
+      server.handle({ method: "sessions.platformControl", params: { platform: "gateway", action: "resume" } }),
+    ).resolves.toMatchObject({
+      ok: true,
+      result: {
+        platform: "gateway",
+        remoteCount: 4,
+        action: "resume",
+        control: { state: "mixed" },
+        results: expect.arrayContaining([
+          {
+            remoteId: pairingCreate.result.remoteId,
+            ok: true,
+            control: { state: "paused", reason: "gateway unhealthy" },
+          },
+          {
+            remoteId: "device-server-1",
+            ok: true,
+            control: { state: "active" },
+          },
+          {
+            remoteId: "device-server-2",
+            ok: true,
+            control: { state: "active" },
+          },
+          {
+            remoteId: inventoryPairing.result.remoteId,
+            ok: false,
+            error: `unknown remote or session: ${inventoryPairing.result.remoteId}`,
+          },
+        ]),
+      },
+    });
 
     const driftingRootDir = await makeTempDir();
     const driftingRuntime = new StandaloneOperatorRuntime({
