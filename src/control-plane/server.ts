@@ -67,6 +67,17 @@ export type SessionBootstrapResult = {
   events: OperatorEvent[];
 };
 
+export type SessionRemoteControlState = "active" | "paused" | "quarantined" | "degraded";
+
+export type SessionRemoteQuarantine = {
+  remoteId: string;
+  sessionId: string;
+  cause: string;
+  trippedAt: number;
+  updatedAt: number;
+  gatewayState?: GatewaySessionHealth["state"];
+};
+
 export type SessionRemoteStatusResult = {
   remoteId: string;
   remoteSource?: string;
@@ -74,7 +85,7 @@ export type SessionRemoteStatusResult = {
   pairing?: PairingTicket;
   approvals: ApprovalRequest[];
   control: {
-    state: "active" | "paused" | "degraded";
+    state: SessionRemoteControlState;
     reason?: string;
   };
   diagnostics?: {
@@ -120,7 +131,7 @@ export type SessionRemoteRepairResult = {
     changed: boolean;
   };
   control: {
-    state: "active" | "paused" | "degraded";
+    state: SessionRemoteControlState;
     reason?: string;
   };
   diagnostics?: {
@@ -153,7 +164,7 @@ export type SessionRemoteInventoryItem = {
     expiresAt: string;
   };
   control?: {
-    state: "active" | "paused" | "degraded";
+    state: SessionRemoteControlState;
     reason?: string;
   };
   diagnostics?: {
@@ -225,6 +236,7 @@ export class OperatorControlPlaneServer {
   private readonly cron: OperatorCronService;
   private readonly pairing: FilePairingStore;
   private readonly gatewaySessions = new Map<string, GatewaySessionHealth>();
+  private readonly quarantinedRemotes = new Map<string, SessionRemoteQuarantine>();
 
   get runtime(): StandaloneOperatorRuntime {
     return this.options.runtime;
@@ -245,10 +257,37 @@ export class OperatorControlPlaneServer {
       return;
     }
     this.gatewaySessions.set(params.sessionId, params);
+    if (params.state === "stale") {
+      this.quarantineRemote(params);
+    }
   }
 
   getGatewaySessionHealth(sessionId: string): GatewaySessionHealth | undefined {
     return this.gatewaySessions.get(sessionId);
+  }
+
+  getRemoteQuarantine(remoteId: string): SessionRemoteQuarantine | undefined {
+    return this.quarantinedRemotes.get(remoteId);
+  }
+
+  clearRemoteQuarantine(remoteId: string): void {
+    this.quarantinedRemotes.delete(remoteId);
+  }
+
+  private quarantineRemote(params: GatewaySessionHealth): void {
+    const remoteId = params.remoteId;
+    if (!remoteId) {
+      return;
+    }
+    const current = this.quarantinedRemotes.get(remoteId);
+    this.quarantinedRemotes.set(remoteId, {
+      remoteId,
+      sessionId: params.sessionId,
+      cause: "gateway heartbeat stale",
+      trippedAt: current?.trippedAt ?? params.updatedAt,
+      updatedAt: params.updatedAt,
+      gatewayState: params.state,
+    });
   }
 
   async handle(request: ControlPlaneRequest): Promise<ControlPlaneResponse> {
@@ -307,7 +346,13 @@ export class OperatorControlPlaneServer {
         }
         case "sessions.remoteStatus": {
           const identifier = getString(request.params, "identifier");
-          const status = await buildSessionRemoteStatusResult(this.options.runtime, this.pairing, identifier, this.getGatewaySessionHealth.bind(this));
+          const status = await buildSessionRemoteStatusResult(
+            this.options.runtime,
+            this.pairing,
+            identifier,
+            this.getGatewaySessionHealth.bind(this),
+            this.getRemoteQuarantine.bind(this),
+          );
           return status ? ok(status) : notFound(`unknown remote or session: ${identifier}`);
         }
         case "sessions.remoteInventory":
@@ -315,6 +360,7 @@ export class OperatorControlPlaneServer {
             this.options.runtime,
             this.pairing,
             this.getGatewaySessionHealth.bind(this),
+            this.getRemoteQuarantine.bind(this),
             getOptionalString(request.params, "remoteSource"),
           ));
         case "sessions.remoteControl": {
@@ -324,6 +370,7 @@ export class OperatorControlPlaneServer {
           if (!session) {
             return notFound(`unknown remote or session: ${identifier}`);
           }
+          const remoteId = session.metadata.remoteId ?? session.id;
           if (action === "pause") {
             const pausedRun = await this.options.runtime.pauseActiveRun(
               session.id,
@@ -333,7 +380,17 @@ export class OperatorControlPlaneServer {
               return notFound(`no active run for remote or session: ${identifier}`);
             }
           }
-          const status = await buildSessionRemoteStatusResult(this.options.runtime, this.pairing, session.id, this.getGatewaySessionHealth.bind(this));
+          if (action === "resume") {
+            this.clearRemoteQuarantine(remoteId);
+            await this.options.runtime.resumeSession(session.id);
+          }
+          const status = await buildSessionRemoteStatusResult(
+            this.options.runtime,
+            this.pairing,
+            session.id,
+            this.getGatewaySessionHealth.bind(this),
+            this.getRemoteQuarantine.bind(this),
+          );
           return status ? ok(status) : notFound(`unknown remote or session: ${identifier}`);
         }
         case "sessions.remoteRepair": {
@@ -347,7 +404,13 @@ export class OperatorControlPlaneServer {
             sessionId: session.id,
             reasons: getOptionalRecoverableBackgroundTaskRecoveryReasons(request.params, "reasons"),
           });
-          const status = await buildSessionRemoteStatusResult(this.options.runtime, this.pairing, session.id, this.getGatewaySessionHealth.bind(this));
+          const status = await buildSessionRemoteStatusResult(
+            this.options.runtime,
+            this.pairing,
+            session.id,
+            this.getGatewaySessionHealth.bind(this),
+            this.getRemoteQuarantine.bind(this),
+          );
           if (!status) {
             return notFound(`unknown remote or session: ${identifier}`);
           }
@@ -841,6 +904,7 @@ async function buildSessionRemoteStatusResult(
   pairing: FilePairingStore,
   identifier: string,
   getGatewaySessionHealth?: (sessionId: string) => GatewaySessionHealth | undefined,
+  getRemoteQuarantine?: (remoteId: string) => SessionRemoteQuarantine | undefined,
 ): Promise<SessionRemoteStatusResult | undefined> {
   const session = await resolveSessionByIdentifier(runtime, identifier);
   if (!session) {
@@ -854,8 +918,9 @@ async function buildSessionRemoteStatusResult(
     : undefined;
   const recentEvents = runtime.events.snapshot(buildRuntimeEventFilter({ sessionId: session.id })).slice(-5);
   const gatewaySession = getGatewaySessionHealth?.(session.id);
-  const diagnostics = await deriveRemoteDiagnostics(runtime, { session, activeRun, activeBackgroundTask, recentEvents, gatewaySession });
-  const control = deriveRemoteControlStatus({ session, activeRun, diagnostics });
+  const quarantine = getRemoteQuarantine?.(session.metadata.remoteId ?? session.id);
+  const diagnostics = await deriveRemoteDiagnostics(runtime, { session, activeRun, activeBackgroundTask, recentEvents, gatewaySession, quarantine });
+  const control = deriveRemoteControlStatus({ session, activeRun, diagnostics, quarantine });
   return {
     remoteId: session.metadata.remoteId ?? session.id,
     ...(session.metadata.remoteSource ? { remoteSource: session.metadata.remoteSource } : {}),
@@ -893,6 +958,7 @@ async function buildSessionRemoteInventoryResult(
   runtime: StandaloneOperatorRuntime,
   pairing: FilePairingStore,
   getGatewaySessionHealth?: (sessionId: string) => GatewaySessionHealth | undefined,
+  getRemoteQuarantine?: (remoteId: string) => SessionRemoteQuarantine | undefined,
   remoteSource?: string,
 ): Promise<SessionRemoteInventoryResult> {
   const items = new Map<string, SessionRemoteInventoryItem>();
@@ -904,7 +970,7 @@ async function buildSessionRemoteInventoryResult(
     if (remoteSource && session.metadata.remoteSource !== remoteSource) {
       continue;
     }
-    const status = await buildSessionRemoteStatusResult(runtime, pairing, session.id, getGatewaySessionHealth);
+    const status = await buildSessionRemoteStatusResult(runtime, pairing, session.id, getGatewaySessionHealth, getRemoteQuarantine);
     if (!status || items.has(status.remoteId)) {
       continue;
     }
@@ -1022,7 +1088,14 @@ function deriveRemoteControlStatus(params: {
   session: SessionRecord;
   activeRun?: { status: string; metadata?: Record<string, unknown> };
   diagnostics?: SessionRemoteStatusResult["diagnostics"];
-}): { state: "active" | "paused" | "degraded"; reason?: string } {
+  quarantine?: SessionRemoteQuarantine;
+}): { state: SessionRemoteControlState; reason?: string } {
+  if (params.quarantine) {
+    return {
+      state: "quarantined",
+      reason: params.quarantine.cause,
+    };
+  }
   if (params.activeRun?.status === "paused") {
     const remoteControlSource = typeof params.activeRun.metadata?.remoteControlSource === "string"
       ? params.activeRun.metadata.remoteControlSource
@@ -1048,8 +1121,16 @@ async function deriveRemoteDiagnostics(
     activeBackgroundTask?: { id: string; status: string };
     recentEvents: OperatorEvent[];
     gatewaySession?: GatewaySessionHealth;
+    quarantine?: SessionRemoteQuarantine;
   },
 ): Promise<SessionRemoteStatusResult["diagnostics"]> {
+  if (params.quarantine) {
+    return {
+      cause: params.quarantine.cause,
+      recoverable: true,
+      recommendedAction: `Run /remote resume ${params.session.metadata.remoteId ?? params.session.id}`,
+    };
+  }
   if (
     params.activeRun?.status === "paused" &&
     params.activeRun.metadata?.remoteControlSource !== "remote-control"
@@ -1069,7 +1150,7 @@ async function deriveRemoteDiagnostics(
     return {
       cause: "gateway heartbeat stale",
       recoverable: true,
-      recommendedAction: `Reconnect remote ${params.session.metadata.remoteId ?? params.session.id}`,
+      recommendedAction: `Run /remote resume ${params.session.metadata.remoteId ?? params.session.id}`,
     };
   }
 
@@ -1230,9 +1311,9 @@ function getOptionalRuntimeEventFamily(
 function getRemoteControlAction(
   params: Record<string, unknown> | undefined,
   key: string,
-): "pause" {
+): "pause" | "resume" {
   const value = params?.[key];
-  if (value === "pause") {
+  if (value === "pause" || value === "resume") {
     return value;
   }
   throw new Error(`Invalid remote control action: ${key}`);

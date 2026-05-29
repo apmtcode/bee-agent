@@ -316,11 +316,11 @@ describe("OperatorControlPlaneServer", () => {
       ok: true,
       result: {
         remoteId: pairingCreate.result.remoteId,
-        control: { state: "degraded", reason: "gateway heartbeat stale" },
+        control: { state: "quarantined", reason: "gateway heartbeat stale" },
         diagnostics: {
           cause: "gateway heartbeat stale",
           recoverable: true,
-          recommendedAction: `Reconnect remote ${pairingCreate.result.remoteId}`,
+          recommendedAction: `Run /remote resume ${pairingCreate.result.remoteId}`,
         },
       },
     });
@@ -331,6 +331,35 @@ describe("OperatorControlPlaneServer", () => {
       state: "healthy",
       updatedAt: Date.now(),
       lastClientActivityAt: Date.now(),
+    });
+    await expect(
+      server.handle({
+        method: "sessions.remoteStatus",
+        params: { identifier: pairingCreate.result.remoteId },
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      result: {
+        remoteId: pairingCreate.result.remoteId,
+        control: { state: "quarantined", reason: "gateway heartbeat stale" },
+        diagnostics: {
+          cause: "gateway heartbeat stale",
+          recoverable: true,
+          recommendedAction: `Run /remote resume ${pairingCreate.result.remoteId}`,
+        },
+      },
+    });
+    await expect(
+      server.handle({
+        method: "sessions.remoteControl",
+        params: { identifier: pairingCreate.result.remoteId, action: "resume" },
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      result: {
+        remoteId: pairingCreate.result.remoteId,
+        control: { state: "active" },
+      },
     });
     await expect(
       server.handle({

@@ -300,11 +300,11 @@ describe("OperatorGatewayTransportConnection", () => {
       ok: true,
       result: {
         remoteId: "device-heartbeat-1",
-        control: { state: "degraded", reason: "gateway heartbeat stale" },
+        control: { state: "quarantined", reason: "gateway heartbeat stale" },
         diagnostics: {
           cause: "gateway heartbeat stale",
           recoverable: true,
-          recommendedAction: "Reconnect remote device-heartbeat-1",
+          recommendedAction: "Run /remote resume device-heartbeat-1",
         },
       },
     });
@@ -321,7 +321,7 @@ describe("OperatorGatewayTransportConnection", () => {
     });
   });
 
-  it("replays only missed events after reconnect cursor and clears stale health after pong", async () => {
+  it("replays only missed events after reconnect cursor and reports healthy status after pong", async () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
       backgroundTaskIsProcessRunning: () => false,

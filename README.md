@@ -47,6 +47,7 @@ Current slash commands:
 - `/remote list [source]`
 - `/remote status <remoteId|sessionId>`
 - `/remote pause <remoteId|sessionId> [reason]`
+- `/remote resume <remoteId|sessionId>`
 - `/remote repair <remoteId|sessionId> [missing-process|missing-state]`
 - `/recall <query>`
 - `/skills`
@@ -96,7 +97,7 @@ Current gateway transport behavior in this tranche:
 - transport message types remain intentionally narrow and now include heartbeat `ping` / `pong` alongside bootstrap, request, response, event, and error
 - gateway bootstrap can now also carry a stable `remoteId` and `remoteSource` so reconnecting clients can reattach without already knowing `sessionId`
 - reconnecting clients can optionally provide an event replay cursor so bootstrap only replays missed session-scoped events
-- stale gateway heartbeats now surface through remote status as recoverable transport degradation instead of silently dropping continuity
+- stale gateway heartbeats now quarantine the affected remote until an operator explicitly resumes it, instead of silently dropping continuity or auto-clearing on a later healthy heartbeat
 - bootstrap can also redeem an approved `pairingCode` into that same `remoteId` continuity path
 - this is still an in-process transport adapter in this tranche; broader channel delivery, platform routing, and circuit-breaker policy remain for later work
 
@@ -121,6 +122,8 @@ Current remote status behavior in this tranche:
 - remote status resolves the bound local session plus `remoteSource`
 - remote status includes the latest pairing ticket for that remote when one exists
 - remote status reports session-scoped pending approvals, the active run, the active background task, and recent runtime events
+- remote status and inventory now project a derived remote `control` state of `active`, `paused`, `quarantined`, or `degraded`
+- quarantined remotes also surface a recoverable diagnostics block with a recommended `/remote resume <remoteId|sessionId>` action
 - the operator CLI exposes fleet summaries with `/remote list [source]` and drill-down troubleshooting with `/remote status <remoteId|sessionId>`
 
 ## Remote subagent spawn
@@ -139,11 +142,14 @@ Current remote subagent behavior in this tranche:
 Operator now also has a first narrow remote-control seam on top of remote status diagnostics.
 
 Current remote control behavior in this tranche:
-- the control plane exposes `sessions.remoteControl` for `pause` against a resolved `remoteId` or `sessionId`
+- the control plane exposes `sessions.remoteControl` for `pause` and `resume` against a resolved `remoteId` or `sessionId`
 - pausing acts on the active top-level run for that remote session and records remote-control metadata on the run
+- stale gateway heartbeat failures trip an in-memory quarantine registry keyed by `remoteId`
 - `/remote pause <remoteId|sessionId> [reason]` lets the operator stop delegated progress and immediately inspect the updated state
-- `sessions.remoteStatus` and `/remote status` now surface a derived `control` summary with `active`, `paused`, or `degraded`
-- degraded status can now include a small diagnostics block with the current cause, whether it is recoverable, the relevant task when known, and a recommended repair command
+- `/remote resume <remoteId|sessionId>` clears quarantine for that remote and resumes the bound session when applicable
+- `sessions.remoteStatus` and `/remote status` now surface a derived `control` summary with `active`, `paused`, `quarantined`, or `degraded`
+- quarantined heartbeat failures recommend an explicit `/remote resume <remoteId|sessionId>` action and do not auto-clear on a later healthy heartbeat
+- degraded status can still include a small diagnostics block with the current cause, whether it is recoverable, the relevant task when known, and a recommended repair command
 - the control plane also exposes `sessions.remoteRepair` for scoped `recover-background-tasks` against the resolved remote session
 - `/remote repair <remoteId|sessionId> [missing-process|missing-state]` reuses existing background-task recovery and reports repaired tasks plus refreshed control state
 - this repair path is intentionally limited to background-task drift recovery; process suspension, platform-specific routing, and broader circuit-breaker policy remain out of scope in this tranche

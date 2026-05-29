@@ -30,6 +30,7 @@ export type OperatorCliSlashCommand =
   | { kind: "remote-list"; remoteSource?: string }
   | { kind: "remote-status"; identifier: string }
   | { kind: "remote-pause"; identifier: string; reason?: string }
+  | { kind: "remote-resume"; identifier: string }
   | { kind: "remote-repair"; identifier: string; reasons?: Array<"missing-process" | "missing-state"> }
   | { kind: "recall"; query: string }
   | { kind: "skills" }
@@ -190,6 +191,7 @@ export class OperatorCliApp {
           "  /remote list [source]",
           "  /remote status <remoteId|sessionId>",
           "  /remote pause <remoteId|sessionId> [reason]",
+          "  /remote resume <remoteId|sessionId>",
           "  /remote repair <remoteId|sessionId> [missing-process|missing-state]",
           "  /recall <query>",
           "  /skills",
@@ -380,6 +382,19 @@ export class OperatorCliApp {
           return response.error.message;
         }
         return `Paused remote ${response.result.remoteId} control=${response.result.control.state}${response.result.control.reason ? ` reason=${response.result.control.reason}` : ""}`;
+      }
+      case "remote-resume": {
+        const response = await this.server.handle({
+          method: "sessions.remoteControl",
+          params: {
+            identifier: command.identifier,
+            action: "resume",
+          },
+        });
+        if (!response.ok) {
+          return response.error.message;
+        }
+        return `Resumed remote ${response.result.remoteId} control=${response.result.control.state}${response.result.control.reason ? ` reason=${response.result.control.reason}` : ""}`;
       }
       case "remote-repair": {
         const response = await this.server.handle({
@@ -792,7 +807,7 @@ function formatRemoteInventory(items: Array<{
   remoteSource?: string;
   session?: { id: string; status: string; agentId?: string; updatedAt: string };
   pairing?: { code: string; status: string; expiresAt: string };
-  control?: { state: "active" | "paused" | "degraded"; reason?: string };
+  control?: { state: "active" | "paused" | "quarantined" | "degraded"; reason?: string };
   diagnostics?: { cause: string; recoverable: boolean; taskId?: string; recommendedAction?: string };
   activeRun?: { id: string; title: string; status: string; updatedAt: string };
   activeBackgroundTask?: { id: string; title: string; kind: string; status: string; updatedAt: string };
@@ -815,6 +830,9 @@ function formatRemoteInventory(items: Array<{
     if (item.diagnostics?.cause) {
       parts.push(`diagnostics=${item.diagnostics.cause}`);
     }
+    if (item.diagnostics?.recommendedAction) {
+      parts.push(`action=${item.diagnostics.recommendedAction}`);
+    }
     return parts.join(" ");
   }).join("\n");
 }
@@ -825,7 +843,7 @@ function formatRemoteStatus(status: {
   session: { id: string; status: string; metadata: { agentId?: string } };
   pairing?: { code: string; status: string; expiresAt: string };
   approvals: Array<{ id: string; title: string }>;
-  control: { state: "active" | "paused" | "degraded"; reason?: string };
+  control: { state: "active" | "paused" | "quarantined" | "degraded"; reason?: string };
   diagnostics?: { cause: string; recoverable: boolean; taskId?: string; recommendedAction?: string };
   activeRun?: { id: string; title: string; status: string; updatedAt: string };
   activeBackgroundTask?: { id: string; title: string; kind: string; status: string; updatedAt: string };
@@ -971,7 +989,7 @@ function parsePairingCommand(tail: string): OperatorCliSlashCommand {
 }
 
 function parseRemoteCommand(tail: string): OperatorCliSlashCommand {
-  const usage = "Usage: /remote <list [source]|status|pause|repair> <remoteId|sessionId> [reason|missing-process|missing-state]";
+  const usage = "Usage: /remote <list [source]|status|pause|resume|repair> <remoteId|sessionId> [reason|missing-process|missing-state]";
   if (!tail) {
     return { kind: "invalid", message: usage };
   }
@@ -982,7 +1000,7 @@ function parseRemoteCommand(tail: string): OperatorCliSlashCommand {
     const remoteSource = tail.slice("list ".length).trim();
     return remoteSource ? { kind: "remote-list", remoteSource } : { kind: "invalid", message: usage };
   }
-  if (tail === "status" || tail === "pause" || tail === "repair") {
+  if (tail === "status" || tail === "pause" || tail === "resume" || tail === "repair") {
     return { kind: "invalid", message: usage };
   }
   if (tail.startsWith("status ")) {
@@ -1000,6 +1018,10 @@ function parseRemoteCommand(tail: string): OperatorCliSlashCommand {
       identifier,
       ...(reasonParts.length > 0 ? { reason: reasonParts.join(" ") } : {}),
     };
+  }
+  if (tail.startsWith("resume ")) {
+    const identifier = tail.slice("resume ".length).trim();
+    return identifier ? { kind: "remote-resume", identifier } : { kind: "invalid", message: usage };
   }
   if (tail.startsWith("repair ")) {
     const rest = tail.slice("repair ".length).trim();

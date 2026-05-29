@@ -37,6 +37,10 @@ describe("parseSlashCommand", () => {
       identifier: "device-1",
       reason: "gateway unhealthy",
     });
+    expect(parseSlashCommand("/remote resume device-1")).toEqual({
+      kind: "remote-resume",
+      identifier: "device-1",
+    });
     expect(parseSlashCommand("/remote repair device-1 missing-process missing-state")).toEqual({
       kind: "remote-repair",
       identifier: "device-1",
@@ -103,15 +107,15 @@ describe("parseSlashCommand", () => {
     });
     expect(parseSlashCommand("/remote")).toEqual({
       kind: "invalid",
-      message: "Usage: /remote <list [source]|status|pause|repair> <remoteId|sessionId> [reason|missing-process|missing-state]",
+      message: "Usage: /remote <list [source]|status|pause|resume|repair> <remoteId|sessionId> [reason|missing-process|missing-state]",
     });
     expect(parseSlashCommand("/remote pause")).toEqual({
       kind: "invalid",
-      message: "Usage: /remote <list [source]|status|pause|repair> <remoteId|sessionId> [reason|missing-process|missing-state]",
+      message: "Usage: /remote <list [source]|status|pause|resume|repair> <remoteId|sessionId> [reason|missing-process|missing-state]",
     });
     expect(parseSlashCommand("/remote repair device-1 bad-reason")).toEqual({
       kind: "invalid",
-      message: "Usage: /remote <list [source]|status|pause|repair> <remoteId|sessionId> [reason|missing-process|missing-state]",
+      message: "Usage: /remote <list [source]|status|pause|resume|repair> <remoteId|sessionId> [reason|missing-process|missing-state]",
     });
     expect(parseSlashCommand("/watch nope")).toEqual({
       kind: "invalid",
@@ -351,6 +355,38 @@ describe("OperatorCliApp", () => {
     expect(remoteStatusOutput).toContain("Remote run");
     expect(remoteStatusOutput).toContain("task=");
     expect(remoteStatusOutput).toContain("Remote task");
+
+    await app.server.updateGatewaySessionHealth({
+      connectionId: "cli-gateway-1",
+      sessionId: pairedBootstrap.result.session.id,
+      remoteId: pairedBootstrap.result.session.metadata.remoteId,
+      state: "stale",
+      updatedAt: Date.now(),
+      lastClientActivityAt: Date.now(),
+    });
+    const quarantinedRemoteStatusOutput = await app.dispatchSlashCommand({ kind: "remote-status", identifier: pairedBootstrap.result.session.metadata.remoteId ?? pairedBootstrap.result.session.id });
+    expect(quarantinedRemoteStatusOutput).toContain("control=quarantined reason=gateway heartbeat stale");
+    expect(quarantinedRemoteStatusOutput).toContain(`action=Run /remote resume ${pairedBootstrap.result.session.metadata.remoteId}`);
+
+    await app.server.updateGatewaySessionHealth({
+      connectionId: "cli-gateway-1",
+      sessionId: pairedBootstrap.result.session.id,
+      remoteId: pairedBootstrap.result.session.metadata.remoteId,
+      state: "healthy",
+      updatedAt: Date.now(),
+      lastClientActivityAt: Date.now(),
+    });
+    const quarantinedRemoteListOutput = await app.dispatchSlashCommand({ kind: "remote-list" });
+    expect(quarantinedRemoteListOutput).toContain(`remote=${pairedBootstrap.result.session.metadata.remoteId}`);
+    expect(quarantinedRemoteListOutput).toContain("control=quarantined:gateway heartbeat stale");
+    expect(quarantinedRemoteListOutput).toContain(`action=Run /remote resume ${pairedBootstrap.result.session.metadata.remoteId}`);
+
+    const remoteResumeOutput = await app.dispatchSlashCommand({
+      kind: "remote-resume",
+      identifier: pairedBootstrap.result.session.metadata.remoteId ?? pairedBootstrap.result.session.id,
+    });
+    expect(remoteResumeOutput).toContain(`Resumed remote ${pairedBootstrap.result.session.metadata.remoteId}`);
+    expect(remoteResumeOutput).toContain("control=active");
 
     const remotePauseOutput = await app.dispatchSlashCommand({
       kind: "remote-pause",
