@@ -374,7 +374,7 @@ describe("OperatorCliApp", () => {
 
     const platformStatusOutput = await app.dispatchSlashCommand({ kind: "platform-status", platform: "gateway" });
     expect(platformStatusOutput).toContain("platform=gateway remotes=3");
-    expect(platformStatusOutput).toContain(`members=${pairedBootstrap.result.session.metadata.remoteId}`);
+    expect(platformStatusOutput).toContain(`members=${pairedBootstrap.result.session.metadata.remoteId} control=active`);
     expect(platformStatusOutput).toContain(`control=active`);
     expect(platformStatusOutput).toContain(`device-cli-2 control=active`);
     expect(platformStatusOutput).toContain(`device-cli-drift-1 control=active`);
@@ -429,13 +429,16 @@ describe("OperatorCliApp", () => {
       reason: "platform unhealthy",
     });
     expect(platformPauseOutput).toContain("Paused platform gateway");
-    expect(platformPauseOutput).toContain("control=mixed");
+    expect(platformPauseOutput).toContain("control=paused reason=platform unhealthy");
     expect(platformPauseOutput).toContain(`${pairedBootstrap.result.session.metadata.remoteId}:paused:platform unhealthy`);
     expect(platformPauseOutput).toContain("device-cli-2:error:no active run for remote or session: device-cli-2");
     expect(platformPauseOutput).toContain("device-cli-drift-1:error:no active run for remote or session: device-cli-drift-1");
 
+    const platformListAfterPause = await app.dispatchSlashCommand({ kind: "platform-list" });
+    expect(platformListAfterPause).toContain("platform=gateway remotes=3 control=paused:platform unhealthy");
+
     const platformStatusAfterPause = await app.dispatchSlashCommand({ kind: "platform-status", platform: "gateway" });
-    expect(platformStatusAfterPause).toContain("control=mixed");
+    expect(platformStatusAfterPause).toContain("control=paused reason=platform unhealthy");
     expect(platformStatusAfterPause).toContain(`${pairedBootstrap.result.session.metadata.remoteId} control=paused:platform unhealthy`);
 
     const remotePauseOutput = await app.dispatchSlashCommand({
@@ -491,7 +494,7 @@ describe("OperatorCliApp", () => {
     expect(remoteRepairOutput).toContain("tasks=<none>");
 
     const mixedPlatformStatusOutput = await app.dispatchSlashCommand({ kind: "platform-status", platform: "gateway" });
-    expect(mixedPlatformStatusOutput).toContain("control=mixed");
+    expect(mixedPlatformStatusOutput).toContain("control=paused reason=platform unhealthy");
     expect(mixedPlatformStatusOutput).toContain("diagnostics=background task failed");
 
     const platformResumeOutput = await app.dispatchSlashCommand({ kind: "platform-resume", platform: "gateway" });

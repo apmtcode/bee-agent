@@ -7,6 +7,10 @@ import {
   type PairingTicket,
   type PairingTicketStatus,
 } from "./pairing-store.js";
+import {
+  FilePlatformBreakerStore,
+  type PlatformBreakerRecord,
+} from "./platform-breaker-store.js";
 import { buildRuntimeEventFilter } from "./subscriptions.js";
 import type { BackgroundTaskKind, BackgroundTaskRecoveryReason } from "../harness/background-tasks.js";
 import type { TranscriptReadOptions } from "../harness/transcript-store.js";
@@ -53,6 +57,7 @@ export type ControlPlaneServerOptions = {
   runtime: StandaloneOperatorRuntime;
   cron?: OperatorCronService;
   pairing?: FilePairingStore;
+  platformBreakers?: FilePlatformBreakerStore;
 };
 
 export type PairingTicketCreateResult = PairingTicket;
@@ -273,6 +278,7 @@ export type SpawnSubagentResult = {
 export class OperatorControlPlaneServer {
   private readonly cron: OperatorCronService;
   private readonly pairing: FilePairingStore;
+  private readonly platformBreakers: FilePlatformBreakerStore;
   private readonly gatewaySessions = new Map<string, GatewaySessionHealth>();
   private readonly quarantinedRemotes = new Map<string, SessionRemoteQuarantine>();
 
@@ -283,6 +289,7 @@ export class OperatorControlPlaneServer {
   constructor(private readonly options: ControlPlaneServerOptions) {
     this.cron = options.cron ?? new OperatorCronService(options.runtime.rootDir, { runtime: options.runtime });
     this.pairing = options.pairing ?? new FilePairingStore(buildPairingStoreFilePath(options.runtime.rootDir));
+    this.platformBreakers = options.platformBreakers ?? new FilePlatformBreakerStore(buildPlatformBreakerStoreFilePath(options.runtime.rootDir));
   }
 
   registerGatewaySessionConnection(params: GatewaySessionHealth): void {
@@ -401,30 +408,31 @@ export class OperatorControlPlaneServer {
             this.getRemoteQuarantine.bind(this),
             getOptionalString(request.params, "remoteSource"),
           ));
-        case "sessions.platformInventory":
-          return ok(buildSessionPlatformInventoryResult(
-            await buildSessionRemoteInventoryResult(
-              this.options.runtime,
-              this.pairing,
-              this.getGatewaySessionHealth.bind(this),
-              this.getRemoteQuarantine.bind(this),
-            ),
-          ));
+        case "sessions.platformInventory": {
+          const remoteInventory = await buildSessionRemoteInventoryResult(
+            this.options.runtime,
+            this.pairing,
+            this.getGatewaySessionHealth.bind(this),
+            this.getRemoteQuarantine.bind(this),
+          );
+          const breakers = await this.platformBreakers.listBreakers();
+          return ok(buildSessionPlatformInventoryResult(remoteInventory, breakers));
+        }
         case "sessions.platformStatus": {
           const platform = getString(request.params, "platform");
-          const status = buildSessionPlatformStatusResult(
-            await buildSessionRemoteInventoryResult(
-              this.options.runtime,
-              this.pairing,
-              this.getGatewaySessionHealth.bind(this),
-              this.getRemoteQuarantine.bind(this),
-            ),
-            platform,
+          const remoteInventory = await buildSessionRemoteInventoryResult(
+            this.options.runtime,
+            this.pairing,
+            this.getGatewaySessionHealth.bind(this),
+            this.getRemoteQuarantine.bind(this),
           );
+          const breakers = await this.platformBreakers.listBreakers();
+          const status = buildSessionPlatformStatusResult(remoteInventory, breakers, platform);
           return status ? ok(status) : notFound(`unknown platform: ${platform}`);
         }
         case "sessions.platformControl": {
           const platform = getString(request.params, "platform");
+          const normalizedPlatform = normalizePlatformName(platform);
           const action = getRemoteControlAction(request.params, "action");
           const remoteInventory = await buildSessionRemoteInventoryResult(
             this.options.runtime,
@@ -432,9 +440,19 @@ export class OperatorControlPlaneServer {
             this.getGatewaySessionHealth.bind(this),
             this.getRemoteQuarantine.bind(this),
           );
-          const status = buildSessionPlatformStatusResult(remoteInventory, platform);
+          const breakers = await this.platformBreakers.listBreakers();
+          const status = buildSessionPlatformStatusResult(remoteInventory, breakers, platform);
           if (!status) {
             return notFound(`unknown platform: ${platform}`);
+          }
+          if (action === "pause") {
+            await this.platformBreakers.setBreaker({
+              platform: normalizedPlatform,
+              reason: getOptionalString(request.params, "reason"),
+            });
+          }
+          if (action === "resume") {
+            await this.platformBreakers.clearBreaker(normalizedPlatform);
           }
           const results: SessionPlatformControlResult["results"] = [];
           for (const remote of status.remotes) {
@@ -493,7 +511,8 @@ export class OperatorControlPlaneServer {
             this.getGatewaySessionHealth.bind(this),
             this.getRemoteQuarantine.bind(this),
           );
-          const refreshedStatus = buildSessionPlatformStatusResult(refreshedInventory, platform);
+          const refreshedBreakers = await this.platformBreakers.listBreakers();
+          const refreshedStatus = buildSessionPlatformStatusResult(refreshedInventory, refreshedBreakers, platform);
           return refreshedStatus
             ? ok({
                 ...refreshedStatus,
@@ -1019,6 +1038,10 @@ function buildPairingStoreFilePath(rootDir: string): string {
   return `${rootDir}/pairing-tickets.json`;
 }
 
+function buildPlatformBreakerStoreFilePath(rootDir: string): string {
+  return `${rootDir}/platform-breakers.json`;
+}
+
 async function buildSessionBootstrapResult(
   runtime: StandaloneOperatorRuntime,
   session: SessionRecord,
@@ -1151,9 +1174,10 @@ async function buildSessionRemoteInventoryResult(
 
 function buildSessionPlatformInventoryResult(
   remoteInventory: SessionRemoteInventoryResult,
+  breakers: PlatformBreakerRecord[],
 ): SessionPlatformInventoryResult {
   return {
-    items: buildPlatformStatusItems(remoteInventory).map((item) => ({
+    items: buildPlatformStatusItems(remoteInventory, breakers).map((item) => ({
       platform: item.platform,
       remoteCount: item.remoteCount,
       control: item.control,
@@ -1163,16 +1187,19 @@ function buildSessionPlatformInventoryResult(
 
 function buildSessionPlatformStatusResult(
   remoteInventory: SessionRemoteInventoryResult,
+  breakers: PlatformBreakerRecord[],
   platform: string,
 ): SessionPlatformStatusResult | undefined {
   const normalizedPlatform = normalizePlatformName(platform);
-  return buildPlatformStatusItems(remoteInventory).find((item) => item.platform === normalizedPlatform);
+  return buildPlatformStatusItems(remoteInventory, breakers).find((item) => item.platform === normalizedPlatform);
 }
 
 function buildPlatformStatusItems(
   remoteInventory: SessionRemoteInventoryResult,
+  breakers: PlatformBreakerRecord[],
 ): SessionPlatformStatusResult[] {
   const grouped = new Map<string, SessionRemoteInventoryItem[]>();
+  const breakerMap = new Map(breakers.map((breaker) => [breaker.platform, breaker]));
   for (const item of remoteInventory.items) {
     const platform = getPlatformFromRemoteInventoryItem(item);
     const bucket = grouped.get(platform);
@@ -1187,7 +1214,7 @@ function buildPlatformStatusItems(
     .map(([platform, remotes]) => ({
       platform,
       remoteCount: remotes.length,
-      control: derivePlatformControlStatus(remotes),
+      control: derivePlatformControlStatus(remotes, breakerMap.get(platform)),
       remotes: remotes.slice().sort((a, b) => a.remoteId.localeCompare(b.remoteId)),
     }));
 }
@@ -1202,7 +1229,14 @@ function normalizePlatformName(value?: string): string {
 
 function derivePlatformControlStatus(
   remotes: SessionRemoteInventoryItem[],
+  breaker?: PlatformBreakerRecord,
 ): { state: SessionPlatformControlState; reason?: string } {
+  if (breaker) {
+    return {
+      state: "paused",
+      ...(breaker.reason ? { reason: breaker.reason } : {}),
+    };
+  }
   const controls = remotes.map((remote) => remote.control).filter(Boolean);
   if (controls.length === 0) {
     return { state: "active" };

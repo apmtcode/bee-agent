@@ -138,6 +138,11 @@ export {
   type PairingTicketStatus,
 } from "./control-plane/pairing-store.js";
 export {
+  FilePlatformBreakerStore,
+  type PlatformBreakerRecord,
+  type PlatformBreakerStoreShape,
+} from "./control-plane/platform-breaker-store.js";
+export {
   OperatorControlPlaneSessionStream,
   type SessionStreamBootstrapParams,
 } from "./control-plane/session-stream.js";

@@ -478,6 +478,82 @@ describe("OperatorControlPlaneServer", () => {
       },
     });
     await expect(
+      server.handle({ method: "sessions.platformControl", params: { platform: "gateway", action: "pause", reason: "platform unhealthy" } }),
+    ).resolves.toMatchObject({
+      ok: true,
+      result: {
+        platform: "gateway",
+        remoteCount: 4,
+        action: "pause",
+        control: { state: "paused", reason: "platform unhealthy" },
+        results: expect.arrayContaining([
+          {
+            remoteId: pairingCreate.result.remoteId,
+            ok: true,
+            control: { state: "paused", reason: "platform unhealthy" },
+          },
+          {
+            remoteId: "device-server-1",
+            ok: false,
+            error: "no active run for remote or session: device-server-1",
+          },
+          {
+            remoteId: "device-server-2",
+            ok: false,
+            error: "no active run for remote or session: device-server-2",
+          },
+          {
+            remoteId: inventoryPairing.result.remoteId,
+            ok: false,
+            error: `unknown remote or session: ${inventoryPairing.result.remoteId}`,
+          },
+        ]),
+      },
+    });
+    await expect(server.handle({ method: "sessions.platformInventory" })).resolves.toMatchObject({
+      ok: true,
+      result: {
+        items: [
+          {
+            platform: "gateway",
+            remoteCount: 4,
+            control: { state: "paused", reason: "platform unhealthy" },
+          },
+        ],
+      },
+    });
+    await expect(
+      server.handle({ method: "sessions.platformStatus", params: { platform: "gateway" } }),
+    ).resolves.toMatchObject({
+      ok: true,
+      result: {
+        platform: "gateway",
+        remoteCount: 4,
+        control: { state: "paused", reason: "platform unhealthy" },
+        remotes: expect.arrayContaining([
+          expect.objectContaining({
+            remoteId: pairingCreate.result.remoteId,
+            control: { state: "paused", reason: "platform unhealthy" },
+          }),
+          expect.objectContaining({
+            remoteId: "device-server-2",
+            control: { state: "active" },
+          }),
+        ]),
+      },
+    });
+    const restartedServer = new OperatorControlPlaneServer({ runtime });
+    await expect(
+      restartedServer.handle({ method: "sessions.platformStatus", params: { platform: "gateway" } }),
+    ).resolves.toMatchObject({
+      ok: true,
+      result: {
+        platform: "gateway",
+        remoteCount: 4,
+        control: { state: "paused", reason: "platform unhealthy" },
+      },
+    });
+    await expect(
       server.handle({ method: "sessions.platformControl", params: { platform: "gateway", action: "resume" } }),
     ).resolves.toMatchObject({
       ok: true,
@@ -490,7 +566,7 @@ describe("OperatorControlPlaneServer", () => {
           {
             remoteId: pairingCreate.result.remoteId,
             ok: true,
-            control: { state: "paused", reason: "gateway unhealthy" },
+            control: { state: "paused", reason: "platform unhealthy" },
           },
           {
             remoteId: "device-server-1",
