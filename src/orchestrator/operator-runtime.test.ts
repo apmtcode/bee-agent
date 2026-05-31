@@ -340,17 +340,38 @@ describe("StandaloneOperatorRuntime", () => {
       expect.objectContaining({ runId: subagent.runId, status: "running" }),
     ]);
 
+    const parentSessionWithModel = await runtime.startSession({
+      title: "Parent with model",
+      agentId: "main",
+      modelSelection: {
+        primary: "claude-opus-4-7",
+        fallbacks: ["claude-sonnet-4-6", "claude-haiku-4-5-20251001"],
+        source: "default",
+      },
+    });
+    const parentRunWithModel = await runtime.startRun({
+      sessionId: parentSessionWithModel.id,
+      title: "Parent run with model",
+      metadata: {
+        modelSelection: {
+          primary: "claude-opus-4-7",
+          fallbacks: ["claude-sonnet-4-6", "claude-haiku-4-5-20251001"],
+          source: "default",
+        },
+      },
+    });
+
     const spawned = await runtime.spawnSubagent({
-      sessionId: session.id,
-      parentRunId: run.id,
+      sessionId: parentSessionWithModel.id,
+      parentRunId: parentRunWithModel.id,
       title: "Spawned child work",
       agentId: "worker",
       remoteSource: "gateway",
       metadata: { source: "spawn" },
     });
     expect(spawned.subagent).toMatchObject({
-      parentRunId: run.id,
-      sessionId: session.id,
+      parentRunId: parentRunWithModel.id,
+      sessionId: parentSessionWithModel.id,
       title: "Spawned child work",
       status: "running",
     });
@@ -358,13 +379,69 @@ describe("StandaloneOperatorRuntime", () => {
       title: "Spawned child work",
       agentId: "worker",
       remoteSource: "gateway",
+      parentSessionId: parentSessionWithModel.id,
+      modelSelection: {
+        primary: "claude-opus-4-7",
+        fallbacks: ["claude-sonnet-4-6", "claude-haiku-4-5-20251001"],
+        source: "inherited",
+      },
     });
     expect(spawned.childRun).toMatchObject({
       sessionId: spawned.childSession.id,
       parentRunId: spawned.subagent.runId,
       title: "Spawned child work",
       status: "running",
-      metadata: { source: "spawn" },
+      metadata: {
+        source: "spawn",
+        modelSelection: {
+          primary: "claude-opus-4-7",
+          fallbacks: ["claude-sonnet-4-6", "claude-haiku-4-5-20251001"],
+          source: "inherited",
+        },
+      },
+    });
+
+    const overridden = await runtime.spawnSubagent({
+      sessionId: parentSessionWithModel.id,
+      parentRunId: parentRunWithModel.id,
+      title: "Override child work",
+      modelPrimary: "claude-sonnet-4-6",
+    });
+    expect(overridden.childSession.metadata).toMatchObject({
+      parentSessionId: parentSessionWithModel.id,
+      modelSelection: {
+        primary: "claude-sonnet-4-6",
+        fallbacks: ["claude-sonnet-4-6", "claude-haiku-4-5-20251001"],
+        source: "override",
+      },
+    });
+    expect(overridden.childRun.metadata).toMatchObject({
+      modelSelection: {
+        primary: "claude-sonnet-4-6",
+        fallbacks: ["claude-sonnet-4-6", "claude-haiku-4-5-20251001"],
+        source: "override",
+      },
+    });
+
+    const clearedFallbacks = await runtime.spawnSubagent({
+      sessionId: parentSessionWithModel.id,
+      parentRunId: parentRunWithModel.id,
+      title: "Clear fallback child work",
+      modelFallbacks: [],
+    });
+    expect(clearedFallbacks.childSession.metadata).toMatchObject({
+      modelSelection: {
+        primary: "claude-opus-4-7",
+        fallbacks: [],
+        source: "override",
+      },
+    });
+    expect(clearedFallbacks.childRun.metadata).toMatchObject({
+      modelSelection: {
+        primary: "claude-opus-4-7",
+        fallbacks: [],
+        source: "override",
+      },
     });
   });
 

@@ -228,6 +228,8 @@ Cron jobs now dispatch into real operator runtime artifacts instead of completin
 Current cron behavior in this tranche:
 - each due cron fire creates a fresh session and runtime run
 - cron runs record linked `sessionId` and `operatorRunId`
+- cron jobs can now optionally declare model primary/fallback metadata
+- cron-dispatched sessions, top-level operator runs, and persisted cron runs now carry the resolved model-selection context they used
 - successful cron fires record a real transcript turn and complete the linked session/run
 - failed cron fires persist `lastStatus` / `lastError` on the job and fail the linked session/run
 - stale `scheduled` / `running` cron runs are recovered as interrupted failures on the next tick
@@ -247,6 +249,17 @@ Current CLI visibility for this tranche:
 - `/cron runs [jobId]` and `/cron tick` show linked session/run ids plus terminal outcome and delivery details
 
 This is still a narrow outbound-only pass. Cron expression handling remains placeholder, and operator still does not have interactive channel/gateway runtime parity.
+
+## Subagent model inheritance
+
+Operator now also preserves model-selection context when runtime work branches into child sessions.
+
+Current subagent model behavior in this tranche:
+- `spawnSubagent()` now inherits model-selection context from the parent run first, then the parent session when no explicit child override is provided
+- child sessions and child runs persist the resolved model primary/fallback selection as metadata for later inspection and future routing work
+- explicit child overrides can replace the primary model while still inheriting fallbacks when unspecified
+- explicit empty fallback lists are preserved as a real override instead of being silently re-inherited
+- this remains metadata-only in this tranche; provider routing, retry/fallback execution, and a user-facing `/model` surface remain out of scope
 
 ## Current gaps to parity
 

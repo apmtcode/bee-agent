@@ -63,6 +63,62 @@ describe("OperatorCronService", () => {
     await expect(service.listJobs()).resolves.toEqual([]);
   });
 
+  it("persists cron model selection across jobs, runs, sessions, and operator runs", async () => {
+    const rootDir = await makeTempDir();
+    const runtime = new StandaloneOperatorRuntime({ rootDir });
+    const service = new OperatorCronService(rootDir, { runtime });
+    const job = await service.createJob({
+      cron: "* * * * *",
+      prompt: "route this cron",
+      modelSelection: {
+        primary: "claude-opus-4-7",
+        fallbacks: ["claude-sonnet-4-6", "claude-haiku-4-5-20251001"],
+      },
+    });
+
+    const [run] = await service.tick(new Date(Date.now() + 120_000));
+    expect(run).toMatchObject({
+      status: "completed",
+      outcome: "success",
+      modelSelection: {
+        primary: "claude-opus-4-7",
+        fallbacks: ["claude-sonnet-4-6", "claude-haiku-4-5-20251001"],
+        source: "job",
+      },
+    });
+
+    const session = await runtime.getSession(run?.sessionId ?? "missing");
+    expect(session).toMatchObject({
+      metadata: {
+        modelSelection: {
+          primary: "claude-opus-4-7",
+          fallbacks: ["claude-sonnet-4-6", "claude-haiku-4-5-20251001"],
+          source: "job",
+        },
+      },
+    });
+
+    const operatorRun = await runtime.getRun(run?.operatorRunId ?? "missing");
+    expect(operatorRun).toMatchObject({
+      metadata: {
+        trigger: "cron",
+        modelSelection: {
+          primary: "claude-opus-4-7",
+          fallbacks: ["claude-sonnet-4-6", "claude-haiku-4-5-20251001"],
+          source: "job",
+        },
+      },
+    });
+
+    const storedJob = await service.store.getJob(job.id);
+    expect(storedJob).toMatchObject({
+      modelSelection: {
+        primary: "claude-opus-4-7",
+        fallbacks: ["claude-sonnet-4-6", "claude-haiku-4-5-20251001"],
+      },
+    });
+  });
+
   it("persists failed cron outcomes and recovers interrupted runs", async () => {
     const rootDir = await makeTempDir();
     const runtime = new StandaloneOperatorRuntime({ rootDir });

@@ -70,6 +70,8 @@ export {
   type TranscriptRecord,
 } from "./harness/transcript-store.js";
 export type {
+  OperatorModelSelectionSource,
+  OperatorResolvedModelSelection,
   SessionMetadata,
   SessionRecord,
   SessionStatus,
@@ -103,6 +105,7 @@ export {
 export {
   FileCronStore,
   type CronJob,
+  type CronJobModelSelection,
   type CronRun,
   type CronStoreShape,
 } from "./control-plane/cron-store.js";

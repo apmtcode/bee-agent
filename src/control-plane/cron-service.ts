@@ -1,4 +1,5 @@
 import path from "node:path";
+import type { OperatorResolvedModelSelection } from "../harness/types.js";
 import {
   OperatorDeliveryService,
   summarizeDeliveryResults,
@@ -77,6 +78,7 @@ export class OperatorCronService {
     recurring?: boolean;
     durable?: boolean;
     delivery?: CronJob["delivery"];
+    modelSelection?: CronJob["modelSelection"];
   }): Promise<CronJob> {
     return await this.store.createJob({
       ...params,
@@ -101,6 +103,24 @@ export class OperatorCronService {
 
   async listRuns(jobId?: string): Promise<CronRun[]> {
     return await this.store.listRuns(jobId);
+  }
+
+  private resolveCronModelSelection(job: CronJob): OperatorResolvedModelSelection | undefined {
+    if (!job.modelSelection) {
+      return undefined;
+    }
+    const primary = typeof job.modelSelection.primary === "string" ? job.modelSelection.primary : undefined;
+    const fallbacks = Array.isArray(job.modelSelection.fallbacks)
+      ? job.modelSelection.fallbacks.filter((item): item is string => typeof item === "string")
+      : undefined;
+    if (!primary && !fallbacks) {
+      return undefined;
+    }
+    return {
+      ...(primary ? { primary } : {}),
+      ...(fallbacks ? { fallbacks } : {}),
+      source: "job",
+    };
   }
 
   private buildDeliveryPayload(job: CronJob, run: CronRun): CronTerminalDeliveryPayload {
@@ -189,10 +209,12 @@ export class OperatorCronService {
 
   private async dispatchJob(job: CronJob, now: Date): Promise<CronRun> {
     const scheduledAt = now.toISOString();
+    const modelSelection = this.resolveCronModelSelection(job);
     const scheduled = await this.store.addRun({
       jobId: job.id,
       status: "scheduled",
       scheduledFor: scheduledAt,
+      ...(modelSelection ? { modelSelection } : {}),
     });
     await this.store.updateJob(job.id, {
       lastRunAt: scheduledAt,
@@ -206,6 +228,7 @@ export class OperatorCronService {
         finishedAt: nowIso(),
         outcome: "success",
         summary: buildCronSummary(`Cron executed prompt: ${job.prompt}`),
+        ...(modelSelection ? { modelSelection } : {}),
       });
       await this.updateJobOutcome(job.id, { lastStatus: "success", lastError: null });
       if (!completed) {
@@ -221,6 +244,7 @@ export class OperatorCronService {
     const session = await this.runtime.startSession({
       title: buildCronSessionTitle(job.prompt),
       agentId: "operator-cron",
+      ...(modelSelection ? { modelSelection } : {}),
     });
     const operatorRun = await this.runtime.startRun({
       sessionId: session.id,
@@ -229,6 +253,7 @@ export class OperatorCronService {
         trigger: "cron",
         cronJobId: job.id,
         cronRunId: scheduled.id,
+        ...(modelSelection ? { modelSelection } : {}),
       },
     });
     const running = await this.store.updateRun(scheduled.id, {
@@ -236,6 +261,7 @@ export class OperatorCronService {
       sessionId: session.id,
       operatorRunId: operatorRun.id,
       startedAt: nowIso(),
+      ...(modelSelection ? { modelSelection } : {}),
     });
     if (!running) {
       throw new Error(`Unable to start cron run: ${scheduled.id}`);
@@ -253,6 +279,7 @@ export class OperatorCronService {
         cronJobId: job.id,
         cronRunId: scheduled.id,
         trigger: "cron",
+        ...(modelSelection ? { modelSelection } : {}),
       });
       await this.runtime.completeSession(session.id);
       const completed = await this.store.updateRun(scheduled.id, {
@@ -264,6 +291,7 @@ export class OperatorCronService {
         outcome: "success",
         error: null,
         summary: buildCronSummary(dispatched.summary ?? dispatched.assistantText),
+        ...(modelSelection ? { modelSelection } : {}),
       });
       await this.updateJobOutcome(job.id, { lastStatus: "success", lastError: null });
       if (!completed) {
@@ -281,6 +309,7 @@ export class OperatorCronService {
         cronRunId: scheduled.id,
         trigger: "cron",
         error: message,
+        ...(modelSelection ? { modelSelection } : {}),
       });
       await this.runtime.failSession(session.id);
       const transcriptSession = await this.runtime.getSession(session.id);
@@ -301,6 +330,7 @@ export class OperatorCronService {
         outcome: "error",
         error: message,
         summary: null,
+        ...(modelSelection ? { modelSelection } : {}),
       });
       await this.updateJobOutcome(job.id, { lastStatus: "error", lastError: message });
       if (!failed) {

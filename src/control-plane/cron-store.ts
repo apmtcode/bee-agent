@@ -1,10 +1,16 @@
 import { randomUUID } from "node:crypto";
+import type { OperatorResolvedModelSelection } from "../harness/types.js";
 import type { CronDeliveryConfig, DeliveryAttemptResult, DeliverySummaryStatus } from "./delivery.js";
 import { readJsonFile, writeJsonAtomic } from "../shared/fs.js";
 
 export type CronJobLastStatus = "success" | "error" | "interrupted";
 export type CronRunStatus = "scheduled" | "running" | "completed" | "failed";
 export type CronRunOutcome = "success" | "error" | "interrupted";
+
+export type CronJobModelSelection = {
+  primary?: string;
+  fallbacks?: string[];
+};
 
 export type CronJob = {
   id: string;
@@ -14,6 +20,7 @@ export type CronJob = {
   durable: boolean;
   createdAt: string;
   delivery?: CronDeliveryConfig;
+  modelSelection?: CronJobModelSelection;
   lastRunAt?: string;
   nextRunAt?: string;
   lastStatus?: CronJobLastStatus;
@@ -36,6 +43,7 @@ export type CronRun = {
   outcome?: CronRunOutcome;
   error?: string;
   summary?: string;
+  modelSelection?: OperatorResolvedModelSelection;
   deliveryResults?: DeliveryAttemptResult[];
 };
 
@@ -87,6 +95,7 @@ export class FileCronStore {
     durable?: boolean;
     nextRunAt?: string;
     delivery?: CronDeliveryConfig;
+    modelSelection?: CronJobModelSelection;
   }): Promise<CronJob> {
     const store = await this.load();
     const job: CronJob = {
@@ -98,6 +107,7 @@ export class FileCronStore {
       createdAt: nowIso(),
       ...(params.nextRunAt ? { nextRunAt: params.nextRunAt } : {}),
       ...(params.delivery ? { delivery: params.delivery } : {}),
+      ...(params.modelSelection ? { modelSelection: params.modelSelection } : {}),
     };
     store.jobs.push(job);
     await this.save(store);
@@ -178,6 +188,7 @@ export class FileCronStore {
     outcome?: CronRunOutcome;
     error?: string;
     summary?: string;
+    modelSelection?: OperatorResolvedModelSelection;
     deliveryResults?: DeliveryAttemptResult[];
   }): Promise<CronRun> {
     const store = await this.load();
@@ -194,6 +205,7 @@ export class FileCronStore {
       ...(params.outcome ? { outcome: params.outcome } : {}),
       ...(params.error ? { error: params.error } : {}),
       ...(params.summary ? { summary: params.summary } : {}),
+      ...(params.modelSelection ? { modelSelection: params.modelSelection } : {}),
       ...(params.deliveryResults ? { deliveryResults: params.deliveryResults } : {}),
     };
     store.runs.push(run);
@@ -218,6 +230,7 @@ export class FileCronStore {
       outcome?: CronRunOutcome;
       error?: string | null;
       summary?: string | null;
+      modelSelection?: OperatorResolvedModelSelection | null;
       deliveryResults?: DeliveryAttemptResult[] | null;
     },
   ): Promise<CronRun | undefined> {
@@ -248,6 +261,13 @@ export class FileCronStore {
         updated.summary = params.summary;
       } else {
         delete updated.summary;
+      }
+    }
+    if (hasOwn(params, "modelSelection")) {
+      if (params.modelSelection) {
+        updated.modelSelection = params.modelSelection;
+      } else {
+        delete updated.modelSelection;
       }
     }
     if (hasOwn(params, "deliveryResults")) {

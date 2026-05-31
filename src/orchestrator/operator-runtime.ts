@@ -63,7 +63,7 @@ import type {
   SkillCandidate,
   SkillCandidateStatus,
 } from "../memory/types.js";
-import type { SessionRecord } from "../harness/types.js";
+import type { OperatorResolvedModelSelection, SessionRecord } from "../harness/types.js";
 import type { ReviewedExportManifest, TrainingMode } from "../training/export-manifest.js";
 import type { LocalTrainingJobManifest, LocalTrainingJobStatus } from "../training/job-manifest.js";
 import type { TrainingExecutionState } from "../training/execution-service.js";
@@ -87,6 +87,8 @@ export type StartSessionParams = {
   agentId?: string;
   remoteId?: string;
   remoteSource?: string;
+  parentSessionId?: string;
+  modelSelection?: OperatorResolvedModelSelection;
 };
 
 export type CommandExecutionPolicyResult = {
@@ -136,6 +138,8 @@ export type SpawnSubagentParams = {
   cwd?: string;
   remoteId?: string;
   remoteSource?: string;
+  modelPrimary?: string;
+  modelFallbacks?: string[];
   metadata?: Record<string, unknown>;
 };
 
@@ -316,6 +320,8 @@ export class StandaloneOperatorRuntime {
         ...(params.agentId ? { agentId: params.agentId } : {}),
         ...(params.remoteId ? { remoteId: params.remoteId } : {}),
         ...(params.remoteSource ? { remoteSource: params.remoteSource } : {}),
+        ...(params.parentSessionId ? { parentSessionId: params.parentSessionId } : {}),
+        ...(params.modelSelection ? { modelSelection: params.modelSelection } : {}),
       },
     });
     this.events.publish({ type: "session.started", payload: session, ts: Date.now() });
@@ -474,25 +480,29 @@ export class StandaloneOperatorRuntime {
   }
 
   async spawnSubagent(params: SpawnSubagentParams): Promise<SpawnSubagentResult> {
+    const modelSelection = await this.resolveSubagentModelSelection(params);
+    const metadata = mergeModelSelectionMetadata(params.metadata, modelSelection);
     const childSession = await this.startSession({
       title: params.title,
       ...(params.cwd ? { cwd: params.cwd } : {}),
       ...(params.agentId ? { agentId: params.agentId } : {}),
       ...(params.remoteId ? { remoteId: params.remoteId } : {}),
       ...(params.remoteSource ? { remoteSource: params.remoteSource } : {}),
+      parentSessionId: params.sessionId,
+      ...(modelSelection ? { modelSelection } : {}),
     });
     const subagent = await this.registerSubagent({
       sessionId: params.sessionId,
       parentRunId: params.parentRunId,
       childSessionId: childSession.id,
       title: params.title,
-      metadata: params.metadata,
+      metadata,
     });
     const childRun = await this.startRun({
       sessionId: childSession.id,
       parentRunId: subagent.runId,
       title: params.title,
-      metadata: params.metadata,
+      metadata,
     });
     const runningSubagent = await this.updateSubagentStatus(subagent.runId, "running");
     if (!runningSubagent) {
@@ -1145,6 +1155,37 @@ export class StandaloneOperatorRuntime {
     return await this.replays.listSessionReplays();
   }
 
+  private async resolveSubagentModelSelection(
+    params: SpawnSubagentParams,
+  ): Promise<OperatorResolvedModelSelection | undefined> {
+    const parentRun = await this.getRun(params.parentRunId);
+    const parentSession = await this.getSession(params.sessionId);
+    const parentSelection = getModelSelectionFromMetadata(parentRun?.metadata) ?? parentSession?.metadata.modelSelection;
+    const hasModelPrimary = hasOwn(params, "modelPrimary");
+    const hasModelFallbacks = hasOwn(params, "modelFallbacks");
+    if (hasModelPrimary || hasModelFallbacks) {
+      const primary = hasModelPrimary ? params.modelPrimary : parentSelection?.primary;
+      const fallbacks = hasModelFallbacks ? params.modelFallbacks : parentSelection?.fallbacks;
+      return {
+        ...(typeof primary === "string" ? { primary } : {}),
+        ...(hasModelFallbacks
+          ? { fallbacks: Array.isArray(fallbacks) ? [...fallbacks] : [] }
+          : Array.isArray(fallbacks)
+            ? { fallbacks: [...fallbacks] }
+            : {}),
+        source: "override",
+      };
+    }
+    if (!parentSelection) {
+      return undefined;
+    }
+    return {
+      ...(parentSelection.primary ? { primary: parentSelection.primary } : {}),
+      ...(Array.isArray(parentSelection.fallbacks) ? { fallbacks: [...parentSelection.fallbacks] } : {}),
+      source: "inherited",
+    };
+  }
+
   private async buildSkillReplayPreview(sourceTrajectoryIds: string[]) {
     const previews = await Promise.all(
       sourceTrajectoryIds.map(async (trajectoryId) => {
@@ -1230,6 +1271,48 @@ export class StandaloneOperatorRuntime {
     }
     return { output: "" };
   }
+}
+
+function hasOwn<T extends object, K extends PropertyKey>(value: T, key: K): boolean {
+  return Object.prototype.hasOwnProperty.call(value, key);
+}
+
+function getModelSelectionFromMetadata(metadata?: Record<string, unknown>): OperatorResolvedModelSelection | undefined {
+  const value = metadata?.modelSelection;
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  const candidate = value as Record<string, unknown>;
+  if (
+    candidate.source !== "job"
+    && candidate.source !== "inherited"
+    && candidate.source !== "override"
+    && candidate.source !== "default"
+  ) {
+    return undefined;
+  }
+  const primary = typeof candidate.primary === "string" ? candidate.primary : undefined;
+  const fallbacks = Array.isArray(candidate.fallbacks)
+    ? candidate.fallbacks.filter((item): item is string => typeof item === "string")
+    : undefined;
+  return {
+    ...(primary ? { primary } : {}),
+    ...(fallbacks ? { fallbacks } : {}),
+    source: candidate.source,
+  };
+}
+
+function mergeModelSelectionMetadata(
+  metadata: Record<string, unknown> | undefined,
+  modelSelection: OperatorResolvedModelSelection | undefined,
+): Record<string, unknown> | undefined {
+  if (!modelSelection) {
+    return metadata;
+  }
+  return {
+    ...(metadata ?? {}),
+    modelSelection,
+  };
 }
 
 function formatHookResult(result: OperatorHookResult): string {

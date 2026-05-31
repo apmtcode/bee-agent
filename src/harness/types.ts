@@ -1,5 +1,13 @@
 export type SessionStatus = "active" | "idle" | "completed" | "failed";
 
+export type OperatorModelSelectionSource = "job" | "inherited" | "override" | "default";
+
+export type OperatorResolvedModelSelection = {
+  primary?: string;
+  fallbacks?: string[];
+  source: OperatorModelSelectionSource;
+};
+
 export type SessionMetadata = {
   cwd?: string;
   title?: string;
@@ -8,6 +16,7 @@ export type SessionMetadata = {
   remoteSource?: string;
   parentSessionId?: string;
   tags?: string[];
+  modelSelection?: OperatorResolvedModelSelection;
 };
 
 export type SessionRecord = {
