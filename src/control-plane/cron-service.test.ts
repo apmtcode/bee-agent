@@ -63,10 +63,17 @@ describe("OperatorCronService", () => {
     await expect(service.listJobs()).resolves.toEqual([]);
   });
 
-  it("persists cron model selection across jobs, runs, sessions, and operator runs", async () => {
+  it("persists explicit cron model selection overrides across jobs, runs, sessions, and operator runs", async () => {
     const rootDir = await makeTempDir();
     const runtime = new StandaloneOperatorRuntime({ rootDir });
-    const service = new OperatorCronService(rootDir, { runtime });
+    const service = new OperatorCronService(rootDir, {
+      runtime,
+      modelSelection: {
+        primary: "claude-haiku-4-5-20251001",
+        fallbacks: ["claude-sonnet-4-6"],
+        source: "default",
+      },
+    });
     const job = await service.createJob({
       cron: "* * * * *",
       prompt: "route this cron",
@@ -115,6 +122,139 @@ describe("OperatorCronService", () => {
       modelSelection: {
         primary: "claude-opus-4-7",
         fallbacks: ["claude-sonnet-4-6", "claude-haiku-4-5-20251001"],
+      },
+    });
+  });
+
+  it("inherits base cron model selection when the job has no override", async () => {
+    const rootDir = await makeTempDir();
+    const runtime = new StandaloneOperatorRuntime({ rootDir });
+    const service = new OperatorCronService(rootDir, {
+      runtime,
+      modelSelection: {
+        primary: "claude-opus-4-7",
+        fallbacks: ["claude-sonnet-4-6", "claude-haiku-4-5-20251001"],
+        source: "default",
+      },
+    });
+    await service.createJob({
+      cron: "* * * * *",
+      prompt: "inherit this cron",
+    });
+
+    const [run] = await service.tick(new Date(Date.now() + 120_000));
+    expect(run).toMatchObject({
+      modelSelection: {
+        primary: "claude-opus-4-7",
+        fallbacks: ["claude-sonnet-4-6", "claude-haiku-4-5-20251001"],
+        source: "default",
+      },
+    });
+    await expect(runtime.getSession(run?.sessionId ?? "missing")).resolves.toMatchObject({
+      metadata: {
+        modelSelection: {
+          primary: "claude-opus-4-7",
+          fallbacks: ["claude-sonnet-4-6", "claude-haiku-4-5-20251001"],
+          source: "default",
+        },
+      },
+    });
+    await expect(runtime.getRun(run?.operatorRunId ?? "missing")).resolves.toMatchObject({
+      metadata: {
+        modelSelection: {
+          primary: "claude-opus-4-7",
+          fallbacks: ["claude-sonnet-4-6", "claude-haiku-4-5-20251001"],
+          source: "default",
+        },
+      },
+    });
+  });
+
+  it("preserves fallback-only cron overrides and explicit empty fallback overrides", async () => {
+    const rootDir = await makeTempDir();
+    const runtime = new StandaloneOperatorRuntime({ rootDir });
+    const service = new OperatorCronService(rootDir, {
+      runtime,
+      modelSelection: {
+        primary: "claude-opus-4-7",
+        fallbacks: ["claude-sonnet-4-6", "claude-haiku-4-5-20251001"],
+        source: "default",
+      },
+    });
+    const overrideJob = await service.createJob({
+      cron: "* * * * *",
+      prompt: "override fallbacks",
+      modelSelection: {
+        fallbacks: ["claude-haiku-4-5-20251001"],
+      },
+    });
+    const clearJob = await service.createJob({
+      cron: "* * * * *",
+      prompt: "clear fallbacks",
+      modelSelection: {
+        fallbacks: [],
+      },
+    });
+
+    const runs = await service.tick(new Date(Date.now() + 120_000));
+    const overrideRun = runs.find((run) => run.jobId === overrideJob.id);
+    const clearRun = runs.find((run) => run.jobId === clearJob.id);
+
+    expect(overrideRun).toMatchObject({
+      modelSelection: {
+        primary: "claude-opus-4-7",
+        fallbacks: ["claude-haiku-4-5-20251001"],
+        source: "job",
+      },
+    });
+    await expect(runtime.getSession(overrideRun?.sessionId ?? "missing")).resolves.toMatchObject({
+      metadata: {
+        modelSelection: {
+          primary: "claude-opus-4-7",
+          fallbacks: ["claude-haiku-4-5-20251001"],
+          source: "job",
+        },
+      },
+    });
+    await expect(runtime.getRun(overrideRun?.operatorRunId ?? "missing")).resolves.toMatchObject({
+      metadata: {
+        modelSelection: {
+          primary: "claude-opus-4-7",
+          fallbacks: ["claude-haiku-4-5-20251001"],
+          source: "job",
+        },
+      },
+    });
+
+    expect(clearRun).toMatchObject({
+      modelSelection: {
+        primary: "claude-opus-4-7",
+        fallbacks: [],
+        source: "job",
+      },
+    });
+    await expect(runtime.getSession(clearRun?.sessionId ?? "missing")).resolves.toMatchObject({
+      metadata: {
+        modelSelection: {
+          primary: "claude-opus-4-7",
+          fallbacks: [],
+          source: "job",
+        },
+      },
+    });
+    await expect(runtime.getRun(clearRun?.operatorRunId ?? "missing")).resolves.toMatchObject({
+      metadata: {
+        modelSelection: {
+          primary: "claude-opus-4-7",
+          fallbacks: [],
+          source: "job",
+        },
+      },
+    });
+
+    await expect(service.store.getJob(clearJob.id)).resolves.toMatchObject({
+      modelSelection: {
+        fallbacks: [],
       },
     });
   });

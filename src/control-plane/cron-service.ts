@@ -10,6 +10,10 @@ import { FileCronStore, type CronJob, type CronJobLastStatus, type CronRun } fro
 import { JsonlTranscriptStore } from "../harness/transcript-store.js";
 import type { StandaloneOperatorOptions, StandaloneOperatorRuntime } from "../orchestrator/operator-runtime.js";
 
+function hasOwn<T extends object, K extends PropertyKey>(value: T, key: K): boolean {
+  return Object.prototype.hasOwnProperty.call(value, key);
+}
+
 function nowIso(): string {
   return new Date().toISOString();
 }
@@ -42,6 +46,40 @@ async function defaultCronDispatcher(job: CronJob): Promise<{ assistantText: str
   return { assistantText, summary: buildCronSummary(assistantText) };
 }
 
+function buildResolvedModelSelection(params: {
+  primary?: string;
+  fallbacks?: string[];
+  source: OperatorResolvedModelSelection["source"];
+  preserveEmptyFallbacks?: boolean;
+}): OperatorResolvedModelSelection | undefined {
+  const primary = typeof params.primary === "string" && params.primary.trim().length > 0 ? params.primary : undefined;
+  const fallbacks = Array.isArray(params.fallbacks) ? [...params.fallbacks] : undefined;
+  if (!primary && !params.preserveEmptyFallbacks && !fallbacks) {
+    return undefined;
+  }
+  return {
+    ...(primary ? { primary } : {}),
+    ...(params.preserveEmptyFallbacks ? { fallbacks: fallbacks ?? [] } : fallbacks ? { fallbacks } : {}),
+    source: params.source,
+  };
+}
+
+function cloneResolvedModelSelection(
+  selection: OperatorResolvedModelSelection | undefined,
+): OperatorResolvedModelSelection | undefined {
+  if (!selection) {
+    return undefined;
+  }
+  return buildResolvedModelSelection({
+    primary: typeof selection.primary === "string" ? selection.primary : undefined,
+    fallbacks: Array.isArray(selection.fallbacks)
+      ? selection.fallbacks.filter((item): item is string => typeof item === "string")
+      : undefined,
+    source: selection.source,
+    preserveEmptyFallbacks: Array.isArray(selection.fallbacks),
+  });
+}
+
 export type OperatorCronDispatcher = (job: CronJob, context: { run: CronRun; runtime: StandaloneOperatorRuntime }) => Promise<{
   assistantText: string;
   summary?: string;
@@ -52,6 +90,7 @@ export class OperatorCronService {
   private readonly runtime?: StandaloneOperatorRuntime;
   private readonly dispatchCronJob: OperatorCronDispatcher;
   private readonly delivery: OperatorDeliveryService;
+  private readonly baseModelSelection?: OperatorResolvedModelSelection;
 
   constructor(
     rootDirOrOptions: string | StandaloneOperatorOptions,
@@ -59,6 +98,7 @@ export class OperatorCronService {
       runtime?: StandaloneOperatorRuntime;
       dispatchCronJob?: OperatorCronDispatcher;
       delivery?: OperatorDeliveryService;
+      modelSelection?: OperatorResolvedModelSelection;
     } = {},
   ) {
     const rootDir = typeof rootDirOrOptions === "string" ? rootDirOrOptions : rootDirOrOptions.rootDir;
@@ -66,6 +106,7 @@ export class OperatorCronService {
     this.runtime = options.runtime;
     this.dispatchCronJob = options.dispatchCronJob ?? defaultCronDispatcher;
     this.delivery = options.delivery ?? new OperatorDeliveryService(rootDir);
+    this.baseModelSelection = cloneResolvedModelSelection(options.modelSelection);
   }
 
   async listJobs(): Promise<CronJob[]> {
@@ -106,21 +147,31 @@ export class OperatorCronService {
   }
 
   private resolveCronModelSelection(job: CronJob): OperatorResolvedModelSelection | undefined {
+    const baseSelection = this.baseModelSelection;
     if (!job.modelSelection) {
-      return undefined;
+      return cloneResolvedModelSelection(baseSelection);
     }
-    const primary = typeof job.modelSelection.primary === "string" ? job.modelSelection.primary : undefined;
-    const fallbacks = Array.isArray(job.modelSelection.fallbacks)
-      ? job.modelSelection.fallbacks.filter((item): item is string => typeof item === "string")
-      : undefined;
-    if (!primary && !fallbacks) {
-      return undefined;
+    const hasPrimary = hasOwn(job.modelSelection, "primary");
+    const hasFallbacks = hasOwn(job.modelSelection, "fallbacks");
+    if (!hasPrimary && !hasFallbacks) {
+      return cloneResolvedModelSelection(baseSelection);
     }
-    return {
-      ...(primary ? { primary } : {}),
-      ...(fallbacks ? { fallbacks } : {}),
+    const primary = hasPrimary
+      ? typeof job.modelSelection.primary === "string"
+        ? job.modelSelection.primary
+        : undefined
+      : baseSelection?.primary;
+    const fallbacks = hasFallbacks
+      ? Array.isArray(job.modelSelection.fallbacks)
+        ? job.modelSelection.fallbacks.filter((item): item is string => typeof item === "string")
+        : []
+      : baseSelection?.fallbacks;
+    return buildResolvedModelSelection({
+      primary,
+      fallbacks,
       source: "job",
-    };
+      preserveEmptyFallbacks: hasFallbacks,
+    });
   }
 
   private buildDeliveryPayload(job: CronJob, run: CronRun): CronTerminalDeliveryPayload {

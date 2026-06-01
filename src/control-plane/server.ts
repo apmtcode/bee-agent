@@ -1001,6 +1001,7 @@ export class OperatorControlPlaneServer {
               recurring: getOptionalBoolean(request.params, "recurring") ?? true,
               durable: getOptionalBoolean(request.params, "durable") ?? false,
               delivery: getOptionalCronDeliveryConfig(request.params, "delivery"),
+              modelSelection: getOptionalCronModelSelection(request.params, "modelSelection"),
             }),
           );
         case "cron.delete": {
@@ -1826,6 +1827,47 @@ function getOptionalPluginCapability(
     return value;
   }
   throw new Error(`Invalid plugin capability: ${key}`);
+}
+
+function getOptionalCronModelSelection(
+  params: Record<string, unknown> | undefined,
+  key: string,
+): { primary?: string; fallbacks?: string[] } | undefined {
+  const value = params?.[key];
+  if (value == null) {
+    return undefined;
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`Invalid cron model selection: ${key}`);
+  }
+  const candidate = value as Record<string, unknown>;
+  const hasPrimary = Object.prototype.hasOwnProperty.call(candidate, "primary");
+  const hasFallbacks = Object.prototype.hasOwnProperty.call(candidate, "fallbacks");
+  if (!hasPrimary && !hasFallbacks) {
+    return undefined;
+  }
+  const primary = typeof candidate.primary === "string" && candidate.primary.trim().length > 0
+    ? candidate.primary
+    : undefined;
+  let fallbacks: string[] | undefined;
+  if (hasFallbacks) {
+    if (!Array.isArray(candidate.fallbacks)) {
+      throw new Error(`Invalid cron model selection fallbacks: ${key}.fallbacks`);
+    }
+    fallbacks = candidate.fallbacks.map((item, index) => {
+      if (typeof item !== "string") {
+        throw new Error(`Invalid cron model selection fallback: ${key}.fallbacks[${index}]`);
+      }
+      return item;
+    });
+  }
+  if (!primary && !hasFallbacks) {
+    return undefined;
+  }
+  return {
+    ...(primary ? { primary } : {}),
+    ...(hasFallbacks ? { fallbacks } : {}),
+  };
 }
 
 function getOptionalCronDeliveryConfig(

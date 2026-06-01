@@ -1458,6 +1458,10 @@ describe("OperatorControlPlaneServer", () => {
           onSuccess: [{ kind: "local" }],
           onFailure: [{ kind: "webhook", url: "https://example.test/hook" }],
         },
+        modelSelection: {
+          primary: "claude-opus-4-7",
+          fallbacks: ["claude-sonnet-4-6"],
+        },
       },
     });
     expect(created).toMatchObject({
@@ -1469,13 +1473,24 @@ describe("OperatorControlPlaneServer", () => {
           onSuccess: [{ kind: "local" }],
           onFailure: [{ kind: "webhook", url: "https://example.test/hook" }],
         },
+        modelSelection: {
+          primary: "claude-opus-4-7",
+          fallbacks: ["claude-sonnet-4-6"],
+        },
       },
     });
 
     const list = await server.handle({ method: "cron.list" });
     expect(list).toMatchObject({
       ok: true,
-      result: [{ prompt: "run cron", delivery: { onSuccess: [{ kind: "local" }], onFailure: [{ kind: "webhook", url: "https://example.test/hook" }] } }],
+      result: [{
+        prompt: "run cron",
+        delivery: { onSuccess: [{ kind: "local" }], onFailure: [{ kind: "webhook", url: "https://example.test/hook" }] },
+        modelSelection: {
+          primary: "claude-opus-4-7",
+          fallbacks: ["claude-sonnet-4-6"],
+        },
+      }],
     });
 
     const tick = await server.handle({ method: "cron.tick", params: { nowMs: Date.now() + 120_000 } });
@@ -1487,6 +1502,11 @@ describe("OperatorControlPlaneServer", () => {
           outcome: "success",
           sessionId: expect.any(String),
           operatorRunId: expect.any(String),
+          modelSelection: {
+            primary: "claude-opus-4-7",
+            fallbacks: ["claude-sonnet-4-6"],
+            source: "job",
+          },
           deliveryResults: [{ status: "sent", target: { kind: "local" } }],
         },
       ],
@@ -1501,6 +1521,11 @@ describe("OperatorControlPlaneServer", () => {
           outcome: "success",
           sessionId: expect.any(String),
           operatorRunId: expect.any(String),
+          modelSelection: {
+            primary: "claude-opus-4-7",
+            fallbacks: ["claude-sonnet-4-6"],
+            source: "job",
+          },
           deliveryResults: [{ status: "sent", target: { kind: "local" } }],
         },
       ],
