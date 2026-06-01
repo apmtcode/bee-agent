@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { resolveOperatorCliExecutionConfig } from "./config.js";
-import { runOperatorHooks } from "./execution-policy.js";
+import { runOperatorHooks, runOperatorPreToolUseHooks } from "./execution-policy.js";
 
 function buildEnvDumpCommand(): string {
   const script = [
@@ -65,5 +65,104 @@ describe("runOperatorHooks", () => {
         },
       },
     });
+  });
+});
+
+describe("runOperatorPreToolUseHooks", () => {
+  it("treats non-json stdout as a no-op", async () => {
+    const config = resolveOperatorCliExecutionConfig({
+      hooks: {
+        PreToolUse: ["printf 'plain output'"] ,
+      },
+    });
+
+    const result = await runOperatorPreToolUseHooks({
+      config,
+      action: {
+        kind: "background.start",
+        cwd: process.cwd(),
+        command: "printf ok",
+        source: "cli",
+      },
+    });
+
+    expect(result.outcome).toBe("allow");
+    expect(result.action.command).toBe("printf ok");
+    expect(result.results[0]?.parsed).toBeUndefined();
+  });
+
+  it("parses the last stdout line json and applies the last updated input", async () => {
+    const config = resolveOperatorCliExecutionConfig({
+      hooks: {
+        PreToolUse: [
+          "printf 'noise\\n{\"updatedInput\":{\"command\":\"printf first\",\"title\":\"First\"}}'",
+          "printf '{\"updatedInput\":{\"command\":\"printf second\",\"title\":\"Second\"}}'",
+        ],
+      },
+    });
+
+    const result = await runOperatorPreToolUseHooks({
+      config,
+      action: {
+        kind: "background.start",
+        cwd: process.cwd(),
+        command: "printf ok",
+        title: "Original",
+        source: "cli",
+      },
+    });
+
+    expect(result.outcome).toBe("allow");
+    expect(result.action.command).toBe("printf second");
+    expect(result.action.title).toBe("Second");
+  });
+
+  it("gives deny precedence over request-approval", async () => {
+    const config = resolveOperatorCliExecutionConfig({
+      hooks: {
+        PreToolUse: [
+          "printf '{\"permissionDecision\":\"request-approval\",\"permissionDecisionReason\":\"needs review\"}'",
+          "printf '{\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"blocked\"}'",
+        ],
+      },
+    });
+
+    const result = await runOperatorPreToolUseHooks({
+      config,
+      action: {
+        kind: "background.start",
+        cwd: process.cwd(),
+        command: "printf ok",
+        source: "cli",
+      },
+    });
+
+    expect(result.outcome).toBe("deny");
+    expect(result.reason).toBe("blocked");
+  });
+
+  it("preserves request-approval when no deny is present", async () => {
+    const config = resolveOperatorCliExecutionConfig({
+      hooks: {
+        PreToolUse: [
+          "printf '{\"permissionDecision\":\"allow\"}'",
+          "printf '{\"permissionDecision\":\"request-approval\",\"permissionDecisionReason\":\"needs review\",\"additionalContext\":\"explain why\"}'",
+        ],
+      },
+    });
+
+    const result = await runOperatorPreToolUseHooks({
+      config,
+      action: {
+        kind: "background.start",
+        cwd: process.cwd(),
+        command: "printf ok",
+        source: "cli",
+      },
+    });
+
+    expect(result.outcome).toBe("request-approval");
+    expect(result.reason).toBe("needs review");
+    expect(result.additionalContext).toBe("explain why");
   });
 });

@@ -185,9 +185,9 @@ Nested objects are deep-merged so project/local overrides can extend shared user
 
 The local CLI now interprets a narrow execution policy from merged settings:
 - `permissionMode`: `default`, `acceptEdits`, `bypassPermissions`, or `plan`
-- command hooks: `hooks.PreCommand` / `hooks.PostCommand`
+- command hooks: first-class `hooks.PreToolUse`, plus legacy `hooks.PreCommand`, and `hooks.PostCommand`
 - lifecycle hooks: `hooks.SessionStart`, `hooks.SessionEnd`, `hooks.ApprovalRequested`, and `hooks.ApprovalResolved`
-- `hooks.PreToolUse` / `hooks.PostToolUse` as aliases for local command actions
+- `hooks.PostToolUse` currently remains an alias to `hooks.PostCommand`
 
 Covered command execution in this tranche:
 - `/background start <title> -- <command>`
@@ -215,7 +215,7 @@ Command hooks also receive these command-specific environment variables:
 - `OPERATOR_COMMAND`
 - `OPERATOR_TITLE`
 
-This remains a narrow synchronous hook pass. Async hook protocols, matcher-targeted hooks, file or cwd watch hooks, tool-input mutation, permission-decision overrides, and broader Claude-style tool-surface parity remain out of scope in this tranche.
+This remains a narrow synchronous hook pass. `PreToolUse` can synchronously allow, deny, request approval, and minimally rewrite `command` / `title` for covered command-like execution. Async hook protocols, `PostToolUse` result mutation, failure hooks, matcher-targeted hooks, file or cwd watch hooks, and broader Claude-style tool-surface parity remain out of scope in this tranche.
 
 ## Prompt and instruction discovery
 

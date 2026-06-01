@@ -549,15 +549,15 @@ export class OperatorCliApp {
         }
         const task = await this.runtime.startBackgroundTask({
           sessionId: activeSessionId,
-          title: command.title,
-          command: command.command,
+          title: authorization.title ?? command.title,
+          command: authorization.command,
           cwd: this.cwd,
         });
         const postHookResults = await this.runtime.runPostCommandHooks({
           sessionId: activeSessionId,
           cwd: this.cwd,
-          command: command.command,
-          title: command.title,
+          command: authorization.command,
+          ...(authorization.title ? { title: authorization.title } : {}),
           kind: "background.start",
           source: "cli",
           executionConfig,
@@ -680,6 +680,7 @@ export class OperatorCliApp {
             : ["Loaded config files:", ...effectiveConfig.loadedEntries.map((entry) => `- ${entry.source}: ${entry.path}`)]),
           `permissionMode=${executionConfig.permissionMode}`,
           ...(executionConfig.invalidPermissionMode ? [`invalidPermissionMode=${executionConfig.invalidPermissionMode}`] : []),
+          `hooks.PreToolUse=${executionConfig.hooks.PreToolUse.length}`,
           `hooks.PreCommand=${executionConfig.hooks.PreCommand.length}`,
           `hooks.PostCommand=${executionConfig.hooks.PostCommand.length}`,
           `hooks.SessionStart=${executionConfig.hooks.SessionStart.length}`,

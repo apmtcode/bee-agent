@@ -609,8 +609,8 @@ async function renderBackgroundStart(params: {
   }
   const task = await params.runtime.startBackgroundTask({
     sessionId: params.sessionId,
-    title: params.title,
-    command: params.command,
+    title: authorization.title ?? params.title,
+    command: authorization.command,
     cwd: params.cwd,
   });
   publishProgress(params.runtime, {
@@ -623,8 +623,8 @@ async function renderBackgroundStart(params: {
   const postHookResults = await params.runtime.runPostCommandHooks({
     sessionId: params.sessionId,
     cwd: params.cwd,
-    command: params.command,
-    title: params.title,
+    command: authorization.command,
+    ...(authorization.title ? { title: authorization.title } : {}),
     kind: "background.start",
     source: "cli",
     executionConfig,
@@ -715,6 +715,7 @@ function renderConfig(config?: OperatorCliRuntimeConfig): string {
       ? ["Loaded config files:", ...config.loadedEntries.map((entry) => `- ${entry.source}: ${entry.path}`)]
       : ["Loaded config files: <none>"]),
     `permissionMode=${executionConfig.permissionMode}`,
+    `hooks.PreToolUse=${executionConfig.hooks.PreToolUse.length}`,
     `hooks.PreCommand=${executionConfig.hooks.PreCommand.length}`,
     `hooks.PostCommand=${executionConfig.hooks.PostCommand.length}`,
     `hooks.SessionStart=${executionConfig.hooks.SessionStart.length}`,

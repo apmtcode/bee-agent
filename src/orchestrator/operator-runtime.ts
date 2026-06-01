@@ -4,9 +4,11 @@ import { promisify } from "node:util";
 import { randomUUID } from "node:crypto";
 import type { OperatorCliExecutionConfig } from "../cli/config.js";
 import {
+  buildOperatorExecutionFingerprint,
   evaluateOperatorExecutionAction,
   runOperatorCommandHooks,
   runOperatorHooks,
+  runOperatorPreToolUseHooks,
   type OperatorHookResult,
 } from "../cli/execution-policy.js";
 import { FileApprovalStore } from "../control-plane/approval-store.js";
@@ -97,6 +99,8 @@ export type CommandExecutionPolicyResult = {
   allowed: boolean;
   pendingApprovalId?: string;
   message: string;
+  command: string;
+  title?: string;
   preHookResults: OperatorHookResult[];
   postHookResults: OperatorHookResult[];
 };
@@ -621,42 +625,87 @@ export class StandaloneOperatorRuntime {
       approvedFingerprints: params.approvedFingerprints,
     });
     if (decision.outcome === "deny") {
-      return { allowed: false, message: decision.reason, preHookResults: [], postHookResults: [] };
-    }
-    if (decision.outcome === "request-approval") {
-      const approval = await this.promptApproval({
-        sessionId: params.sessionId ?? "operator-cli",
-        title: "Approve local command execution",
-        summary: `${params.kind}: ${params.command}`,
-        scope: params.kind,
-        metadata: {
-          command: params.command,
-          cwd: params.cwd,
-          permissionMode: decision.permissionMode,
-          dangerousReasons: decision.dangerousReasons,
-          fingerprint: decision.fingerprint,
-        },
-      });
       return {
         allowed: false,
-        pendingApprovalId: approval.id,
-        message: `Approval required: ${approval.id}. Use /approve ${approval.id} or /deny ${approval.id} and rerun the command.`,
+        message: decision.reason,
+        command: action.command,
+        ...(action.title ? { title: action.title } : {}),
         preHookResults: [],
         postHookResults: [],
       };
     }
+
+    let effectiveAction = action;
+    let preHookResults: OperatorHookResult[] = [];
+
     try {
-      const preHookResults = await runOperatorCommandHooks({
+      const preToolUse = await runOperatorPreToolUseHooks({
         config: params.executionConfig,
-        event: "PreCommand",
         action,
       });
-      return { allowed: true, message: decision.reason, preHookResults, postHookResults: [] };
+      effectiveAction = preToolUse.action;
+      preHookResults = [...preToolUse.results];
+      if (preToolUse.outcome === "deny") {
+        return {
+          allowed: false,
+          message: preToolUse.reason ?? "PreToolUse hook denied execution.",
+          command: effectiveAction.command,
+          ...(effectiveAction.title ? { title: effectiveAction.title } : {}),
+          preHookResults,
+          postHookResults: [],
+        };
+      }
+
+      const requiresApproval = decision.outcome === "request-approval" || preToolUse.outcome === "request-approval";
+      if (requiresApproval) {
+        const fingerprint = buildOperatorExecutionFingerprint(effectiveAction);
+        const approval = await this.promptApproval({
+          sessionId: params.sessionId ?? "operator-cli",
+          title: "Approve local command execution",
+          summary: `${params.kind}: ${effectiveAction.command}`,
+          scope: params.kind,
+          metadata: {
+            command: effectiveAction.command,
+            ...(effectiveAction.title ? { title: effectiveAction.title } : {}),
+            cwd: effectiveAction.cwd,
+            permissionMode: decision.permissionMode,
+            dangerousReasons: decision.dangerousReasons,
+            fingerprint,
+            reason: preToolUse.reason ?? decision.reason,
+          },
+        });
+        return {
+          allowed: false,
+          pendingApprovalId: approval.id,
+          message: `Approval required: ${approval.id}. Use /approve ${approval.id} or /deny ${approval.id} and rerun the command.`,
+          command: effectiveAction.command,
+          ...(effectiveAction.title ? { title: effectiveAction.title } : {}),
+          preHookResults,
+          postHookResults: [],
+        };
+      }
+
+      const preCommandResults = await runOperatorCommandHooks({
+        config: params.executionConfig,
+        event: "PreCommand",
+        action: effectiveAction,
+      });
+      preHookResults = [...preHookResults, ...preCommandResults];
+      return {
+        allowed: true,
+        message: preToolUse.additionalContext ?? preToolUse.reason ?? decision.reason,
+        command: effectiveAction.command,
+        ...(effectiveAction.title ? { title: effectiveAction.title } : {}),
+        preHookResults,
+        postHookResults: [],
+      };
     } catch (error) {
       return {
         allowed: false,
         message: `Pre-command hook blocked execution: ${error instanceof Error ? error.message : String(error)}`,
-        preHookResults: [],
+        command: effectiveAction.command,
+        ...(effectiveAction.title ? { title: effectiveAction.title } : {}),
+        preHookResults,
         postHookResults: [],
       };
     }
@@ -1325,6 +1374,8 @@ export class StandaloneOperatorRuntime {
       if (!step.command) {
         return { output: "" };
       }
+      let authorizedCommand = step.command;
+      let authorizedTitle = step.title;
       if (params.executionConfig) {
         const authorization = await this.authorizeCommandExecution({
           sessionId: params.sessionId,
@@ -1339,14 +1390,16 @@ export class StandaloneOperatorRuntime {
         if (!authorization.allowed) {
           return { output: authorization.message };
         }
+        authorizedCommand = authorization.command;
+        authorizedTitle = authorization.title;
       }
-      const { stdout, stderr } = await execFileAsync("bash", ["-lc", step.command], { cwd: this.rootDir, maxBuffer: 1024 * 1024 });
+      const { stdout, stderr } = await execFileAsync("bash", ["-lc", authorizedCommand], { cwd: this.rootDir, maxBuffer: 1024 * 1024 });
       const postHookResults = params.executionConfig
         ? await this.runPostCommandHooks({
             sessionId: params.sessionId,
             cwd: this.rootDir,
-            command: step.command,
-            title: step.title,
+            command: authorizedCommand,
+            ...(authorizedTitle ? { title: authorizedTitle } : {}),
             kind: "skill.command",
             source: "runtime",
             executionConfig: params.executionConfig,

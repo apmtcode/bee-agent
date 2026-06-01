@@ -262,6 +262,110 @@ describe("StandaloneOperatorRuntime", () => {
     });
   });
 
+  it("lets PreToolUse deny command execution", async () => {
+    const runtime = new StandaloneOperatorRuntime({
+      rootDir: await makeTempDir(),
+      executionConfig: resolveOperatorCliExecutionConfig({
+        hooks: {
+          PreToolUse: ["printf '{\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"blocked by hook\"}'"],
+        },
+      }),
+    });
+
+    const result = await runtime.authorizeCommandExecution({
+      sessionId: "sess-1",
+      cwd: runtime.rootDir,
+      command: "printf ok",
+      title: "demo",
+      kind: "background.start",
+      source: "cli",
+      executionConfig: resolveOperatorCliExecutionConfig({
+        hooks: {
+          PreToolUse: ["printf '{\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"blocked by hook\"}'"],
+        },
+      }),
+    });
+
+    expect(result).toMatchObject({
+      allowed: false,
+      message: "blocked by hook",
+      command: "printf ok",
+      title: "demo",
+    });
+  });
+
+  it("reuses approval flow for PreToolUse request-approval", async () => {
+    const executionConfig = resolveOperatorCliExecutionConfig({
+      hooks: {
+        PreToolUse: ["printf '{\"permissionDecision\":\"request-approval\",\"permissionDecisionReason\":\"needs review\"}'"],
+      },
+    });
+    const runtime = new StandaloneOperatorRuntime({
+      rootDir: await makeTempDir(),
+      executionConfig,
+    });
+
+    const result = await runtime.authorizeCommandExecution({
+      sessionId: "sess-1",
+      cwd: runtime.rootDir,
+      command: "printf ok",
+      kind: "background.start",
+      source: "cli",
+      executionConfig,
+    });
+
+    expect(result.allowed).toBe(false);
+    expect(result.pendingApprovalId).toBeTruthy();
+    expect(result.message).toContain("Approval required:");
+    expect((await runtime.listApprovals()).length).toBe(1);
+  });
+
+  it("propagates rewritten command and title into executable skill commands", async () => {
+    const executionConfig = resolveOperatorCliExecutionConfig({
+      hooks: {
+        PreToolUse: ["printf '{\"updatedInput\":{\"command\":\"printf hooked\",\"title\":\"Hooked verify\"}}'"],
+      },
+    });
+    const runtime = new StandaloneOperatorRuntime({
+      rootDir: await makeTempDir(),
+      executionConfig,
+    });
+    const session = await runtime.startSession({ title: "Rewrite", agentId: "main" });
+    const run = await runtime.startRun({ sessionId: session.id, title: "Skill run" });
+    const recorded = await runtime.recordTurn({
+      sessionId: session.id,
+      userText: "rewrite skill",
+      assistantText: "recorded",
+      trajectorySummary: "rewrite skill workflow ready to reuse safely",
+    });
+    if (!recorded.skillCandidate) {
+      throw new Error("expected skill candidate");
+    }
+    await runtime.reviewSkillCandidate(recorded.skillCandidate.id, "reviewed", "reusable");
+    const promoted = await runtime.promoteSkill(recorded.skillCandidate.id);
+    if (!promoted) {
+      throw new Error("expected promoted skill");
+    }
+    const executable = await runtime.createExecutableSkillFromPromoted({
+      promotedSkillId: promoted.id,
+      steps: [{ id: "command", title: "Verify", kind: "command", command: "printf original" }],
+    });
+    if (!executable) {
+      throw new Error("expected executable skill");
+    }
+
+    const skillRun = await runtime.runExecutableSkill({
+      skillId: executable.id,
+      sessionId: session.id,
+      parentRunId: run.id,
+      executionConfig,
+    });
+
+    expect(skillRun?.stepResults[0]).toMatchObject({
+      output: "hooked",
+    });
+  });
+
   it("restores persisted approvals and trajectories across runtime instances", async () => {
     const rootDir = await makeTempDir();
     const runtime = new StandaloneOperatorRuntime({ rootDir });

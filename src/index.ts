@@ -22,11 +22,16 @@ export {
   evaluateOperatorExecutionAction,
   runOperatorCommandHooks,
   runOperatorHooks,
+  runOperatorPreToolUseHooks,
   type OperatorExecutionAction,
   type OperatorExecutionActionKind,
   type OperatorExecutionPolicyDecision,
   type OperatorHookContext,
   type OperatorHookResult,
+  type OperatorPreToolUseDecision,
+  type OperatorPreToolUseHookParsedOutput,
+  type OperatorPreToolUseHookResult,
+  type OperatorPreToolUsePermissionDecision,
 } from "./cli/execution-policy.js";
 export {
   discoverPromptContext,

@@ -31,6 +31,30 @@ export type OperatorHookResult = {
   stderr: string;
 };
 
+export type OperatorPreToolUsePermissionDecision = "allow" | "deny" | "request-approval";
+
+export type OperatorPreToolUseHookParsedOutput = {
+  permissionDecision?: OperatorPreToolUsePermissionDecision;
+  permissionDecisionReason?: string;
+  updatedInput?: {
+    command?: string;
+    title?: string;
+  };
+  additionalContext?: string;
+};
+
+export type OperatorPreToolUseHookResult = OperatorHookResult & {
+  parsed?: OperatorPreToolUseHookParsedOutput;
+};
+
+export type OperatorPreToolUseDecision = {
+  outcome: "allow" | "deny" | "request-approval";
+  reason?: string;
+  additionalContext?: string;
+  action: OperatorExecutionAction;
+  results: OperatorPreToolUseHookResult[];
+};
+
 export type OperatorHookContext = {
   event: OperatorCliHookEvent;
   cwd: string;
@@ -165,6 +189,117 @@ export async function runOperatorCommandHooks(params: {
       },
     },
   });
+}
+
+export async function runOperatorPreToolUseHooks(params: {
+  config: OperatorCliExecutionConfig;
+  action: OperatorExecutionAction;
+}): Promise<OperatorPreToolUseDecision> {
+  const results = (await runOperatorHooks({
+    config: params.config,
+    context: {
+      event: "PreToolUse",
+      cwd: params.action.cwd,
+      permissionMode: params.config.permissionMode,
+      ...(params.action.sessionId ? { sessionId: params.action.sessionId } : {}),
+      actionKind: params.action.kind,
+      command: params.action.command,
+      ...(params.action.title ? { title: params.action.title } : {}),
+      input: {
+        source: params.action.source,
+        action: params.action,
+      },
+    },
+  })) as OperatorPreToolUseHookResult[];
+
+  let action: OperatorExecutionAction = { ...params.action };
+  let outcome: OperatorPreToolUseDecision["outcome"] = "allow";
+  let reason: string | undefined;
+  let additionalContext: string | undefined;
+
+  for (const result of results) {
+    const parsed = parseOperatorPreToolUseHookOutput(result.stdout);
+    result.parsed = parsed;
+    if (parsed?.updatedInput) {
+      action = {
+        ...action,
+        ...(parsed.updatedInput.command !== undefined ? { command: parsed.updatedInput.command } : {}),
+        ...(parsed.updatedInput.title !== undefined ? { title: parsed.updatedInput.title } : {}),
+      };
+    }
+    if (parsed?.additionalContext) {
+      additionalContext = parsed.additionalContext;
+    }
+    if (parsed?.permissionDecision === "deny") {
+      outcome = "deny";
+      reason = parsed.permissionDecisionReason;
+      continue;
+    }
+    if (outcome !== "deny" && parsed?.permissionDecision === "request-approval") {
+      outcome = "request-approval";
+      reason = parsed.permissionDecisionReason;
+    }
+  }
+
+  return {
+    outcome,
+    ...(reason ? { reason } : {}),
+    ...(additionalContext ? { additionalContext } : {}),
+    action,
+    results,
+  };
+}
+
+function parseOperatorPreToolUseHookOutput(stdout: string): OperatorPreToolUseHookParsedOutput | undefined {
+  const trimmed = stdout.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  const lastLine = trimmed.split(/\r?\n/).at(-1)?.trim();
+  if (!lastLine) {
+    return undefined;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(lastLine);
+  } catch {
+    return undefined;
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return undefined;
+  }
+  const record = parsed as Record<string, unknown>;
+  const permissionDecision =
+    record.permissionDecision === "allow"
+    || record.permissionDecision === "deny"
+    || record.permissionDecision === "request-approval"
+      ? record.permissionDecision
+      : undefined;
+  const permissionDecisionReason = typeof record.permissionDecisionReason === "string"
+    ? record.permissionDecisionReason
+    : undefined;
+  const additionalContext = typeof record.additionalContext === "string"
+    ? record.additionalContext
+    : undefined;
+  const updatedInput = isRecord(record.updatedInput)
+    ? {
+        ...(typeof record.updatedInput.command === "string" ? { command: record.updatedInput.command } : {}),
+        ...(typeof record.updatedInput.title === "string" ? { title: record.updatedInput.title } : {}),
+      }
+    : undefined;
+  if (!permissionDecision && !permissionDecisionReason && !additionalContext && !updatedInput) {
+    return undefined;
+  }
+  return {
+    ...(permissionDecision ? { permissionDecision } : {}),
+    ...(permissionDecisionReason ? { permissionDecisionReason } : {}),
+    ...(updatedInput ? { updatedInput } : {}),
+    ...(additionalContext ? { additionalContext } : {}),
+  };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
 }
 
 function detectDangerousCommandReasons(command: string): string[] {

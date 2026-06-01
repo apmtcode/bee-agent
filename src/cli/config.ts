@@ -21,6 +21,7 @@ export type OperatorCliRuntimeConfig = {
 
 export type OperatorCliPermissionMode = "default" | "acceptEdits" | "bypassPermissions" | "plan";
 export type OperatorCliHookEvent =
+  | "PreToolUse"
   | "PreCommand"
   | "PostCommand"
   | "SessionStart"
@@ -84,6 +85,7 @@ export function resolveOperatorCliExecutionConfig(
       : "default";
 
   const hooks: Record<OperatorCliHookEvent, string[]> = {
+    PreToolUse: [],
     PreCommand: [],
     PostCommand: [],
     SessionStart: [],
@@ -97,13 +99,13 @@ export function resolveOperatorCliExecutionConfig(
     for (const [key, value] of Object.entries(rawHooks)) {
       const commands = readHookCommandList(value);
       switch (key) {
-        case "PreCommand":
         case "PreToolUse":
+        case "PreCommand":
           if (!commands) {
             unsupportedHookKeys.push(`${key} (invalid)`);
             continue;
           }
-          hooks.PreCommand.push(...commands);
+          hooks[key].push(...commands);
           continue;
         case "PostCommand":
         case "PostToolUse":
@@ -135,6 +137,7 @@ export function resolveOperatorCliExecutionConfig(
       ? { invalidPermissionMode: rawPermissionMode }
       : {}),
     hooks: {
+      PreToolUse: [...new Set(hooks.PreToolUse)],
       PreCommand: [...new Set(hooks.PreCommand)],
       PostCommand: [...new Set(hooks.PostCommand)],
       SessionStart: [...new Set(hooks.SessionStart)],

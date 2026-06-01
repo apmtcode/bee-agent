@@ -58,7 +58,8 @@ describe("OperatorCliConfigLoader", () => {
         model: "opus",
         permissionMode: "acceptEdits",
         hooks: {
-          PreToolUse: ["echo pre"],
+          PreToolUse: ["echo pre-tool"],
+          PreCommand: ["echo pre-command"],
           PostCommand: ["echo post"],
           SessionStart: ["echo session-start"],
           ApprovalResolved: ["echo approval-resolved"],
@@ -68,7 +69,8 @@ describe("OperatorCliConfigLoader", () => {
     ).toEqual({
       permissionMode: "acceptEdits",
       hooks: {
-        PreCommand: ["echo pre"],
+        PreToolUse: ["echo pre-tool"],
+        PreCommand: ["echo pre-command"],
         PostCommand: ["echo post"],
         SessionStart: ["echo session-start"],
         SessionEnd: [],
@@ -76,6 +78,28 @@ describe("OperatorCliConfigLoader", () => {
         ApprovalResolved: ["echo approval-resolved"],
       },
       unsupportedHookKeys: ["Notification"],
+    });
+  });
+
+  it("keeps PostToolUse aliased to PostCommand", () => {
+    expect(
+      resolveOperatorCliExecutionConfig({
+        hooks: {
+          PostToolUse: ["echo alias"],
+        },
+      }),
+    ).toEqual({
+      permissionMode: "default",
+      hooks: {
+        PreToolUse: [],
+        PreCommand: [],
+        PostCommand: ["echo alias"],
+        SessionStart: [],
+        SessionEnd: [],
+        ApprovalRequested: [],
+        ApprovalResolved: [],
+      },
+      unsupportedHookKeys: [],
     });
   });
 
@@ -88,6 +112,7 @@ describe("OperatorCliConfigLoader", () => {
       permissionMode: "default",
       invalidPermissionMode: "dangerously-unsupported",
       hooks: {
+        PreToolUse: [],
         PreCommand: [],
         PostCommand: [],
         SessionStart: [],

@@ -520,6 +520,7 @@ describe("OperatorCliApp", () => {
     const configOutput = await app.dispatchSlashCommand({ kind: "config" });
     expect(configOutput).toContain("Loaded config files");
     expect(configOutput).toContain("permissionMode=default");
+    expect(configOutput).toContain("hooks.PreToolUse=0");
     expect(configOutput).toContain("hooks.PreCommand=0");
 
     const promptOutput = await app.dispatchSlashCommand({ kind: "prompt" });
@@ -641,6 +642,7 @@ describe("OperatorCliApp", () => {
       JSON.stringify({
         permissionMode: "default",
         hooks: {
+          PreToolUse: ["printf '{\"updatedInput\":{\"command\":\"printf hooked\",\"title\":\"hooked title\"}}'"],
           PreCommand: ["printf 'pre:%s' \"$OPERATOR_ACTION_KIND\""],
           PostCommand: ["printf 'post:%s' \"$OPERATOR_HOOK_EVENT\""],
           SessionStart: ["printf unsupported"],
@@ -655,10 +657,14 @@ describe("OperatorCliApp", () => {
       session.id,
     );
     expect(output).toContain("Started background task");
+    expect(output).toContain("hooked title");
     expect(output).toContain("[PostCommand] post:PostCommand");
+    const tasks = await app.runtime.listBackgroundTasks(session.id);
+    expect(tasks[0]).toMatchObject({ title: "hooked title", command: "printf hooked" });
 
     const configOutput = await app.dispatchSlashCommand({ kind: "config" }, session.id);
     expect(configOutput).toContain("permissionMode=default");
+    expect(configOutput).toContain("hooks.PreToolUse=1");
     expect(configOutput).toContain("hooks.PreCommand=1");
     expect(configOutput).toContain("hooks.PostCommand=1");
     expect(configOutput).toContain("hooks.SessionStart=1");
