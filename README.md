@@ -185,22 +185,37 @@ Nested objects are deep-merged so project/local overrides can extend shared user
 
 The local CLI now interprets a narrow execution policy from merged settings:
 - `permissionMode`: `default`, `acceptEdits`, `bypassPermissions`, or `plan`
-- `hooks.PreCommand` / `hooks.PostCommand`
+- command hooks: `hooks.PreCommand` / `hooks.PostCommand`
+- lifecycle hooks: `hooks.SessionStart`, `hooks.SessionEnd`, `hooks.ApprovalRequested`, and `hooks.ApprovalResolved`
 - `hooks.PreToolUse` / `hooks.PostToolUse` as aliases for local command actions
 
 Covered command execution in this tranche:
 - `/background start <title> -- <command>`
 - executable skill `command` steps
 
+Covered lifecycle execution in this tranche:
+- session creation via `startSession()`
+- session terminal transitions via `completeSession()` and `failSession()`
+- approval creation via `promptApproval()`
+- approval resolution via `resolveApproval()`
+
 In `default` and `acceptEdits` modes, dangerous commands require approval before they run. The initial dangerous-command heuristic covers destructive filesystem commands, risky git mutation, privilege-escalation commands, fetch-and-exec pipelines, and shell redirection. Use `/approvals`, `/approve <id>`, and `/deny <id>` to manage pending approvals.
 
-Configured pre/post hooks run synchronously around covered command execution with these environment variables:
+Configured hooks run synchronously with these shared environment variables when relevant:
 - `OPERATOR_HOOK_EVENT`
-- `OPERATOR_ACTION_KIND`
 - `OPERATOR_SESSION_ID`
+- `OPERATOR_RUN_ID`
+- `OPERATOR_APPROVAL_ID`
 - `OPERATOR_CWD`
-- `OPERATOR_COMMAND`
 - `OPERATOR_PERMISSION_MODE`
+- `OPERATOR_HOOK_INPUT`
+
+Command hooks also receive these command-specific environment variables:
+- `OPERATOR_ACTION_KIND`
+- `OPERATOR_COMMAND`
+- `OPERATOR_TITLE`
+
+This remains a narrow synchronous hook pass. Async hook protocols, matcher-targeted hooks, file or cwd watch hooks, tool-input mutation, permission-decision overrides, and broader Claude-style tool-surface parity remain out of scope in this tranche.
 
 ## Prompt and instruction discovery
 

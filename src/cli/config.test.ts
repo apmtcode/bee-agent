@@ -60,7 +60,9 @@ describe("OperatorCliConfigLoader", () => {
         hooks: {
           PreToolUse: ["echo pre"],
           PostCommand: ["echo post"],
-          SessionStart: ["echo unsupported"],
+          SessionStart: ["echo session-start"],
+          ApprovalResolved: ["echo approval-resolved"],
+          Notification: ["echo unsupported"],
         },
       }),
     ).toEqual({
@@ -68,8 +70,12 @@ describe("OperatorCliConfigLoader", () => {
       hooks: {
         PreCommand: ["echo pre"],
         PostCommand: ["echo post"],
+        SessionStart: ["echo session-start"],
+        SessionEnd: [],
+        ApprovalRequested: [],
+        ApprovalResolved: ["echo approval-resolved"],
       },
-      unsupportedHookKeys: ["SessionStart"],
+      unsupportedHookKeys: ["Notification"],
     });
   });
 
@@ -81,7 +87,14 @@ describe("OperatorCliConfigLoader", () => {
     ).toEqual({
       permissionMode: "default",
       invalidPermissionMode: "dangerously-unsupported",
-      hooks: { PreCommand: [], PostCommand: [] },
+      hooks: {
+        PreCommand: [],
+        PostCommand: [],
+        SessionStart: [],
+        SessionEnd: [],
+        ApprovalRequested: [],
+        ApprovalResolved: [],
+      },
       unsupportedHookKeys: [],
     });
   });

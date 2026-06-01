@@ -717,6 +717,10 @@ function renderConfig(config?: OperatorCliRuntimeConfig): string {
     `permissionMode=${executionConfig.permissionMode}`,
     `hooks.PreCommand=${executionConfig.hooks.PreCommand.length}`,
     `hooks.PostCommand=${executionConfig.hooks.PostCommand.length}`,
+    `hooks.SessionStart=${executionConfig.hooks.SessionStart.length}`,
+    `hooks.SessionEnd=${executionConfig.hooks.SessionEnd.length}`,
+    `hooks.ApprovalRequested=${executionConfig.hooks.ApprovalRequested.length}`,
+    `hooks.ApprovalResolved=${executionConfig.hooks.ApprovalResolved.length}`,
     `unsupportedHooks=${executionConfig.unsupportedHookKeys.length === 0 ? "<none>" : executionConfig.unsupportedHookKeys.join(",")}`,
   ].join("\n");
 }

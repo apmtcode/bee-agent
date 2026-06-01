@@ -3,6 +3,8 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { StandaloneOperatorRuntime } from "./operator-runtime.js";
+import { resolveOperatorCliExecutionConfig } from "../cli/config.js";
+import { runOperatorHooks } from "../cli/execution-policy.js";
 import type { ReviewedExportManifest } from "../training/export-manifest.js";
 
 const tempDirs: string[] = [];
@@ -11,6 +13,21 @@ async function makeTempDir(): Promise<string> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "operator-runtime-"));
   tempDirs.push(dir);
   return dir;
+}
+
+function buildHookCaptureCommand(outputFile: string): string {
+  const script = [
+    "import fs from 'node:fs';",
+    "const payload = {",
+    "  event: process.env.OPERATOR_HOOK_EVENT,",
+    "  sessionId: process.env.OPERATOR_SESSION_ID,",
+    "  approvalId: process.env.OPERATOR_APPROVAL_ID,",
+    "  cwd: process.env.OPERATOR_CWD,",
+    "  input: JSON.parse(process.env.OPERATOR_HOOK_INPUT || '{}'),",
+    "};",
+    `fs.appendFileSync(${JSON.stringify(outputFile)}, JSON.stringify(payload) + '\\n');`,
+  ].join(" ");
+  return `node -e ${JSON.stringify(script)}`;
 }
 
 afterEach(async () => {
@@ -157,6 +174,92 @@ describe("StandaloneOperatorRuntime", () => {
     await expect(runtime.completeSession(session.id)).resolves.toMatchObject({ status: "completed" });
     await expect(runtime.failSession(session.id)).resolves.toMatchObject({ status: "failed" });
     await expect(runtime.listSessions()).resolves.toHaveLength(1);
+  });
+
+  it("runs configured lifecycle hooks for session and approval events", async () => {
+    const rootDir = await makeTempDir();
+    const sessionStartFile = path.join(rootDir, "session-start.jsonl");
+    const sessionEndFile = path.join(rootDir, "session-end.jsonl");
+    const approvalRequestedFile = path.join(rootDir, "approval-requested.jsonl");
+    const approvalResolvedFile = path.join(rootDir, "approval-resolved.jsonl");
+    const runtime = new StandaloneOperatorRuntime({
+      rootDir,
+      executionConfig: resolveOperatorCliExecutionConfig({
+        permissionMode: "acceptEdits",
+        hooks: {
+          SessionStart: [buildHookCaptureCommand(sessionStartFile)],
+          SessionEnd: [buildHookCaptureCommand(sessionEndFile)],
+          ApprovalRequested: [buildHookCaptureCommand(approvalRequestedFile)],
+          ApprovalResolved: [buildHookCaptureCommand(approvalResolvedFile)],
+        },
+      }),
+    });
+
+    const session = await runtime.startSession({ title: "Lifecycle hooks", cwd: rootDir, agentId: "main" });
+    const approval = await runtime.promptApproval({
+      sessionId: session.id,
+      title: "Approve lifecycle",
+      summary: "Verify hook payloads",
+      metadata: { source: "test" },
+    });
+    const resolution = await runtime.resolveApproval(approval.id, "approved", "tester");
+    await runtime.completeSession(session.id);
+
+    expect(JSON.parse((await fs.readFile(sessionStartFile, "utf8")).trim())).toMatchObject({
+      event: "SessionStart",
+      sessionId: session.id,
+      cwd: rootDir,
+      input: {
+        session: {
+          id: session.id,
+          status: "active",
+          metadata: expect.objectContaining({ title: "Lifecycle hooks", cwd: rootDir, agentId: "main" }),
+        },
+      },
+    });
+    expect(JSON.parse((await fs.readFile(approvalRequestedFile, "utf8")).trim())).toMatchObject({
+      event: "ApprovalRequested",
+      sessionId: session.id,
+      approvalId: approval.id,
+      cwd: rootDir,
+      input: {
+        request: {
+          id: approval.id,
+          sessionId: session.id,
+          metadata: { source: "test" },
+        },
+      },
+    });
+    expect(JSON.parse((await fs.readFile(approvalResolvedFile, "utf8")).trim())).toMatchObject({
+      event: "ApprovalResolved",
+      sessionId: session.id,
+      approvalId: approval.id,
+      cwd: rootDir,
+      input: {
+        request: {
+          id: approval.id,
+          sessionId: session.id,
+        },
+        resolution: {
+          id: approval.id,
+          decision: "approved",
+          resolvedBy: "tester",
+          resolvedAtMs: resolution?.resolvedAtMs,
+        },
+      },
+    });
+    expect(JSON.parse((await fs.readFile(sessionEndFile, "utf8")).trim())).toMatchObject({
+      event: "SessionEnd",
+      sessionId: session.id,
+      cwd: rootDir,
+      input: {
+        status: "completed",
+        session: {
+          id: session.id,
+          status: "completed",
+        },
+      },
+    });
   });
 
   it("restores persisted approvals and trajectories across runtime instances", async () => {

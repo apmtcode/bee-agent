@@ -6,6 +6,7 @@ import type { OperatorCliExecutionConfig } from "../cli/config.js";
 import {
   evaluateOperatorExecutionAction,
   runOperatorCommandHooks,
+  runOperatorHooks,
   type OperatorHookResult,
 } from "../cli/execution-policy.js";
 import { FileApprovalStore } from "../control-plane/approval-store.js";
@@ -79,6 +80,7 @@ export type StandaloneOperatorOptions = {
   replayLimit?: number;
   backgroundTaskSpawnProcess?: Parameters<typeof FileBackgroundTaskStore>[1];
   backgroundTaskIsProcessRunning?: Parameters<typeof FileBackgroundTaskStore>[2];
+  executionConfig?: OperatorCliExecutionConfig;
 };
 
 export type StartSessionParams = {
@@ -275,6 +277,7 @@ export class StandaloneOperatorRuntime {
   readonly trainingExporter: LocalTrainingExporter;
   private readonly transcriptsDir: string;
   private approvalsReady: Promise<void> | null = null;
+  private executionConfig?: OperatorCliExecutionConfig;
 
   constructor(private readonly options: StandaloneOperatorOptions) {
     this.events = new OperatorEventBus({ replayLimit: options.replayLimit ?? 200 });
@@ -304,6 +307,7 @@ export class StandaloneOperatorRuntime {
       resolveSession: async (sessionId) => await this.sessions.get(sessionId),
     });
     this.transcriptsDir = path.join(options.rootDir, "transcripts");
+    this.executionConfig = options.executionConfig;
   }
 
   async startSession(params: StartSessionParams = {}): Promise<SessionRecord> {
@@ -325,6 +329,14 @@ export class StandaloneOperatorRuntime {
       },
     });
     this.events.publish({ type: "session.started", payload: session, ts: Date.now() });
+    await this.runLifecycleHooks({
+      event: "SessionStart",
+      sessionId: session.id,
+      cwd: session.metadata.cwd ?? this.rootDir,
+      input: {
+        session,
+      },
+    });
     return session;
   }
 
@@ -365,6 +377,15 @@ export class StandaloneOperatorRuntime {
     const session = await this.sessions.update(sessionId, { status: "completed" });
     if (session) {
       this.events.publish({ type: "session.completed", payload: session, ts: Date.now() });
+      await this.runLifecycleHooks({
+        event: "SessionEnd",
+        sessionId: session.id,
+        cwd: session.metadata.cwd ?? this.rootDir,
+        input: {
+          status: session.status,
+          session,
+        },
+      });
     }
     return session;
   }
@@ -373,6 +394,15 @@ export class StandaloneOperatorRuntime {
     const session = await this.sessions.update(sessionId, { status: "failed" });
     if (session) {
       this.events.publish({ type: "session.failed", payload: session, ts: Date.now() });
+      await this.runLifecycleHooks({
+        event: "SessionEnd",
+        sessionId: session.id,
+        cwd: session.metadata.cwd ?? this.rootDir,
+        input: {
+          status: session.status,
+          session,
+        },
+      });
     }
     return session;
   }
@@ -388,6 +418,15 @@ export class StandaloneOperatorRuntime {
       timeoutMs: params.timeoutMs,
     });
     this.events.publish({ type: "approval.requested", payload: request, ts: Date.now() });
+    await this.runLifecycleHooks({
+      event: "ApprovalRequested",
+      sessionId: request.sessionId,
+      approvalId: request.id,
+      cwd: await this.resolveSessionHookCwd(request.sessionId),
+      input: {
+        request,
+      },
+    });
     return request;
   }
 
@@ -413,6 +452,16 @@ export class StandaloneOperatorRuntime {
           ...(request?.sessionId ? { sessionId: request.sessionId } : {}),
         },
         ts: Date.now(),
+      });
+      await this.runLifecycleHooks({
+        event: "ApprovalResolved",
+        sessionId: request?.sessionId,
+        approvalId,
+        cwd: await this.resolveSessionHookCwd(request?.sessionId),
+        input: {
+          request,
+          resolution,
+        },
       });
     }
     return resolution;
@@ -1119,6 +1168,10 @@ export class StandaloneOperatorRuntime {
     return skill;
   }
 
+  setExecutionConfig(config?: OperatorCliExecutionConfig): void {
+    this.executionConfig = config;
+  }
+
   async getTranscript(
     sessionId: string,
     options?: TranscriptReadOptions,
@@ -1128,6 +1181,43 @@ export class StandaloneOperatorRuntime {
       return [];
     }
     return await new JsonlTranscriptStore(session.transcriptFile).read(options);
+  }
+
+  private async runLifecycleHooks(params: {
+    event: "SessionStart" | "SessionEnd" | "ApprovalRequested" | "ApprovalResolved";
+    cwd: string;
+    sessionId?: string;
+    runId?: string;
+    approvalId?: string;
+    input: Record<string, unknown>;
+  }): Promise<OperatorHookResult[]> {
+    if (!this.executionConfig) {
+      return [];
+    }
+    try {
+      return await runOperatorHooks({
+        config: this.executionConfig,
+        context: {
+          event: params.event,
+          cwd: params.cwd,
+          permissionMode: this.executionConfig.permissionMode,
+          ...(params.sessionId ? { sessionId: params.sessionId } : {}),
+          ...(params.runId ? { runId: params.runId } : {}),
+          ...(params.approvalId ? { approvalId: params.approvalId } : {}),
+          input: params.input,
+        },
+      });
+    } catch {
+      return [];
+    }
+  }
+
+  private async resolveSessionHookCwd(sessionId?: string): Promise<string> {
+    if (!sessionId) {
+      return this.rootDir;
+    }
+    const session = await this.sessions.get(sessionId);
+    return session?.metadata.cwd ?? this.rootDir;
   }
 
   private async ensureApprovalsLoaded(): Promise<void> {

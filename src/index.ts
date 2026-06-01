@@ -21,9 +21,11 @@ export {
   buildOperatorExecutionFingerprint,
   evaluateOperatorExecutionAction,
   runOperatorCommandHooks,
+  runOperatorHooks,
   type OperatorExecutionAction,
   type OperatorExecutionActionKind,
   type OperatorExecutionPolicyDecision,
+  type OperatorHookContext,
   type OperatorHookResult,
 } from "./cli/execution-policy.js";
 export {

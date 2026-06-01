@@ -661,7 +661,8 @@ describe("OperatorCliApp", () => {
     expect(configOutput).toContain("permissionMode=default");
     expect(configOutput).toContain("hooks.PreCommand=1");
     expect(configOutput).toContain("hooks.PostCommand=1");
-    expect(configOutput).toContain("unsupportedHooks=SessionStart");
+    expect(configOutput).toContain("hooks.SessionStart=1");
+    expect(configOutput).toContain("unsupportedHooks=<none>");
   });
 
   it("gates dangerous executable skill command steps", async () => {

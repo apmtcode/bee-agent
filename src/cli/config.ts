@@ -20,7 +20,13 @@ export type OperatorCliRuntimeConfig = {
 };
 
 export type OperatorCliPermissionMode = "default" | "acceptEdits" | "bypassPermissions" | "plan";
-export type OperatorCliHookEvent = "PreCommand" | "PostCommand";
+export type OperatorCliHookEvent =
+  | "PreCommand"
+  | "PostCommand"
+  | "SessionStart"
+  | "SessionEnd"
+  | "ApprovalRequested"
+  | "ApprovalResolved";
 
 export type OperatorCliExecutionConfig = {
   permissionMode: OperatorCliPermissionMode;
@@ -80,6 +86,10 @@ export function resolveOperatorCliExecutionConfig(
   const hooks: Record<OperatorCliHookEvent, string[]> = {
     PreCommand: [],
     PostCommand: [],
+    SessionStart: [],
+    SessionEnd: [],
+    ApprovalRequested: [],
+    ApprovalResolved: [],
   };
   const unsupportedHookKeys: string[] = [];
   const rawHooks = merged.hooks;
@@ -103,6 +113,16 @@ export function resolveOperatorCliExecutionConfig(
           }
           hooks.PostCommand.push(...commands);
           continue;
+        case "SessionStart":
+        case "SessionEnd":
+        case "ApprovalRequested":
+        case "ApprovalResolved":
+          if (!commands) {
+            unsupportedHookKeys.push(`${key} (invalid)`);
+            continue;
+          }
+          hooks[key].push(...commands);
+          continue;
         default:
           unsupportedHookKeys.push(key);
       }
@@ -117,6 +137,10 @@ export function resolveOperatorCliExecutionConfig(
     hooks: {
       PreCommand: [...new Set(hooks.PreCommand)],
       PostCommand: [...new Set(hooks.PostCommand)],
+      SessionStart: [...new Set(hooks.SessionStart)],
+      SessionEnd: [...new Set(hooks.SessionEnd)],
+      ApprovalRequested: [...new Set(hooks.ApprovalRequested)],
+      ApprovalResolved: [...new Set(hooks.ApprovalResolved)],
     },
     unsupportedHookKeys,
   };

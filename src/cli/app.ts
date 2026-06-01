@@ -90,7 +90,9 @@ export class OperatorCliApp {
   }
 
   async loadRuntimeConfig(): Promise<OperatorCliRuntimeConfig> {
-    return await new OperatorCliConfigLoader(this.cwd).load();
+    const config = await new OperatorCliConfigLoader(this.cwd).load();
+    this.runtime.setExecutionConfig(resolveOperatorCliExecutionConfig(config));
+    return config;
   }
 
   async loadPromptContext(config?: OperatorCliRuntimeConfig): Promise<OperatorCliPromptContext> {
@@ -680,6 +682,10 @@ export class OperatorCliApp {
           ...(executionConfig.invalidPermissionMode ? [`invalidPermissionMode=${executionConfig.invalidPermissionMode}`] : []),
           `hooks.PreCommand=${executionConfig.hooks.PreCommand.length}`,
           `hooks.PostCommand=${executionConfig.hooks.PostCommand.length}`,
+          `hooks.SessionStart=${executionConfig.hooks.SessionStart.length}`,
+          `hooks.SessionEnd=${executionConfig.hooks.SessionEnd.length}`,
+          `hooks.ApprovalRequested=${executionConfig.hooks.ApprovalRequested.length}`,
+          `hooks.ApprovalResolved=${executionConfig.hooks.ApprovalResolved.length}`,
           `unsupportedHooks=${executionConfig.unsupportedHookKeys.length === 0 ? "<none>" : executionConfig.unsupportedHookKeys.join(",")}`,
           "Merged config:",
           JSON.stringify(effectiveConfig.merged, null, 2),
