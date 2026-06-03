@@ -3,6 +3,7 @@ import {
   buildAnthropicMessagesRequest,
   forwardAnthropicMessagesRequest,
   forwardAnthropicMessagesStreamRequest,
+  normalizeAnthropicMessagesPayload,
   resolveAnthropicAuthConfig,
 } from "./anthropic-client.js";
 
@@ -20,7 +21,7 @@ describe("anthropic-client", () => {
       baseUrl: "https://example.anthropic.test/",
     });
 
-    expect(buildAnthropicMessagesRequest("{}", config)).toEqual({
+    expect(buildAnthropicMessagesRequest({ body: "{}", config })).toEqual({
       url: "https://example.anthropic.test/v1/messages",
       body: "{}",
       headers: {
@@ -28,6 +29,29 @@ describe("anthropic-client", () => {
         authorization: "Bearer oauth-token",
         "anthropic-version": "2023-06-01",
         "content-type": "application/json",
+      },
+    });
+  });
+
+  it("forwards incoming anthropic-beta headers", () => {
+    const config = resolveAnthropicAuthConfig((name) => ({
+      ANTHROPIC_API_KEY: "primary-key",
+    })[name]);
+
+    expect(buildAnthropicMessagesRequest({
+      body: "{}",
+      config,
+      headers: {
+        "Anthropic-Beta": "tools-2024-04-04,files-api-2025-04-14",
+      },
+    })).toEqual({
+      url: "https://api.anthropic.com/v1/messages",
+      body: "{}",
+      headers: {
+        "x-api-key": "primary-key",
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json",
+        "anthropic-beta": "tools-2024-04-04,files-api-2025-04-14",
       },
     });
   });
@@ -41,6 +65,46 @@ describe("anthropic-client", () => {
       apiKey: "token-only",
       authToken: "token-only",
       baseUrl: "https://api.anthropic.com",
+    });
+  });
+
+  it("normalizes Anthropc messages by stripping orphaned tool blocks and merging same-role messages", () => {
+    expect(normalizeAnthropicMessagesPayload({
+      model: "claude-opus-4-7",
+      messages: [
+        {
+          role: "assistant",
+          content: [
+            { type: "tool_use", id: "tool-orphan", name: "bash", input: { command: "pwd" } },
+          ],
+        },
+        {
+          role: "user",
+          content: [
+            { type: "tool_result", tool_use_id: "tool-keep", content: "ok" },
+          ],
+        },
+        {
+          role: "user",
+          content: "follow-up",
+        },
+        {
+          role: "assistant",
+          content: [
+            { type: "tool_use", id: "tool-keep", name: "bash", input: { command: "ls" } },
+          ],
+        },
+      ],
+    })).toEqual({
+      model: "claude-opus-4-7",
+      messages: [
+        {
+          role: "user",
+          content: [
+            { type: "text", text: "follow-up" },
+          ],
+        },
+      ],
     });
   });
 

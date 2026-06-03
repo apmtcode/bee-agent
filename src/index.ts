@@ -102,6 +102,7 @@ export {
 export {
   resolveAnthropicAuthConfig,
   buildAnthropicMessagesRequest,
+  normalizeAnthropicMessagesPayload,
   forwardAnthropicMessagesRequest,
   forwardAnthropicMessagesStreamRequest,
   type AnthropicAuthConfig,

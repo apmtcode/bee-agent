@@ -2,6 +2,7 @@ import type { ApprovalDecision, ApprovalRequest } from "./approvals.js";
 import {
   forwardAnthropicMessagesRequest,
   forwardAnthropicMessagesStreamRequest,
+  normalizeAnthropicMessagesPayload,
   type EnvReader,
 } from "./anthropic-client.js";
 import { OperatorCronService } from "./cron-service.js";
@@ -473,12 +474,13 @@ export class OperatorControlPlaneServer {
           body: JSON.stringify({ error: { type: "invalid_request", message: "Request body is required." } }),
         };
       }
-      const parsed = JSON.parse(request.body) as Record<string, unknown>;
+      const parsed = normalizeAnthropicMessagesPayload(JSON.parse(request.body) as Record<string, unknown>);
       if (parsed.stream === true) {
         const forwarded = await forwardAnthropicMessagesStreamRequest({
           body: JSON.stringify(parsed),
           fetchImpl: this.fetchImpl,
           env: this.env,
+          headers: request.headers,
         });
         return {
           status: forwarded.status,
@@ -491,6 +493,7 @@ export class OperatorControlPlaneServer {
         body: JSON.stringify({ ...parsed, stream: false }),
         fetchImpl: this.fetchImpl,
         env: this.env,
+        headers: request.headers,
       });
       return forwarded;
     } catch (error) {

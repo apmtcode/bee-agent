@@ -1798,10 +1798,20 @@ describe("OperatorControlPlaneServer", () => {
         authorization: "Bearer oauth-token-1",
         "anthropic-version": "2023-06-01",
         "content-type": "application/json",
+        "anthropic-beta": "tools-2024-04-04",
       });
       expect(typeof init?.body).toBe("string");
-      expect(JSON.parse(String(init?.body))).toMatchObject({
+      expect(JSON.parse(String(init?.body))).toEqual({
         model: "claude-opus-4-7",
+        max_tokens: 128,
+        messages: [
+          {
+            role: "user",
+            content: [
+              { type: "text", text: "hello" },
+            ],
+          },
+        ],
         stream: false,
       });
       return new Response(JSON.stringify({ id: "msg_123", type: "message" }), {
@@ -1826,10 +1836,16 @@ describe("OperatorControlPlaneServer", () => {
     await expect(server.handleHttp({
       method: "POST",
       path: "/v1/messages",
+      headers: { "anthropic-beta": "tools-2024-04-04" },
       body: JSON.stringify({
         model: "claude-opus-4-7",
         max_tokens: 128,
-        messages: [{ role: "user", content: "hello" }],
+        messages: [
+          { role: "assistant", content: [{ type: "tool_use", id: "tool-orphan", name: "bash", input: { command: "pwd" } }] },
+          { role: "user", content: [{ type: "tool_result", tool_use_id: "tool-keep", content: "ok" }] },
+          { role: "user", content: "hello" },
+          { role: "assistant", content: [{ type: "tool_use", id: "tool-keep", name: "bash", input: { command: "ls" } }] },
+        ],
       }),
     })).resolves.toMatchObject({
       status: 200,
@@ -1851,6 +1867,22 @@ describe("OperatorControlPlaneServer", () => {
         authorization: "Bearer token-only",
       });
       if (typeof init?.body === "string" && JSON.parse(init.body).stream === true) {
+        expect(init?.headers).toMatchObject({
+          "anthropic-beta": "tools-2024-04-04",
+        });
+        expect(JSON.parse(init.body)).toEqual({
+          model: "claude-sonnet-4-6",
+          messages: [
+            {
+              role: "user",
+              content: [
+                { type: "text", text: "follow-up" },
+              ],
+            },
+          ],
+          max_tokens: 8,
+          stream: true,
+        });
         return new Response(new ReadableStream<Uint8Array>({
           start(controller) {
             controller.enqueue(new TextEncoder().encode("event: message_start\n\n"));
@@ -1886,7 +1918,17 @@ describe("OperatorControlPlaneServer", () => {
     const streamingResponse = await server.handleHttp({
       method: "POST",
       path: "/v1/messages",
-      body: JSON.stringify({ model: "claude-sonnet-4-6", messages: [], max_tokens: 8, stream: true }),
+      headers: { "anthropic-beta": "tools-2024-04-04" },
+      body: JSON.stringify({
+        model: "claude-sonnet-4-6",
+        messages: [
+          { role: "user", content: [{ type: "tool_result", tool_use_id: "tool-keep", content: "ok" }] },
+          { role: "user", content: "follow-up" },
+          { role: "assistant", content: [{ type: "tool_use", id: "tool-keep", name: "bash", input: { command: "ls" } }] },
+        ],
+        max_tokens: 8,
+        stream: true,
+      }),
     });
     expect(streamingResponse.status).toBe(200);
     expect(streamingResponse.headers).toEqual({
