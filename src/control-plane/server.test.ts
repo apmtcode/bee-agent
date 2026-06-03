@@ -1751,6 +1751,107 @@ describe("OperatorControlPlaneServer", () => {
         },
       },
     });
+    const teamTaskSession = await runtime.startSession({ title: "Team reviewers", agentId: "team:reviewers" });
+    await runtime.teams.create({ name: "reviewers", description: "Review team", taskSessionId: teamTaskSession.id });
+    const teammateStart = await server.handle({
+      method: "teams.teammates.start",
+      params: {
+        teamName: "reviewers",
+        sessionId: session.id,
+        parentRunId: run.id,
+        teammateName: "alice",
+        title: "Review PR",
+        agentId: "reviewer",
+        metadata: { lane: "ops" },
+      },
+    });
+    expect(teammateStart).toMatchObject({
+      ok: true,
+      result: {
+        teamName: "reviewers",
+        teammateName: "alice",
+        taskSessionId: teamTaskSession.id,
+        spawned: {
+          subagent: {
+            parentRunId: run.id,
+            sessionId: session.id,
+            title: "Review PR",
+            status: "running",
+          },
+          childSession: {
+            metadata: {
+              title: "Review PR",
+              agentId: "reviewer",
+              parentSessionId: session.id,
+            },
+          },
+          childRun: {
+            title: "Review PR",
+            status: "running",
+            metadata: {
+              lane: "ops",
+              teamName: "reviewers",
+              teammateName: "alice",
+              taskSessionId: teamTaskSession.id,
+            },
+          },
+        },
+      },
+    });
+    if (!teammateStart.ok) {
+      throw new Error("expected teammate to start");
+    }
+    await expect(server.handle({ method: "teams.teammates.list", params: { teamName: "reviewers" } })).resolves.toMatchObject({
+      ok: true,
+      result: [
+        expect.objectContaining({
+          name: "alice",
+          sessionId: teammateStart.result.spawned.childSession.id,
+          subagentRunId: teammateStart.result.spawned.subagent.runId,
+          childRunId: teammateStart.result.spawned.childRun.id,
+          title: "Review PR",
+          agentId: "reviewer",
+          status: "running",
+        }),
+      ],
+    });
+    await expect(server.handle({ method: "teams.teammates.get", params: { teamName: "reviewers", teammateName: "alice" } })).resolves.toMatchObject({
+      ok: true,
+      result: {
+        name: "alice",
+        sessionId: teammateStart.result.spawned.childSession.id,
+        status: "running",
+      },
+    });
+    const teammateMessage = await server.handle({
+      method: "teams.teammates.message",
+      params: {
+        teamName: "reviewers",
+        fromSessionId: session.id,
+        teammateName: "alice",
+        message: "Please inspect logs.",
+      },
+    });
+    expect(teammateMessage).toMatchObject({
+      ok: true,
+      result: {
+        teamName: "reviewers",
+        teammateName: "alice",
+        teammateSessionId: teammateStart.result.spawned.childSession.id,
+        message: {
+          fromSessionId: session.id,
+          toSessionId: teammateStart.result.spawned.childSession.id,
+          summary: "Please inspect logs.",
+        },
+      },
+    });
+    await expect(server.handle({ method: "teams.teammates.update", params: { teamName: "reviewers", teammateName: "alice", status: "completed" } })).resolves.toMatchObject({
+      ok: true,
+      result: {
+        name: "alice",
+        status: "completed",
+      },
+    });
   }, 120_000);
 
   it("streams runtime events through subscriptions", async () => {

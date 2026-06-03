@@ -64,7 +64,7 @@ export class OperatorControlPlaneSessionStream {
         identifier: params?.identifier ?? this.boundSessionId,
       };
     }
-    if (method === "messages.send") {
+    if (method === "messages.send" || method === "teams.teammates.message") {
       return {
         ...(params ?? {}),
         fromSessionId: params?.fromSessionId ?? this.boundSessionId,
@@ -108,6 +108,7 @@ function requiresSessionBinding(method: string): boolean {
     method === "runs.events" ||
     method === "subagents.list" ||
     method === "subagents.spawn" ||
+    method === "teams.teammates.start" ||
     method === "background.tasks.start" ||
     method === "background.tasks.list" ||
     method === "background.tasks.active" ||

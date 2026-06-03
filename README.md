@@ -70,6 +70,10 @@ Current slash commands:
 - `/teams`
 - `/team-create <name> [description]`
 - `/team-delete <name>`
+- `/teammates <team>`
+- `/teammate-start <team> <name> [title] [--agent <agentId>]`
+- `/teammate-message <team> <name> <message>`
+- `/teammate-update <team> <name> <pending|running|paused|completed|failed>`
 - `/skills`
 - `/run-skill <id>`
 - `/background`
@@ -161,8 +165,12 @@ Current team behavior in this tranche:
 - each created team now gets a dedicated persisted task session so the existing task store can coordinate shared team work instead of staying tied to the caller session
 - team-scoped task flows reuse the existing task surface through `/tasks team <name>` and `--team <name>` task creation flags
 - task coordination can now persist `owner` and `blockedBy` through the CLI for team task handoff and dependency tracking
-- the public operator export surface now includes the team store types for later runtime or control-plane integration
-- this tranche remains intentionally narrow and does not yet add teammate spawning, routing, or shutdown orchestration
+- teammate records are persisted per team with `sessionId`, `subagentRunId`, `childRunId`, `title`, optional `agentId`, and lifecycle status
+- the runtime and control plane now expose teammate start, list, get, status update, and direct message flows through `teams.teammates.start`, `teams.teammates.list`, `teams.teammates.get`, `teams.teammates.update`, and `teams.teammates.message`
+- the CLI exposes `/teammates <team>`, `/teammate-start <team> <name> [title] [--agent <agentId>]`, `/teammate-message <team> <name> <message>`, and `/teammate-update <team> <name> <pending|running|paused|completed|failed>`
+- bootstrapped session streams inherit `sessionId` for `teams.teammates.start` and `fromSessionId` for `teams.teammates.message`
+- the public operator export surface now includes the team and teammate store types plus runtime teammate request/result types for later runtime or control-plane integration
+- teammate shutdown/removal orchestration, richer assignment rules, and broader multi-agent arbitration remain out of scope in this tranche
 
 ## Push notifications
 

@@ -62,6 +62,10 @@ export type OperatorCliSlashCommand =
   | { kind: "teams" }
   | { kind: "team-create"; name: string; description?: string }
   | { kind: "team-delete"; name: string }
+  | { kind: "teammates"; team: string }
+  | { kind: "teammate-start"; team: string; name: string; title?: string; agentId?: string }
+  | { kind: "teammate-message"; team: string; teammate: string; message: string }
+  | { kind: "teammate-update"; team: string; teammate: string; status: "pending" | "running" | "paused" | "completed" | "failed" }
   | { kind: "skills" }
   | { kind: "run-skill"; skillId: string }
   | { kind: "watch-run"; runId?: string }
@@ -257,6 +261,10 @@ export class OperatorCliApp {
           "  /teams",
           "  /team-create <name> [description]",
           "  /team-delete <name>",
+          "  /teammates <team>",
+          "  /teammate-start <team> <name> [title] [--agent <agentId>]",
+          "  /teammate-message <team> <name> <message>",
+          "  /teammate-update <team> <name> <pending|running|paused|completed|failed>",
           "  /skills",
           "  /run-skill <id>",
           "  /watch run [runId]",
@@ -677,6 +685,51 @@ export class OperatorCliApp {
       case "team-delete": {
         const team = await this.teams.delete(command.name);
         return team ? `Deleted team ${team.name}.` : `Unknown team: ${command.name}`;
+      }
+      case "teammates": {
+        const team = await this.teams.get(command.team);
+        if (!team) {
+          return `Unknown team: ${command.team}`;
+        }
+        const teammates = await this.runtime.listTeammates(command.team);
+        return formatTeammates(command.team, teammates, team.taskSessionId);
+      }
+      case "teammate-start": {
+        const activeSessionId = this.requireActiveSessionId(sessionId);
+        const team = await this.teams.get(command.team);
+        if (!team) {
+          return `Unknown team: ${command.team}`;
+        }
+        const parentRun = await this.runtime.getActiveRun(activeSessionId);
+        if (!parentRun) {
+          return `No active run for session ${activeSessionId}.`;
+        }
+        const started = await this.runtime.startTeammate({
+          teamName: command.team,
+          sessionId: activeSessionId,
+          parentRunId: parentRun.id,
+          teammateName: command.name,
+          title: command.title ?? `Teammate ${command.name}`,
+          ...(command.agentId ? { agentId: command.agentId } : {}),
+          cwd: this.cwd,
+        });
+        return `Started teammate ${started.teammateName} team=${started.teamName} session=${started.spawned.childSession.id} run=${started.spawned.subagent.runId} taskSession=${started.taskSessionId}`;
+      }
+      case "teammate-message": {
+        const activeSessionId = this.requireActiveSessionId(sessionId);
+        const result = await this.runtime.sendTeammateMessage({
+          teamName: command.team,
+          fromSessionId: activeSessionId,
+          teammateName: command.teammate,
+          message: command.message,
+        });
+        return `Sent teammate message ${result.message.id} team=${result.teamName} teammate=${result.teammateName} session=${result.teammateSessionId}`;
+      }
+      case "teammate-update": {
+        const updated = await this.runtime.updateTeammateStatus(command.team, command.teammate, command.status);
+        return updated
+          ? `Updated teammate ${updated.name} team=${command.team} status=${updated.status}`
+          : `Unknown teammate: ${command.team}/${command.teammate}`;
       }
       case "skills": {
         const promoted = await this.runtime.listPromotedSkills();
@@ -1130,6 +1183,38 @@ function formatOperatorTasks(tasks: Array<{
     .join("\n");
 }
 
+function formatTeammates(
+  team: string,
+  teammates: Array<{
+    name: string;
+    sessionId: string;
+    subagentRunId: string;
+    childRunId: string;
+    title: string;
+    agentId?: string;
+    status: string;
+  }>,
+  taskSessionId?: string,
+): string {
+  if (teammates.length === 0) {
+    return `No teammates for ${team}${taskSessionId ? ` taskSession=${taskSessionId}` : ""}.`;
+  }
+  return teammates
+    .map((teammate) => {
+      const details = [
+        `team=${team}`,
+        `status=${teammate.status}`,
+        `session=${teammate.sessionId}`,
+        `subagent=${teammate.subagentRunId}`,
+        `run=${teammate.childRunId}`,
+        taskSessionId ? `taskSession=${taskSessionId}` : undefined,
+        teammate.agentId ? `agent=${teammate.agentId}` : undefined,
+      ].filter(Boolean).join(" ");
+      return `${teammate.name} ${teammate.title} ${details}`;
+    })
+    .join("\n");
+}
+
 function formatOperatorMessages(messages: Array<{
   id: string;
   fromSessionId: string;
@@ -1371,6 +1456,14 @@ export function parseSlashCommand(input: string): OperatorCliSlashCommand | unde
       return parseTeamCreateCommand(tail);
     case "team-delete":
       return tail ? { kind: "team-delete", name: tail } : { kind: "invalid", message: "Usage: /team-delete <name>" };
+    case "teammates":
+      return parseTeammatesCommand(tail);
+    case "teammate-start":
+      return parseTeammateStartCommand(tail);
+    case "teammate-message":
+      return parseTeammateMessageCommand(tail);
+    case "teammate-update":
+      return parseTeammateUpdateCommand(tail);
     case "skills":
       return { kind: "skills" };
     case "run-skill":
@@ -1454,6 +1547,66 @@ function parseTeamCreateCommand(tail: string): OperatorCliSlashCommand {
   return description
     ? { kind: "team-create", name, description }
     : { kind: "team-create", name };
+}
+
+function parseTeammatesCommand(tail: string): OperatorCliSlashCommand {
+  return tail
+    ? { kind: "teammates", team: tail }
+    : { kind: "invalid", message: "Usage: /teammates <team>" };
+}
+
+function parseTeammateStartCommand(tail: string): OperatorCliSlashCommand {
+  const tokens = tail.split(/\s+/).filter(Boolean);
+  const [team, name, ...rest] = tokens;
+  if (!team || !name) {
+    return { kind: "invalid", message: "Usage: /teammate-start <team> <name> [title] [--agent <agentId>]" };
+  }
+  let agentId: string | undefined;
+  const titleParts: string[] = [];
+  for (let index = 0; index < rest.length; index += 1) {
+    const token = rest[index];
+    if (token === "--agent") {
+      const value = rest[index + 1];
+      if (!value) {
+        return { kind: "invalid", message: "Usage: /teammate-start <team> <name> [title] [--agent <agentId>]" };
+      }
+      agentId = value;
+      index += 1;
+      continue;
+    }
+    if (token.startsWith("--")) {
+      return { kind: "invalid", message: "Usage: /teammate-start <team> <name> [title] [--agent <agentId>]" };
+    }
+    titleParts.push(token);
+  }
+  const title = titleParts.join(" ").trim();
+  return {
+    kind: "teammate-start",
+    team,
+    name,
+    ...(title ? { title } : {}),
+    ...(agentId ? { agentId } : {}),
+  };
+}
+
+function parseTeammateMessageCommand(tail: string): OperatorCliSlashCommand {
+  const [team, teammate, ...messageParts] = tail.split(/\s+/).filter(Boolean);
+  const message = messageParts.join(" ").trim();
+  if (!team || !teammate || !message) {
+    return { kind: "invalid", message: "Usage: /teammate-message <team> <name> <message>" };
+  }
+  return { kind: "teammate-message", team, teammate, message };
+}
+
+function parseTeammateUpdateCommand(tail: string): OperatorCliSlashCommand {
+  const [team, teammate, status] = tail.split(/\s+/).filter(Boolean);
+  if (!team || !teammate || !status) {
+    return { kind: "invalid", message: "Usage: /teammate-update <team> <name> <pending|running|paused|completed|failed>" };
+  }
+  if (status !== "pending" && status !== "running" && status !== "paused" && status !== "completed" && status !== "failed") {
+    return { kind: "invalid", message: "Usage: /teammate-update <team> <name> <pending|running|paused|completed|failed>" };
+  }
+  return { kind: "teammate-update", team, teammate, status };
 }
 
 function parseWatchCommand(tail: string): OperatorCliSlashCommand {

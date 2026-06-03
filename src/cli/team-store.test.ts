@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { FileOperatorCliTeamStore } from "./team-store.js";
+import { FileOperatorCliTeamStore, type OperatorCliTeammateRecord } from "./team-store.js";
 
 const tempDirs: string[] = [];
 
@@ -58,5 +58,89 @@ describe("FileOperatorCliTeamStore", () => {
     expect(second.id).toBe(first.id);
     expect(second.taskSessionId).toBe("session-operators");
     await expect(store.get("operators")).resolves.toEqual(expect.objectContaining({ taskSessionId: "session-operators" }));
+  });
+
+  it("adds updates lists and removes teammates", async () => {
+    const rootDir = await makeTempDir();
+    const store = new FileOperatorCliTeamStore(rootDir);
+    await store.create({ name: "reviewers", taskSessionId: "session-reviewers" });
+
+    const teammate = await store.addTeammate({
+      teamName: "reviewers",
+      teammateName: "alice",
+      sessionId: "session-alice",
+      subagentRunId: "subagent-run-1",
+      childRunId: "child-run-1",
+      title: "Review teammate",
+      agentId: "reviewer",
+    });
+    expect(teammate).toMatchObject({
+      name: "alice",
+      sessionId: "session-alice",
+      subagentRunId: "subagent-run-1",
+      childRunId: "child-run-1",
+      title: "Review teammate",
+      agentId: "reviewer",
+      status: "running",
+    } satisfies Partial<OperatorCliTeammateRecord>);
+
+    await expect(store.listTeammates("reviewers")).resolves.toEqual([
+      expect.objectContaining({
+        name: "alice",
+        sessionId: "session-alice",
+        subagentRunId: "subagent-run-1",
+        childRunId: "child-run-1",
+      }),
+    ]);
+    await expect(store.getTeammate("reviewers", "alice")).resolves.toEqual(
+      expect.objectContaining({ name: "alice", status: "running" }),
+    );
+
+    const updated = await store.updateTeammate("reviewers", "alice", {
+      status: "completed",
+      childRunId: "child-run-2",
+      agentId: null,
+    });
+    expect(updated).toMatchObject({
+      name: "alice",
+      status: "completed",
+      childRunId: "child-run-2",
+    });
+    expect(updated).not.toHaveProperty("agentId");
+
+    await expect(store.get("reviewers")).resolves.toEqual(
+      expect.objectContaining({
+        teammates: [
+          expect.objectContaining({ name: "alice", status: "completed", childRunId: "child-run-2" }),
+        ],
+      }),
+    );
+
+    const removed = await store.removeTeammate("reviewers", "alice");
+    expect(removed).toMatchObject({ name: "alice", status: "completed" });
+    await expect(store.listTeammates("reviewers")).resolves.toEqual([]);
+  });
+
+  it("rejects duplicate teammate names within a team", async () => {
+    const rootDir = await makeTempDir();
+    const store = new FileOperatorCliTeamStore(rootDir);
+    await store.create({ name: "reviewers", taskSessionId: "session-reviewers" });
+    await store.addTeammate({
+      teamName: "reviewers",
+      teammateName: "alice",
+      sessionId: "session-alice",
+      subagentRunId: "subagent-run-1",
+      childRunId: "child-run-1",
+      title: "Review teammate",
+    });
+
+    await expect(store.addTeammate({
+      teamName: "reviewers",
+      teammateName: "alice",
+      sessionId: "session-alice-2",
+      subagentRunId: "subagent-run-2",
+      childRunId: "child-run-2",
+      title: "Duplicate teammate",
+    })).rejects.toThrow("duplicate teammate: reviewers/alice");
   });
 });

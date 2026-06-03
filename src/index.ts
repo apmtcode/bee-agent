@@ -7,6 +7,8 @@ export {
 export {
   FileOperatorCliTeamStore,
   type OperatorCliTeamRecord,
+  type OperatorCliTeammateRecord,
+  type OperatorCliTeammateStatus,
 } from "./cli/team-store.js";
 export {
   OperatorCliConfigLoader,
@@ -333,11 +335,16 @@ export {
   type ReviewTrajectoryParams as RuntimeReviewTrajectoryParams,
   type SendMessageParams,
   type SendNotificationParams,
+  type SendTeammateMessageParams,
+  type SendTeammateMessageResult,
   type SpawnSubagentParams,
   type SpawnSubagentResult,
+  type StartSessionParams,
+  type StartTeammateParams,
+  type StartTeammateResult,
   type SessionLifecycleEventType,
   type StandaloneOperatorOptions,
-  type StartSessionParams,
+  type TeammateStatus,
 } from "./orchestrator/operator-runtime.js";
 export {
   LocalTrainingExporter,

@@ -93,6 +93,26 @@ describe("parseSlashCommand", () => {
     expect(parseSlashCommand("/teams")).toEqual({ kind: "teams" });
     expect(parseSlashCommand("/team-create reviewers Review team")).toEqual({ kind: "team-create", name: "reviewers", description: "Review team" });
     expect(parseSlashCommand("/team-delete reviewers")).toEqual({ kind: "team-delete", name: "reviewers" });
+    expect(parseSlashCommand("/teammates reviewers")).toEqual({ kind: "teammates", team: "reviewers" });
+    expect(parseSlashCommand("/teammate-start reviewers alice Review PR --agent reviewer")).toEqual({
+      kind: "teammate-start",
+      team: "reviewers",
+      name: "alice",
+      title: "Review PR",
+      agentId: "reviewer",
+    });
+    expect(parseSlashCommand("/teammate-message reviewers alice Please inspect logs")).toEqual({
+      kind: "teammate-message",
+      team: "reviewers",
+      teammate: "alice",
+      message: "Please inspect logs",
+    });
+    expect(parseSlashCommand("/teammate-update reviewers alice completed")).toEqual({
+      kind: "teammate-update",
+      team: "reviewers",
+      teammate: "alice",
+      status: "completed",
+    });
     expect(parseSlashCommand("/background")).toEqual({ kind: "background-list" });
     expect(parseSlashCommand("/background start smoke -- printf ok")).toEqual({
       kind: "background-start",
@@ -473,6 +493,72 @@ describe("OperatorCliApp", () => {
     const deleted = await app.dispatchSlashCommand({ kind: "team-delete", name: "reviewers" }, session.id);
     expect(deleted).toContain("Deleted team reviewers.");
     await expect(app.dispatchSlashCommand({ kind: "teams" }, session.id)).resolves.toBe("No teams.");
+  });
+
+  it("starts lists messages and updates teammates", async () => {
+    const rootDir = await makeTempDir();
+    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    const session = await app.runtime.startSession({ title: "teammate cli", cwd: rootDir, agentId: "operator-cli" });
+
+    await expect(app.dispatchSlashCommand({ kind: "team-create", name: "reviewers", description: "Review team" }, session.id)).resolves.toContain("Created team reviewers");
+    await app.runtime.startRun({ sessionId: session.id, title: "Review coordinator" });
+
+    const startedOutput = await app.dispatchSlashCommand(
+      { kind: "teammate-start", team: "reviewers", name: "alice", title: "Review PR", agentId: "reviewer" },
+      session.id,
+    );
+    expect(startedOutput).toContain("Started teammate alice");
+    expect(startedOutput).toContain("team=reviewers");
+    expect(startedOutput).toContain("run=");
+    expect(startedOutput).toContain("taskSession=");
+
+    const teammate = await app.runtime.getTeammate("reviewers", "alice");
+    expect(teammate).toMatchObject({
+      name: "alice",
+      title: "Review PR",
+      agentId: "reviewer",
+      status: "running",
+    });
+    if (!teammate) {
+      throw new Error("expected teammate");
+    }
+
+    const listed = await app.dispatchSlashCommand({ kind: "teammates", team: "reviewers" }, session.id);
+    expect(listed).toContain("alice Review PR");
+    expect(listed).toContain("team=reviewers");
+    expect(listed).toContain("status=running");
+    expect(listed).toContain(`session=${teammate.sessionId}`);
+    expect(listed).toContain(`subagent=${teammate.subagentRunId}`);
+    expect(listed).toContain(`run=${teammate.childRunId}`);
+    expect(listed).toContain("agent=reviewer");
+
+    const messageOutput = await app.dispatchSlashCommand(
+      { kind: "teammate-message", team: "reviewers", teammate: "alice", message: "Please inspect logs" },
+      session.id,
+    );
+    expect(messageOutput).toContain("Sent teammate message");
+    expect(messageOutput).toContain("team=reviewers");
+    expect(messageOutput).toContain("teammate=alice");
+    expect(messageOutput).toContain(`session=${teammate.sessionId}`);
+
+    const inbox = await app.runtime.listInbox(teammate.sessionId);
+    expect(inbox).toHaveLength(1);
+    expect(inbox[0]).toMatchObject({
+      fromSessionId: session.id,
+      toSessionId: teammate.sessionId,
+      summary: "Please inspect logs",
+    });
+
+    const updatedOutput = await app.dispatchSlashCommand(
+      { kind: "teammate-update", team: "reviewers", teammate: "alice", status: "completed" },
+      session.id,
+    );
+    expect(updatedOutput).toContain("Updated teammate alice team=reviewers status=completed");
+
+    const updatedTeammate = await app.runtime.getTeammate("reviewers", "alice");
+    expect(updatedTeammate).toMatchObject({ name: "alice", status: "completed" });
+    const childRun = await app.runtime.getRun(teammate.childRunId);
+    expect(childRun).toMatchObject({ id: teammate.childRunId, status: "completed" });
   });
 
   it("streams in-flight freeform run updates and reuses transcript context across resume", async () => {

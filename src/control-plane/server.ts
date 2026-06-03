@@ -924,6 +924,52 @@ export class OperatorControlPlaneServer {
           return ok(await this.options.runtime.listInbox(getString(request.params, "sessionId")));
         case "messages.outbox":
           return ok(await this.options.runtime.listOutbox(getString(request.params, "sessionId")));
+        case "teams.teammates.start": {
+          const result = await this.options.runtime.startTeammate({
+            teamName: getString(request.params, "teamName"),
+            sessionId: getString(request.params, "sessionId"),
+            parentRunId: getString(request.params, "parentRunId"),
+            teammateName: getString(request.params, "teammateName"),
+            title: getString(request.params, "title"),
+            agentId: getOptionalString(request.params, "agentId"),
+            cwd: getOptionalString(request.params, "cwd"),
+            remoteId: getOptionalString(request.params, "remoteId"),
+            remoteSource: getOptionalString(request.params, "remoteSource"),
+            modelPrimary: getOptionalString(request.params, "modelPrimary"),
+            modelFallbacks: getOptionalStringArray(request.params, "modelFallbacks"),
+            metadata: getOptionalRecord(request.params, "metadata"),
+          });
+          return ok(result);
+        }
+        case "teams.teammates.list":
+          return ok(await this.options.runtime.listTeammates(getString(request.params, "teamName")));
+        case "teams.teammates.get": {
+          const teammate = await this.options.runtime.getTeammate(
+            getString(request.params, "teamName"),
+            getString(request.params, "teammateName"),
+          );
+          return teammate ? ok(teammate) : notFound(`unknown teammate: ${getString(request.params, "teamName")}/${getString(request.params, "teammateName")}`);
+        }
+        case "teams.teammates.update": {
+          const updated = await this.options.runtime.updateTeammateStatus(
+            getString(request.params, "teamName"),
+            getString(request.params, "teammateName"),
+            getRunStatus(request.params, "status"),
+          );
+          return updated ? ok(updated) : notFound(`unknown teammate: ${getString(request.params, "teamName")}/${getString(request.params, "teammateName")}`);
+        }
+        case "teams.teammates.message": {
+          const result = await this.options.runtime.sendTeammateMessage({
+            teamName: getString(request.params, "teamName"),
+            fromSessionId: getString(request.params, "fromSessionId"),
+            teammateSessionId: getOptionalString(request.params, "teammateSessionId"),
+            teammateName: getOptionalString(request.params, "teammateName"),
+            summary: getOptionalString(request.params, "summary"),
+            message: getString(request.params, "message"),
+            metadata: getOptionalRecord(request.params, "metadata"),
+          });
+          return ok(result);
+        }
         case "runs.get": {
           const runId = getString(request.params, "runId");
           const run = await this.options.runtime.getRun(runId);

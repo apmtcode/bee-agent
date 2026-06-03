@@ -358,6 +358,81 @@ describe("OperatorControlPlaneSessionStream", () => {
     ]);
   });
 
+  it("binds teammate requests for a bootstrapped session", async () => {
+    const runtime = new StandaloneOperatorRuntime({
+      rootDir: await makeTempDir(),
+      backgroundTaskIsProcessRunning: () => false,
+    });
+    const server = new OperatorControlPlaneServer({ runtime });
+    const stream = new OperatorControlPlaneSessionStream(server);
+
+    const bootstrapped = await stream.bootstrap({ title: "Teammate session" });
+    const run = await runtime.startRun({ sessionId: bootstrapped.session.id, title: "Coordinator" });
+    const teamTaskSession = await runtime.startSession({ title: "Team reviewers", agentId: "team:reviewers" });
+    await runtime.teams.create({ name: "reviewers", description: "Review team", taskSessionId: teamTaskSession.id });
+
+    const started = await stream.request<{
+      teamName: string;
+      teammateName: string;
+      taskSessionId: string;
+      spawned: {
+        subagent: { sessionId: string; runId: string; status: string };
+        childSession: { id: string };
+        childRun: { id: string; status: string };
+      };
+    }>({
+      method: "teams.teammates.start",
+      params: { teamName: "reviewers", parentRunId: run.id, teammateName: "alice", title: "Review PR", agentId: "reviewer" },
+    });
+    expect(started.ok).toBe(true);
+    if (!started.ok) {
+      throw new Error("expected started teammate");
+    }
+    expect(started.result).toMatchObject({
+      teamName: "reviewers",
+      teammateName: "alice",
+      taskSessionId: teamTaskSession.id,
+      spawned: {
+        subagent: { sessionId: bootstrapped.session.id, status: "running" },
+        childRun: { status: "running" },
+      },
+    });
+
+    const listed = await stream.request<Array<{ name: string; sessionId: string; status: string }>>({
+      method: "teams.teammates.list",
+      params: { teamName: "reviewers" },
+    });
+    expect(listed.ok).toBe(true);
+    if (!listed.ok) {
+      throw new Error("expected listed teammates");
+    }
+    expect(listed.result).toEqual([
+      expect.objectContaining({ name: "alice", sessionId: started.result.spawned.childSession.id, status: "running" }),
+    ]);
+
+    const sent = await stream.request<{
+      teammateName: string;
+      teammateSessionId: string;
+      message: { fromSessionId: string; toSessionId: string; summary: string };
+    }>({
+      method: "teams.teammates.message",
+      params: { teamName: "reviewers", teammateName: "alice", message: "Please inspect logs." },
+    });
+    expect(sent.ok).toBe(true);
+    if (!sent.ok) {
+      throw new Error("expected sent teammate message");
+    }
+    expect(sent.result).toMatchObject({
+      teammateName: "alice",
+      teammateSessionId: started.result.spawned.childSession.id,
+      message: {
+        fromSessionId: bootstrapped.session.id,
+        toSessionId: started.result.spawned.childSession.id,
+        summary: "Please inspect logs.",
+      },
+    });
+  });
+
   it("reattaches to an idle session and returns only session-scoped bootstrap state", async () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),

@@ -61,6 +61,7 @@ import {
   type CompleteTrainingJobParams,
   type FailTrainingJobParams,
 } from "../training/job-store.js";
+import { FileOperatorCliTeamStore } from "../cli/team-store.js";
 import {
   FilePluginManifestRegistry,
   type RegisterPluginParams,
@@ -213,6 +214,47 @@ export type SpawnSubagentResult = {
   childRun: OperatorRunRecord;
 };
 
+export type TeammateStatus = SubagentRunRecord["status"];
+
+export type StartTeammateParams = {
+  teamName: string;
+  sessionId: string;
+  parentRunId: string;
+  teammateName: string;
+  title: string;
+  agentId?: string;
+  cwd?: string;
+  remoteId?: string;
+  remoteSource?: string;
+  modelPrimary?: string;
+  modelFallbacks?: string[];
+  metadata?: Record<string, unknown>;
+};
+
+export type StartTeammateResult = {
+  teamName: string;
+  teammateName: string;
+  taskSessionId: string;
+  spawned: SpawnSubagentResult;
+};
+
+export type SendTeammateMessageParams = {
+  teamName: string;
+  fromSessionId: string;
+  teammateSessionId?: string;
+  teammateName?: string;
+  summary?: string;
+  message: string;
+  metadata?: Record<string, unknown>;
+};
+
+export type SendTeammateMessageResult = {
+  teamName: string;
+  teammateName: string;
+  teammateSessionId: string;
+  message: OperatorMessageRecord;
+};
+
 export type CreateTrainingJobParams = {
   exportManifest: ReviewedExportManifest;
   mode: TrainingMode;
@@ -337,6 +379,7 @@ export class StandaloneOperatorRuntime {
   readonly runs: FileRunStore;
   readonly tasks: FileTaskStore;
   readonly messages: FileMessageStore;
+  readonly teams: FileOperatorCliTeamStore;
   readonly delivery: OperatorDeliveryService;
   readonly subagents: FileSubagentRegistry;
   readonly backgroundTasks: FileBackgroundTaskStore;
@@ -363,6 +406,7 @@ export class StandaloneOperatorRuntime {
     this.runs = new FileRunStore(path.join(options.rootDir, "runs.json"));
     this.tasks = new FileTaskStore(path.join(options.rootDir, "tasks.json"));
     this.messages = new FileMessageStore(path.join(options.rootDir, "messages.json"));
+    this.teams = new FileOperatorCliTeamStore(options.rootDir);
     this.delivery = new OperatorDeliveryService(options.rootDir);
     this.subagents = new FileSubagentRegistry(options.rootDir);
     this.backgroundTasks = new FileBackgroundTaskStore(
@@ -648,6 +692,103 @@ export class StandaloneOperatorRuntime {
 
   async listOutbox(sessionId: string): Promise<OperatorMessageRecord[]> {
     return await this.messages.listOutbox(sessionId);
+  }
+
+  async startTeammate(params: StartTeammateParams): Promise<StartTeammateResult> {
+    const team = await this.teams.get(params.teamName);
+    if (!team) {
+      throw new Error(`unknown team: ${params.teamName}`);
+    }
+    if (!team.taskSessionId) {
+      throw new Error(`team ${params.teamName} has no task session`);
+    }
+    const teammate = await this.teams.getTeammate(params.teamName, params.teammateName);
+    if (teammate) {
+      throw new Error(`duplicate teammate: ${params.teamName}/${params.teammateName}`);
+    }
+    const spawned = await this.spawnSubagent({
+      sessionId: params.sessionId,
+      parentRunId: params.parentRunId,
+      title: params.title,
+      ...(params.agentId ? { agentId: params.agentId } : {}),
+      ...(params.cwd ? { cwd: params.cwd } : {}),
+      ...(params.remoteId ? { remoteId: params.remoteId } : {}),
+      ...(params.remoteSource ? { remoteSource: params.remoteSource } : {}),
+      ...(params.modelPrimary ? { modelPrimary: params.modelPrimary } : {}),
+      ...(params.modelFallbacks ? { modelFallbacks: params.modelFallbacks } : {}),
+      metadata: {
+        ...(params.metadata ?? {}),
+        teamName: params.teamName,
+        teammateName: params.teammateName,
+        taskSessionId: team.taskSessionId,
+      },
+    });
+    await this.teams.addTeammate({
+      teamName: params.teamName,
+      teammateName: params.teammateName,
+      sessionId: spawned.childSession.id,
+      subagentRunId: spawned.subagent.runId,
+      childRunId: spawned.childRun.id,
+      title: params.title,
+      ...(params.agentId ? { agentId: params.agentId } : {}),
+      status: spawned.subagent.status,
+    });
+    return {
+      teamName: params.teamName,
+      teammateName: params.teammateName,
+      taskSessionId: team.taskSessionId,
+      spawned,
+    };
+  }
+
+  async sendTeammateMessage(params: SendTeammateMessageParams): Promise<SendTeammateMessageResult> {
+    const teammate = params.teammateName
+      ? await this.teams.getTeammate(params.teamName, params.teammateName)
+      : await this.resolveTeammateBySession(params.teamName, params.teammateSessionId);
+    if (!teammate) {
+      throw new Error(`unknown teammate in team ${params.teamName}`);
+    }
+    const message = await this.sendMessage({
+      fromSessionId: params.fromSessionId,
+      toSessionId: teammate.sessionId,
+      ...(params.summary ? { summary: params.summary } : {}),
+      message: params.message,
+      ...(params.metadata ? { metadata: params.metadata } : {}),
+    });
+    return {
+      teamName: params.teamName,
+      teammateName: teammate.name,
+      teammateSessionId: teammate.sessionId,
+      message,
+    };
+  }
+
+  async listTeammates(teamName: string) {
+    return await this.teams.listTeammates(teamName);
+  }
+
+  async getTeammate(teamName: string, teammateName: string) {
+    return await this.teams.getTeammate(teamName, teammateName);
+  }
+
+  async updateTeammateStatus(
+    teamName: string,
+    teammateName: string,
+    status: TeammateStatus,
+  ) {
+    const teammate = await this.teams.getTeammate(teamName, teammateName);
+    if (!teammate) {
+      return undefined;
+    }
+    const subagent = await this.updateSubagentStatus(teammate.subagentRunId, status);
+    if (!subagent) {
+      return undefined;
+    }
+    await this.updateRunStatus(teammate.childRunId, status);
+    return await this.teams.updateTeammate(teamName, teammateName, {
+      status,
+      subagentRunId: subagent.runId,
+    });
   }
 
   async pauseActiveRun(sessionId: string, reason?: string): Promise<OperatorRunRecord | undefined> {
@@ -1428,6 +1569,14 @@ export class StandaloneOperatorRuntime {
 
   async listReplays(): Promise<ReplayManifest[]> {
     return await this.replays.listSessionReplays();
+  }
+
+  private async resolveTeammateBySession(teamName: string, teammateSessionId?: string) {
+    if (!teammateSessionId) {
+      return undefined;
+    }
+    const teammates = await this.teams.listTeammates(teamName);
+    return teammates.find((teammate) => teammate.sessionId === teammateSessionId);
   }
 
   private async resolveSubagentModelSelection(
