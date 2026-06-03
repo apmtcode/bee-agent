@@ -281,6 +281,7 @@ Current cron behavior in this tranche:
 - cron jobs can now optionally declare model primary/fallback metadata
 - cron-dispatched runs can inherit a base model-selection context when the job omits overrides
 - job-level cron overrides can replace primary and fallback lists independently, including fallback-only overrides
+- cron runs and spawned subagents now share the same model-selection patching semantics, including strict primary-only overrides and explicit empty fallback overrides
 - explicit empty fallback lists are preserved instead of being silently re-inherited
 - cron-dispatched sessions, top-level operator runs, and persisted cron runs now carry the resolved model-selection context they used
 - successful cron fires record a real transcript turn and complete the linked session/run

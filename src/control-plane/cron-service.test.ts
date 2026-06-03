@@ -170,7 +170,7 @@ describe("OperatorCronService", () => {
     });
   });
 
-  it("preserves fallback-only cron overrides and explicit empty fallback overrides", async () => {
+  it("preserves fallback-only cron overrides, strict primary-only overrides, and explicit empty fallback overrides", async () => {
     const rootDir = await makeTempDir();
     const runtime = new StandaloneOperatorRuntime({ rootDir });
     const service = new OperatorCronService(rootDir, {
@@ -188,6 +188,13 @@ describe("OperatorCronService", () => {
         fallbacks: ["claude-haiku-4-5-20251001"],
       },
     });
+    const strictJob = await service.createJob({
+      cron: "* * * * *",
+      prompt: "strict primary",
+      modelSelection: {
+        primary: "claude-sonnet-4-6",
+      },
+    });
     const clearJob = await service.createJob({
       cron: "* * * * *",
       prompt: "clear fallbacks",
@@ -198,6 +205,7 @@ describe("OperatorCronService", () => {
 
     const runs = await service.tick(new Date(Date.now() + 120_000));
     const overrideRun = runs.find((run) => run.jobId === overrideJob.id);
+    const strictRun = runs.find((run) => run.jobId === strictJob.id);
     const clearRun = runs.find((run) => run.jobId === clearJob.id);
 
     expect(overrideRun).toMatchObject({
@@ -226,6 +234,13 @@ describe("OperatorCronService", () => {
       },
     });
 
+    expect(strictRun).toMatchObject({
+      modelSelection: {
+        primary: "claude-sonnet-4-6",
+        fallbacks: ["claude-sonnet-4-6", "claude-haiku-4-5-20251001"],
+        source: "job",
+      },
+    });
     expect(clearRun).toMatchObject({
       modelSelection: {
         primary: "claude-opus-4-7",

@@ -650,6 +650,37 @@ describe("StandaloneOperatorRuntime", () => {
         source: "override",
       },
     });
+
+    const parentRunPrimaryOnly = await runtime.startRun({
+      sessionId: parentSessionWithModel.id,
+      title: "Parent run primary only",
+      metadata: {
+        modelSelection: {
+          primary: "claude-opus-4-7",
+          source: "default",
+        },
+      },
+    });
+    const strictOverride = await runtime.spawnSubagent({
+      sessionId: parentSessionWithModel.id,
+      parentRunId: parentRunPrimaryOnly.id,
+      title: "Strict override child work",
+      modelPrimary: "claude-sonnet-4-6",
+    });
+    expect(strictOverride.childSession.metadata).toMatchObject({
+      modelSelection: {
+        primary: "claude-sonnet-4-6",
+        fallbacks: [],
+        source: "override",
+      },
+    });
+    expect(strictOverride.childRun.metadata).toMatchObject({
+      modelSelection: {
+        primary: "claude-sonnet-4-6",
+        fallbacks: [],
+        source: "override",
+      },
+    });
   });
 
   it("creates executable skills, runs them, and exports their provenance", async () => {

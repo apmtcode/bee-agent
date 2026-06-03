@@ -44,6 +44,10 @@ import { FileSessionStore } from "../harness/session-store.js";
 import { FileMemoryStore } from "../memory/memory-store.js";
 import { OperatorEventBus, type OperatorEvent } from "../kernel/event-bus.js";
 import { FileRunStore, type OperatorRunRecord } from "./run-store.js";
+import {
+  cloneResolvedModelSelection,
+  resolvePatchedModelSelection,
+} from "./model-selection.js";
 import { FileTaskStore, type OperatorTaskRecord, type OperatorTaskStatus } from "./task-store.js";
 import { FileMessageStore, type OperatorMessageRecord } from "./message-store.js";
 import { FileSubagentRegistry, type SubagentRunRecord } from "./subagent-registry.js";
@@ -1387,26 +1391,22 @@ export class StandaloneOperatorRuntime {
     const hasModelPrimary = hasOwn(params, "modelPrimary");
     const hasModelFallbacks = hasOwn(params, "modelFallbacks");
     if (hasModelPrimary || hasModelFallbacks) {
-      const primary = hasModelPrimary ? params.modelPrimary : parentSelection?.primary;
-      const fallbacks = hasModelFallbacks ? params.modelFallbacks : parentSelection?.fallbacks;
-      return {
-        ...(typeof primary === "string" ? { primary } : {}),
-        ...(hasModelFallbacks
-          ? { fallbacks: Array.isArray(fallbacks) ? [...fallbacks] : [] }
-          : Array.isArray(fallbacks)
-            ? { fallbacks: [...fallbacks] }
-            : {}),
+      return resolvePatchedModelSelection({
+        baseSelection: parentSelection,
         source: "override",
-      };
+        primary: params.modelPrimary,
+        hasPrimary: hasModelPrimary,
+        fallbacks: params.modelFallbacks,
+        hasFallbacks: hasModelFallbacks,
+      });
     }
-    if (!parentSelection) {
-      return undefined;
-    }
-    return {
-      ...(parentSelection.primary ? { primary: parentSelection.primary } : {}),
-      ...(Array.isArray(parentSelection.fallbacks) ? { fallbacks: [...parentSelection.fallbacks] } : {}),
-      source: "inherited",
-    };
+    const selection = cloneResolvedModelSelection(parentSelection);
+    return selection
+      ? {
+          ...selection,
+          source: "inherited",
+        }
+      : undefined;
   }
 
   private async buildSkillReplayPreview(sourceTrajectoryIds: string[]) {
