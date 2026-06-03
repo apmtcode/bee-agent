@@ -1,10 +1,13 @@
+import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 import { OperatorCliApp, parseSlashCommand } from "./app.js";
 
 const tempDirs: string[] = [];
+const execFileAsync = promisify(execFile);
 
 async function makeTempDir(): Promise<string> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "operator-cli-app-"));
@@ -66,6 +69,10 @@ describe("parseSlashCommand", () => {
     expect(parseSlashCommand("/notify success Deploy finished")).toEqual({ kind: "notify", status: "success", message: "Deploy finished" });
     expect(parseSlashCommand("/statusline")).toEqual({ kind: "statusline" });
     expect(parseSlashCommand("/statusline node .claude/statusline.js")).toEqual({ kind: "statusline", command: "node .claude/statusline.js" });
+    expect(parseSlashCommand("/worktree")).toEqual({ kind: "worktree" });
+    expect(parseSlashCommand("/worktree feature-x")).toEqual({ kind: "worktree", name: "feature-x" });
+    expect(parseSlashCommand("/worktree-exit")).toEqual({ kind: "worktree-exit", action: "keep" });
+    expect(parseSlashCommand("/worktree-exit remove")).toEqual({ kind: "worktree-exit", action: "remove" });
     expect(parseSlashCommand("/background")).toEqual({ kind: "background-list" });
     expect(parseSlashCommand("/background start smoke -- printf ok")).toEqual({
       kind: "background-start",
@@ -179,6 +186,10 @@ describe("parseSlashCommand", () => {
     expect(parseSlashCommand("/notify success")).toEqual({
       kind: "invalid",
       message: "Usage: /notify <status> <message>",
+    });
+    expect(parseSlashCommand("/worktree-exit nope")).toEqual({
+      kind: "invalid",
+      message: "Usage: /worktree-exit [keep|remove]",
     });
     expect(parseSlashCommand("/watch nope")).toEqual({
       kind: "invalid",
@@ -299,6 +310,40 @@ describe("OperatorCliApp", () => {
 
     const settings = JSON.parse(await fs.readFile(path.join(rootDir, ".claude", "settings.local.json"), "utf8")) as Record<string, unknown>;
     expect(settings).not.toHaveProperty("statusLine");
+  });
+
+  it("enters keeps and removes git worktrees", async () => {
+    const rootDir = await makeTempDir();
+    await execFileAsync("git", ["init", "-b", "main"], { cwd: rootDir });
+    await fs.writeFile(path.join(rootDir, "tracked.txt"), "hello\n");
+    await execFileAsync("git", ["add", "tracked.txt"], { cwd: rootDir });
+    await execFileAsync("git", ["-c", "user.name=Operator Test", "-c", "user.email=operator@example.test", "commit", "-m", "init"], { cwd: rootDir });
+
+    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    const session = await app.runtime.startSession({ title: "worktree cli", cwd: rootDir, agentId: "operator-cli" });
+
+    const nonRepoRoot = await makeTempDir();
+    const notRepoApp = new OperatorCliApp({ rootDir: nonRepoRoot, cwd: nonRepoRoot, currentDate: "2026-05-25" });
+    await expect(notRepoApp.dispatchSlashCommand({ kind: "worktree" }, session.id)).resolves.toContain("Not a git repository");
+
+    const entered = await app.dispatchSlashCommand({ kind: "worktree", name: "feature-x" }, session.id);
+    expect(entered).toContain("Entered worktree");
+    expect(entered).toContain("branch=operator/feature-x");
+
+    const status = await app.dispatchSlashCommand({ kind: "status" }, session.id);
+    expect(status).toContain("cwd=");
+    expect(status).toContain(`${path.sep}.operator${path.sep}worktrees${path.sep}feature-x`);
+
+    const kept = await app.dispatchSlashCommand({ kind: "worktree-exit", action: "keep" }, session.id);
+    expect(kept).toContain("kept branch=operator/feature-x");
+    await expect(fs.stat(path.join(rootDir, ".operator", "worktrees", "feature-x"))).resolves.toBeDefined();
+
+    const reentered = await app.dispatchSlashCommand({ kind: "worktree", name: "feature-y" }, session.id);
+    expect(reentered).toContain("branch=operator/feature-y");
+
+    const removed = await app.dispatchSlashCommand({ kind: "worktree-exit", action: "remove" }, session.id);
+    expect(removed).toContain("Exited and removed worktree");
+    await expect(fs.stat(path.join(rootDir, ".operator", "worktrees", "feature-y"))).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("streams in-flight freeform run updates and reuses transcript context across resume", async () => {

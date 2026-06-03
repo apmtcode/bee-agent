@@ -1,5 +1,9 @@
-import readline from "node:readline/promises";
+import { execFile } from "node:child_process";
+import fs from "node:fs/promises";
+import path from "node:path";
 import process from "node:process";
+import readline from "node:readline/promises";
+import { promisify } from "node:util";
 import { subscribeRuntimeEvents } from "../control-plane/subscriptions.js";
 import { OperatorControlPlaneServer } from "../control-plane/server.js";
 import { StandaloneOperatorRuntime } from "../orchestrator/operator-runtime.js";
@@ -48,6 +52,8 @@ export type OperatorCliSlashCommand =
   | { kind: "send"; toSessionId: string; message: string }
   | { kind: "notify"; status: string; message: string }
   | { kind: "statusline"; command?: string }
+  | { kind: "worktree"; name?: string }
+  | { kind: "worktree-exit"; action: "keep" | "remove" }
   | { kind: "skills" }
   | { kind: "run-skill"; skillId: string }
   | { kind: "watch-run"; runId?: string }
@@ -80,16 +86,25 @@ export type OperatorCliAppOptions = {
   stderr?: NodeJS.WritableStream;
 };
 
+type OperatorCliWorktreeSession = {
+  originalCwd: string;
+  path: string;
+  branch?: string;
+};
+
+const execFileAsync = promisify(execFile);
+
 export class OperatorCliApp {
   readonly runtime: StandaloneOperatorRuntime;
   readonly server: OperatorControlPlaneServer;
-  readonly cwd: string;
+  private cwd: string;
   readonly currentDate: string;
   private readonly stdin: NodeJS.ReadableStream;
   private readonly stdout: NodeJS.WritableStream;
   private readonly stderr: NodeJS.WritableStream;
   private activeSessionId?: string;
   private readonly approvedCommandFingerprints = new Set<string>();
+  private worktreeSession?: OperatorCliWorktreeSession;
 
   constructor(private readonly options: OperatorCliAppOptions) {
     this.runtime = new StandaloneOperatorRuntime({ rootDir: options.rootDir });
@@ -225,6 +240,8 @@ export class OperatorCliApp {
           "  /send <sessionId> <message>",
           "  /notify <status> <message>",
           "  /statusline [command|off]",
+          "  /worktree [name]",
+          "  /worktree-exit [keep|remove]",
           "  /skills",
           "  /run-skill <id>",
           "  /watch run [runId]",
@@ -576,6 +593,12 @@ export class OperatorCliApp {
         await setProjectStatusLineConfig(this.cwd, { type: "command", command: command.command });
         return `Configured status line command=${command.command}`;
       }
+      case "worktree": {
+        return await this.enterWorktree(command.name);
+      }
+      case "worktree-exit": {
+        return await this.exitWorktree(command.action);
+      }
       case "skills": {
         const promoted = await this.runtime.listPromotedSkills();
         const executable = await this.runtime.listExecutableSkills();
@@ -812,6 +835,52 @@ export class OperatorCliApp {
 
   writeError(message: string): void {
     this.stderr.write(`${message}\n`);
+  }
+
+  private async enterWorktree(name?: string): Promise<string> {
+    if (this.worktreeSession) {
+      return `Already in worktree ${this.worktreeSession.path}`;
+    }
+    const repoRoot = await this.resolveGitRoot(this.cwd);
+    if (!repoRoot) {
+      return `Not a git repository: ${this.cwd}`;
+    }
+    const safeName = sanitizeWorktreeName(name) ?? `operator-${Date.now().toString(36)}`;
+    const worktreesDir = path.join(repoRoot, ".operator", "worktrees");
+    const worktreePath = path.join(worktreesDir, safeName);
+    await fs.mkdir(worktreesDir, { recursive: true });
+    const branch = `operator/${safeName}`;
+    await execFileAsync("git", ["worktree", "add", "-b", branch, worktreePath], { cwd: repoRoot });
+    this.worktreeSession = { originalCwd: this.cwd, path: worktreePath, branch };
+    this.cwd = worktreePath;
+    return `Entered worktree ${worktreePath} branch=${branch}`;
+  }
+
+  private async exitWorktree(action: "keep" | "remove"): Promise<string> {
+    if (!this.worktreeSession) {
+      return "No active worktree.";
+    }
+    const session = this.worktreeSession;
+    this.cwd = session.originalCwd;
+    this.worktreeSession = undefined;
+    if (action === "keep") {
+      return `Exited worktree ${session.path} and kept branch=${session.branch ?? "<none>"}`;
+    }
+    await execFileAsync("git", ["worktree", "remove", "--force", session.path], { cwd: session.originalCwd });
+    if (session.branch) {
+      await execFileAsync("git", ["branch", "-D", session.branch], { cwd: session.originalCwd });
+    }
+    return `Exited and removed worktree ${session.path}`;
+  }
+
+  private async resolveGitRoot(cwd: string): Promise<string | undefined> {
+    try {
+      const { stdout } = await execFileAsync("git", ["rev-parse", "--show-toplevel"], { cwd });
+      const root = stdout.trim();
+      return root || undefined;
+    } catch {
+      return undefined;
+    }
   }
 
   private async collectRunProgress<T>(
@@ -1130,6 +1199,18 @@ function formatPlatformControlResult(
   return [summary, details].join("\n");
 }
 
+function sanitizeWorktreeName(value?: string): string | undefined {
+  if (!value) {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  const sanitized = trimmed.replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "");
+  return sanitized || undefined;
+}
+
 export function parseSlashCommand(input: string): OperatorCliSlashCommand | undefined {
   const trimmed = input.trim();
   if (!trimmed.startsWith("/")) {
@@ -1186,6 +1267,10 @@ export function parseSlashCommand(input: string): OperatorCliSlashCommand | unde
       return parseNotifyCommand(tail);
     case "statusline":
       return parseStatusLineCommand(tail);
+    case "worktree":
+      return parseWorktreeCommand(tail);
+    case "worktree-exit":
+      return parseWorktreeExitCommand(tail);
     case "skills":
       return { kind: "skills" };
     case "run-skill":
@@ -1234,6 +1319,20 @@ function parseStatusLineCommand(tail: string): OperatorCliSlashCommand {
     return { kind: "statusline" };
   }
   return { kind: "statusline", command: tail };
+}
+
+function parseWorktreeCommand(tail: string): OperatorCliSlashCommand {
+  return tail ? { kind: "worktree", name: tail } : { kind: "worktree" };
+}
+
+function parseWorktreeExitCommand(tail: string): OperatorCliSlashCommand {
+  if (!tail) {
+    return { kind: "worktree-exit", action: "keep" };
+  }
+  if (tail === "keep" || tail === "remove") {
+    return { kind: "worktree-exit", action: tail };
+  }
+  return { kind: "invalid", message: "Usage: /worktree-exit [keep|remove]" };
 }
 
 function parseWatchCommand(tail: string): OperatorCliSlashCommand {

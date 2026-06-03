@@ -63,6 +63,8 @@ Current slash commands:
 - `/send <sessionId> <message>`
 - `/notify <status> <message>`
 - `/statusline [command|off]`
+- `/worktree [name]`
+- `/worktree-exit [keep|remove]`
 - `/skills`
 - `/run-skill <id>`
 - `/background`
@@ -123,6 +125,16 @@ Current status-line behavior in this tranche:
 - the supported shape mirrors the narrow Claude Code command-backed form: `{ "type": "command", "command": "..." }`
 - exported helpers can resolve the merged `statusLine` command config or persist a project-local override
 - this tranche remains intentionally narrow and does not yet execute the command, stream session JSON to it, or render a live terminal status line
+
+## Worktree entry and exit
+
+Operator now also has a first narrow worktree surface for Claude Code-style isolated local edits.
+
+Current worktree behavior in this tranche:
+- the CLI exposes `/worktree [name]` to create and enter a git worktree rooted under `<repo>/.operator/worktrees/`
+- each created worktree gets an isolated branch named `operator/<name>`
+- `/worktree-exit [keep|remove]` returns the CLI session to the original cwd and can either keep the worktree or remove both the worktree and its branch
+- this tranche is intentionally CLI-local and git-only; it does not yet add session handoff, existing-worktree attach, dirty-state protection, or non-git hook-backed worktrees
 
 ## Push notifications
 
