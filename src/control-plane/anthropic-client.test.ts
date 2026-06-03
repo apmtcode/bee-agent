@@ -108,6 +108,77 @@ describe("anthropic-client", () => {
     });
   });
 
+  it("drops trailing assistant prefill when thinking is enabled", () => {
+    expect(normalizeAnthropicMessagesPayload({
+      model: "claude-opus-4-7",
+      thinking: { type: "enabled", budget_tokens: 1024 },
+      system: "You are helpful.",
+      tool_choice: { type: "auto" },
+      stop_sequences: ["DONE"],
+      temperature: 0.2,
+      top_p: 0.9,
+      top_k: 32,
+      metadata: { lane: "ops" },
+      messages: [
+        { role: "user", content: "hello" },
+        { role: "assistant", content: "partial prefill" },
+      ],
+    })).toEqual({
+      model: "claude-opus-4-7",
+      thinking: { type: "enabled", budget_tokens: 1024 },
+      system: "You are helpful.",
+      tool_choice: { type: "auto" },
+      stop_sequences: ["DONE"],
+      temperature: 0.2,
+      top_p: 0.9,
+      top_k: 32,
+      metadata: { lane: "ops" },
+      messages: [
+        {
+          role: "user",
+          content: [
+            { type: "text", text: "hello" },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("keeps retained tool blocks when thinking is enabled", () => {
+    expect(normalizeAnthropicMessagesPayload({
+      model: "claude-opus-4-7",
+      thinking: { type: "enabled", budget_tokens: 1024 },
+      messages: [
+        { role: "user", content: "hello" },
+        { role: "assistant", content: [{ type: "tool_use", id: "tool_1", name: "bash", input: { command: "pwd" } }] },
+        { role: "user", content: [{ type: "tool_result", tool_use_id: "tool_1", content: "ok" }] },
+      ],
+    })).toEqual({
+      model: "claude-opus-4-7",
+      thinking: { type: "enabled", budget_tokens: 1024 },
+      messages: [
+        {
+          role: "user",
+          content: [
+            { type: "text", text: "hello" },
+          ],
+        },
+        {
+          role: "assistant",
+          content: [
+            { type: "tool_use", id: "tool_1", name: "bash", input: { command: "pwd" } },
+          ],
+        },
+        {
+          role: "user",
+          content: [
+            { type: "tool_result", tool_use_id: "tool_1", content: "ok" },
+          ],
+        },
+      ],
+    });
+  });
+
   it("preserves response metadata for non-streaming requests", async () => {
     const response = await forwardAnthropicMessagesRequest({
       body: JSON.stringify({ model: "claude-opus-4-7", stream: false }),

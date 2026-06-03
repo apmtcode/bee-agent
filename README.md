@@ -325,10 +325,11 @@ Current behavior in this tranche:
 - forwarded requests send Claude-style `x-api-key` auth and optional `Authorization: Bearer ...` when `ANTHROPIC_AUTH_TOKEN` is present
 - base URL resolution now honors `ANTHROPIC_BASE_URL`
 - incoming `anthropic-beta` headers are now forwarded through the control plane
-- request bodies now perform narrow Anthropic-oriented sanitation for message histories by stripping orphaned tool blocks and merging same-role neighbors before forwarding
+- Claude-native request fields like `system`, `tool_choice`, `stop_sequences`, `temperature`, `top_p`, `top_k`, `metadata`, and `thinking` are preserved through request normalization instead of being dropped by the control-plane seam
+- request bodies now perform narrow Anthropic-oriented sanitation for message histories by stripping orphaned tool blocks, merging same-role neighbors, and removing trailing assistant prefill when `thinking` is enabled unless the final assistant turn is a retained tool use
 - non-streaming and streaming responses preserve key upstream transport metadata like `request-id`, Anthropic request IDs, selected rate-limit headers, and `retry-after`
 - streaming responses now pass through raw `text/event-stream` bodies instead of being rejected at the control-plane boundary
-- this tranche is intentionally narrow and still does not add retries, SSE event normalization, or broader provider routing
+- this tranche is intentionally narrow and still does not add retries, SSE event normalization, broader provider routing, or container/MCP-specific request shaping
 
 ## Current gaps to parity
 

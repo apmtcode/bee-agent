@@ -91,13 +91,13 @@ export function buildAnthropicMessagesRequest(params: {
 }
 
 export function normalizeAnthropicMessagesPayload(payload: Record<string, unknown>): Record<string, unknown> {
-  if (!Array.isArray(payload.messages)) {
-    return payload;
-  }
-  return {
+  const normalizedMessages = Array.isArray(payload.messages)
+    ? normalizeAnthropicMessages(payload.messages)
+    : payload.messages;
+  return stripTrailingAssistantPrefillForThinking({
     ...payload,
-    messages: normalizeAnthropicMessages(payload.messages),
-  };
+    ...(normalizedMessages === undefined ? {} : { messages: normalizedMessages }),
+  });
 }
 
 export async function forwardAnthropicMessagesRequest(params: {
@@ -183,6 +183,45 @@ function readIncomingHeader(
     }
   }
   return undefined;
+}
+
+function stripTrailingAssistantPrefillForThinking(payload: Record<string, unknown>): Record<string, unknown> {
+  if (!isThinkingEnabled(payload.thinking) || !Array.isArray(payload.messages) || payload.messages.length === 0) {
+    return payload;
+  }
+  const messages = payload.messages.filter((message): message is AnthropicMessage => isAnthropicMessage(message));
+  if (messages.length === 0) {
+    return {
+      ...payload,
+      messages,
+    };
+  }
+  const lastMessage = messages.at(-1);
+  if (!lastMessage || lastMessage.role !== "assistant" || hasToolUseBlock(lastMessage.content)) {
+    return {
+      ...payload,
+      messages,
+    };
+  }
+  return {
+    ...payload,
+    messages: messages.slice(0, -1),
+  };
+}
+
+function isThinkingEnabled(thinking: unknown): boolean {
+  return !!thinking && typeof thinking === "object";
+}
+
+function isAnthropicMessage(value: unknown): value is AnthropicMessage {
+  return !!value
+    && typeof value === "object"
+    && (((value as { role?: unknown }).role === "user") || ((value as { role?: unknown }).role === "assistant"))
+    && Array.isArray((value as { content?: unknown }).content);
+}
+
+function hasToolUseBlock(content: AnthropicMessageBlock[]): boolean {
+  return content.some((block) => block.type === "tool_use");
 }
 
 function normalizeAnthropicMessages(messages: unknown[]): AnthropicMessage[] {

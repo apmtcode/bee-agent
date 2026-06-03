@@ -1804,6 +1804,14 @@ describe("OperatorControlPlaneServer", () => {
       expect(JSON.parse(String(init?.body))).toEqual({
         model: "claude-opus-4-7",
         max_tokens: 128,
+        system: "You are helpful.",
+        tool_choice: { type: "auto" },
+        stop_sequences: ["DONE"],
+        temperature: 0.2,
+        top_p: 0.9,
+        top_k: 32,
+        metadata: { lane: "ops" },
+        thinking: { type: "enabled", budget_tokens: 1024 },
         messages: [
           {
             role: "user",
@@ -1840,10 +1848,19 @@ describe("OperatorControlPlaneServer", () => {
       body: JSON.stringify({
         model: "claude-opus-4-7",
         max_tokens: 128,
+        system: "You are helpful.",
+        tool_choice: { type: "auto" },
+        stop_sequences: ["DONE"],
+        temperature: 0.2,
+        top_p: 0.9,
+        top_k: 32,
+        metadata: { lane: "ops" },
+        thinking: { type: "enabled", budget_tokens: 1024 },
         messages: [
           { role: "assistant", content: [{ type: "tool_use", id: "tool-orphan", name: "bash", input: { command: "pwd" } }] },
           { role: "user", content: [{ type: "tool_result", tool_use_id: "tool-keep", content: "ok" }] },
           { role: "user", content: "hello" },
+          { role: "assistant", content: "partial prefill" },
           { role: "assistant", content: [{ type: "tool_use", id: "tool-keep", name: "bash", input: { command: "ls" } }] },
         ],
       }),
