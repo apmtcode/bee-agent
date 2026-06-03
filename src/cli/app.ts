@@ -46,9 +46,9 @@ export type OperatorCliSlashCommand =
   | { kind: "platform-pause"; platform: string; reason?: string }
   | { kind: "platform-resume"; platform: string }
   | { kind: "recall"; query: string }
-  | { kind: "tasks" }
-  | { kind: "task-create"; subject: string }
-  | { kind: "task-update"; taskId: string; status: "pending" | "in_progress" | "completed" }
+  | { kind: "tasks"; team?: string }
+  | { kind: "task-create"; subject: string; team?: string; owner?: string; blockedBy?: string[] }
+  | { kind: "task-update"; taskId: string; status?: "pending" | "in_progress" | "completed"; owner?: string | null; blockedBy?: string[] }
   | { kind: "messages" }
   | { kind: "inbox" }
   | { kind: "outbox" }
@@ -113,7 +113,7 @@ export class OperatorCliApp {
   private activeSessionId?: string;
   private readonly approvedCommandFingerprints = new Set<string>();
   private worktreeSession?: OperatorCliWorktreeSession;
-  private readonly teams: FileOperatorCliTeamStore;
+  readonly teams: FileOperatorCliTeamStore;
 
   constructor(private readonly options: OperatorCliAppOptions) {
     this.runtime = new StandaloneOperatorRuntime({ rootDir: options.rootDir });
@@ -241,9 +241,9 @@ export class OperatorCliApp {
           "  /platform pause <platform> [reason]",
           "  /platform resume <platform>",
           "  /recall <query>",
-          "  /tasks",
-          "  /task-create <subject>",
-          "  /task-update <taskId> <pending|in_progress|completed>",
+          "  /tasks [team <name>]",
+          "  /task-create <subject> [--team <name>] [--owner <owner>] [--blocked-by <taskId,...>]",
+          "  /task-update <taskId> [<pending|in_progress|completed>] [--owner <owner|off>] [--blocked-by <taskId,...>]",
           "  /messages",
           "  /inbox",
           "  /outbox",
@@ -541,20 +541,34 @@ export class OperatorCliApp {
       }
       case "tasks": {
         const activeSessionId = this.requireActiveSessionId(sessionId);
-        const tasks = await this.runtime.listTasks(activeSessionId);
+        const team = command.team ? await this.teams.get(command.team) : undefined;
+        if (command.team && !team) {
+          return `Unknown team: ${command.team}`;
+        }
+        const tasks = await this.runtime.listTasks(team?.taskSessionId ?? activeSessionId);
         return formatOperatorTasks(tasks);
       }
       case "task-create": {
         const activeSessionId = this.requireActiveSessionId(sessionId);
+        const team = command.team ? await this.teams.get(command.team) : undefined;
+        if (command.team && !team) {
+          return `Unknown team: ${command.team}`;
+        }
         const task = await this.runtime.createTask({
-          sessionId: activeSessionId,
+          sessionId: team?.taskSessionId ?? activeSessionId,
           subject: command.subject,
           description: command.subject,
+          ...(command.owner ? { owner: command.owner } : {}),
+          ...(command.blockedBy?.length ? { blockedBy: command.blockedBy } : {}),
         });
         return `Created task ${task.id} ${task.status} ${task.subject}`;
       }
       case "task-update": {
-        const task = await this.runtime.updateTask(command.taskId, { status: command.status });
+        const task = await this.runtime.updateTask(command.taskId, {
+          ...(command.status ? { status: command.status } : {}),
+          ...(command.owner !== undefined ? { owner: command.owner } : {}),
+          ...(command.blockedBy ? { blockedBy: command.blockedBy } : {}),
+        });
         return task ? `Updated task ${task.id} ${task.status} ${task.subject}` : `Unknown task: ${command.taskId}`;
       }
       case "messages": {
@@ -641,11 +655,24 @@ export class OperatorCliApp {
         const teams = await this.teams.list();
         return teams.length === 0
           ? "No teams."
-          : teams.map((team) => `${team.name}${team.description ? ` ${team.description}` : ""}`).join("\n");
+          : teams.map((team) => `${team.name}${team.description ? ` ${team.description}` : ""}${team.taskSessionId ? ` taskSession=${team.taskSessionId}` : ""}`).join("\n");
       }
       case "team-create": {
-        const team = await this.teams.create({ name: command.name, ...(command.description ? { description: command.description } : {}) });
-        return `Created team ${team.name}${team.description ? ` description=${team.description}` : ""}`;
+        const existing = await this.teams.get(command.name);
+        const taskSession = existing?.taskSessionId
+          ? await this.runtime.getSession(existing.taskSessionId)
+          : undefined;
+        const createdTaskSession = taskSession ?? await this.runtime.startSession({
+          title: `Team ${command.name}`,
+          cwd: this.cwd,
+          agentId: `team:${command.name}`,
+        });
+        const team = await this.teams.create({
+          name: command.name,
+          ...(command.description ? { description: command.description } : {}),
+          taskSessionId: createdTaskSession.id,
+        });
+        return `Created team ${team.name}${team.description ? ` description=${team.description}` : ""} taskSession=${team.taskSessionId ?? createdTaskSession.id}`;
       }
       case "team-delete": {
         const team = await this.teams.delete(command.name);
@@ -1311,9 +1338,9 @@ export function parseSlashCommand(input: string): OperatorCliSlashCommand | unde
     case "recall":
       return { kind: "recall", query: tail };
     case "tasks":
-      return tail ? { kind: "invalid", message: "Usage: /tasks" } : { kind: "tasks" };
+      return parseTasksCommand(tail);
     case "task-create":
-      return tail ? { kind: "task-create", subject: tail } : { kind: "invalid", message: "Usage: /task-create <subject>" };
+      return parseTaskCreateCommand(tail);
     case "task-update":
       return parseTaskUpdateCommand(tail);
     case "task-stop":
@@ -1565,6 +1592,34 @@ function parsePlatformCommand(tail: string): OperatorCliSlashCommand {
   return { kind: "invalid", message: usage };
 }
 
+function parseTasksCommand(tail: string): OperatorCliSlashCommand {
+  if (!tail) {
+    return { kind: "tasks" };
+  }
+  const parts = tail.split(/\s+/).filter(Boolean);
+  if (parts.length === 2 && parts[0] === "team") {
+    return { kind: "tasks", team: parts[1] };
+  }
+  return { kind: "invalid", message: "Usage: /tasks [team <name>]" };
+}
+
+function parseTaskCreateCommand(tail: string): OperatorCliSlashCommand {
+  const parsed = parseFlagSegments(tail);
+  if (!parsed.subject) {
+    return { kind: "invalid", message: "Usage: /task-create <subject> [--team <name>] [--owner <owner>] [--blocked-by <taskId,...>]" };
+  }
+  if (parsed.invalid) {
+    return { kind: "invalid", message: "Usage: /task-create <subject> [--team <name>] [--owner <owner>] [--blocked-by <taskId,...>]" };
+  }
+  return {
+    kind: "task-create",
+    subject: parsed.subject,
+    ...(parsed.team ? { team: parsed.team } : {}),
+    ...(parsed.owner ? { owner: parsed.owner } : {}),
+    ...(parsed.blockedBy ? { blockedBy: parsed.blockedBy } : {}),
+  };
+}
+
 function parseBackgroundCommand(tail: string): OperatorCliSlashCommand {
   if (!tail) {
     return { kind: "background-list" };
@@ -1620,14 +1675,83 @@ function parseBackgroundCommand(tail: string): OperatorCliSlashCommand {
 }
 
 function parseTaskUpdateCommand(tail: string): OperatorCliSlashCommand {
-  const [taskId, status, ...rest] = tail.split(/\s+/).filter(Boolean);
-  if (!taskId || !status || rest.length > 0) {
-    return { kind: "invalid", message: "Usage: /task-update <taskId> <pending|in_progress|completed>" };
+  const tokens = tail.split(/\s+/).filter(Boolean);
+  const [taskId, maybeStatus, ...rest] = tokens;
+  if (!taskId) {
+    return { kind: "invalid", message: "Usage: /task-update <taskId> [<pending|in_progress|completed>] [--owner <owner|off>] [--blocked-by <taskId,...>]" };
   }
-  if (status !== "pending" && status !== "in_progress" && status !== "completed") {
-    return { kind: "invalid", message: "Usage: /task-update <taskId> <pending|in_progress|completed>" };
+  const hasStatus = maybeStatus === "pending" || maybeStatus === "in_progress" || maybeStatus === "completed";
+  if (maybeStatus && !hasStatus && !maybeStatus.startsWith("--")) {
+    return { kind: "invalid", message: "Usage: /task-update <taskId> [<pending|in_progress|completed>] [--owner <owner|off>] [--blocked-by <taskId,...>]" };
   }
-  return { kind: "task-update", taskId, status };
+  const flags = parseFlagSegments([...(hasStatus ? rest : tokens.slice(1))].join(" "));
+  if (flags.invalid || (!hasStatus && flags.owner === undefined && flags.blockedBy === undefined)) {
+    return { kind: "invalid", message: "Usage: /task-update <taskId> [<pending|in_progress|completed>] [--owner <owner|off>] [--blocked-by <taskId,...>]" };
+  }
+  return {
+    kind: "task-update",
+    taskId,
+    ...(hasStatus ? { status: maybeStatus } : {}),
+    ...(flags.owner !== undefined ? { owner: flags.owner } : {}),
+    ...(flags.blockedBy ? { blockedBy: flags.blockedBy } : {}),
+  };
+}
+
+function parseFlagSegments(tail: string): {
+  subject?: string;
+  team?: string;
+  owner?: string | null;
+  blockedBy?: string[];
+  invalid?: boolean;
+} {
+  const tokens = tail.split(/\s+/).filter(Boolean);
+  const subjectParts: string[] = [];
+  let team: string | undefined;
+  let owner: string | null | undefined;
+  let blockedBy: string[] | undefined;
+  for (let index = 0; index < tokens.length; index += 1) {
+    const token = tokens[index];
+    if (token === "--team") {
+      const value = tokens[index + 1];
+      if (!value) {
+        return { invalid: true };
+      }
+      team = value;
+      index += 1;
+      continue;
+    }
+    if (token === "--owner") {
+      const value = tokens[index + 1];
+      if (!value) {
+        return { invalid: true };
+      }
+      owner = value === "off" ? null : value;
+      index += 1;
+      continue;
+    }
+    if (token === "--blocked-by") {
+      const value = tokens[index + 1];
+      if (!value) {
+        return { invalid: true };
+      }
+      blockedBy = value.split(",").map((item) => item.trim()).filter(Boolean);
+      if (blockedBy.length === 0) {
+        return { invalid: true };
+      }
+      index += 1;
+      continue;
+    }
+    if (token.startsWith("--")) {
+      return { invalid: true };
+    }
+    subjectParts.push(token);
+  }
+  return {
+    ...(subjectParts.length > 0 ? { subject: subjectParts.join(" ") } : {}),
+    ...(team ? { team } : {}),
+    ...(owner !== undefined ? { owner } : {}),
+    ...(blockedBy ? { blockedBy } : {}),
+  };
 }
 
 function parseSendCommand(tail: string): OperatorCliSlashCommand {

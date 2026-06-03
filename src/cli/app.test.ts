@@ -59,8 +59,22 @@ describe("parseSlashCommand", () => {
     expect(parseSlashCommand("/platform resume gateway")).toEqual({ kind: "platform-resume", platform: "gateway" });
     expect(parseSlashCommand("/recall deploy bug")).toEqual({ kind: "recall", query: "deploy bug" });
     expect(parseSlashCommand("/tasks")).toEqual({ kind: "tasks" });
+    expect(parseSlashCommand("/tasks team reviewers")).toEqual({ kind: "tasks", team: "reviewers" });
     expect(parseSlashCommand("/task-create Inspect logs")).toEqual({ kind: "task-create", subject: "Inspect logs" });
+    expect(parseSlashCommand("/task-create Inspect logs --team reviewers --owner worker --blocked-by task-1,task-2")).toEqual({
+      kind: "task-create",
+      subject: "Inspect logs",
+      team: "reviewers",
+      owner: "worker",
+      blockedBy: ["task-1", "task-2"],
+    });
     expect(parseSlashCommand("/task-update task-1 in_progress")).toEqual({ kind: "task-update", taskId: "task-1", status: "in_progress" });
+    expect(parseSlashCommand("/task-update task-1 --owner worker --blocked-by task-2")).toEqual({
+      kind: "task-update",
+      taskId: "task-1",
+      owner: "worker",
+      blockedBy: ["task-2"],
+    });
     expect(parseSlashCommand("/task-stop task-1")).toEqual({ kind: "task-stop", taskId: "task-1" });
     expect(parseSlashCommand("/messages")).toEqual({ kind: "messages" });
     expect(parseSlashCommand("/inbox")).toEqual({ kind: "inbox" });
@@ -157,17 +171,25 @@ describe("parseSlashCommand", () => {
       kind: "invalid",
       message: "Usage: /platform <list|status|pause|resume> <platform> [reason]",
     });
+    expect(parseSlashCommand("/tasks later")).toEqual({
+      kind: "invalid",
+      message: "Usage: /tasks [team <name>]",
+    });
     expect(parseSlashCommand("/task-create")).toEqual({
       kind: "invalid",
-      message: "Usage: /task-create <subject>",
+      message: "Usage: /task-create <subject> [--team <name>] [--owner <owner>] [--blocked-by <taskId,...>]",
+    });
+    expect(parseSlashCommand("/task-create --team reviewers")).toEqual({
+      kind: "invalid",
+      message: "Usage: /task-create <subject> [--team <name>] [--owner <owner>] [--blocked-by <taskId,...>]",
     });
     expect(parseSlashCommand("/task-update")).toEqual({
       kind: "invalid",
-      message: "Usage: /task-update <taskId> <pending|in_progress|completed>",
+      message: "Usage: /task-update <taskId> [<pending|in_progress|completed>] [--owner <owner|off>] [--blocked-by <taskId,...>]",
     });
     expect(parseSlashCommand("/task-update task-1 blocked")).toEqual({
       kind: "invalid",
-      message: "Usage: /task-update <taskId> <pending|in_progress|completed>",
+      message: "Usage: /task-update <taskId> [<pending|in_progress|completed>] [--owner <owner|off>] [--blocked-by <taskId,...>]",
     });
     expect(parseSlashCommand("/task-stop")).toEqual({
       kind: "invalid",
@@ -264,11 +286,11 @@ describe("OperatorCliApp", () => {
     const listOutput = await app.dispatchSlashCommand({ kind: "tasks" }, session.id);
     expect(listOutput).toContain(`${task.id} pending Inspect logs`);
 
-    const updatedOutput = await app.dispatchSlashCommand({ kind: "task-update", taskId: task.id, status: "completed" }, session.id);
+    const updatedOutput = await app.dispatchSlashCommand({ kind: "task-update", taskId: task.id, status: "completed", owner: "worker", blockedBy: ["task-2"] }, session.id);
     expect(updatedOutput).toContain(`Updated task ${task.id} completed Inspect logs`);
 
     const updatedTask = await app.runtime.getTask(task.id);
-    expect(updatedTask).toMatchObject({ id: task.id, status: "completed", subject: "Inspect logs" });
+    expect(updatedTask).toMatchObject({ id: task.id, status: "completed", subject: "Inspect logs", owner: "worker", blockedBy: ["task-2"] });
   });
 
   it("sends and lists operator messages", async () => {
@@ -420,22 +442,37 @@ describe("OperatorCliApp", () => {
     await expect(fs.stat(path.join(rootDir, ".operator", "worktrees", "feature-y"))).rejects.toMatchObject({ code: "ENOENT" });
   });
 
-  it("creates lists and deletes teams", async () => {
+  it("creates team task sessions and coordinates team-scoped tasks", async () => {
     const rootDir = await makeTempDir();
     const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    const session = await app.runtime.startSession({ title: "team task cli", cwd: rootDir, agentId: "operator-cli" });
 
     await expect(app.dispatchSlashCommand({ kind: "teams" })).resolves.toBe("No teams.");
 
-    const created = await app.dispatchSlashCommand({ kind: "team-create", name: "reviewers", description: "Review team" });
+    const created = await app.dispatchSlashCommand({ kind: "team-create", name: "reviewers", description: "Review team" }, session.id);
     expect(created).toContain("Created team reviewers");
     expect(created).toContain("description=Review team");
+    expect(created).toContain("taskSession=");
 
-    const listed = await app.dispatchSlashCommand({ kind: "teams" });
-    expect(listed).toContain("reviewers Review team");
+    const listed = await app.dispatchSlashCommand({ kind: "teams" }, session.id);
+    expect(listed).toContain("reviewers Review team taskSession=");
 
-    const deleted = await app.dispatchSlashCommand({ kind: "team-delete", name: "reviewers" });
+    const teamTask = await app.dispatchSlashCommand({ kind: "task-create", subject: "Inspect PR", team: "reviewers", owner: "alice", blockedBy: ["task-0"] }, session.id);
+    expect(teamTask).toContain("Created task");
+
+    const listedTasks = await app.dispatchSlashCommand({ kind: "tasks", team: "reviewers" }, session.id);
+    expect(listedTasks).toContain("Inspect PR owner=alice blockedBy=task-0");
+
+    const team = await app.teams.get("reviewers");
+    if (!team?.taskSessionId) {
+      throw new Error("expected team task session");
+    }
+    const tasks = await app.runtime.listTasks(team.taskSessionId);
+    expect(tasks).toHaveLength(1);
+
+    const deleted = await app.dispatchSlashCommand({ kind: "team-delete", name: "reviewers" }, session.id);
     expect(deleted).toContain("Deleted team reviewers.");
-    await expect(app.dispatchSlashCommand({ kind: "teams" })).resolves.toBe("No teams.");
+    await expect(app.dispatchSlashCommand({ kind: "teams" }, session.id)).resolves.toBe("No teams.");
   });
 
   it("streams in-flight freeform run updates and reuses transcript context across resume", async () => {

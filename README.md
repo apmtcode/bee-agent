@@ -54,9 +54,9 @@ Current slash commands:
 - `/platform pause <platform> [reason]`
 - `/platform resume <platform>`
 - `/recall <query>`
-- `/tasks`
-- `/task-create <subject>`
-- `/task-update <taskId> <pending|in_progress|completed>`
+- `/tasks [team <name>]`
+- `/task-create <subject> [--team <name>] [--owner <owner>] [--blocked-by <taskId,...>]`
+- `/task-update <taskId> [<pending|in_progress|completed>] [--owner <owner|off>] [--blocked-by <taskId,...>]`
 - `/messages`
 - `/inbox`
 - `/outbox`
@@ -105,7 +105,7 @@ Current task behavior in this tranche:
 - the runtime exposes create, list, get, and update flows through the existing control-plane RPC surface as `tasks.create`, `tasks.list`, `tasks.get`, and `tasks.update`
 - task lifecycle changes emit `task.created` and `task.updated` runtime events and can be replayed or filtered through the `task` event family
 - bootstrapped session streams inherit `sessionId` for `tasks.create` and `tasks.list`
-- the CLI exposes `/tasks`, `/task-create <subject>`, and `/task-update <taskId> <pending|in_progress|completed>` for narrow local task inspection and status updates
+- the CLI exposes `/tasks [team <name>]`, `/task-create <subject> [--team <name>] [--owner <owner>] [--blocked-by <taskId,...>]`, and `/task-update <taskId> [<pending|in_progress|completed>] [--owner <owner|off>] [--blocked-by <taskId,...>]` for narrow local task inspection and coordination updates
 - team ownership rules, assignment arbitration, and richer dependency editing syntax remain out of scope in this tranche
 
 ## Session messaging
@@ -158,9 +158,11 @@ Operator now also has a first narrow team surface for Claude Code-style multi-ag
 
 Current team behavior in this tranche:
 - the CLI exposes `/teams`, `/team-create <name> [description]`, and `/team-delete <name>`
-- teams are persisted in a local JSON store so CLI sessions can list and reuse previously created team names
+- each created team now gets a dedicated persisted task session so the existing task store can coordinate shared team work instead of staying tied to the caller session
+- team-scoped task flows reuse the existing task surface through `/tasks team <name>` and `--team <name>` task creation flags
+- task coordination can now persist `owner` and `blockedBy` through the CLI for team task handoff and dependency tracking
 - the public operator export surface now includes the team store types for later runtime or control-plane integration
-- this tranche remains intentionally narrow and does not yet add teammate spawning, shared task ownership, routing, or shutdown orchestration
+- this tranche remains intentionally narrow and does not yet add teammate spawning, routing, or shutdown orchestration
 
 ## Push notifications
 

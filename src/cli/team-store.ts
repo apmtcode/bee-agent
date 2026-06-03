@@ -6,6 +6,7 @@ export type OperatorCliTeamRecord = {
   id: string;
   name: string;
   description?: string;
+  taskSessionId?: string;
   createdAt: string;
   updatedAt: string;
 };
@@ -28,17 +29,35 @@ export class FileOperatorCliTeamStore {
     return store.teams.map((team) => ({ ...team }));
   }
 
-  async create(params: { name: string; description?: string }): Promise<OperatorCliTeamRecord> {
+  async get(name: string): Promise<OperatorCliTeamRecord | undefined> {
+    const store = await this.read();
+    const team = store.teams.find((item) => item.name === name);
+    return team ? { ...team } : undefined;
+  }
+
+  async create(params: { name: string; description?: string; taskSessionId?: string }): Promise<OperatorCliTeamRecord> {
     const now = new Date().toISOString();
     const store = await this.read();
-    const existing = store.teams.find((team) => team.name === params.name);
-    if (existing) {
+    const existingIndex = store.teams.findIndex((team) => team.name === params.name);
+    if (existingIndex >= 0) {
+      const existing = store.teams[existingIndex];
+      if (params.taskSessionId && !existing.taskSessionId) {
+        const updated = {
+          ...existing,
+          taskSessionId: params.taskSessionId,
+          updatedAt: now,
+        };
+        store.teams[existingIndex] = updated;
+        await this.write(store);
+        return { ...updated };
+      }
       return { ...existing };
     }
     const team: OperatorCliTeamRecord = {
       id: randomUUID(),
       name: params.name,
       ...(params.description ? { description: params.description } : {}),
+      ...(params.taskSessionId ? { taskSessionId: params.taskSessionId } : {}),
       createdAt: now,
       updatedAt: now,
     };

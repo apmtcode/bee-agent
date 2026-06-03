@@ -21,12 +21,17 @@ describe("FileOperatorCliTeamStore", () => {
     const rootDir = await makeTempDir();
     const store = new FileOperatorCliTeamStore(rootDir);
 
-    const created = await store.create({ name: "reviewers", description: "Review team" });
+    const created = await store.create({ name: "reviewers", description: "Review team", taskSessionId: "session-reviewers" });
     expect(created.name).toBe("reviewers");
     expect(created.description).toBe("Review team");
+    expect(created.taskSessionId).toBe("session-reviewers");
+
+    await expect(store.get("reviewers")).resolves.toEqual(
+      expect.objectContaining({ name: "reviewers", description: "Review team", taskSessionId: "session-reviewers" }),
+    );
 
     await expect(store.list()).resolves.toEqual([
-      expect.objectContaining({ name: "reviewers", description: "Review team" }),
+      expect.objectContaining({ name: "reviewers", description: "Review team", taskSessionId: "session-reviewers" }),
     ]);
 
     const deleted = await store.delete("reviewers");
@@ -42,5 +47,16 @@ describe("FileOperatorCliTeamStore", () => {
     const second = await store.create({ name: "operators", description: "Duplicate" });
     expect(second.id).toBe(first.id);
     await expect(store.list()).resolves.toHaveLength(1);
+  });
+
+  it("backfills a missing task session id for an existing team", async () => {
+    const rootDir = await makeTempDir();
+    const store = new FileOperatorCliTeamStore(rootDir);
+
+    const first = await store.create({ name: "operators" });
+    const second = await store.create({ name: "operators", taskSessionId: "session-operators" });
+    expect(second.id).toBe(first.id);
+    expect(second.taskSessionId).toBe("session-operators");
+    await expect(store.get("operators")).resolves.toEqual(expect.objectContaining({ taskSessionId: "session-operators" }));
   });
 });
