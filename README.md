@@ -65,6 +65,9 @@ Current slash commands:
 - `/statusline [command|off]`
 - `/worktree [name]`
 - `/worktree-exit [keep|remove]`
+- `/teams`
+- `/team-create <name> [description]`
+- `/team-delete <name>`
 - `/skills`
 - `/run-skill <id>`
 - `/background`
@@ -135,6 +138,16 @@ Current worktree behavior in this tranche:
 - each created worktree gets an isolated branch named `operator/<name>`
 - `/worktree-exit [keep|remove]` returns the CLI session to the original cwd and can either keep the worktree or remove both the worktree and its branch
 - this tranche is intentionally CLI-local and git-only; it does not yet add session handoff, existing-worktree attach, dirty-state protection, or non-git hook-backed worktrees
+
+## Team registry
+
+Operator now also has a first narrow team surface for Claude Code-style multi-agent coordination setup.
+
+Current team behavior in this tranche:
+- the CLI exposes `/teams`, `/team-create <name> [description]`, and `/team-delete <name>`
+- teams are persisted in a local JSON store so CLI sessions can list and reuse previously created team names
+- the public operator export surface now includes the team store types for later runtime or control-plane integration
+- this tranche remains intentionally narrow and does not yet add teammate spawning, shared task ownership, routing, or shutdown orchestration
 
 ## Push notifications
 

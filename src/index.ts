@@ -5,6 +5,10 @@ export {
   type OperatorCliSlashCommand,
 } from "./cli/app.js";
 export {
+  FileOperatorCliTeamStore,
+  type OperatorCliTeamRecord,
+} from "./cli/team-store.js";
+export {
   OperatorCliConfigLoader,
   deepMergeConfig,
   resolveOperatorCliExecutionConfig,

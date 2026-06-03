@@ -73,6 +73,9 @@ describe("parseSlashCommand", () => {
     expect(parseSlashCommand("/worktree feature-x")).toEqual({ kind: "worktree", name: "feature-x" });
     expect(parseSlashCommand("/worktree-exit")).toEqual({ kind: "worktree-exit", action: "keep" });
     expect(parseSlashCommand("/worktree-exit remove")).toEqual({ kind: "worktree-exit", action: "remove" });
+    expect(parseSlashCommand("/teams")).toEqual({ kind: "teams" });
+    expect(parseSlashCommand("/team-create reviewers Review team")).toEqual({ kind: "team-create", name: "reviewers", description: "Review team" });
+    expect(parseSlashCommand("/team-delete reviewers")).toEqual({ kind: "team-delete", name: "reviewers" });
     expect(parseSlashCommand("/background")).toEqual({ kind: "background-list" });
     expect(parseSlashCommand("/background start smoke -- printf ok")).toEqual({
       kind: "background-start",
@@ -190,6 +193,18 @@ describe("parseSlashCommand", () => {
     expect(parseSlashCommand("/worktree-exit nope")).toEqual({
       kind: "invalid",
       message: "Usage: /worktree-exit [keep|remove]",
+    });
+    expect(parseSlashCommand("/teams later")).toEqual({
+      kind: "invalid",
+      message: "Usage: /teams",
+    });
+    expect(parseSlashCommand("/team-create")).toEqual({
+      kind: "invalid",
+      message: "Usage: /team-create <name> [description]",
+    });
+    expect(parseSlashCommand("/team-delete")).toEqual({
+      kind: "invalid",
+      message: "Usage: /team-delete <name>",
     });
     expect(parseSlashCommand("/watch nope")).toEqual({
       kind: "invalid",
@@ -344,6 +359,24 @@ describe("OperatorCliApp", () => {
     const removed = await app.dispatchSlashCommand({ kind: "worktree-exit", action: "remove" }, session.id);
     expect(removed).toContain("Exited and removed worktree");
     await expect(fs.stat(path.join(rootDir, ".operator", "worktrees", "feature-y"))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("creates lists and deletes teams", async () => {
+    const rootDir = await makeTempDir();
+    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+
+    await expect(app.dispatchSlashCommand({ kind: "teams" })).resolves.toBe("No teams.");
+
+    const created = await app.dispatchSlashCommand({ kind: "team-create", name: "reviewers", description: "Review team" });
+    expect(created).toContain("Created team reviewers");
+    expect(created).toContain("description=Review team");
+
+    const listed = await app.dispatchSlashCommand({ kind: "teams" });
+    expect(listed).toContain("reviewers Review team");
+
+    const deleted = await app.dispatchSlashCommand({ kind: "team-delete", name: "reviewers" });
+    expect(deleted).toContain("Deleted team reviewers.");
+    await expect(app.dispatchSlashCommand({ kind: "teams" })).resolves.toBe("No teams.");
   });
 
   it("streams in-flight freeform run updates and reuses transcript context across resume", async () => {

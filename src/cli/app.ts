@@ -17,6 +17,7 @@ import {
 } from "./config.js";
 import { runOperatorCliConversationTurn } from "./conversation.js";
 import { discoverPromptContext, type OperatorCliPromptContext } from "./prompt.js";
+import { FileOperatorCliTeamStore } from "./team-store.js";
 
 export type OperatorCliSlashCommand =
   | { kind: "help" }
@@ -54,6 +55,9 @@ export type OperatorCliSlashCommand =
   | { kind: "statusline"; command?: string }
   | { kind: "worktree"; name?: string }
   | { kind: "worktree-exit"; action: "keep" | "remove" }
+  | { kind: "teams" }
+  | { kind: "team-create"; name: string; description?: string }
+  | { kind: "team-delete"; name: string }
   | { kind: "skills" }
   | { kind: "run-skill"; skillId: string }
   | { kind: "watch-run"; runId?: string }
@@ -105,10 +109,12 @@ export class OperatorCliApp {
   private activeSessionId?: string;
   private readonly approvedCommandFingerprints = new Set<string>();
   private worktreeSession?: OperatorCliWorktreeSession;
+  private readonly teams: FileOperatorCliTeamStore;
 
   constructor(private readonly options: OperatorCliAppOptions) {
     this.runtime = new StandaloneOperatorRuntime({ rootDir: options.rootDir });
     this.server = new OperatorControlPlaneServer({ runtime: this.runtime });
+    this.teams = new FileOperatorCliTeamStore(options.rootDir);
     this.cwd = options.cwd ?? process.cwd();
     this.currentDate = options.currentDate ?? new Date().toISOString().slice(0, 10);
     this.stdin = options.stdin ?? process.stdin;
@@ -242,6 +248,9 @@ export class OperatorCliApp {
           "  /statusline [command|off]",
           "  /worktree [name]",
           "  /worktree-exit [keep|remove]",
+          "  /teams",
+          "  /team-create <name> [description]",
+          "  /team-delete <name>",
           "  /skills",
           "  /run-skill <id>",
           "  /watch run [runId]",
@@ -598,6 +607,20 @@ export class OperatorCliApp {
       }
       case "worktree-exit": {
         return await this.exitWorktree(command.action);
+      }
+      case "teams": {
+        const teams = await this.teams.list();
+        return teams.length === 0
+          ? "No teams."
+          : teams.map((team) => `${team.name}${team.description ? ` ${team.description}` : ""}`).join("\n");
+      }
+      case "team-create": {
+        const team = await this.teams.create({ name: command.name, ...(command.description ? { description: command.description } : {}) });
+        return `Created team ${team.name}${team.description ? ` description=${team.description}` : ""}`;
+      }
+      case "team-delete": {
+        const team = await this.teams.delete(command.name);
+        return team ? `Deleted team ${team.name}.` : `Unknown team: ${command.name}`;
       }
       case "skills": {
         const promoted = await this.runtime.listPromotedSkills();
@@ -1271,6 +1294,12 @@ export function parseSlashCommand(input: string): OperatorCliSlashCommand | unde
       return parseWorktreeCommand(tail);
     case "worktree-exit":
       return parseWorktreeExitCommand(tail);
+    case "teams":
+      return tail ? { kind: "invalid", message: "Usage: /teams" } : { kind: "teams" };
+    case "team-create":
+      return parseTeamCreateCommand(tail);
+    case "team-delete":
+      return tail ? { kind: "team-delete", name: tail } : { kind: "invalid", message: "Usage: /team-delete <name>" };
     case "skills":
       return { kind: "skills" };
     case "run-skill":
@@ -1333,6 +1362,17 @@ function parseWorktreeExitCommand(tail: string): OperatorCliSlashCommand {
     return { kind: "worktree-exit", action: tail };
   }
   return { kind: "invalid", message: "Usage: /worktree-exit [keep|remove]" };
+}
+
+function parseTeamCreateCommand(tail: string): OperatorCliSlashCommand {
+  const [name, ...descriptionParts] = tail.split(/\s+/).filter(Boolean);
+  if (!name) {
+    return { kind: "invalid", message: "Usage: /team-create <name> [description]" };
+  }
+  const description = descriptionParts.join(" ").trim();
+  return description
+    ? { kind: "team-create", name, description }
+    : { kind: "team-create", name };
 }
 
 function parseWatchCommand(tail: string): OperatorCliSlashCommand {
