@@ -100,6 +100,15 @@ export {
   OperatorCronService,
 } from "./control-plane/cron-service.js";
 export {
+  resolveAnthropicAuthConfig,
+  buildAnthropicMessagesRequest,
+  forwardAnthropicMessagesRequest,
+  type AnthropicAuthConfig,
+  type AnthropicHttpRequest,
+  type AnthropicMessageForwardResponse,
+  type EnvReader,
+} from "./control-plane/anthropic-client.js";
+export {
   OperatorDeliveryService,
   summarizeDeliveryResults,
   type CronDeliveryConfig,
@@ -119,6 +128,8 @@ export {
 export {
   OperatorControlPlaneServer,
   type ControlPlaneFailure,
+  type ControlPlaneHttpRequest,
+  type ControlPlaneHttpResponse,
   type ControlPlaneRequest,
   type ControlPlaneResponse,
   type ControlPlaneServerOptions,

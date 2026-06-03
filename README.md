@@ -315,6 +315,16 @@ Current subagent model behavior in this tranche:
 - explicit empty fallback lists are preserved as a real override instead of being silently re-inherited
 - this remains metadata-only in this tranche; provider routing, retry/fallback execution, and a user-facing `/model` surface remain out of scope
 
+## Anthropic HTTP compatibility
+
+Operator now also has a first narrow Anthropic-compatible HTTP seam alongside the RPC control plane.
+
+Current behavior in this tranche:
+- the control plane can now forward non-streaming `POST /v1/messages` requests through a minimal Anthropic client path
+- forwarded requests send Claude-style `x-api-key` auth and optional `Authorization: Bearer ...` when `ANTHROPIC_AUTH_TOKEN` is present
+- base URL resolution now honors `ANTHROPIC_BASE_URL`
+- this tranche is intentionally narrow and only covers non-streaming request forwarding, not SSE streaming, retries, or broader provider routing
+
 ## Current gaps to parity
 
 The system is still incomplete relative to the long-term goal. Major missing tranches include:

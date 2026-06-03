@@ -1,4 +1,9 @@
 import type { ApprovalDecision, ApprovalRequest } from "./approvals.js";
+import {
+  forwardAnthropicMessagesRequest,
+  type AnthropicMessageForwardResponse,
+  type EnvReader,
+} from "./anthropic-client.js";
 import { OperatorCronService } from "./cron-service.js";
 import type { CronDeliveryConfig, DeliveryTarget } from "./delivery.js";
 import {
@@ -53,11 +58,26 @@ export type ControlPlaneFailure = {
 
 export type ControlPlaneResponse<T = unknown> = ControlPlaneSuccess<T> | ControlPlaneFailure;
 
+export type ControlPlaneHttpRequest = {
+  method: string;
+  path: string;
+  headers?: Record<string, string | undefined>;
+  body?: string;
+};
+
+export type ControlPlaneHttpResponse = {
+  status: number;
+  headers?: Record<string, string>;
+  body: string;
+};
+
 export type ControlPlaneServerOptions = {
   runtime: StandaloneOperatorRuntime;
   cron?: OperatorCronService;
   pairing?: FilePairingStore;
   platformBreakers?: FilePlatformBreakerStore;
+  fetchImpl?: typeof fetch;
+  env?: EnvReader;
 };
 
 export type PairingTicketCreateResult = PairingTicket;
@@ -285,6 +305,8 @@ export class OperatorControlPlaneServer {
   private readonly cron: OperatorCronService;
   private readonly pairing: FilePairingStore;
   private readonly platformBreakers: FilePlatformBreakerStore;
+  private readonly fetchImpl: typeof fetch;
+  private readonly env: EnvReader;
   private readonly gatewaySessions = new Map<string, GatewaySessionHealth>();
   private readonly quarantinedRemotes = new Map<string, SessionRemoteQuarantine>();
 
@@ -296,6 +318,8 @@ export class OperatorControlPlaneServer {
     this.cron = options.cron ?? new OperatorCronService(options.runtime.rootDir, { runtime: options.runtime });
     this.pairing = options.pairing ?? new FilePairingStore(buildPairingStoreFilePath(options.runtime.rootDir));
     this.platformBreakers = options.platformBreakers ?? new FilePlatformBreakerStore(buildPlatformBreakerStoreFilePath(options.runtime.rootDir));
+    this.fetchImpl = options.fetchImpl ?? fetch;
+    this.env = options.env ?? ((name) => process.env[name]);
   }
 
   registerGatewaySessionConnection(params: GatewaySessionHealth): void {
@@ -413,6 +437,45 @@ export class OperatorControlPlaneServer {
       updatedAt: params.updatedAt,
       gatewayState: params.state,
     });
+  }
+
+  async handleHttp(request: ControlPlaneHttpRequest): Promise<ControlPlaneHttpResponse> {
+    try {
+      if (request.method !== "POST" || request.path !== "/v1/messages") {
+        return {
+          status: 404,
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ error: { type: "not_found", message: `unknown path: ${request.method} ${request.path}` } }),
+        };
+      }
+      if (!request.body?.trim()) {
+        return {
+          status: 400,
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ error: { type: "invalid_request", message: "Request body is required." } }),
+        };
+      }
+      const parsed = JSON.parse(request.body) as Record<string, unknown>;
+      if (parsed.stream === true) {
+        return {
+          status: 400,
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ error: { type: "invalid_request", message: "Streaming is not supported in this tranche." } }),
+        };
+      }
+      const forwarded = await forwardAnthropicMessagesRequest({
+        body: JSON.stringify({ ...parsed, stream: false }),
+        fetchImpl: this.fetchImpl,
+        env: this.env,
+      });
+      return forwarded;
+    } catch (error) {
+      return {
+        status: 500,
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ error: { type: "internal_error", message: error instanceof Error ? error.message : String(error) } }),
+      };
+    }
   }
 
   async handle(request: ControlPlaneRequest): Promise<ControlPlaneResponse> {

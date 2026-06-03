@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { OperatorControlPlaneServer } from "./server.js";
 import { OperatorCronService } from "./cron-service.js";
 import { OperatorDeliveryService } from "./delivery.js";
@@ -1767,6 +1767,88 @@ describe("OperatorControlPlaneServer", () => {
       expect.objectContaining({ type: "task.created", payload: expect.objectContaining({ id: taskA.id, sessionId: sessionA.id, subject: "Inspect A" }) }),
       expect.objectContaining({ type: "task.updated", payload: expect.objectContaining({ id: taskA.id, status: "completed", sessionId: sessionA.id }) }),
     ]);
+  });
+
+  it("forwards non-streaming /v1/messages requests with Claude-compatible auth headers", async () => {
+    const runtime = new StandaloneOperatorRuntime({ rootDir: await makeTempDir() });
+    const fetchImpl = vi.fn<typeof fetch>(async (input, init) => {
+      expect(input).toBe("https://example.anthropic.test/v1/messages");
+      expect(init?.method).toBe("POST");
+      expect(init?.headers).toMatchObject({
+        "x-api-key": "api-key-1",
+        authorization: "Bearer oauth-token-1",
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json",
+      });
+      expect(typeof init?.body).toBe("string");
+      expect(JSON.parse(String(init?.body))).toMatchObject({
+        model: "claude-opus-4-7",
+        stream: false,
+      });
+      return new Response(JSON.stringify({ id: "msg_123", type: "message" }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    });
+    const server = new OperatorControlPlaneServer({
+      runtime,
+      fetchImpl,
+      env: (name) => ({
+        ANTHROPIC_API_KEY: "api-key-1",
+        ANTHROPIC_AUTH_TOKEN: "oauth-token-1",
+        ANTHROPIC_BASE_URL: "https://example.anthropic.test",
+      })[name],
+    });
+
+    await expect(server.handleHttp({
+      method: "POST",
+      path: "/v1/messages",
+      body: JSON.stringify({
+        model: "claude-opus-4-7",
+        max_tokens: 128,
+        messages: [{ role: "user", content: "hello" }],
+      }),
+    })).resolves.toMatchObject({
+      status: 200,
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ id: "msg_123", type: "message" }),
+    });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it("falls back to ANTHROPIC_AUTH_TOKEN for x-api-key and rejects streaming /v1/messages requests", async () => {
+    const runtime = new StandaloneOperatorRuntime({ rootDir: await makeTempDir() });
+    const fetchImpl = vi.fn<typeof fetch>(async (_input, init) => {
+      expect(init?.headers).toMatchObject({
+        "x-api-key": "token-only",
+        authorization: "Bearer token-only",
+      });
+      return new Response(JSON.stringify({ id: "msg_456", type: "message" }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    });
+    const server = new OperatorControlPlaneServer({
+      runtime,
+      fetchImpl,
+      env: (name) => ({
+        ANTHROPIC_AUTH_TOKEN: "token-only",
+      })[name],
+    });
+
+    await expect(server.handleHttp({
+      method: "POST",
+      path: "/v1/messages",
+      body: JSON.stringify({ model: "claude-sonnet-4-6", messages: [], max_tokens: 8 }),
+    })).resolves.toMatchObject({ status: 200 });
+    await expect(server.handleHttp({
+      method: "POST",
+      path: "/v1/messages",
+      body: JSON.stringify({ model: "claude-sonnet-4-6", messages: [], max_tokens: 8, stream: true }),
+    })).resolves.toMatchObject({
+      status: 400,
+      body: JSON.stringify({ error: { type: "invalid_request", message: "Streaming is not supported in this tranche." } }),
+    });
   });
 
   it("handles cron methods", async () => {
