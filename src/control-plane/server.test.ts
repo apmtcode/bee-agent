@@ -1338,12 +1338,43 @@ describe("OperatorControlPlaneServer", () => {
       cwd: monitorTask.cwd,
       command: monitorTask.command,
     });
+    const monitorTaskStopStart = await server.handle({
+      method: "background.tasks.start",
+      params: {
+        sessionId: session.id,
+        title: "Watch metrics",
+        command: "tail -f metrics.log",
+        kind: "monitor",
+      },
+    });
+    expect(monitorTaskStopStart).toMatchObject({ ok: true, result: { kind: "monitor", status: "running" } });
+    const monitorTaskStop = monitorTaskStopStart.ok ? monitorTaskStopStart.result : undefined;
+    expect(monitorTaskStop).toBeDefined();
+    if (!monitorTaskStop) {
+      throw new Error("expected second monitor task to be created");
+    }
+    await runtime.backgroundTasks.executionService.writeState(monitorTaskStop, {
+      version: 1,
+      taskId: monitorTaskStop.id,
+      kind: "monitor",
+      status: "running",
+      pid: monitorTaskStop.execution.processId ?? 5679,
+      startedAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      outputFile: monitorTaskStop.execution.outputFile,
+      cwd: monitorTaskStop.cwd,
+      command: monitorTaskStop.command,
+    });
     const originalKill = process.kill;
     process.kill = (() => true) as typeof process.kill;
     try {
       await expect(server.handle({ method: "background.tasks.cancel", params: { taskId: monitorTask.id } })).resolves.toMatchObject({
         ok: true,
         result: { id: monitorTask.id, status: "cancelled", execution: { signal: "SIGTERM" } },
+      });
+      await expect(server.handle({ method: "tasks.stop", params: { taskId: monitorTaskStop.id } })).resolves.toMatchObject({
+        ok: true,
+        result: { id: monitorTaskStop.id, status: "cancelled", execution: { signal: "SIGTERM" } },
       });
     } finally {
       process.kill = originalKill;

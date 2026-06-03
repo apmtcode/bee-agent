@@ -55,6 +55,7 @@ export type OperatorCliSlashCommand =
   | { kind: "background-view"; taskId: string; lines?: number }
   | { kind: "background-sync"; taskId: string }
   | { kind: "background-cancel"; taskId: string }
+  | { kind: "task-stop"; taskId: string }
   | { kind: "background" }
   | { kind: "training" }
   | { kind: "cron-list" }
@@ -230,6 +231,7 @@ export class OperatorCliApp {
           "  /background view <taskId> [lines]",
           "  /background sync <taskId>",
           "  /background cancel <taskId>",
+          "  /task-stop <taskId>",
           "  /training",
           "  /cron",
           "  /cron create <cronExpr> <prompt>",
@@ -657,6 +659,13 @@ export class OperatorCliApp {
       case "background-cancel": {
         const task = await this.runtime.cancelBackgroundTask(command.taskId);
         return task ? `Cancelled background task ${task.id}.` : `Unknown background task: ${command.taskId}`;
+      }
+      case "task-stop": {
+        const response = await this.server.handle({ method: "tasks.stop", params: { taskId: command.taskId } });
+        if (!response.ok) {
+          return response.error.message;
+        }
+        return `Stopped task ${response.result.id}.`;
       }
       case "training": {
         const jobs = await this.runtime.listTrainingJobs();
@@ -1144,6 +1153,8 @@ export function parseSlashCommand(input: string): OperatorCliSlashCommand | unde
       return tail ? { kind: "task-create", subject: tail } : { kind: "invalid", message: "Usage: /task-create <subject>" };
     case "task-update":
       return parseTaskUpdateCommand(tail);
+    case "task-stop":
+      return tail ? { kind: "task-stop", taskId: tail } : { kind: "invalid", message: "Usage: /task-stop <taskId>" };
     case "messages":
       return tail ? { kind: "invalid", message: "Usage: /messages" } : { kind: "messages" };
     case "inbox":

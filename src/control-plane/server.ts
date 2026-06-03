@@ -1085,7 +1085,8 @@ export class OperatorControlPlaneServer {
           const task = await this.options.runtime.syncBackgroundTask(taskId);
           return task ? ok(task) : notFound(`unknown background task: ${taskId}`);
         }
-        case "background.tasks.cancel": {
+        case "background.tasks.cancel":
+        case "tasks.stop": {
           const taskId = getString(request.params, "taskId");
           const task = await this.options.runtime.cancelBackgroundTask(taskId);
           return task ? ok(task) : notFound(`unknown background task: ${taskId}`);

@@ -58,6 +58,7 @@ describe("parseSlashCommand", () => {
     expect(parseSlashCommand("/tasks")).toEqual({ kind: "tasks" });
     expect(parseSlashCommand("/task-create Inspect logs")).toEqual({ kind: "task-create", subject: "Inspect logs" });
     expect(parseSlashCommand("/task-update task-1 in_progress")).toEqual({ kind: "task-update", taskId: "task-1", status: "in_progress" });
+    expect(parseSlashCommand("/task-stop task-1")).toEqual({ kind: "task-stop", taskId: "task-1" });
     expect(parseSlashCommand("/messages")).toEqual({ kind: "messages" });
     expect(parseSlashCommand("/inbox")).toEqual({ kind: "inbox" });
     expect(parseSlashCommand("/outbox")).toEqual({ kind: "outbox" });
@@ -152,6 +153,10 @@ describe("parseSlashCommand", () => {
     expect(parseSlashCommand("/task-update task-1 blocked")).toEqual({
       kind: "invalid",
       message: "Usage: /task-update <taskId> <pending|in_progress|completed>",
+    });
+    expect(parseSlashCommand("/task-stop")).toEqual({
+      kind: "invalid",
+      message: "Usage: /task-stop <taskId>",
     });
     expect(parseSlashCommand("/messages later")).toEqual({
       kind: "invalid",
@@ -673,6 +678,9 @@ describe("OperatorCliApp", () => {
 
     const activeWatchOutput = await app.dispatchSlashCommand({ kind: "watch-active" }, session.id);
     expect(activeWatchOutput).toContain(`[task ${task.id}]`);
+
+    const stopOutput = await app.dispatchSlashCommand({ kind: "task-stop", taskId: task.id }, session.id);
+    expect(stopOutput).toContain(`Stopped task ${task.id}.`);
 
     const cronCreate = await app.dispatchSlashCommand(
       {
