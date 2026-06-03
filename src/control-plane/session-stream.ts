@@ -70,6 +70,18 @@ export class OperatorControlPlaneSessionStream {
         fromSessionId: params?.fromSessionId ?? this.boundSessionId,
       };
     }
+    if (method === "plans.requestApproval") {
+      return {
+        ...(params ?? {}),
+        sessionId: params?.sessionId ?? this.boundSessionId,
+      };
+    }
+    if (method === "plans.respondApproval") {
+      return {
+        ...(params ?? {}),
+        sessionId: params?.sessionId ?? this.boundSessionId,
+      };
+    }
     if (method === "notifications.send") {
       return {
         ...(params ?? {}),
@@ -115,6 +127,9 @@ function requiresSessionBinding(method: string): boolean {
     method === "background.tasks.recoverAll" ||
     method === "tasks.create" ||
     method === "tasks.list" ||
+    method === "plans.get" ||
+    method === "plans.upsert" ||
+    method === "plans.verify" ||
     method === "messages.send" ||
     method === "notifications.send" ||
     method === "messages.list" ||

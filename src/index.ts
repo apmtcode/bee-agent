@@ -318,6 +318,15 @@ export {
   type OperatorMessageRecord,
 } from "./orchestrator/message-store.js";
 export {
+  FilePlanStore,
+  type OperatorPlanApprovalRecord,
+  type OperatorPlanRecord,
+  type OperatorPlanStatus,
+  type OperatorPlanVerificationRecord,
+  type OperatorPlanVerificationStatus,
+  type PlanStoreShape,
+} from "./orchestrator/plan-store.js";
+export {
   FileSubagentRegistry,
   type SubagentRunRecord,
   type SubagentRegistryShape,
@@ -332,9 +341,13 @@ export {
   type OperatorRuntimeEventType,
   type RecoverBackgroundTasksParams,
   type RecordTurnParams,
+  type RequestPlanApprovalParams,
+  type RespondPlanApprovalParams,
   type ReviewTrajectoryParams as RuntimeReviewTrajectoryParams,
   type SendMessageParams,
   type SendNotificationParams,
+  type UpdatePlanVerificationParams,
+  type UpsertPlanParams,
   type SendTeammateMessageParams,
   type SendTeammateMessageResult,
   type SpawnSubagentParams,

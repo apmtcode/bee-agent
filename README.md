@@ -62,6 +62,11 @@ Current slash commands:
 - `/outbox`
 - `/send <sessionId> <message>`
 - `/notify <status> <message>`
+- `/plan-show`
+- `/plan-set <content>`
+- `/plan-request-approval <sessionId>`
+- `/plan-respond <requestId> <approve|reject> [feedback]`
+- `/verify <pending|requested|completed|skipped> [notes]`
 - `/plan`
 - `/plan-exit [default|acceptEdits|bypassPermissions]`
 - `/statusline [command|off]`
@@ -133,7 +138,22 @@ Current plan mode behavior in this tranche:
 - entering plan mode remembers the prior non-plan local permission mode under `operator.previousPermissionMode` when one exists
 - `/plan-exit [default|acceptEdits|bypassPermissions]` restores the remembered mode or a caller-specified override
 - command execution continues to honor the existing execution-policy rule that blocks execution while `permissionMode=plan`
-- this tranche remains intentionally narrow and does not yet add explicit plan documents, approval handoff, or a separate enter/exit plan runtime protocol
+- permission-mode plan entry/exit remains separate from the new persisted plan record lifecycle described below
+
+## Plan orchestration
+
+Operator now also has a first narrow persisted plan-approval surface for Claude Code/Hermes-style planning workflows.
+
+Current plan behavior in this tranche:
+- plans are persisted as session-scoped records with `content`, `status`, optional approval state, and optional verification state
+- the runtime exposes `getPlan()`, `upsertPlan()`, `requestPlanApproval()`, `respondPlanApproval()`, and `updatePlanVerification()`
+- control-plane RPC now exposes `plans.get`, `plans.upsert`, `plans.requestApproval`, `plans.respondApproval`, and `plans.verify`
+- bootstrapped session streams inherit `sessionId` for `plans.get`, `plans.upsert`, `plans.requestApproval`, `plans.respondApproval`, and `plans.verify`
+- session bootstrap now returns the current persisted plan snapshot alongside task-plan state when one exists
+- plan approval requests and responses are persisted through the existing mailbox surface with structured metadata so they replay through normal message/event plumbing
+- runtime event replay/filtering now includes a `plan` family with `plan.updated`, `plan.approval.requested`, `plan.approval.resolved`, and `plan.verification.updated`
+- the CLI exposes `/plan-show`, `/plan-set <content>`, `/plan-request-approval <sessionId>`, `/plan-respond <requestId> <approve|reject> [feedback]`, and `/verify <pending|requested|completed|skipped> [notes]`
+- richer plan diffs, plan files, reminder scheduling, and ACP-native replay projection remain out of scope in this tranche
 
 ## Status line setup
 
@@ -191,7 +211,7 @@ The control plane now also exposes a first remote session-stream seam for future
 
 Current remote session behavior in this tranche:
 - `sessions.bootstrap` can create or reattach to a session and optionally resume idle sessions
-- bootstrap returns session-scoped pending approvals, a replayable task-plan snapshot, plus a filtered replay of runtime events
+- bootstrap returns session-scoped pending approvals, a replayable task-plan snapshot, the current persisted plan snapshot when present, plus a filtered replay of runtime events
 - `OperatorControlPlaneSessionStream` binds later session-scoped control-plane requests to the bootstrapped session
 - the same stream adapter can subscribe to live session-scoped runtime events for approvals, runs, tasks, skills, and background tasks
 - the seam is transport-agnostic and in-process in this tranche; it is intended to be mounted by a later gateway/channel transport layer
@@ -204,7 +224,7 @@ Current gateway transport behavior in this tranche:
 - one remote connection can bootstrap or reattach to a single operator session
 - later connection-scoped requests are forwarded through the bound session stream without resupplying `sessionId`
 - live session-scoped runtime events are forwarded as transport event frames
-- transport bootstrap now includes the session task-plan snapshot so reconnecting clients can recover persisted operator tasks immediately
+- transport bootstrap now includes the session task-plan snapshot and current plan snapshot so reconnecting clients can recover persisted operator coordination state immediately
 - transport message types remain intentionally narrow and now include heartbeat `ping` / `pong` alongside bootstrap, request, response, event, and error
 - gateway bootstrap can now also carry a stable `remoteId` and `remoteSource` so reconnecting clients can reattach without already knowing `sessionId`
 - reconnecting clients can optionally provide an event replay cursor so bootstrap only replays missed session-scoped events

@@ -54,6 +54,11 @@ export type OperatorCliSlashCommand =
   | { kind: "outbox" }
   | { kind: "send"; toSessionId: string; message: string }
   | { kind: "notify"; status: string; message: string }
+  | { kind: "plan-show" }
+  | { kind: "plan-set"; content: string }
+  | { kind: "plan-request-approval"; approverSessionId: string }
+  | { kind: "plan-respond"; requestId: string; approve: boolean; feedback?: string }
+  | { kind: "verify"; status: "pending" | "requested" | "completed" | "skipped"; notes?: string }
   | { kind: "plan" }
   | { kind: "plan-exit"; mode?: Exclude<OperatorCliPermissionMode, "plan"> }
   | { kind: "statusline"; command?: string }
@@ -253,6 +258,11 @@ export class OperatorCliApp {
           "  /outbox",
           "  /send <sessionId> <message>",
           "  /notify <status> <message>",
+          "  /plan-show",
+          "  /plan-set <content>",
+          "  /plan-request-approval <sessionId>",
+          "  /plan-respond <requestId> <approve|reject> [feedback]",
+          "  /verify <pending|requested|completed|skipped> [notes]",
           "  /plan",
           "  /plan-exit [default|acceptEdits|bypassPermissions]",
           "  /statusline [command|off]",
@@ -614,6 +624,46 @@ export class OperatorCliApp {
           ? "suppressed"
           : notification.deliveryResults.map((result) => result.status).join(",");
         return `Sent notification ${notification.id} status=${notification.status} delivery=${delivered} message=${notification.message}`;
+      }
+      case "plan-show": {
+        const activeSessionId = this.requireActiveSessionId(sessionId);
+        const plan = await this.runtime.getPlan(activeSessionId);
+        return plan ? formatOperatorPlan(plan) : `No plan for session ${activeSessionId}.`;
+      }
+      case "plan-set": {
+        const activeSessionId = this.requireActiveSessionId(sessionId);
+        const plan = await this.runtime.upsertPlan({
+          sessionId: activeSessionId,
+          content: command.content,
+        });
+        return `Updated plan ${plan.id} status=${plan.status}`;
+      }
+      case "plan-request-approval": {
+        const activeSessionId = this.requireActiveSessionId(sessionId);
+        const requested = await this.runtime.requestPlanApproval({
+          sessionId: activeSessionId,
+          approverSessionId: command.approverSessionId,
+        });
+        return `Requested plan approval ${requested.plan.approval?.requestId} plan=${requested.plan.id} approver=${command.approverSessionId}`;
+      }
+      case "plan-respond": {
+        const activeSessionId = this.requireActiveSessionId(sessionId);
+        const responded = await this.runtime.respondPlanApproval({
+          requestId: command.requestId,
+          sessionId: activeSessionId,
+          approve: command.approve,
+          ...(command.feedback ? { feedback: command.feedback } : {}),
+        });
+        return `Responded to plan approval ${command.requestId} status=${responded.plan.status}`;
+      }
+      case "verify": {
+        const activeSessionId = this.requireActiveSessionId(sessionId);
+        const plan = await this.runtime.updatePlanVerification({
+          sessionId: activeSessionId,
+          status: command.status,
+          ...(command.notes ? { notes: command.notes } : {}),
+        });
+        return `Updated plan verification ${plan.id} status=${command.status}${command.notes ? ` notes=${command.notes}` : ""}`;
       }
       case "plan": {
         const effectiveConfig = config ?? (await this.loadRuntimeConfig());
@@ -1183,6 +1233,34 @@ function formatOperatorTasks(tasks: Array<{
     .join("\n");
 }
 
+function formatOperatorPlan(plan: {
+  id: string;
+  status: string;
+  content: string;
+  approval?: {
+    requestId: string;
+    approverSessionId: string;
+    approved?: boolean;
+    feedback?: string;
+  };
+  verification?: {
+    status: string;
+    reminderAt?: string;
+    notes?: string;
+  };
+}): string {
+  const parts = [
+    `plan=${plan.id}`,
+    `status=${plan.status}`,
+    plan.approval ? `approval=${plan.approval.requestId}:${plan.approval.approverSessionId}${plan.approval.approved === undefined ? "" : `:${plan.approval.approved ? "approved" : "rejected"}`}` : undefined,
+    plan.verification ? `verification=${plan.verification.status}` : undefined,
+    plan.verification?.reminderAt ? `reminder=${plan.verification.reminderAt}` : undefined,
+    plan.verification?.notes ? `notes=${plan.verification.notes}` : undefined,
+    `content=${plan.content.replace(/\s+/g, " ").trim()}`,
+  ].filter(Boolean).join(" ");
+  return parts;
+}
+
 function formatTeammates(
   team: string,
   teammates: Array<{
@@ -1440,6 +1518,16 @@ export function parseSlashCommand(input: string): OperatorCliSlashCommand | unde
       return parseSendCommand(tail);
     case "notify":
       return parseNotifyCommand(tail);
+    case "plan-show":
+      return tail ? { kind: "invalid", message: "Usage: /plan-show" } : { kind: "plan-show" };
+    case "plan-set":
+      return tail ? { kind: "plan-set", content: tail } : { kind: "invalid", message: "Usage: /plan-set <content>" };
+    case "plan-request-approval":
+      return tail ? { kind: "plan-request-approval", approverSessionId: tail } : { kind: "invalid", message: "Usage: /plan-request-approval <sessionId>" };
+    case "plan-respond":
+      return parsePlanRespondCommand(tail);
+    case "verify":
+      return parseVerifyCommand(tail);
     case "plan":
       return tail ? { kind: "invalid", message: "Usage: /plan" } : { kind: "plan" };
     case "plan-exit":
@@ -1515,6 +1603,33 @@ function parsePlanExitCommand(tail: string): OperatorCliSlashCommand {
     return { kind: "plan-exit", mode: tail };
   }
   return { kind: "invalid", message: "Usage: /plan-exit [default|acceptEdits|bypassPermissions]" };
+}
+
+function parsePlanRespondCommand(tail: string): OperatorCliSlashCommand {
+  const [requestId, decision, ...feedbackParts] = tail.split(/\s+/).filter(Boolean);
+  if (!requestId || !decision || (decision !== "approve" && decision !== "reject")) {
+    return { kind: "invalid", message: "Usage: /plan-respond <requestId> <approve|reject> [feedback]" };
+  }
+  const feedback = feedbackParts.join(" ").trim();
+  return {
+    kind: "plan-respond",
+    requestId,
+    approve: decision === "approve",
+    ...(feedback ? { feedback } : {}),
+  };
+}
+
+function parseVerifyCommand(tail: string): OperatorCliSlashCommand {
+  const [status, ...noteParts] = tail.split(/\s+/).filter(Boolean);
+  if (status !== "pending" && status !== "requested" && status !== "completed" && status !== "skipped") {
+    return { kind: "invalid", message: "Usage: /verify <pending|requested|completed|skipped> [notes]" };
+  }
+  const notes = noteParts.join(" ").trim();
+  return {
+    kind: "verify",
+    status,
+    ...(notes ? { notes } : {}),
+  };
 }
 
 function parseStatusLineCommand(tail: string): OperatorCliSlashCommand {

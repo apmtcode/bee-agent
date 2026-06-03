@@ -103,12 +103,34 @@ export type SessionTaskPlan = {
   entries: SessionTaskPlanEntry[];
 };
 
+export type SessionPlan = {
+  id: string;
+  content: string;
+  status: "draft" | "awaiting_approval" | "approved" | "rejected" | "in_progress" | "completed";
+  approval?: {
+    requestId: string;
+    requestedBySessionId: string;
+    approverSessionId: string;
+    requestedAt: string;
+    resolvedAt?: string;
+    approved?: boolean;
+    feedback?: string;
+  };
+  verification?: {
+    status: "pending" | "requested" | "completed" | "skipped";
+    reminderAt?: string;
+    notes?: string;
+  };
+  updatedAt: string;
+};
+
 export type SessionBootstrapResult = {
   session: SessionRecord;
   created: boolean;
   resumed: boolean;
   approvals: ApprovalRequest[];
   taskPlan: SessionTaskPlan;
+  plan?: SessionPlan;
   events: OperatorEvent[];
 };
 
@@ -891,6 +913,45 @@ export class OperatorControlPlaneServer {
           });
           return task ? ok(task) : notFound(`unknown task: ${taskId}`);
         }
+        case "plans.get": {
+          const sessionId = getString(request.params, "sessionId");
+          const plan = await this.options.runtime.getPlan(sessionId);
+          return plan ? ok(plan) : notFound(`unknown plan session: ${sessionId}`);
+        }
+        case "plans.upsert":
+          return ok(
+            await this.options.runtime.upsertPlan({
+              sessionId: getString(request.params, "sessionId"),
+              content: getString(request.params, "content"),
+              status: getOptionalPlanStatus(request.params, "status"),
+            }),
+          );
+        case "plans.requestApproval":
+          return ok(
+            await this.options.runtime.requestPlanApproval({
+              sessionId: getString(request.params, "sessionId"),
+              approverSessionId: getString(request.params, "approverSessionId"),
+              content: getOptionalString(request.params, "content"),
+            }),
+          );
+        case "plans.respondApproval":
+          return ok(
+            await this.options.runtime.respondPlanApproval({
+              requestId: getString(request.params, "requestId"),
+              sessionId: getString(request.params, "sessionId"),
+              approve: getBoolean(request.params, "approve"),
+              feedback: getOptionalString(request.params, "feedback"),
+            }),
+          );
+        case "plans.verify":
+          return ok(
+            await this.options.runtime.updatePlanVerification({
+              sessionId: getString(request.params, "sessionId"),
+              status: getPlanVerificationStatus(request.params, "status"),
+              reminderAt: getOptionalString(request.params, "reminderAt"),
+              notes: getOptionalString(request.params, "notes"),
+            }),
+          );
         case "messages.send":
           return ok(
             await this.options.runtime.sendMessage({
@@ -1353,12 +1414,14 @@ async function buildSessionBootstrapResult(
     ...(options.runId ? { runId: options.runId } : {}),
     ...(options.family ? { family: options.family } : {}),
   }));
+  const plan = await runtime.getPlan(session.id);
   return {
     session,
     created: options.created,
     resumed: options.resumed,
     approvals: await runtime.listApprovals(session.id),
     taskPlan: buildSessionTaskPlan(await runtime.listTasks(session.id)),
+    ...(plan ? { plan: buildSessionPlan(plan) } : {}),
     events: typeof options.afterTs === "number" ? events.filter((event) => event.ts > options.afterTs!) : events,
   };
 }
@@ -1376,6 +1439,19 @@ function buildSessionTaskPlan(tasks: Awaited<ReturnType<StandaloneOperatorRuntim
       blockedBy: [...task.blockedBy],
       updatedAt: task.updatedAt,
     })),
+  };
+}
+
+function buildSessionPlan(
+  plan: Exclude<Awaited<ReturnType<StandaloneOperatorRuntime["getPlan"]>>, undefined>,
+): SessionPlan {
+  return {
+    id: plan.id,
+    content: plan.content,
+    status: plan.status,
+    ...(plan.approval ? { approval: { ...plan.approval } } : {}),
+    ...(plan.verification ? { verification: { ...plan.verification } } : {}),
+    updatedAt: plan.updatedAt,
   };
 }
 
@@ -1850,6 +1926,14 @@ function getOptionalNullableString(params: Record<string, unknown> | undefined, 
   return value;
 }
 
+function getBoolean(params: Record<string, unknown> | undefined, key: string): boolean {
+  const value = params?.[key];
+  if (typeof value !== "boolean") {
+    throw new Error(`Invalid boolean parameter: ${key}`);
+  }
+  return value;
+}
+
 function getApprovalDecision(
   params: Record<string, unknown> | undefined,
   key: string,
@@ -1886,6 +1970,38 @@ function getOptionalTaskStatus(
   throw new Error(`Invalid task status: ${key}`);
 }
 
+function getOptionalPlanStatus(
+  params: Record<string, unknown> | undefined,
+  key: string,
+): "draft" | "awaiting_approval" | "approved" | "rejected" | "in_progress" | "completed" | undefined {
+  const value = params?.[key];
+  if (value == null) {
+    return undefined;
+  }
+  if (
+    value === "draft" ||
+    value === "awaiting_approval" ||
+    value === "approved" ||
+    value === "rejected" ||
+    value === "in_progress" ||
+    value === "completed"
+  ) {
+    return value;
+  }
+  throw new Error(`Invalid plan status: ${key}`);
+}
+
+function getPlanVerificationStatus(
+  params: Record<string, unknown> | undefined,
+  key: string,
+): "pending" | "requested" | "completed" | "skipped" {
+  const value = params?.[key];
+  if (value === "pending" || value === "requested" || value === "completed" || value === "skipped") {
+    return value;
+  }
+  throw new Error(`Invalid plan verification status: ${key}`);
+}
+
 function getSkillCandidateStatus(
   params: Record<string, unknown> | undefined,
   key: string,
@@ -1919,7 +2035,7 @@ function getOptionalRuntimeEventFamily(
   if (value == null) {
     return undefined;
   }
-  if (value === "run" || value === "approval" || value === "background-task" || value === "skill" || value === "subagent" || value === "task" || value === "message" || value === "notification") {
+  if (value === "run" || value === "approval" || value === "background-task" || value === "skill" || value === "subagent" || value === "task" || value === "plan" || value === "message" || value === "notification") {
     return value;
   }
   throw new Error(`Invalid runtime event family: ${key}`);
@@ -1980,17 +2096,6 @@ function getOptionalBoolean(
   if (value == null) {
     return undefined;
   }
-  if (typeof value !== "boolean") {
-    throw new Error(`Invalid boolean parameter: ${key}`);
-  }
-  return value;
-}
-
-function getBoolean(
-  params: Record<string, unknown> | undefined,
-  key: string,
-): boolean {
-  const value = params?.[key];
   if (typeof value !== "boolean") {
     throw new Error(`Invalid boolean parameter: ${key}`);
   }

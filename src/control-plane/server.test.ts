@@ -137,6 +137,126 @@ describe("OperatorControlPlaneServer", () => {
       ok: true,
       result: [expect.objectContaining({ id: task.id, sessionId: session.id, subject: "Inspect logs" })],
     });
+    const planUpsert = await server.handle({
+      method: "plans.upsert",
+      params: {
+        sessionId: session.id,
+        content: "1. Add plan store\n2. Add plan RPC",
+      },
+    });
+    expect(planUpsert).toMatchObject({
+      ok: true,
+      result: {
+        sessionId: session.id,
+        content: "1. Add plan store\n2. Add plan RPC",
+        status: "draft",
+      },
+    });
+    if (!planUpsert.ok) {
+      throw new Error("expected plan to be created");
+    }
+    await expect(server.handle({ method: "plans.get", params: { sessionId: session.id } })).resolves.toMatchObject({
+      ok: true,
+      result: { id: planUpsert.result.id, sessionId: session.id, content: "1. Add plan store\n2. Add plan RPC", status: "draft" },
+    });
+    const planRequestApproval = await server.handle({
+      method: "plans.requestApproval",
+      params: {
+        sessionId: session.id,
+        approverSessionId: childSession.id,
+      },
+    });
+    expect(planRequestApproval).toMatchObject({
+      ok: true,
+      result: {
+        plan: {
+          id: planUpsert.result.id,
+          sessionId: session.id,
+          status: "awaiting_approval",
+          approval: {
+            approverSessionId: childSession.id,
+            requestedBySessionId: session.id,
+          },
+        },
+        message: {
+          fromSessionId: session.id,
+          toSessionId: childSession.id,
+          metadata: {
+            type: "plan_approval_request",
+            planId: planUpsert.result.id,
+            fromSessionId: session.id,
+          },
+        },
+      },
+    });
+    if (!planRequestApproval.ok) {
+      throw new Error("expected plan approval request");
+    }
+    await expect(
+      server.handle({
+        method: "plans.respondApproval",
+        params: {
+          requestId: planRequestApproval.result.plan.approval?.requestId,
+          sessionId: childSession.id,
+          approve: true,
+          feedback: "Looks good.",
+        },
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      result: {
+        plan: {
+          id: planUpsert.result.id,
+          status: "approved",
+          approval: {
+            requestId: planRequestApproval.result.plan.approval?.requestId,
+            approverSessionId: childSession.id,
+            approved: true,
+            feedback: "Looks good.",
+          },
+        },
+        message: {
+          fromSessionId: childSession.id,
+          toSessionId: session.id,
+          metadata: {
+            type: "plan_approval_response",
+            requestId: planRequestApproval.result.plan.approval?.requestId,
+            approve: true,
+            feedback: "Looks good.",
+          },
+        },
+      },
+    });
+    await expect(
+      server.handle({
+        method: "plans.verify",
+        params: {
+          sessionId: session.id,
+          status: "requested",
+          reminderAt: "2026-06-03T04:00:00.000Z",
+          notes: "Run focused tests.",
+        },
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      result: {
+        id: planUpsert.result.id,
+        verification: {
+          status: "requested",
+          reminderAt: "2026-06-03T04:00:00.000Z",
+          notes: "Run focused tests.",
+        },
+      },
+    });
+    await expect(server.handle({ method: "runs.events", params: { sessionId: session.id, family: "plan" } })).resolves.toMatchObject({
+      ok: true,
+      result: expect.arrayContaining([
+        expect.objectContaining({ type: "plan.updated", payload: expect.objectContaining({ id: planUpsert.result.id, sessionId: session.id }) }),
+        expect.objectContaining({ type: "plan.approval.requested", payload: expect.objectContaining({ sessionId: session.id, fromSessionId: session.id, toSessionId: childSession.id }) }),
+        expect.objectContaining({ type: "plan.approval.resolved", payload: expect.objectContaining({ sessionId: session.id, fromSessionId: childSession.id, toSessionId: session.id }) }),
+        expect.objectContaining({ type: "plan.verification.updated", payload: expect.objectContaining({ id: planUpsert.result.id, verification: expect.objectContaining({ status: "requested" }) }) }),
+      ]),
+    });
     await expect(
       server.handle({
         method: "tasks.update",
@@ -197,21 +317,21 @@ describe("OperatorControlPlaneServer", () => {
     });
     await expect(server.handle({ method: "messages.list", params: { sessionId: session.id } })).resolves.toMatchObject({
       ok: true,
-      result: [expect.objectContaining({ id: message.id, fromSessionId: session.id, toSessionId: childSession.id })],
+      result: expect.arrayContaining([expect.objectContaining({ id: message.id, fromSessionId: session.id, toSessionId: childSession.id })]),
     });
     await expect(server.handle({ method: "messages.inbox", params: { sessionId: childSession.id } })).resolves.toMatchObject({
       ok: true,
-      result: [expect.objectContaining({ id: message.id, toSessionId: childSession.id })],
+      result: expect.arrayContaining([expect.objectContaining({ id: message.id, toSessionId: childSession.id })]),
     });
     await expect(server.handle({ method: "messages.outbox", params: { sessionId: session.id } })).resolves.toMatchObject({
       ok: true,
-      result: [expect.objectContaining({ id: message.id, fromSessionId: session.id })],
+      result: expect.arrayContaining([expect.objectContaining({ id: message.id, fromSessionId: session.id })]),
     });
     await expect(server.handle({ method: "runs.events", params: { sessionId: session.id, family: "message" } })).resolves.toMatchObject({
       ok: true,
-      result: [
+      result: expect.arrayContaining([
         expect.objectContaining({ type: "message.sent", payload: expect.objectContaining({ id: message.id, fromSessionId: session.id, toSessionId: childSession.id }) }),
-      ],
+      ]),
     });
     const notificationSend = await server.handle({
       method: "notifications.send",

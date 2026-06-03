@@ -81,6 +81,11 @@ describe("parseSlashCommand", () => {
     expect(parseSlashCommand("/outbox")).toEqual({ kind: "outbox" });
     expect(parseSlashCommand("/send session-2 Please collect logs")).toEqual({ kind: "send", toSessionId: "session-2", message: "Please collect logs" });
     expect(parseSlashCommand("/notify success Deploy finished")).toEqual({ kind: "notify", status: "success", message: "Deploy finished" });
+    expect(parseSlashCommand("/plan-show")).toEqual({ kind: "plan-show" });
+    expect(parseSlashCommand("/plan-set 1. Draft plan")).toEqual({ kind: "plan-set", content: "1. Draft plan" });
+    expect(parseSlashCommand("/plan-request-approval session-2")).toEqual({ kind: "plan-request-approval", approverSessionId: "session-2" });
+    expect(parseSlashCommand("/plan-respond req-1 approve looks good")).toEqual({ kind: "plan-respond", requestId: "req-1", approve: true, feedback: "looks good" });
+    expect(parseSlashCommand("/verify requested rerun tests")).toEqual({ kind: "verify", status: "requested", notes: "rerun tests" });
     expect(parseSlashCommand("/plan")).toEqual({ kind: "plan" });
     expect(parseSlashCommand("/plan-exit")).toEqual({ kind: "plan-exit" });
     expect(parseSlashCommand("/plan-exit acceptEdits")).toEqual({ kind: "plan-exit", mode: "acceptEdits" });
@@ -235,6 +240,26 @@ describe("parseSlashCommand", () => {
       kind: "invalid",
       message: "Usage: /notify <status> <message>",
     });
+    expect(parseSlashCommand("/plan-show later")).toEqual({
+      kind: "invalid",
+      message: "Usage: /plan-show",
+    });
+    expect(parseSlashCommand("/plan-set")).toEqual({
+      kind: "invalid",
+      message: "Usage: /plan-set <content>",
+    });
+    expect(parseSlashCommand("/plan-request-approval")).toEqual({
+      kind: "invalid",
+      message: "Usage: /plan-request-approval <sessionId>",
+    });
+    expect(parseSlashCommand("/plan-respond req-1 maybe")).toEqual({
+      kind: "invalid",
+      message: "Usage: /plan-respond <requestId> <approve|reject> [feedback]",
+    });
+    expect(parseSlashCommand("/verify later")).toEqual({
+      kind: "invalid",
+      message: "Usage: /verify <pending|requested|completed|skipped> [notes]",
+    });
     expect(parseSlashCommand("/plan later")).toEqual({
       kind: "invalid",
       message: "Usage: /plan",
@@ -355,6 +380,67 @@ describe("OperatorCliApp", () => {
     const deliveryLog = await fs.readFile(path.join(rootDir, "delivery-local.jsonl"), "utf8");
     expect(deliveryLog).toContain("\"kind\":\"push-notification\"");
     expect(deliveryLog).toContain("Deploy finished.");
+  });
+
+  it("shows, updates, requests approval for, responds to, and verifies plans", async () => {
+    const rootDir = await makeTempDir();
+    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    const author = await app.runtime.startSession({ title: "plan author", cwd: rootDir, agentId: "operator-cli" });
+    const reviewer = await app.runtime.startSession({ title: "plan reviewer", cwd: rootDir, agentId: "reviewer" });
+
+    await expect(app.dispatchSlashCommand({ kind: "plan-show" }, author.id)).resolves.toBe(`No plan for session ${author.id}.`);
+
+    const setOutput = await app.dispatchSlashCommand({ kind: "plan-set", content: "1. Add plan store\n2. Add plan RPC" }, author.id);
+    expect(setOutput).toContain("Updated plan");
+    expect(setOutput).toContain("status=draft");
+
+    const plan = await app.runtime.getPlan(author.id);
+    expect(plan).toMatchObject({
+      sessionId: author.id,
+      content: "1. Add plan store\n2. Add plan RPC",
+      status: "draft",
+    });
+    if (!plan) {
+      throw new Error("expected plan");
+    }
+
+    const showOutput = await app.dispatchSlashCommand({ kind: "plan-show" }, author.id);
+    expect(showOutput).toContain(`plan=${plan.id}`);
+    expect(showOutput).toContain("status=draft");
+    expect(showOutput).toContain("content=1. Add plan store 2. Add plan RPC");
+
+    const requestOutput = await app.dispatchSlashCommand({ kind: "plan-request-approval", approverSessionId: reviewer.id }, author.id);
+    expect(requestOutput).toContain("Requested plan approval");
+    expect(requestOutput).toContain(`plan=${plan.id}`);
+    expect(requestOutput).toContain(`approver=${reviewer.id}`);
+
+    const requestedPlan = await app.runtime.getPlan(author.id);
+    expect(requestedPlan).toMatchObject({
+      id: plan.id,
+      status: "awaiting_approval",
+      approval: { approverSessionId: reviewer.id },
+    });
+    if (!requestedPlan?.approval?.requestId) {
+      throw new Error("expected approval request id");
+    }
+
+    const respondOutput = await app.dispatchSlashCommand(
+      { kind: "plan-respond", requestId: requestedPlan.approval.requestId, approve: true, feedback: "Looks good" },
+      reviewer.id,
+    );
+    expect(respondOutput).toContain(`Responded to plan approval ${requestedPlan.approval.requestId}`);
+    expect(respondOutput).toContain("status=approved");
+
+    const verifyOutput = await app.dispatchSlashCommand({ kind: "verify", status: "requested", notes: "Run focused tests" }, author.id);
+    expect(verifyOutput).toContain(`Updated plan verification ${plan.id} status=requested`);
+    expect(verifyOutput).toContain("notes=Run focused tests");
+
+    const verifiedPlan = await app.runtime.getPlan(author.id);
+    expect(verifiedPlan).toMatchObject({
+      id: plan.id,
+      status: "approved",
+      verification: { status: "requested", notes: "Run focused tests" },
+    });
   });
 
   it("enables and exits plan mode with persisted local config", async () => {

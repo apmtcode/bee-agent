@@ -1,7 +1,7 @@
 import type { OperatorEvent, OperatorEventFilter } from "../kernel/event-bus.js";
 import type { OperatorRunProgressEvent, StandaloneOperatorRuntime } from "../orchestrator/operator-runtime.js";
 
-export type RuntimeEventFamily = "run" | "approval" | "background-task" | "skill" | "subagent" | "task" | "message" | "notification";
+export type RuntimeEventFamily = "run" | "approval" | "background-task" | "skill" | "subagent" | "task" | "plan" | "message" | "notification";
 
 export type RuntimeEventSubscriptionOptions = {
   replay?: boolean;
@@ -53,6 +53,9 @@ function matchesFamily(type: string, family: RuntimeEventFamily): boolean {
   }
   if (family === "task") {
     return type.startsWith("task.");
+  }
+  if (family === "plan") {
+    return type.startsWith("plan.");
   }
   if (family === "message") {
     return type.startsWith("message.");

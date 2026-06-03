@@ -391,6 +391,109 @@ describe("StandaloneOperatorRuntime", () => {
     ]);
   });
 
+  it("stores plans, routes approval responses through messages, and emits plan events", async () => {
+    const runtime = new StandaloneOperatorRuntime({ rootDir: await makeTempDir(), replayLimit: 50 });
+    const author = await runtime.startSession({ title: "Author", agentId: "main" });
+    const reviewer = await runtime.startSession({ title: "Reviewer", agentId: "reviewer" });
+
+    const draft = await runtime.upsertPlan({
+      sessionId: author.id,
+      content: "1. Add plan store\n2. Wire approval flow",
+    });
+    expect(draft).toMatchObject({
+      sessionId: author.id,
+      status: "draft",
+      content: "1. Add plan store\n2. Wire approval flow",
+    });
+
+    const requested = await runtime.requestPlanApproval({
+      sessionId: author.id,
+      approverSessionId: reviewer.id,
+    });
+    expect(requested.plan).toMatchObject({
+      id: draft.id,
+      sessionId: author.id,
+      status: "awaiting_approval",
+      approval: {
+        requestedBySessionId: author.id,
+        approverSessionId: reviewer.id,
+      },
+    });
+    expect(requested.message).toMatchObject({
+      fromSessionId: author.id,
+      toSessionId: reviewer.id,
+      metadata: {
+        type: "plan_approval_request",
+        requestId: requested.plan.approval?.requestId,
+        planId: draft.id,
+        fromSessionId: author.id,
+      },
+    });
+    await expect(runtime.listInbox(reviewer.id)).resolves.toEqual([
+      expect.objectContaining({ id: requested.message.id }),
+    ]);
+
+    const responded = await runtime.respondPlanApproval({
+      requestId: requested.plan.approval?.requestId ?? "missing",
+      sessionId: reviewer.id,
+      approve: true,
+      feedback: "Ship it.",
+    });
+    expect(responded.plan).toMatchObject({
+      id: draft.id,
+      status: "approved",
+      approval: {
+        requestId: requested.plan.approval?.requestId,
+        approverSessionId: reviewer.id,
+        approved: true,
+        feedback: "Ship it.",
+      },
+    });
+    expect(responded.message).toMatchObject({
+      fromSessionId: reviewer.id,
+      toSessionId: author.id,
+      metadata: {
+        type: "plan_approval_response",
+        requestId: requested.plan.approval?.requestId,
+        approve: true,
+        feedback: "Ship it.",
+      },
+    });
+
+    await expect(
+      runtime.updatePlanVerification({
+        sessionId: author.id,
+        status: "requested",
+        reminderAt: "2026-06-03T03:00:00.000Z",
+        notes: "Re-run focused vitest before push",
+      }),
+    ).resolves.toMatchObject({
+      id: draft.id,
+      verification: {
+        status: "requested",
+        reminderAt: "2026-06-03T03:00:00.000Z",
+        notes: "Re-run focused vitest before push",
+      },
+    });
+    await expect(runtime.getPlan(author.id)).resolves.toMatchObject({
+      id: draft.id,
+      status: "approved",
+      verification: {
+        status: "requested",
+      },
+    });
+
+    expect(runtime.events.snapshot().map((event) => event.type)).toEqual(
+      expect.arrayContaining([
+        "plan.updated",
+        "message.sent",
+        "plan.approval.requested",
+        "plan.approval.resolved",
+        "plan.verification.updated",
+      ]),
+    );
+  });
+
   it("starts, syncs, recovers, lists, and cancels background tasks", async () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),

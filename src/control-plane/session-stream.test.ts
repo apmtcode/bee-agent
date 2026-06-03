@@ -275,6 +275,127 @@ describe("OperatorControlPlaneSessionStream", () => {
     ]);
   });
 
+  it("binds plan requests and streams plan events for a bootstrapped session", async () => {
+    const runtime = new StandaloneOperatorRuntime({
+      rootDir: await makeTempDir(),
+      backgroundTaskIsProcessRunning: () => false,
+    });
+    const server = new OperatorControlPlaneServer({ runtime });
+    const reviewer = await runtime.startSession({ title: "Reviewer", agentId: "reviewer" });
+    const stream = new OperatorControlPlaneSessionStream(server);
+
+    const bootstrapped = await stream.bootstrap({ title: "Plan session", family: "plan" });
+    expect(bootstrapped.created).toBe(true);
+    expect(bootstrapped.plan).toBeUndefined();
+    expect(bootstrapped.events).toEqual([]);
+
+    const created = await stream.request<{
+      id: string;
+      sessionId: string;
+      content: string;
+      status: string;
+    }>({
+      method: "plans.upsert",
+      params: { content: "1. Add plan store\n2. Wire RPC" },
+    });
+    expect(created.ok).toBe(true);
+    if (!created.ok) {
+      throw new Error("expected created plan");
+    }
+    expect(created.result).toMatchObject({
+      sessionId: bootstrapped.session.id,
+      content: "1. Add plan store\n2. Wire RPC",
+      status: "draft",
+    });
+
+    const listed = await stream.request<{
+      id: string;
+      content: string;
+      status: string;
+    }>({
+      method: "plans.get",
+      params: {},
+    });
+    expect(listed.ok).toBe(true);
+    if (!listed.ok) {
+      throw new Error("expected listed plan");
+    }
+    expect(listed.result).toMatchObject({
+      id: created.result.id,
+      content: "1. Add plan store\n2. Wire RPC",
+      status: "draft",
+    });
+
+    const requested = await stream.request<{
+      plan: { id: string; sessionId: string; status: string; approval?: { requestId: string; approverSessionId: string } };
+      message: { fromSessionId: string; toSessionId: string; summary: string };
+    }>({
+      method: "plans.requestApproval",
+      params: { approverSessionId: reviewer.id },
+    });
+    expect(requested.ok).toBe(true);
+    if (!requested.ok) {
+      throw new Error("expected requested plan approval");
+    }
+    expect(requested.result).toMatchObject({
+      plan: {
+        id: created.result.id,
+        sessionId: bootstrapped.session.id,
+        status: "awaiting_approval",
+        approval: {
+          approverSessionId: reviewer.id,
+        },
+      },
+      message: {
+        fromSessionId: bootstrapped.session.id,
+        toSessionId: reviewer.id,
+      },
+    });
+
+    const eventIterator = stream.events({ family: "plan" })[Symbol.asyncIterator]();
+    const verified = await stream.request<{ id: string; verification: { status: string; notes?: string } }>({
+      method: "plans.verify",
+      params: { status: "requested", notes: "Run focused tests" },
+    });
+    expect(verified.ok).toBe(true);
+    if (!verified.ok) {
+      throw new Error("expected verified plan");
+    }
+    expect(verified.result).toMatchObject({
+      id: created.result.id,
+      verification: { status: "requested", notes: "Run focused tests" },
+    });
+
+    const nextEvent = await eventIterator.next();
+    expect(nextEvent.done).toBe(false);
+    expect(nextEvent.value?.type).toBe("plan.verification.updated");
+    expect(nextEvent.value?.payload).toMatchObject({
+      id: created.result.id,
+      sessionId: bootstrapped.session.id,
+      verification: { status: "requested", notes: "Run focused tests" },
+    });
+    await eventIterator.return?.();
+
+    const resumedBootstrap = await stream.bootstrap({ sessionId: bootstrapped.session.id, family: "plan" });
+    expect(resumedBootstrap.plan).toMatchObject({
+      id: created.result.id,
+      content: "1. Add plan store\n2. Wire RPC",
+      status: "awaiting_approval",
+      approval: {
+        requestId: requested.result.plan.approval?.requestId,
+        approverSessionId: reviewer.id,
+      },
+      verification: { status: "requested", notes: "Run focused tests" },
+    });
+    expect(resumedBootstrap.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: "plan.updated" }),
+        expect.objectContaining({ type: "plan.approval.requested" }),
+        expect.objectContaining({ type: "plan.verification.updated" }),
+      ]),
+    );
+  });
+
   it("binds message requests and streams message events for a bootstrapped session", async () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),

@@ -54,6 +54,14 @@ import {
   resolvePatchedModelSelection,
 } from "./model-selection.js";
 import { FileTaskStore, type OperatorTaskRecord, type OperatorTaskStatus } from "./task-store.js";
+import {
+  FilePlanStore,
+  type OperatorPlanApprovalRecord,
+  type OperatorPlanRecord,
+  type OperatorPlanStatus,
+  type OperatorPlanVerificationRecord,
+  type OperatorPlanVerificationStatus,
+} from "./plan-store.js";
 import { FileMessageStore, type OperatorMessageRecord } from "./message-store.js";
 import { FileSubagentRegistry, type SubagentRunRecord } from "./subagent-registry.js";
 import {
@@ -161,6 +169,32 @@ export type UpdateTaskParams = {
   metadata?: Record<string, unknown>;
   blocks?: string[];
   blockedBy?: string[];
+};
+
+export type UpsertPlanParams = {
+  sessionId: string;
+  content: string;
+  status?: OperatorPlanStatus;
+};
+
+export type RequestPlanApprovalParams = {
+  sessionId: string;
+  approverSessionId: string;
+  content?: string;
+};
+
+export type RespondPlanApprovalParams = {
+  requestId: string;
+  sessionId: string;
+  approve: boolean;
+  feedback?: string;
+};
+
+export type UpdatePlanVerificationParams = {
+  sessionId: string;
+  status: OperatorPlanVerificationStatus;
+  reminderAt?: string;
+  notes?: string;
 };
 
 export type SendMessageParams = {
@@ -337,6 +371,10 @@ export type OperatorRuntimeEventType =
   | "run.progress"
   | "task.created"
   | "task.updated"
+  | "plan.updated"
+  | "plan.approval.requested"
+  | "plan.approval.resolved"
+  | "plan.verification.updated"
   | "message.sent"
   | "notification.sent"
   | "subagent.registered"
@@ -378,6 +416,7 @@ export class StandaloneOperatorRuntime {
   readonly replays: ReplayRuntimeService;
   readonly runs: FileRunStore;
   readonly tasks: FileTaskStore;
+  readonly plans: FilePlanStore;
   readonly messages: FileMessageStore;
   readonly teams: FileOperatorCliTeamStore;
   readonly delivery: OperatorDeliveryService;
@@ -405,6 +444,7 @@ export class StandaloneOperatorRuntime {
     this.replays = new ReplayRuntimeService(this.sessions, this.trajectories);
     this.runs = new FileRunStore(path.join(options.rootDir, "runs.json"));
     this.tasks = new FileTaskStore(path.join(options.rootDir, "tasks.json"));
+    this.plans = new FilePlanStore(path.join(options.rootDir, "plans.json"));
     this.messages = new FileMessageStore(path.join(options.rootDir, "messages.json"));
     this.teams = new FileOperatorCliTeamStore(options.rootDir);
     this.delivery = new OperatorDeliveryService(options.rootDir);
@@ -646,6 +686,141 @@ export class StandaloneOperatorRuntime {
 
   async listTasks(sessionId?: string): Promise<OperatorTaskRecord[]> {
     return sessionId ? await this.tasks.listBySession(sessionId) : await this.tasks.list();
+  }
+
+  async getPlan(sessionId: string): Promise<OperatorPlanRecord | undefined> {
+    return await this.plans.getBySession(sessionId);
+  }
+
+  async upsertPlan(params: UpsertPlanParams): Promise<OperatorPlanRecord> {
+    const existing = await this.plans.getBySession(params.sessionId);
+    const plan = await this.plans.upsert({
+      sessionId: params.sessionId,
+      content: params.content,
+      status: params.status ?? existing?.status,
+      approval: existing?.approval,
+      verification: existing?.verification,
+    });
+    this.events.publish({ type: "plan.updated", payload: plan, ts: Date.now() });
+    return plan;
+  }
+
+  async requestPlanApproval(params: RequestPlanApprovalParams): Promise<{
+    plan: OperatorPlanRecord;
+    message: OperatorMessageRecord;
+  }> {
+    const existing = await this.plans.getBySession(params.sessionId);
+    const content = params.content ?? existing?.content;
+    if (!content) {
+      throw new Error(`missing plan content for session ${params.sessionId}`);
+    }
+    const approval: OperatorPlanApprovalRecord = {
+      requestId: randomUUID(),
+      requestedBySessionId: params.sessionId,
+      approverSessionId: params.approverSessionId,
+      requestedAt: new Date().toISOString(),
+    };
+    const plan = await this.plans.upsert({
+      sessionId: params.sessionId,
+      content,
+      status: "awaiting_approval",
+      approval,
+      verification: existing?.verification,
+    });
+    const message = await this.sendMessage({
+      fromSessionId: params.sessionId,
+      toSessionId: params.approverSessionId,
+      summary: `Plan approval request ${approval.requestId}`,
+      message: content,
+      metadata: {
+        type: "plan_approval_request",
+        requestId: approval.requestId,
+        planId: plan.id,
+        fromSessionId: params.sessionId,
+      },
+    });
+    this.events.publish({
+      type: "plan.approval.requested",
+      payload: {
+        sessionId: plan.sessionId,
+        fromSessionId: params.sessionId,
+        toSessionId: params.approverSessionId,
+        plan,
+        message,
+      },
+      ts: Date.now(),
+    });
+    return { plan, message };
+  }
+
+  async respondPlanApproval(params: RespondPlanApprovalParams): Promise<{
+    plan: OperatorPlanRecord;
+    message: OperatorMessageRecord;
+  }> {
+    const plan = await this.plans.getByApprovalRequestId(params.requestId);
+    if (!plan?.approval) {
+      throw new Error(`unknown plan approval request: ${params.requestId}`);
+    }
+    if (plan.approval.approverSessionId !== params.sessionId) {
+      throw new Error(`plan approval request ${params.requestId} is not assigned to session ${params.sessionId}`);
+    }
+    const approval: OperatorPlanApprovalRecord = {
+      ...plan.approval,
+      resolvedAt: new Date().toISOString(),
+      approved: params.approve,
+      ...(params.feedback ? { feedback: params.feedback } : {}),
+    };
+    const updatedPlan = await this.plans.update(plan.id, {
+      status: params.approve ? "approved" : "rejected",
+      approval,
+    });
+    if (!updatedPlan) {
+      throw new Error(`unknown plan: ${plan.id}`);
+    }
+    const message = await this.sendMessage({
+      fromSessionId: params.sessionId,
+      toSessionId: plan.sessionId,
+      summary: `Plan approval response ${params.requestId}`,
+      message: params.feedback ?? (params.approve ? "approved" : "rejected"),
+      metadata: {
+        type: "plan_approval_response",
+        requestId: params.requestId,
+        approve: params.approve,
+        ...(params.feedback ? { feedback: params.feedback } : {}),
+      },
+    });
+    this.events.publish({
+      type: "plan.approval.resolved",
+      payload: {
+        sessionId: updatedPlan.sessionId,
+        fromSessionId: params.sessionId,
+        toSessionId: updatedPlan.sessionId,
+        plan: updatedPlan,
+        message,
+      },
+      ts: Date.now(),
+    });
+    return { plan: updatedPlan, message };
+  }
+
+  async updatePlanVerification(params: UpdatePlanVerificationParams): Promise<OperatorPlanRecord> {
+    const plan = await this.plans.getBySession(params.sessionId);
+    if (!plan) {
+      throw new Error(`unknown plan session: ${params.sessionId}`);
+    }
+    const verification: OperatorPlanVerificationRecord = {
+      status: params.status,
+      ...(params.reminderAt ? { reminderAt: params.reminderAt } : {}),
+      ...(params.notes ? { notes: params.notes } : {}),
+    };
+    const updated = await this.plans.update(plan.id, {
+      verification,
+    });
+    if (!updated) {
+      throw new Error(`unknown plan: ${plan.id}`);
+    }
+    this.events.publish({ type: "plan.verification.updated", payload: updated, ts: Date.now() });
+    return updated;
   }
 
   async sendMessage(params: SendMessageParams): Promise<OperatorMessageRecord> {
