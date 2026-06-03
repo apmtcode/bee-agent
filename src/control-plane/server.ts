@@ -85,11 +85,28 @@ export type PairingTicketCreateResult = PairingTicket;
 
 export type PairingTicketResolveResult = PairingTicket;
 
+export type SessionTaskPlanEntry = {
+  id: string;
+  subject: string;
+  description: string;
+  status: "pending" | "in_progress" | "completed";
+  activeForm?: string;
+  owner?: string;
+  blocks: string[];
+  blockedBy: string[];
+  updatedAt: string;
+};
+
+export type SessionTaskPlan = {
+  entries: SessionTaskPlanEntry[];
+};
+
 export type SessionBootstrapResult = {
   session: SessionRecord;
   created: boolean;
   resumed: boolean;
   approvals: ApprovalRequest[];
+  taskPlan: SessionTaskPlan;
   events: OperatorEvent[];
 };
 
@@ -1269,7 +1286,24 @@ async function buildSessionBootstrapResult(
     created: options.created,
     resumed: options.resumed,
     approvals: await runtime.listApprovals(session.id),
+    taskPlan: buildSessionTaskPlan(await runtime.listTasks(session.id)),
     events: typeof options.afterTs === "number" ? events.filter((event) => event.ts > options.afterTs!) : events,
+  };
+}
+
+function buildSessionTaskPlan(tasks: Awaited<ReturnType<StandaloneOperatorRuntime["listTasks"]>>): SessionTaskPlan {
+  return {
+    entries: tasks.map((task) => ({
+      id: task.id,
+      subject: task.subject,
+      description: task.description,
+      status: task.status,
+      ...(task.activeForm ? { activeForm: task.activeForm } : {}),
+      ...(task.owner ? { owner: task.owner } : {}),
+      blocks: [...task.blocks],
+      blockedBy: [...task.blockedBy],
+      updatedAt: task.updatedAt,
+    })),
   };
 }
 

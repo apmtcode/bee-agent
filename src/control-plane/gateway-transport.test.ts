@@ -213,6 +213,56 @@ describe("OperatorGatewayTransportConnection", () => {
     expect(secondBootstrap.result.session.id).toBe(firstBootstrap.result.session.id);
   });
 
+  it("replays task plans in gateway bootstrap and forwards task-family events", async () => {
+    const runtime = new StandaloneOperatorRuntime({
+      rootDir: await makeTempDir(),
+      backgroundTaskIsProcessRunning: () => false,
+    });
+    const server = new OperatorControlPlaneServer({ runtime });
+    const transport = new InMemoryGatewayTransport();
+    const connection = new OperatorGatewayTransportConnection(server, transport);
+    const session = await runtime.startSession({ title: "Gateway task", agentId: "gateway" });
+    const task = await runtime.createTask({ sessionId: session.id, subject: "Inspect gateway", description: "Inspect gateway state." });
+
+    await connection.receive({
+      type: "bootstrap",
+      id: "boot-task-1",
+      params: { sessionId: session.id, family: "task" },
+      eventSubscription: { family: "task" },
+    });
+    const bootstrapped = transport.sent.find((message) => message.type === "bootstrap.ok" && message.id === "boot-task-1");
+    expect(bootstrapped).toBeDefined();
+    if (!bootstrapped || bootstrapped.type !== "bootstrap.ok") {
+      throw new Error("expected task bootstrap");
+    }
+    expect(bootstrapped.result.taskPlan).toEqual({
+      entries: [
+        expect.objectContaining({
+          id: task.id,
+          subject: "Inspect gateway",
+          description: "Inspect gateway state.",
+          status: "pending",
+        }),
+      ],
+    });
+
+    await connection.receive({
+      type: "request",
+      id: "req-task-update",
+      request: { method: "tasks.update", params: { taskId: task.id, status: "completed" } },
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const taskEvent = transport.sent.findLast(
+      (message) => message.type === "event" && message.event.type === "task.updated",
+    );
+    expect(taskEvent).toBeDefined();
+    if (!taskEvent || taskEvent.type !== "event") {
+      throw new Error("expected task event");
+    }
+    expect(taskEvent.event.payload).toMatchObject({ id: task.id, status: "completed", sessionId: session.id });
+  });
+
   it("forwards subagent-family events across the gateway", async () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),

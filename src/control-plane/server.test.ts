@@ -257,6 +257,17 @@ describe("OperatorControlPlaneServer", () => {
         created: false,
         resumed: false,
         approvals: [expect.objectContaining({ id: approval.id, sessionId: session.id })],
+        taskPlan: {
+          entries: [
+            expect.objectContaining({
+              id: task.id,
+              subject: "Inspect logs",
+              description: "Look at the latest logs.",
+              status: "in_progress",
+              blockedBy: [approval.id],
+            }),
+          ],
+        },
         events: [expect.objectContaining({ type: "approval.requested" })],
       },
     });
@@ -269,6 +280,14 @@ describe("OperatorControlPlaneServer", () => {
       ok: true,
       result: {
         session: { id: session.id },
+        taskPlan: {
+          entries: [
+            expect.objectContaining({
+              id: task.id,
+              status: "in_progress",
+            }),
+          ],
+        },
         events: [],
       },
     });

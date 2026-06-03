@@ -117,9 +117,9 @@ The control plane now also exposes a first remote session-stream seam for future
 
 Current remote session behavior in this tranche:
 - `sessions.bootstrap` can create or reattach to a session and optionally resume idle sessions
-- bootstrap returns session-scoped pending approvals plus a filtered replay of runtime events
+- bootstrap returns session-scoped pending approvals, a replayable task-plan snapshot, plus a filtered replay of runtime events
 - `OperatorControlPlaneSessionStream` binds later session-scoped control-plane requests to the bootstrapped session
-- the same stream adapter can subscribe to live session-scoped runtime events for approvals, runs, skills, and background tasks
+- the same stream adapter can subscribe to live session-scoped runtime events for approvals, runs, tasks, skills, and background tasks
 - the seam is transport-agnostic and in-process in this tranche; it is intended to be mounted by a later gateway/channel transport layer
 
 ## Gateway transport
@@ -130,6 +130,7 @@ Current gateway transport behavior in this tranche:
 - one remote connection can bootstrap or reattach to a single operator session
 - later connection-scoped requests are forwarded through the bound session stream without resupplying `sessionId`
 - live session-scoped runtime events are forwarded as transport event frames
+- transport bootstrap now includes the session task-plan snapshot so reconnecting clients can recover persisted operator tasks immediately
 - transport message types remain intentionally narrow and now include heartbeat `ping` / `pong` alongside bootstrap, request, response, event, and error
 - gateway bootstrap can now also carry a stable `remoteId` and `remoteSource` so reconnecting clients can reattach without already knowing `sessionId`
 - reconnecting clients can optionally provide an event replay cursor so bootstrap only replays missed session-scoped events

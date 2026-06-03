@@ -185,6 +185,7 @@ describe("OperatorControlPlaneSessionStream", () => {
 
     const bootstrapped = await stream.bootstrap({ title: "Task session", family: "task" });
     expect(bootstrapped.created).toBe(true);
+    expect(bootstrapped.taskPlan).toEqual({ entries: [] });
     expect(bootstrapped.events).toEqual([]);
 
     const created = await stream.request<{
@@ -204,6 +205,17 @@ describe("OperatorControlPlaneSessionStream", () => {
       sessionId: bootstrapped.session.id,
       subject: "Inspect logs",
       status: "pending",
+    });
+    const resumedBootstrap = await stream.bootstrap({ sessionId: bootstrapped.session.id, family: "task" });
+    expect(resumedBootstrap.taskPlan).toEqual({
+      entries: [
+        expect.objectContaining({
+          id: created.result.id,
+          subject: "Inspect logs",
+          description: "Look at the latest logs.",
+          status: "pending",
+        }),
+      ],
     });
 
     const listed = await stream.request<Array<{ id: string; sessionId: string; subject: string }>>({

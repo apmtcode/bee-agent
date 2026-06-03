@@ -140,6 +140,8 @@ export {
   type PairingTicketCreateResult,
   type PairingTicketResolveResult,
   type SessionBootstrapResult,
+  type SessionTaskPlan,
+  type SessionTaskPlanEntry,
   type SessionRemoteControlState,
   type SessionRemoteInventoryItem,
   type SessionRemoteInventoryResult,

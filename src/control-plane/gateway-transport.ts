@@ -52,7 +52,7 @@ export type GatewayServerMessage =
 export type GatewayEventSubscription = {
   replay?: boolean;
   runId?: string;
-  family?: "run" | "approval" | "background-task" | "skill" | "subagent";
+  family?: "run" | "approval" | "background-task" | "skill" | "subagent" | "task" | "message";
 };
 
 export type GatewayTransport = {
