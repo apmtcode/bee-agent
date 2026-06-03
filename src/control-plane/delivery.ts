@@ -39,6 +39,19 @@ export type CronTerminalDeliveryPayload = {
   };
 };
 
+export type PushNotificationDeliveryPayload = {
+  kind: "push-notification";
+  notification: {
+    id: string;
+    status: string;
+    message: string;
+    createdAt: string;
+    sessionId?: string;
+  };
+};
+
+export type DeliveryPayload = CronTerminalDeliveryPayload | PushNotificationDeliveryPayload;
+
 function nowIso(): string {
   return new Date().toISOString();
 }
@@ -88,7 +101,7 @@ export class OperatorDeliveryService {
     this.fetchImpl = options.fetchImpl ?? fetch;
   }
 
-  async deliver(targets: DeliveryTarget[], payload: CronTerminalDeliveryPayload): Promise<DeliveryAttemptResult[]> {
+  async deliver(targets: DeliveryTarget[], payload: DeliveryPayload): Promise<DeliveryAttemptResult[]> {
     const results: DeliveryAttemptResult[] = [];
     for (const target of targets) {
       results.push(await this.deliverToTarget(target, payload));
@@ -96,7 +109,7 @@ export class OperatorDeliveryService {
     return results;
   }
 
-  private async deliverToTarget(target: DeliveryTarget, payload: CronTerminalDeliveryPayload): Promise<DeliveryAttemptResult> {
+  private async deliverToTarget(target: DeliveryTarget, payload: DeliveryPayload): Promise<DeliveryAttemptResult> {
     const attemptedAt = nowIso();
     try {
       if (target.kind === "local") {

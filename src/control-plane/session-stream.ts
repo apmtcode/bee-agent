@@ -70,6 +70,12 @@ export class OperatorControlPlaneSessionStream {
         fromSessionId: params?.fromSessionId ?? this.boundSessionId,
       };
     }
+    if (method === "notifications.send") {
+      return {
+        ...(params ?? {}),
+        sessionId: params?.sessionId ?? this.boundSessionId,
+      };
+    }
     if (!requiresSessionBinding(method)) {
       return params;
     }
@@ -109,6 +115,7 @@ function requiresSessionBinding(method: string): boolean {
     method === "tasks.create" ||
     method === "tasks.list" ||
     method === "messages.send" ||
+    method === "notifications.send" ||
     method === "messages.list" ||
     method === "messages.inbox" ||
     method === "messages.outbox" ||

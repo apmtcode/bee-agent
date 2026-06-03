@@ -62,6 +62,7 @@ describe("parseSlashCommand", () => {
     expect(parseSlashCommand("/inbox")).toEqual({ kind: "inbox" });
     expect(parseSlashCommand("/outbox")).toEqual({ kind: "outbox" });
     expect(parseSlashCommand("/send session-2 Please collect logs")).toEqual({ kind: "send", toSessionId: "session-2", message: "Please collect logs" });
+    expect(parseSlashCommand("/notify success Deploy finished")).toEqual({ kind: "notify", status: "success", message: "Deploy finished" });
     expect(parseSlashCommand("/background")).toEqual({ kind: "background-list" });
     expect(parseSlashCommand("/background start smoke -- printf ok")).toEqual({
       kind: "background-start",
@@ -168,6 +169,10 @@ describe("parseSlashCommand", () => {
       kind: "invalid",
       message: "Usage: /send <sessionId> <message>",
     });
+    expect(parseSlashCommand("/notify success")).toEqual({
+      kind: "invalid",
+      message: "Usage: /notify <status> <message>",
+    });
     expect(parseSlashCommand("/watch nope")).toEqual({
       kind: "invalid",
       message: "Usage: /watch [active|run <runId>|task <taskId>]",
@@ -248,6 +253,22 @@ describe("OperatorCliApp", () => {
 
     const outboxOutput = await app.dispatchSlashCommand({ kind: "outbox" }, sender.id);
     expect(outboxOutput).toContain(`${message.id} from=${sender.id} to=${recipient.id} Please collect logs.`);
+  });
+
+  it("sends operator notifications", async () => {
+    const rootDir = await makeTempDir();
+    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    const session = await app.runtime.startSession({ title: "notify cli", cwd: rootDir, agentId: "operator-cli" });
+
+    const output = await app.dispatchSlashCommand({ kind: "notify", status: "success", message: "Deploy finished." }, session.id);
+    expect(output).toContain("Sent notification");
+    expect(output).toContain("status=success");
+    expect(output).toContain("delivery=sent");
+    expect(output).toContain("message=Deploy finished.");
+
+    const deliveryLog = await fs.readFile(path.join(rootDir, "delivery-local.jsonl"), "utf8");
+    expect(deliveryLog).toContain("\"kind\":\"push-notification\"");
+    expect(deliveryLog).toContain("Deploy finished.");
   });
 
   it("streams in-flight freeform run updates and reuses transcript context across resume", async () => {

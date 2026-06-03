@@ -17,6 +17,11 @@ import {
   type ApprovalRequest,
   type ApprovalResolution,
 } from "../control-plane/approvals.js";
+import {
+  OperatorDeliveryService,
+  type DeliveryAttemptResult,
+  type DeliveryTarget,
+} from "../control-plane/delivery.js";
 import { CaptureIngestionService } from "../capture/ingestion.js";
 import { FileCaptureConsentStore } from "../capture/consent-store.js";
 import { ReplayRuntimeService } from "../capture/replay-service.js";
@@ -165,6 +170,22 @@ export type SendMessageParams = {
   metadata?: Record<string, unknown>;
 };
 
+export type SendNotificationParams = {
+  sessionId?: string;
+  status: string;
+  message: string;
+  targets?: DeliveryTarget[];
+};
+
+export type OperatorNotificationRecord = {
+  id: string;
+  sessionId?: string;
+  status: string;
+  message: string;
+  createdAt: string;
+  deliveryResults: DeliveryAttemptResult[];
+};
+
 export type RegisterSubagentParams = {
   sessionId: string;
   parentRunId: string;
@@ -275,6 +296,7 @@ export type OperatorRuntimeEventType =
   | "task.created"
   | "task.updated"
   | "message.sent"
+  | "notification.sent"
   | "subagent.registered"
   | "subagent.updated"
   | "training-job.created"
@@ -315,6 +337,7 @@ export class StandaloneOperatorRuntime {
   readonly runs: FileRunStore;
   readonly tasks: FileTaskStore;
   readonly messages: FileMessageStore;
+  readonly delivery: OperatorDeliveryService;
   readonly subagents: FileSubagentRegistry;
   readonly backgroundTasks: FileBackgroundTaskStore;
   readonly trainingJobs: FileTrainingJobStore;
@@ -340,6 +363,7 @@ export class StandaloneOperatorRuntime {
     this.runs = new FileRunStore(path.join(options.rootDir, "runs.json"));
     this.tasks = new FileTaskStore(path.join(options.rootDir, "tasks.json"));
     this.messages = new FileMessageStore(path.join(options.rootDir, "messages.json"));
+    this.delivery = new OperatorDeliveryService(options.rootDir);
     this.subagents = new FileSubagentRegistry(options.rootDir);
     this.backgroundTasks = new FileBackgroundTaskStore(
       path.join(options.rootDir, "background-tasks.json"),
@@ -584,6 +608,30 @@ export class StandaloneOperatorRuntime {
     const message = await this.messages.send(params);
     this.events.publish({ type: "message.sent", payload: message, ts: Date.now() });
     return message;
+  }
+
+  async sendNotification(params: SendNotificationParams): Promise<OperatorNotificationRecord> {
+    const createdAt = new Date().toISOString();
+    const id = randomUUID();
+    const notification: OperatorNotificationRecord = {
+      id,
+      ...(params.sessionId ? { sessionId: params.sessionId } : {}),
+      status: params.status,
+      message: params.message,
+      createdAt,
+      deliveryResults: await this.delivery.deliver(params.targets ?? [{ kind: "local" }], {
+        kind: "push-notification",
+        notification: {
+          id,
+          ...(params.sessionId ? { sessionId: params.sessionId } : {}),
+          status: params.status,
+          message: params.message,
+          createdAt,
+        },
+      }),
+    };
+    this.events.publish({ type: "notification.sent", payload: notification, ts: Date.now() });
+    return notification;
   }
 
   async getMessage(messageId: string): Promise<OperatorMessageRecord | undefined> {

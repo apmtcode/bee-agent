@@ -213,6 +213,38 @@ describe("OperatorControlPlaneServer", () => {
         expect.objectContaining({ type: "message.sent", payload: expect.objectContaining({ id: message.id, fromSessionId: session.id, toSessionId: childSession.id }) }),
       ],
     });
+    const notificationSend = await server.handle({
+      method: "notifications.send",
+      params: {
+        sessionId: session.id,
+        status: "task-complete",
+        message: "Deploy smoke test passed.",
+      },
+    });
+    expect(notificationSend).toMatchObject({
+      ok: true,
+      result: {
+        sessionId: session.id,
+        status: "task-complete",
+        message: "Deploy smoke test passed.",
+        lastDeliveryStatus: "sent",
+        deliveryResults: [{ status: "sent", target: { kind: "local" } }],
+      },
+    });
+    const notification = notificationSend.ok ? notificationSend.result : undefined;
+    expect(notification).toBeDefined();
+    if (!notification) {
+      throw new Error("expected notification to be sent");
+    }
+    const deliveryLog = await fs.readFile(path.join(runtime.rootDir, "delivery-local.jsonl"), "utf8");
+    expect(deliveryLog).toContain("\"kind\":\"push-notification\"");
+    expect(deliveryLog).toContain(notification.id);
+    await expect(server.handle({ method: "runs.events", params: { sessionId: session.id, family: "notification" } })).resolves.toMatchObject({
+      ok: true,
+      result: [
+        expect.objectContaining({ type: "notification.sent", payload: expect.objectContaining({ id: notification.id, sessionId: session.id, status: "task-complete" }) }),
+      ],
+    });
     const runCreate = await server.handle({
       method: "runs.start",
       params: { sessionId: session.id, title: "Investigate deploy", metadata: { source: "rpc" } },

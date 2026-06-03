@@ -44,6 +44,7 @@ export type OperatorCliSlashCommand =
   | { kind: "inbox" }
   | { kind: "outbox" }
   | { kind: "send"; toSessionId: string; message: string }
+  | { kind: "notify"; status: string; message: string }
   | { kind: "skills" }
   | { kind: "run-skill"; skillId: string }
   | { kind: "watch-run"; runId?: string }
@@ -218,6 +219,7 @@ export class OperatorCliApp {
           "  /inbox",
           "  /outbox",
           "  /send <sessionId> <message>",
+          "  /notify <status> <message>",
           "  /skills",
           "  /run-skill <id>",
           "  /watch run [runId]",
@@ -540,6 +542,18 @@ export class OperatorCliApp {
           message: command.message,
         });
         return `Sent message ${message.id} to=${message.toSessionId} summary=${message.summary}`;
+      }
+      case "notify": {
+        const activeSessionId = this.requireActiveSessionId(sessionId);
+        const notification = await this.runtime.sendNotification({
+          sessionId: activeSessionId,
+          status: command.status,
+          message: command.message,
+        });
+        const delivered = notification.deliveryResults.length === 0
+          ? "suppressed"
+          : notification.deliveryResults.map((result) => result.status).join(",");
+        return `Sent notification ${notification.id} status=${notification.status} delivery=${delivered} message=${notification.message}`;
       }
       case "skills": {
         const promoted = await this.runtime.listPromotedSkills();
@@ -1138,6 +1152,8 @@ export function parseSlashCommand(input: string): OperatorCliSlashCommand | unde
       return tail ? { kind: "invalid", message: "Usage: /outbox" } : { kind: "outbox" };
     case "send":
       return parseSendCommand(tail);
+    case "notify":
+      return parseNotifyCommand(tail);
     case "skills":
       return { kind: "skills" };
     case "run-skill":
@@ -1168,6 +1184,17 @@ function parseTranscriptCommand(tail: string): OperatorCliSlashCommand {
   return typeof limit === "number"
     ? { kind: "transcript", limit }
     : { kind: "invalid", message: "Usage: /transcript [limit]" };
+}
+
+function parseNotifyCommand(tail: string): OperatorCliSlashCommand {
+  if (!tail) {
+    return { kind: "invalid", message: "Usage: /notify <status> <message>" };
+  }
+  const [status, ...messageParts] = tail.split(/\s+/);
+  const message = messageParts.join(" ").trim();
+  return status && message
+    ? { kind: "notify", status, message }
+    : { kind: "invalid", message: "Usage: /notify <status> <message>" };
 }
 
 function parseWatchCommand(tail: string): OperatorCliSlashCommand {

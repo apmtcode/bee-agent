@@ -61,6 +61,7 @@ Current slash commands:
 - `/inbox`
 - `/outbox`
 - `/send <sessionId> <message>`
+- `/notify <status> <message>`
 - `/skills`
 - `/run-skill <id>`
 - `/background`
@@ -110,6 +111,19 @@ Current messaging behavior in this tranche:
 - bootstrapped session streams inherit `fromSessionId` for `messages.send` and `sessionId` for `messages.list`, `messages.inbox`, and `messages.outbox`
 - the CLI exposes `/messages`, `/inbox`, `/outbox`, and `/send <sessionId> <message>` for narrow local mailbox inspection and delivery
 - richer mailbox threading, unread state, assignment semantics, and team arbitration remain out of scope in this tranche
+
+## Push notifications
+
+Operator now also has a first narrow push-notification surface for local operator attention routing.
+
+Current notification behavior in this tranche:
+- notifications are delivered through the existing delivery seam instead of adding a separate transport path
+- the runtime exposes a narrow `sendNotification()` flow and emits `notification.sent` runtime events
+- the control plane exposes `notifications.send` with optional explicit delivery targets and local delivery by default
+- runtime event replay/filtering now includes the `notification` family alongside existing run, task, message, and subagent families
+- bootstrapped session streams inherit `sessionId` for `notifications.send`
+- the CLI exposes `/notify <status> <message>` for first-class local push notification delivery
+- this tranche remains intentionally narrow and does not yet add notification history, mobile platform integrations, retry queues, or acknowledgement state
 
 ## Remote session stream
 

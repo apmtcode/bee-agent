@@ -7,6 +7,7 @@ import {
 } from "./anthropic-client.js";
 import { OperatorCronService } from "./cron-service.js";
 import type { CronDeliveryConfig, DeliveryTarget } from "./delivery.js";
+import { summarizeDeliveryResults } from "./delivery.js";
 import {
   FilePairingStore,
   PairingTicketError,
@@ -900,6 +901,18 @@ export class OperatorControlPlaneServer {
               metadata: getOptionalRecord(request.params, "metadata"),
             }),
           );
+        case "notifications.send": {
+          const notification = await this.options.runtime.sendNotification({
+            sessionId: getOptionalString(request.params, "sessionId"),
+            status: getString(request.params, "status"),
+            message: getString(request.params, "message"),
+            targets: getOptionalDeliveryTargets(request.params, "targets"),
+          });
+          return ok({
+            ...notification,
+            ...summarizeDeliveryResults(notification.deliveryResults),
+          });
+        }
         case "messages.get": {
           const messageId = getString(request.params, "messageId");
           const message = await this.options.runtime.getMessage(messageId);
@@ -1850,7 +1863,7 @@ function getOptionalRuntimeEventFamily(
   if (value == null) {
     return undefined;
   }
-  if (value === "run" || value === "approval" || value === "background-task" || value === "skill" || value === "subagent" || value === "task" || value === "message") {
+  if (value === "run" || value === "approval" || value === "background-task" || value === "skill" || value === "subagent" || value === "task" || value === "message" || value === "notification") {
     return value;
   }
   throw new Error(`Invalid runtime event family: ${key}`);
@@ -2188,6 +2201,17 @@ function getOptionalCronModelSelection(
     ...(primary ? { primary } : {}),
     ...(hasFallbacks ? { fallbacks } : {}),
   };
+}
+
+function getOptionalDeliveryTargets(
+  params: Record<string, unknown> | undefined,
+  key: string,
+): DeliveryTarget[] | undefined {
+  const value = params?.[key];
+  if (value == null) {
+    return undefined;
+  }
+  return getDeliveryTargets(value, key);
 }
 
 function getOptionalCronDeliveryConfig(
