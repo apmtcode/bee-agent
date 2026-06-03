@@ -86,7 +86,16 @@ describe("OperatorGatewayTransportConnection", () => {
     await connection.receive({
       type: "request",
       id: "req-subagent-1",
-      request: { method: "subagents.spawn", params: { parentRunId: response.result.result.id, title: "Gateway child", agentId: "worker" } },
+      request: {
+        method: "subagents.spawn",
+        params: {
+          parentRunId: response.result.result.id,
+          title: "Gateway child",
+          agentId: "worker",
+          modelPrimary: "claude-sonnet-4-6",
+          modelFallbacks: ["claude-haiku-4-5-20251001"],
+        },
+      },
     });
     const spawnResponse = transport.sent.find((message) => message.type === "response" && message.id === "req-subagent-1");
     expect(spawnResponse).toBeDefined();
@@ -95,7 +104,25 @@ describe("OperatorGatewayTransportConnection", () => {
     }
     expect(spawnResponse.result.result).toMatchObject({
       subagent: { parentRunId: response.result.result.id, sessionId, title: "Gateway child", status: "running" },
-      childSession: { metadata: { agentId: "worker" } },
+      childSession: {
+        metadata: {
+          agentId: "worker",
+          modelSelection: {
+            primary: "claude-sonnet-4-6",
+            fallbacks: ["claude-haiku-4-5-20251001"],
+            source: "override",
+          },
+        },
+      },
+      childRun: {
+        metadata: {
+          modelSelection: {
+            primary: "claude-sonnet-4-6",
+            fallbacks: ["claude-haiku-4-5-20251001"],
+            source: "override",
+          },
+        },
+      },
     });
 
     await connection.receive({

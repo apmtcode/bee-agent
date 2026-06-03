@@ -977,16 +977,25 @@ export class OperatorControlPlaneServer {
           if (parentRun.sessionId !== sessionId) {
             return invalidRequest(`run ${parentRunId} does not belong to session: ${sessionId}`);
           }
+          const agentId = getOptionalString(request.params, "agentId");
+          const cwd = getOptionalString(request.params, "cwd");
+          const remoteId = getOptionalString(request.params, "remoteId");
+          const remoteSource = getOptionalString(request.params, "remoteSource");
+          const modelPrimary = getOptionalString(request.params, "modelPrimary");
+          const modelFallbacks = getOptionalStringArray(request.params, "modelFallbacks");
+          const metadata = getOptionalRecord(request.params, "metadata");
           return ok(
             await this.options.runtime.spawnSubagent({
               sessionId,
               parentRunId,
               title: getString(request.params, "title"),
-              agentId: getOptionalString(request.params, "agentId"),
-              cwd: getOptionalString(request.params, "cwd"),
-              remoteId: getOptionalString(request.params, "remoteId"),
-              remoteSource: getOptionalString(request.params, "remoteSource"),
-              metadata: getOptionalRecord(request.params, "metadata"),
+              ...(agentId ? { agentId } : {}),
+              ...(cwd ? { cwd } : {}),
+              ...(remoteId ? { remoteId } : {}),
+              ...(remoteSource ? { remoteSource } : {}),
+              ...(modelPrimary ? { modelPrimary } : {}),
+              ...(modelFallbacks ? { modelFallbacks } : {}),
+              ...(metadata ? { metadata } : {}),
             }),
           );
         }

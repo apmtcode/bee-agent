@@ -2270,6 +2270,49 @@ describe("OperatorControlPlaneServer", () => {
       ok: false,
       error: { code: "NOT_FOUND", message: "unknown session: missing" },
     });
+    const parentSession = await runtime.startSession({
+      title: "Parent with model",
+      agentId: "main",
+      modelSelection: {
+        primary: "claude-opus-4-7",
+        fallbacks: ["claude-sonnet-4-6", "claude-haiku-4-5-20251001"],
+        source: "default",
+      },
+    });
+    const parentRun = await runtime.startRun({ sessionId: parentSession.id, title: "Parent run" });
+    await expect(
+      server.handle({
+        method: "subagents.spawn",
+        params: {
+          sessionId: parentSession.id,
+          parentRunId: parentRun.id,
+          title: "Spawn override",
+          modelPrimary: "claude-sonnet-4-6",
+        },
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      result: {
+        childSession: {
+          metadata: {
+            modelSelection: {
+              primary: "claude-sonnet-4-6",
+              fallbacks: ["claude-sonnet-4-6", "claude-haiku-4-5-20251001"],
+              source: "override",
+            },
+          },
+        },
+        childRun: {
+          metadata: {
+            modelSelection: {
+              primary: "claude-sonnet-4-6",
+              fallbacks: ["claude-sonnet-4-6", "claude-haiku-4-5-20251001"],
+              source: "override",
+            },
+          },
+        },
+      },
+    });
     await expect(server.handle({ method: "nope" })).resolves.toEqual({
       ok: false,
       error: { code: "INVALID_REQUEST", message: "unknown method: nope" },

@@ -146,13 +146,23 @@ describe("OperatorControlPlaneSessionStream", () => {
     const eventIterator = stream.events({ family: "subagent" })[Symbol.asyncIterator]();
     const spawned = await stream.request<{
       subagent: { runId: string; parentRunId: string; sessionId: string; title: string; status: string };
-      childSession: { id: string };
-      childRun: { id: string };
-    }>({ method: "subagents.spawn", params: { parentRunId: run.id, title: "Follow-up child" } });
+      childSession: { id: string; metadata?: { modelSelection?: { primary: string; fallbacks: string[]; source: string } } };
+      childRun: { id: string; metadata?: { modelSelection?: { primary: string; fallbacks: string[]; source: string } } };
+    }>({ method: "subagents.spawn", params: { parentRunId: run.id, title: "Follow-up child", modelPrimary: "claude-sonnet-4-6", modelFallbacks: ["claude-haiku-4-5-20251001"] } });
     expect(spawned.ok).toBe(true);
     if (!spawned.ok) {
       throw new Error("expected spawned subagent");
     }
+    expect(spawned.result.childSession.metadata?.modelSelection).toMatchObject({
+      primary: "claude-sonnet-4-6",
+      fallbacks: ["claude-haiku-4-5-20251001"],
+      source: "override",
+    });
+    expect(spawned.result.childRun.metadata?.modelSelection).toMatchObject({
+      primary: "claude-sonnet-4-6",
+      fallbacks: ["claude-haiku-4-5-20251001"],
+      source: "override",
+    });
     const registeredEvent = await eventIterator.next();
     expect(registeredEvent.done).toBe(false);
     expect(registeredEvent.value?.type).toBe("subagent.registered");
