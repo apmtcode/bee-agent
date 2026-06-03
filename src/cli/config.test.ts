@@ -7,6 +7,7 @@ import {
   deepMergeConfig,
   resolveOperatorCliExecutionConfig,
   resolveOperatorCliStatusLineConfig,
+  setProjectPermissionModeConfig,
   setProjectStatusLineConfig,
 } from "./config.js";
 
@@ -153,5 +154,20 @@ describe("OperatorCliConfigLoader", () => {
     await setProjectStatusLineConfig(cwd, undefined);
     const removed = JSON.parse(await fs.readFile(path.join(cwd, ".claude", "settings.local.json"), "utf8")) as Record<string, unknown>;
     expect(removed).not.toHaveProperty("statusLine");
+  });
+
+  it("writes and removes project plan mode settings", async () => {
+    const cwd = await makeTempDir();
+    await setProjectPermissionModeConfig(cwd, "plan", "acceptEdits");
+    const enabled = JSON.parse(await fs.readFile(path.join(cwd, ".claude", "settings.local.json"), "utf8")) as Record<string, unknown>;
+    expect(enabled).toMatchObject({
+      permissionMode: "plan",
+      operator: { previousPermissionMode: "acceptEdits" },
+    });
+
+    await setProjectPermissionModeConfig(cwd, "default", undefined);
+    const disabled = JSON.parse(await fs.readFile(path.join(cwd, ".claude", "settings.local.json"), "utf8")) as Record<string, unknown>;
+    expect(disabled).toMatchObject({ permissionMode: "default" });
+    expect(disabled).not.toHaveProperty("operator");
   });
 });

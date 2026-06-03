@@ -13,6 +13,7 @@ export {
   deepMergeConfig,
   resolveOperatorCliExecutionConfig,
   resolveOperatorCliStatusLineConfig,
+  setProjectPermissionModeConfig,
   setProjectStatusLineConfig,
   type OperatorCliConfigEntry,
   type OperatorCliConfigObject,

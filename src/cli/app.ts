@@ -12,7 +12,9 @@ import {
   OperatorCliConfigLoader,
   resolveOperatorCliExecutionConfig,
   resolveOperatorCliStatusLineConfig,
+  setProjectPermissionModeConfig,
   setProjectStatusLineConfig,
+  type OperatorCliPermissionMode,
   type OperatorCliRuntimeConfig,
 } from "./config.js";
 import { runOperatorCliConversationTurn } from "./conversation.js";
@@ -52,6 +54,8 @@ export type OperatorCliSlashCommand =
   | { kind: "outbox" }
   | { kind: "send"; toSessionId: string; message: string }
   | { kind: "notify"; status: string; message: string }
+  | { kind: "plan" }
+  | { kind: "plan-exit"; mode?: Exclude<OperatorCliPermissionMode, "plan"> }
   | { kind: "statusline"; command?: string }
   | { kind: "worktree"; name?: string }
   | { kind: "worktree-exit"; action: "keep" | "remove" }
@@ -150,7 +154,7 @@ export class OperatorCliApp {
         if (!line.trim()) {
           continue;
         }
-        this.stdout.write(`${await this.handleInput(line, undefined, config, promptContext)}\n`);
+        this.stdout.write(`${await this.handleInput(line)}\n`);
       }
     } catch {
       this.stdout.write("\n");
@@ -245,6 +249,8 @@ export class OperatorCliApp {
           "  /outbox",
           "  /send <sessionId> <message>",
           "  /notify <status> <message>",
+          "  /plan",
+          "  /plan-exit [default|acceptEdits|bypassPermissions]",
           "  /statusline [command|off]",
           "  /worktree [name]",
           "  /worktree-exit [keep|remove]",
@@ -586,6 +592,29 @@ export class OperatorCliApp {
           ? "suppressed"
           : notification.deliveryResults.map((result) => result.status).join(",");
         return `Sent notification ${notification.id} status=${notification.status} delivery=${delivered} message=${notification.message}`;
+      }
+      case "plan": {
+        const effectiveConfig = config ?? (await this.loadRuntimeConfig());
+        const executionConfig = resolveOperatorCliExecutionConfig(effectiveConfig);
+        if (executionConfig.permissionMode === "plan") {
+          const previous = readPreviousPermissionMode(effectiveConfig.merged);
+          return `Plan mode already enabled${previous ? ` previous=${previous}` : ""}`;
+        }
+        const previousPermissionMode = executionConfig.permissionMode === "default"
+          ? undefined
+          : executionConfig.permissionMode;
+        await setProjectPermissionModeConfig(this.cwd, "plan", previousPermissionMode);
+        return `Enabled plan mode${previousPermissionMode ? ` previous=${previousPermissionMode}` : ""}`;
+      }
+      case "plan-exit": {
+        const effectiveConfig = config ?? (await this.loadRuntimeConfig());
+        const executionConfig = resolveOperatorCliExecutionConfig(effectiveConfig);
+        const restoredMode = command.mode ?? readPreviousPermissionMode(effectiveConfig.merged) ?? "default";
+        if (executionConfig.permissionMode !== "plan" && !command.mode) {
+          return `Plan mode is not enabled. permissionMode=${executionConfig.permissionMode}`;
+        }
+        await setProjectPermissionModeConfig(this.cwd, restoredMode, undefined);
+        return `Disabled plan mode permissionMode=${restoredMode}`;
       }
       case "statusline": {
         if (!command.command) {
@@ -1222,6 +1251,17 @@ function formatPlatformControlResult(
   return [summary, details].join("\n");
 }
 
+function readPreviousPermissionMode(config: Record<string, unknown>): Exclude<OperatorCliPermissionMode, "plan"> | undefined {
+  const operator = config.operator;
+  if (!operator || typeof operator !== "object" || Array.isArray(operator)) {
+    return undefined;
+  }
+  const previousPermissionMode = (operator as { previousPermissionMode?: unknown }).previousPermissionMode;
+  return previousPermissionMode === "default" || previousPermissionMode === "acceptEdits" || previousPermissionMode === "bypassPermissions"
+    ? previousPermissionMode
+    : undefined;
+}
+
 function sanitizeWorktreeName(value?: string): string | undefined {
   if (!value) {
     return undefined;
@@ -1288,6 +1328,10 @@ export function parseSlashCommand(input: string): OperatorCliSlashCommand | unde
       return parseSendCommand(tail);
     case "notify":
       return parseNotifyCommand(tail);
+    case "plan":
+      return tail ? { kind: "invalid", message: "Usage: /plan" } : { kind: "plan" };
+    case "plan-exit":
+      return parsePlanExitCommand(tail);
     case "statusline":
       return parseStatusLineCommand(tail);
     case "worktree":
@@ -1341,6 +1385,16 @@ function parseNotifyCommand(tail: string): OperatorCliSlashCommand {
   return status && message
     ? { kind: "notify", status, message }
     : { kind: "invalid", message: "Usage: /notify <status> <message>" };
+}
+
+function parsePlanExitCommand(tail: string): OperatorCliSlashCommand {
+  if (!tail) {
+    return { kind: "plan-exit" };
+  }
+  if (tail === "default" || tail === "acceptEdits" || tail === "bypassPermissions") {
+    return { kind: "plan-exit", mode: tail };
+  }
+  return { kind: "invalid", message: "Usage: /plan-exit [default|acceptEdits|bypassPermissions]" };
 }
 
 function parseStatusLineCommand(tail: string): OperatorCliSlashCommand {

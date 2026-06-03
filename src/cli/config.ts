@@ -182,15 +182,44 @@ export function resolveOperatorCliStatusLineConfig(
 }
 
 export async function setProjectStatusLineConfig(cwd: string, statusLine?: OperatorCliStatusLineConfig): Promise<void> {
-  const filePath = path.join(cwd, ".claude", "settings.local.json");
-  const current = await readOptionalConfigObject(filePath) ?? {};
-  const next = { ...current };
-  if (statusLine) {
-    next.statusLine = cloneConfigValue(statusLine) as OperatorCliConfigValue;
-  } else {
-    delete next.statusLine;
-  }
-  await writeJsonAtomic(filePath, next);
+  await updateProjectLocalConfig(cwd, (next) => {
+    if (statusLine) {
+      next.statusLine = cloneConfigValue(statusLine) as OperatorCliConfigValue;
+    } else {
+      delete next.statusLine;
+    }
+  });
+}
+
+export async function setProjectPermissionModeConfig(
+  cwd: string,
+  permissionMode?: OperatorCliPermissionMode,
+  previousPermissionMode?: Exclude<OperatorCliPermissionMode, "plan">,
+): Promise<void> {
+  await updateProjectLocalConfig(cwd, (next) => {
+    if (permissionMode) {
+      next.permissionMode = permissionMode;
+    } else {
+      delete next.permissionMode;
+    }
+    if (previousPermissionMode) {
+      next.operator = {
+        ...(isConfigObject(next.operator) ? next.operator : {}),
+        previousPermissionMode,
+      };
+      return;
+    }
+    if (!isConfigObject(next.operator)) {
+      return;
+    }
+    const operator = { ...next.operator };
+    delete operator.previousPermissionMode;
+    if (Object.keys(operator).length === 0) {
+      delete next.operator;
+      return;
+    }
+    next.operator = operator;
+  });
 }
 
 async function readOptionalConfigObject(filePath: string): Promise<OperatorCliConfigObject | undefined> {
@@ -238,4 +267,15 @@ function cloneConfigValue(value: OperatorCliConfigValue): OperatorCliConfigValue
     return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, cloneConfigValue(item)]));
   }
   return value;
+}
+
+async function updateProjectLocalConfig(
+  cwd: string,
+  update: (next: OperatorCliConfigObject) => void,
+): Promise<void> {
+  const filePath = path.join(cwd, ".claude", "settings.local.json");
+  const current = await readOptionalConfigObject(filePath) ?? {};
+  const next = { ...current };
+  update(next);
+  await writeJsonAtomic(filePath, next);
 }

@@ -62,6 +62,8 @@ Current slash commands:
 - `/outbox`
 - `/send <sessionId> <message>`
 - `/notify <status> <message>`
+- `/plan`
+- `/plan-exit [default|acceptEdits|bypassPermissions]`
 - `/statusline [command|off]`
 - `/worktree [name]`
 - `/worktree-exit [keep|remove]`
@@ -117,6 +119,17 @@ Current messaging behavior in this tranche:
 - bootstrapped session streams inherit `fromSessionId` for `messages.send` and `sessionId` for `messages.list`, `messages.inbox`, and `messages.outbox`
 - the CLI exposes `/messages`, `/inbox`, `/outbox`, and `/send <sessionId> <message>` for narrow local mailbox inspection and delivery
 - richer mailbox threading, unread state, assignment semantics, and team arbitration remain out of scope in this tranche
+
+## Plan mode
+
+Operator now also has a first narrow Claude Code-style plan mode surface for local planning-only sessions.
+
+Current plan mode behavior in this tranche:
+- the CLI exposes `/plan` to persist `permissionMode: "plan"` in `<cwd>/.claude/settings.local.json`
+- entering plan mode remembers the prior non-plan local permission mode under `operator.previousPermissionMode` when one exists
+- `/plan-exit [default|acceptEdits|bypassPermissions]` restores the remembered mode or a caller-specified override
+- command execution continues to honor the existing execution-policy rule that blocks execution while `permissionMode=plan`
+- this tranche remains intentionally narrow and does not yet add explicit plan documents, approval handoff, or a separate enter/exit plan runtime protocol
 
 ## Status line setup
 

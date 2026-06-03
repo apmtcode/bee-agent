@@ -67,6 +67,9 @@ describe("parseSlashCommand", () => {
     expect(parseSlashCommand("/outbox")).toEqual({ kind: "outbox" });
     expect(parseSlashCommand("/send session-2 Please collect logs")).toEqual({ kind: "send", toSessionId: "session-2", message: "Please collect logs" });
     expect(parseSlashCommand("/notify success Deploy finished")).toEqual({ kind: "notify", status: "success", message: "Deploy finished" });
+    expect(parseSlashCommand("/plan")).toEqual({ kind: "plan" });
+    expect(parseSlashCommand("/plan-exit")).toEqual({ kind: "plan-exit" });
+    expect(parseSlashCommand("/plan-exit acceptEdits")).toEqual({ kind: "plan-exit", mode: "acceptEdits" });
     expect(parseSlashCommand("/statusline")).toEqual({ kind: "statusline" });
     expect(parseSlashCommand("/statusline node .claude/statusline.js")).toEqual({ kind: "statusline", command: "node .claude/statusline.js" });
     expect(parseSlashCommand("/worktree")).toEqual({ kind: "worktree" });
@@ -190,6 +193,14 @@ describe("parseSlashCommand", () => {
       kind: "invalid",
       message: "Usage: /notify <status> <message>",
     });
+    expect(parseSlashCommand("/plan later")).toEqual({
+      kind: "invalid",
+      message: "Usage: /plan",
+    });
+    expect(parseSlashCommand("/plan-exit plan")).toEqual({
+      kind: "invalid",
+      message: "Usage: /plan-exit [default|acceptEdits|bypassPermissions]",
+    });
     expect(parseSlashCommand("/worktree-exit nope")).toEqual({
       kind: "invalid",
       message: "Usage: /worktree-exit [keep|remove]",
@@ -302,6 +313,54 @@ describe("OperatorCliApp", () => {
     const deliveryLog = await fs.readFile(path.join(rootDir, "delivery-local.jsonl"), "utf8");
     expect(deliveryLog).toContain("\"kind\":\"push-notification\"");
     expect(deliveryLog).toContain("Deploy finished.");
+  });
+
+  it("enables and exits plan mode with persisted local config", async () => {
+    const rootDir = await makeTempDir();
+    await fs.mkdir(path.join(rootDir, ".claude"), { recursive: true });
+    await fs.writeFile(path.join(rootDir, ".claude", "settings.local.json"), '{"permissionMode":"acceptEdits"}');
+    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    const session = await app.runtime.startSession({ title: "plan cli", cwd: rootDir, agentId: "operator-cli" });
+
+    const enabled = await app.dispatchSlashCommand({ kind: "plan" }, session.id);
+    expect(enabled).toContain("Enabled plan mode");
+    expect(enabled).toContain("previous=acceptEdits");
+
+    await expect(app.dispatchSlashCommand({ kind: "plan" }, session.id)).resolves.toContain("Plan mode already enabled");
+
+    const enabledSettings = JSON.parse(await fs.readFile(path.join(rootDir, ".claude", "settings.local.json"), "utf8")) as Record<string, unknown>;
+    expect(enabledSettings).toMatchObject({
+      permissionMode: "plan",
+      operator: { previousPermissionMode: "acceptEdits" },
+    });
+
+    await expect(app.dispatchSlashCommand({ kind: "config" }, session.id)).resolves.toContain("permissionMode=plan");
+
+    const exited = await app.dispatchSlashCommand({ kind: "plan-exit" }, session.id);
+    expect(exited).toContain("Disabled plan mode permissionMode=acceptEdits");
+
+    const exitedSettings = JSON.parse(await fs.readFile(path.join(rootDir, ".claude", "settings.local.json"), "utf8")) as Record<string, unknown>;
+    expect(exitedSettings).toMatchObject({ permissionMode: "acceptEdits" });
+    expect(exitedSettings).not.toHaveProperty("operator");
+    await expect(app.dispatchSlashCommand({ kind: "config" }, session.id)).resolves.toContain("permissionMode=acceptEdits");
+  });
+
+  it("overrides plan-exit restore mode and reports when plan mode is inactive", async () => {
+    const rootDir = await makeTempDir();
+    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    const session = await app.runtime.startSession({ title: "plan exit cli", cwd: rootDir, agentId: "operator-cli" });
+
+    await expect(app.dispatchSlashCommand({ kind: "plan-exit" }, session.id)).resolves.toBe("Plan mode is not enabled. permissionMode=default");
+
+    await expect(app.dispatchSlashCommand({ kind: "plan" }, session.id)).resolves.toContain("Enabled plan mode");
+    const blocked = await app.dispatchSlashCommand({ kind: "background-start", title: "wipe", command: "printf ok" }, session.id);
+    expect(blocked).toContain("Execution is disabled while permissionMode=plan.");
+
+    const exited = await app.dispatchSlashCommand({ kind: "plan-exit", mode: "bypassPermissions" }, session.id);
+    expect(exited).toContain("Disabled plan mode permissionMode=bypassPermissions");
+
+    const settings = JSON.parse(await fs.readFile(path.join(rootDir, ".claude", "settings.local.json"), "utf8")) as Record<string, unknown>;
+    expect(settings).toMatchObject({ permissionMode: "bypassPermissions" });
   });
 
   it("shows, configures, and disables the status line command", async () => {
