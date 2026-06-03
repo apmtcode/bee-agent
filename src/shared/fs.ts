@@ -8,6 +8,12 @@ export async function ensureParentDir(filePath: string): Promise<void> {
 export async function readJsonFile<T>(filePath: string, fallback: T): Promise<T> {
   try {
     const raw = await fs.promises.readFile(filePath, "utf8");
+    if (!raw.trim()) {
+      if (fallback === undefined) {
+        return fallback;
+      }
+      return JSON.parse(JSON.stringify(fallback)) as T;
+    }
     return JSON.parse(raw) as T;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {

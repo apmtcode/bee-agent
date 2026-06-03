@@ -175,6 +175,84 @@ describe("OperatorControlPlaneSessionStream", () => {
     ]);
   });
 
+  it("binds task requests and streams task events for a bootstrapped session", async () => {
+    const runtime = new StandaloneOperatorRuntime({
+      rootDir: await makeTempDir(),
+      backgroundTaskIsProcessRunning: () => false,
+    });
+    const server = new OperatorControlPlaneServer({ runtime });
+    const stream = new OperatorControlPlaneSessionStream(server);
+
+    const bootstrapped = await stream.bootstrap({ title: "Task session", family: "task" });
+    expect(bootstrapped.created).toBe(true);
+    expect(bootstrapped.events).toEqual([]);
+
+    const created = await stream.request<{
+      id: string;
+      sessionId: string;
+      subject: string;
+      status: string;
+    }>({
+      method: "tasks.create",
+      params: { subject: "Inspect logs", description: "Look at the latest logs." },
+    });
+    expect(created.ok).toBe(true);
+    if (!created.ok) {
+      throw new Error("expected created task");
+    }
+    expect(created.result).toMatchObject({
+      sessionId: bootstrapped.session.id,
+      subject: "Inspect logs",
+      status: "pending",
+    });
+
+    const listed = await stream.request<Array<{ id: string; sessionId: string; subject: string }>>({
+      method: "tasks.list",
+      params: {},
+    });
+    expect(listed.ok).toBe(true);
+    if (!listed.ok) {
+      throw new Error("expected listed tasks");
+    }
+    expect(listed.result).toEqual([
+      expect.objectContaining({
+        id: created.result.id,
+        sessionId: bootstrapped.session.id,
+        subject: "Inspect logs",
+      }),
+    ]);
+
+    const eventIterator = stream.events({ family: "task" })[Symbol.asyncIterator]();
+    const updated = await stream.request<{ id: string; status: string }>({
+      method: "tasks.update",
+      params: { taskId: created.result.id, status: "completed" },
+    });
+    expect(updated.ok).toBe(true);
+    if (!updated.ok) {
+      throw new Error("expected updated task");
+    }
+    expect(updated.result).toMatchObject({ id: created.result.id, status: "completed" });
+
+    const nextEvent = await eventIterator.next();
+    expect(nextEvent.done).toBe(false);
+    expect(nextEvent.value?.type).toBe("task.updated");
+    expect(nextEvent.value?.payload).toMatchObject({ id: created.result.id, status: "completed", sessionId: bootstrapped.session.id });
+    await eventIterator.return?.();
+
+    const replay = await stream.request<Array<{ type: string; payload?: { id?: string; sessionId?: string; status?: string } }>>({
+      method: "runs.events",
+      params: { family: "task" },
+    });
+    expect(replay.ok).toBe(true);
+    if (!replay.ok) {
+      throw new Error("expected task replay");
+    }
+    expect(replay.result).toEqual([
+      expect.objectContaining({ type: "task.created", payload: expect.objectContaining({ id: created.result.id, sessionId: bootstrapped.session.id }) }),
+      expect.objectContaining({ type: "task.updated", payload: expect.objectContaining({ id: created.result.id, status: "completed" }) }),
+    ]);
+  });
+
   it("reattaches to an idle session and returns only session-scoped bootstrap state", async () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),

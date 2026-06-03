@@ -44,6 +44,7 @@ import { FileSessionStore } from "../harness/session-store.js";
 import { FileMemoryStore } from "../memory/memory-store.js";
 import { OperatorEventBus, type OperatorEvent } from "../kernel/event-bus.js";
 import { FileRunStore, type OperatorRunRecord } from "./run-store.js";
+import { FileTaskStore, type OperatorTaskRecord, type OperatorTaskStatus } from "./task-store.js";
 import { FileSubagentRegistry, type SubagentRunRecord } from "./subagent-registry.js";
 import {
   FileTrainingJobStore,
@@ -126,6 +127,29 @@ export type StartRunParams = {
   title: string;
   parentRunId?: string;
   metadata?: Record<string, unknown>;
+};
+
+export type CreateTaskParams = {
+  sessionId: string;
+  subject: string;
+  description: string;
+  activeForm?: string;
+  owner?: string;
+  status?: OperatorTaskStatus;
+  metadata?: Record<string, unknown>;
+  blocks?: string[];
+  blockedBy?: string[];
+};
+
+export type UpdateTaskParams = {
+  subject?: string;
+  description?: string;
+  activeForm?: string | null;
+  owner?: string | null;
+  status?: OperatorTaskStatus;
+  metadata?: Record<string, unknown>;
+  blocks?: string[];
+  blockedBy?: string[];
 };
 
 export type RegisterSubagentParams = {
@@ -235,6 +259,8 @@ export type OperatorRuntimeEventType =
   | "run.started"
   | "run.updated"
   | "run.progress"
+  | "task.created"
+  | "task.updated"
   | "subagent.registered"
   | "subagent.updated"
   | "training-job.created"
@@ -273,6 +299,7 @@ export class StandaloneOperatorRuntime {
   readonly capture: CaptureIngestionService;
   readonly replays: ReplayRuntimeService;
   readonly runs: FileRunStore;
+  readonly tasks: FileTaskStore;
   readonly subagents: FileSubagentRegistry;
   readonly backgroundTasks: FileBackgroundTaskStore;
   readonly trainingJobs: FileTrainingJobStore;
@@ -296,6 +323,7 @@ export class StandaloneOperatorRuntime {
     });
     this.replays = new ReplayRuntimeService(this.sessions, this.trajectories);
     this.runs = new FileRunStore(path.join(options.rootDir, "runs.json"));
+    this.tasks = new FileTaskStore(path.join(options.rootDir, "tasks.json"));
     this.subagents = new FileSubagentRegistry(options.rootDir);
     this.backgroundTasks = new FileBackgroundTaskStore(
       path.join(options.rootDir, "background-tasks.json"),
@@ -512,6 +540,28 @@ export class StandaloneOperatorRuntime {
     return [...runs].reverse().find(
       (run) => !run.parentRunId && (run.status === "running" || run.status === "paused" || run.status === "pending"),
     );
+  }
+
+  async createTask(params: CreateTaskParams): Promise<OperatorTaskRecord> {
+    const task = await this.tasks.create(params);
+    this.events.publish({ type: "task.created", payload: task, ts: Date.now() });
+    return task;
+  }
+
+  async getTask(taskId: string): Promise<OperatorTaskRecord | undefined> {
+    return await this.tasks.get(taskId);
+  }
+
+  async updateTask(taskId: string, params: UpdateTaskParams): Promise<OperatorTaskRecord | undefined> {
+    const task = await this.tasks.update(taskId, params);
+    if (task) {
+      this.events.publish({ type: "task.updated", payload: task, ts: Date.now() });
+    }
+    return task;
+  }
+
+  async listTasks(sessionId?: string): Promise<OperatorTaskRecord[]> {
+    return sessionId ? await this.tasks.listBySession(sessionId) : await this.tasks.list();
   }
 
   async pauseActiveRun(sessionId: string, reason?: string): Promise<OperatorRunRecord | undefined> {

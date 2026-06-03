@@ -134,6 +134,9 @@ function nowIso(): string {
 }
 
 function defaultIsProcessRunning(pid: number): boolean {
+  if (!Number.isFinite(pid) || pid <= 0) {
+    return false;
+  }
   try {
     process.kill(process.platform === "win32" ? pid : -pid, 0);
     return true;

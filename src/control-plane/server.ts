@@ -11,7 +11,7 @@ import {
   FilePlatformBreakerStore,
   type PlatformBreakerRecord,
 } from "./platform-breaker-store.js";
-import { buildRuntimeEventFilter } from "./subscriptions.js";
+import { buildRuntimeEventFilter, type RuntimeEventFamily } from "./subscriptions.js";
 import type { BackgroundTaskKind, BackgroundTaskRecoveryReason } from "../harness/background-tasks.js";
 import type { TranscriptReadOptions } from "../harness/transcript-store.js";
 import type { SessionRecord } from "../harness/types.js";
@@ -680,6 +680,41 @@ export class OperatorControlPlaneServer {
               metadata: getOptionalRecord(request.params, "metadata"),
             }),
           );
+        case "tasks.create":
+          return ok(
+            await this.options.runtime.createTask({
+              sessionId: getString(request.params, "sessionId"),
+              subject: getString(request.params, "subject"),
+              description: getString(request.params, "description"),
+              activeForm: getOptionalString(request.params, "activeForm"),
+              owner: getOptionalString(request.params, "owner"),
+              status: getOptionalTaskStatus(request.params, "status"),
+              metadata: getOptionalRecord(request.params, "metadata"),
+              blocks: getOptionalStringArray(request.params, "blocks"),
+              blockedBy: getOptionalStringArray(request.params, "blockedBy"),
+            }),
+          );
+        case "tasks.get": {
+          const taskId = getString(request.params, "taskId");
+          const task = await this.options.runtime.getTask(taskId);
+          return task ? ok(task) : notFound(`unknown task: ${taskId}`);
+        }
+        case "tasks.list":
+          return ok(await this.options.runtime.listTasks(getOptionalString(request.params, "sessionId")));
+        case "tasks.update": {
+          const taskId = getString(request.params, "taskId");
+          const task = await this.options.runtime.updateTask(taskId, {
+            subject: getOptionalString(request.params, "subject"),
+            description: getOptionalString(request.params, "description"),
+            activeForm: getOptionalNullableString(request.params, "activeForm"),
+            owner: getOptionalNullableString(request.params, "owner"),
+            status: getOptionalTaskStatus(request.params, "status"),
+            metadata: getOptionalRecord(request.params, "metadata"),
+            blocks: getOptionalStringArray(request.params, "blocks"),
+            blockedBy: getOptionalStringArray(request.params, "blockedBy"),
+          });
+          return task ? ok(task) : notFound(`unknown task: ${taskId}`);
+        }
         case "runs.get": {
           const runId = getString(request.params, "runId");
           const run = await this.options.runtime.getRun(runId);
@@ -1046,7 +1081,7 @@ function buildPlatformBreakerStoreFilePath(rootDir: string): string {
 async function buildSessionBootstrapResult(
   runtime: StandaloneOperatorRuntime,
   session: SessionRecord,
-  options: { created: boolean; resumed: boolean; runId?: string; family?: "run" | "approval" | "background-task" | "skill" | "subagent"; afterTs?: number },
+  options: { created: boolean; resumed: boolean; runId?: string; family?: RuntimeEventFamily; afterTs?: number },
 ): Promise<SessionBootstrapResult> {
   const events = runtime.events.snapshot(buildRuntimeEventFilter({
     sessionId: session.id,
@@ -1494,6 +1529,20 @@ function getOptionalString(params: Record<string, unknown> | undefined, key: str
   return value;
 }
 
+function getOptionalNullableString(params: Record<string, unknown> | undefined, key: string): string | null | undefined {
+  const value = params?.[key];
+  if (value === null) {
+    return null;
+  }
+  if (value == null) {
+    return undefined;
+  }
+  if (typeof value !== "string" || !value.trim()) {
+    throw new Error(`Invalid string parameter: ${key}`);
+  }
+  return value;
+}
+
 function getApprovalDecision(
   params: Record<string, unknown> | undefined,
   key: string,
@@ -1514,6 +1563,20 @@ function getRunStatus(
     return value;
   }
   throw new Error(`Invalid run status: ${key}`);
+}
+
+function getOptionalTaskStatus(
+  params: Record<string, unknown> | undefined,
+  key: string,
+): "pending" | "in_progress" | "completed" | undefined {
+  const value = params?.[key];
+  if (value == null) {
+    return undefined;
+  }
+  if (value === "pending" || value === "in_progress" || value === "completed") {
+    return value;
+  }
+  throw new Error(`Invalid task status: ${key}`);
 }
 
 function getSkillCandidateStatus(
@@ -1544,12 +1607,12 @@ function getOptionalSkillCandidateStatus(
 function getOptionalRuntimeEventFamily(
   params: Record<string, unknown> | undefined,
   key: string,
-): "run" | "approval" | "background-task" | "skill" | "subagent" | undefined {
+): RuntimeEventFamily | undefined {
   const value = params?.[key];
   if (value == null) {
     return undefined;
   }
-  if (value === "run" || value === "approval" || value === "background-task" || value === "skill" || value === "subagent") {
+  if (value === "run" || value === "approval" || value === "background-task" || value === "skill" || value === "subagent" || value === "task") {
     return value;
   }
   throw new Error(`Invalid runtime event family: ${key}`);
@@ -1691,6 +1754,25 @@ function getOptionalBackgroundTaskRecoveryReasons(
       return item;
     }
     throw new Error(`Invalid background task recovery reason: ${key}`);
+  });
+}
+
+function getOptionalStringArray(
+  params: Record<string, unknown> | undefined,
+  key: string,
+): string[] | undefined {
+  const value = params?.[key];
+  if (value == null) {
+    return undefined;
+  }
+  if (!Array.isArray(value)) {
+    throw new Error(`Invalid string array parameter: ${key}`);
+  }
+  return value.map((item, index) => {
+    if (typeof item !== "string" || !item.trim()) {
+      throw new Error(`Invalid string array parameter: ${key}[${index}]`);
+    }
+    return item;
   });
 }
 

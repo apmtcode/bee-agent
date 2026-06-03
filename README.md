@@ -54,6 +54,9 @@ Current slash commands:
 - `/platform pause <platform> [reason]`
 - `/platform resume <platform>`
 - `/recall <query>`
+- `/tasks`
+- `/task-create <subject>`
+- `/task-update <taskId> <pending|in_progress|completed>`
 - `/skills`
 - `/run-skill <id>`
 - `/background`
@@ -78,6 +81,19 @@ Freeform conversational turns now run through a narrow local assistant path in t
 Local freeform turns now also emit live run-progress updates while they execute. The CLI surfaces in-flight progress for freeform handling, approval waits, skill execution, and background-task-backed actions before printing the final assistant response.
 
 The local shell now also has a first watch/follow surface for long-lived work. `/watch run`, `/watch task`, and `/watch active` let the operator inspect the current state of active runs and background tasks without falling back to manual polling workflows.
+
+## Task lists
+
+Operator now also has a first narrow persisted task-list surface for multi-step work tracking.
+
+Current task behavior in this tranche:
+- tasks are persisted as session-scoped records with `pending`, `in_progress`, and `completed` status
+- task records keep structured fields for `description`, optional `activeForm`, optional `owner`, `metadata`, `blocks`, and `blockedBy`
+- the runtime exposes create, list, get, and update flows through the existing control-plane RPC surface as `tasks.create`, `tasks.list`, `tasks.get`, and `tasks.update`
+- task lifecycle changes emit `task.created` and `task.updated` runtime events and can be replayed or filtered through the `task` event family
+- bootstrapped session streams inherit `sessionId` for `tasks.create` and `tasks.list`
+- the CLI exposes `/tasks`, `/task-create <subject>`, and `/task-update <taskId> <pending|in_progress|completed>` for narrow local task inspection and status updates
+- team ownership rules, assignment arbitration, and richer dependency editing syntax remain out of scope in this tranche
 
 ## Remote session stream
 

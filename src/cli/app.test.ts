@@ -55,6 +55,9 @@ describe("parseSlashCommand", () => {
     });
     expect(parseSlashCommand("/platform resume gateway")).toEqual({ kind: "platform-resume", platform: "gateway" });
     expect(parseSlashCommand("/recall deploy bug")).toEqual({ kind: "recall", query: "deploy bug" });
+    expect(parseSlashCommand("/tasks")).toEqual({ kind: "tasks" });
+    expect(parseSlashCommand("/task-create Inspect logs")).toEqual({ kind: "task-create", subject: "Inspect logs" });
+    expect(parseSlashCommand("/task-update task-1 in_progress")).toEqual({ kind: "task-update", taskId: "task-1", status: "in_progress" });
     expect(parseSlashCommand("/background")).toEqual({ kind: "background-list" });
     expect(parseSlashCommand("/background start smoke -- printf ok")).toEqual({
       kind: "background-start",
@@ -133,6 +136,18 @@ describe("parseSlashCommand", () => {
       kind: "invalid",
       message: "Usage: /platform <list|status|pause|resume> <platform> [reason]",
     });
+    expect(parseSlashCommand("/task-create")).toEqual({
+      kind: "invalid",
+      message: "Usage: /task-create <subject>",
+    });
+    expect(parseSlashCommand("/task-update")).toEqual({
+      kind: "invalid",
+      message: "Usage: /task-update <taskId> <pending|in_progress|completed>",
+    });
+    expect(parseSlashCommand("/task-update task-1 blocked")).toEqual({
+      kind: "invalid",
+      message: "Usage: /task-update <taskId> <pending|in_progress|completed>",
+    });
     expect(parseSlashCommand("/watch nope")).toEqual({
       kind: "invalid",
       message: "Usage: /watch [active|run <runId>|task <taskId>]",
@@ -159,6 +174,32 @@ describe("OperatorCliApp", () => {
 
     const recall = await app.dispatchSlashCommand({ kind: "recall", query: "deploy" }, session.id);
     expect(recall).toContain("Deploy checked for recall");
+  });
+
+  it("creates, lists, and updates operator tasks", async () => {
+    const rootDir = await makeTempDir();
+    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    const session = await app.runtime.startSession({ title: "task cli", cwd: rootDir, agentId: "operator-cli" });
+
+    const createdOutput = await app.dispatchSlashCommand({ kind: "task-create", subject: "Inspect logs" }, session.id);
+    expect(createdOutput).toContain("Created task");
+    expect(createdOutput).toContain("pending Inspect logs");
+
+    const tasks = await app.runtime.listTasks(session.id);
+    expect(tasks).toHaveLength(1);
+    const [task] = tasks;
+    if (!task) {
+      throw new Error("expected operator task");
+    }
+
+    const listOutput = await app.dispatchSlashCommand({ kind: "tasks" }, session.id);
+    expect(listOutput).toContain(`${task.id} pending Inspect logs`);
+
+    const updatedOutput = await app.dispatchSlashCommand({ kind: "task-update", taskId: task.id, status: "completed" }, session.id);
+    expect(updatedOutput).toContain(`Updated task ${task.id} completed Inspect logs`);
+
+    const updatedTask = await app.runtime.getTask(task.id);
+    expect(updatedTask).toMatchObject({ id: task.id, status: "completed", subject: "Inspect logs" });
   });
 
   it("streams in-flight freeform run updates and reuses transcript context across resume", async () => {
@@ -374,8 +415,8 @@ describe("OperatorCliApp", () => {
 
     const platformStatusOutput = await app.dispatchSlashCommand({ kind: "platform-status", platform: "gateway" });
     expect(platformStatusOutput).toContain("platform=gateway remotes=3");
-    expect(platformStatusOutput).toContain(`members=${pairedBootstrap.result.session.metadata.remoteId} control=active`);
     expect(platformStatusOutput).toContain(`control=active`);
+    expect(platformStatusOutput).toContain(`${pairedBootstrap.result.session.metadata.remoteId} control=active`);
     expect(platformStatusOutput).toContain(`device-cli-2 control=active`);
     expect(platformStatusOutput).toContain(`device-cli-drift-1 control=active`);
 

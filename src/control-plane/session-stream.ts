@@ -100,6 +100,8 @@ function requiresSessionBinding(method: string): boolean {
     method === "background.tasks.list" ||
     method === "background.tasks.active" ||
     method === "background.tasks.recoverAll" ||
+    method === "tasks.create" ||
+    method === "tasks.list" ||
     method === "skills.executable.run"
   );
 }

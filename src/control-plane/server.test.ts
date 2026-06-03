@@ -98,6 +98,74 @@ describe("OperatorControlPlaneServer", () => {
       assistantText: "deploy checked and fixed",
       trajectorySummary: "Deploy repaired for recall",
     });
+    const taskCreate = await server.handle({
+      method: "tasks.create",
+      params: {
+        sessionId: session.id,
+        subject: "Inspect logs",
+        description: "Look at the latest logs.",
+        activeForm: "Inspecting logs",
+        owner: "operator",
+        metadata: { priority: "high" },
+        blocks: ["follow-up"],
+      },
+    });
+    expect(taskCreate).toMatchObject({
+      ok: true,
+      result: {
+        sessionId: session.id,
+        subject: "Inspect logs",
+        description: "Look at the latest logs.",
+        activeForm: "Inspecting logs",
+        owner: "operator",
+        status: "pending",
+        metadata: { priority: "high" },
+        blocks: ["follow-up"],
+        blockedBy: [],
+      },
+    });
+    const task = taskCreate.ok ? taskCreate.result : undefined;
+    expect(task).toBeDefined();
+    if (!task) {
+      throw new Error("expected task to be created");
+    }
+    await expect(server.handle({ method: "tasks.get", params: { taskId: task.id } })).resolves.toMatchObject({
+      ok: true,
+      result: { id: task.id, sessionId: session.id, subject: "Inspect logs", status: "pending" },
+    });
+    await expect(server.handle({ method: "tasks.list", params: { sessionId: session.id } })).resolves.toMatchObject({
+      ok: true,
+      result: [expect.objectContaining({ id: task.id, sessionId: session.id, subject: "Inspect logs" })],
+    });
+    await expect(
+      server.handle({
+        method: "tasks.update",
+        params: {
+          taskId: task.id,
+          status: "in_progress",
+          activeForm: null,
+          owner: null,
+          metadata: { lane: "ops" },
+          blockedBy: [approval.id],
+        },
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      result: {
+        id: task.id,
+        status: "in_progress",
+        metadata: { priority: "high", lane: "ops" },
+        blocks: ["follow-up"],
+        blockedBy: [approval.id],
+      },
+    });
+    await expect(server.handle({ method: "runs.events", params: { sessionId: session.id, family: "task" } })).resolves.toMatchObject({
+      ok: true,
+      result: expect.arrayContaining([
+        expect.objectContaining({ type: "task.created", payload: expect.objectContaining({ id: task.id, sessionId: session.id }) }),
+        expect.objectContaining({ type: "task.updated", payload: expect.objectContaining({ id: task.id, status: "in_progress" }) }),
+      ]),
+    });
     const runCreate = await server.handle({
       method: "runs.start",
       params: { sessionId: session.id, title: "Investigate deploy", metadata: { source: "rpc" } },
@@ -1397,6 +1465,9 @@ describe("OperatorControlPlaneServer", () => {
       phase: "planning",
       message: "Session B progress.",
     });
+    const taskA = await runtime.createTask({ sessionId: sessionA.id, subject: "Inspect A", description: "Inspect session A." });
+    await runtime.updateTask(taskA.id, { status: "completed" });
+    await runtime.createTask({ sessionId: sessionB.id, subject: "Inspect B", description: "Inspect session B." });
 
     const sessionARunEvents = runtime.events.snapshot(buildRuntimeEventFilter({ sessionId: sessionA.id, family: "run" }));
     expect(sessionARunEvents).toEqual(
@@ -1436,6 +1507,12 @@ describe("OperatorControlPlaneServer", () => {
     const subagentEvents = runtime.events.snapshot(buildRuntimeEventFilter({ family: "subagent", sessionId: sessionA.id }));
     expect(subagentEvents).toEqual([
       expect.objectContaining({ type: "subagent.registered", payload: expect.objectContaining({ sessionId: sessionA.id, title: "Subagent A" }) }),
+    ]);
+
+    const sessionATaskEvents = runtime.events.snapshot(buildRuntimeEventFilter({ family: "task", sessionId: sessionA.id }));
+    expect(sessionATaskEvents).toEqual([
+      expect.objectContaining({ type: "task.created", payload: expect.objectContaining({ id: taskA.id, sessionId: sessionA.id, subject: "Inspect A" }) }),
+      expect.objectContaining({ type: "task.updated", payload: expect.objectContaining({ id: taskA.id, status: "completed", sessionId: sessionA.id }) }),
     ]);
   });
 
@@ -1553,6 +1630,14 @@ describe("OperatorControlPlaneServer", () => {
     await expect(server.handle({ method: "background.tasks.get", params: { taskId: "missing" } })).resolves.toEqual({
       ok: false,
       error: { code: "NOT_FOUND", message: "unknown background task: missing" },
+    });
+    await expect(server.handle({ method: "tasks.get", params: { taskId: "missing" } })).resolves.toEqual({
+      ok: false,
+      error: { code: "NOT_FOUND", message: "unknown task: missing" },
+    });
+    await expect(server.handle({ method: "tasks.update", params: { taskId: "missing", status: "completed" } })).resolves.toEqual({
+      ok: false,
+      error: { code: "NOT_FOUND", message: "unknown task: missing" },
     });
     await expect(server.handle({ method: "background.tasks.sync", params: { taskId: "missing" } })).resolves.toEqual({
       ok: false,

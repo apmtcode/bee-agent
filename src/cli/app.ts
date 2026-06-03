@@ -37,6 +37,9 @@ export type OperatorCliSlashCommand =
   | { kind: "platform-pause"; platform: string; reason?: string }
   | { kind: "platform-resume"; platform: string }
   | { kind: "recall"; query: string }
+  | { kind: "tasks" }
+  | { kind: "task-create"; subject: string }
+  | { kind: "task-update"; taskId: string; status: "pending" | "in_progress" | "completed" }
   | { kind: "skills" }
   | { kind: "run-skill"; skillId: string }
   | { kind: "watch-run"; runId?: string }
@@ -204,6 +207,9 @@ export class OperatorCliApp {
           "  /platform pause <platform> [reason]",
           "  /platform resume <platform>",
           "  /recall <query>",
+          "  /tasks",
+          "  /task-create <subject>",
+          "  /task-update <taskId> <pending|in_progress|completed>",
           "  /skills",
           "  /run-skill <id>",
           "  /watch run [runId]",
@@ -484,6 +490,24 @@ export class OperatorCliApp {
             return `trajectory ${hit.trajectoryId}: ${hit.summary}`;
           })
           .join("\n");
+      }
+      case "tasks": {
+        const activeSessionId = this.requireActiveSessionId(sessionId);
+        const tasks = await this.runtime.listTasks(activeSessionId);
+        return formatOperatorTasks(tasks);
+      }
+      case "task-create": {
+        const activeSessionId = this.requireActiveSessionId(sessionId);
+        const task = await this.runtime.createTask({
+          sessionId: activeSessionId,
+          subject: command.subject,
+          description: command.subject,
+        });
+        return `Created task ${task.id} ${task.status} ${task.subject}`;
+      }
+      case "task-update": {
+        const task = await this.runtime.updateTask(command.taskId, { status: command.status });
+        return task ? `Updated task ${task.id} ${task.status} ${task.subject}` : `Unknown task: ${command.taskId}`;
       }
       case "skills": {
         const promoted = await this.runtime.listPromotedSkills();
@@ -861,6 +885,29 @@ function formatWatchEvent(event: { type: string; payload?: unknown }): string | 
   return undefined;
 }
 
+function formatOperatorTasks(tasks: Array<{
+  id: string;
+  status: string;
+  subject: string;
+  owner?: string;
+  blockedBy: string[];
+  blocks: string[];
+}>): string {
+  if (tasks.length === 0) {
+    return "No tasks.";
+  }
+  return tasks
+    .map((task) => {
+      const details = [
+        task.owner ? `owner=${task.owner}` : undefined,
+        task.blockedBy.length > 0 ? `blockedBy=${task.blockedBy.join(",")}` : undefined,
+        task.blocks.length > 0 ? `blocks=${task.blocks.join(",")}` : undefined,
+      ].filter(Boolean).join(" ");
+      return details ? `${task.id} ${task.status} ${task.subject} ${details}` : `${task.id} ${task.status} ${task.subject}`;
+    })
+    .join("\n");
+}
+
 function formatRemoteInventory(items: Array<{
   remoteId: string;
   remoteSource?: string;
@@ -1031,6 +1078,12 @@ export function parseSlashCommand(input: string): OperatorCliSlashCommand | unde
       return parsePlatformCommand(tail);
     case "recall":
       return { kind: "recall", query: tail };
+    case "tasks":
+      return tail ? { kind: "invalid", message: "Usage: /tasks" } : { kind: "tasks" };
+    case "task-create":
+      return tail ? { kind: "task-create", subject: tail } : { kind: "invalid", message: "Usage: /task-create <subject>" };
+    case "task-update":
+      return parseTaskUpdateCommand(tail);
     case "skills":
       return { kind: "skills" };
     case "run-skill":
@@ -1251,6 +1304,17 @@ function parseBackgroundCommand(tail: string): OperatorCliSlashCommand {
     return taskId ? { kind: "background-cancel", taskId } : { kind: "invalid", message: "Usage: /background cancel <taskId>" };
   }
   return { kind: "invalid", message: "Usage: /background [start|view|sync|cancel] ..." };
+}
+
+function parseTaskUpdateCommand(tail: string): OperatorCliSlashCommand {
+  const [taskId, status, ...rest] = tail.split(/\s+/).filter(Boolean);
+  if (!taskId || !status || rest.length > 0) {
+    return { kind: "invalid", message: "Usage: /task-update <taskId> <pending|in_progress|completed>" };
+  }
+  if (status !== "pending" && status !== "in_progress" && status !== "completed") {
+    return { kind: "invalid", message: "Usage: /task-update <taskId> <pending|in_progress|completed>" };
+  }
+  return { kind: "task-update", taskId, status };
 }
 
 function parseCronCommand(tail: string): OperatorCliSlashCommand {
