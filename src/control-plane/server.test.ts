@@ -376,7 +376,7 @@ describe("OperatorControlPlaneServer", () => {
     const remoteTask = await runtime.startBackgroundTask({
       sessionId: pairedBootstrap.result.session.id,
       title: "Remote task",
-      command: "printf 'remote'",
+      command: "sleep 5",
       kind: "task",
     });
     await expect(server.handle({ method: "pairing.list", params: { status: "redeemed" } })).resolves.toMatchObject({
@@ -765,6 +765,212 @@ describe("OperatorControlPlaneServer", () => {
           results: [],
         },
         control: { state: "active" },
+      },
+    });
+
+    const breakerRootDir = await makeTempDir();
+    const breakerRuntime = new StandaloneOperatorRuntime({
+      rootDir: breakerRootDir,
+      backgroundTaskIsProcessRunning: () => false,
+    });
+    const breakerServer = new OperatorControlPlaneServer({ runtime: breakerRuntime });
+    const breakerOne = await breakerServer.handle({
+      method: "sessions.bootstrap",
+      params: { title: "Breaker remote 1", remoteId: "device-breaker-1", remoteSource: "gateway", agentId: "gateway" },
+    });
+    const breakerTwo = await breakerServer.handle({
+      method: "sessions.bootstrap",
+      params: { title: "Breaker remote 2", remoteId: "device-breaker-2", remoteSource: "gateway", agentId: "gateway" },
+    });
+    const breakerThree = await breakerServer.handle({
+      method: "sessions.bootstrap",
+      params: { title: "Breaker remote 3", remoteId: "device-breaker-3", remoteSource: "gateway", agentId: "gateway" },
+    });
+    [breakerOne, breakerTwo, breakerThree].forEach((response) => expect(response).toMatchObject({ ok: true }));
+    if (!breakerOne || !breakerTwo || !breakerThree) {
+      throw new Error("expected breaker bootstraps");
+    }
+    const breakerRunOne = await breakerRuntime.startRun({ sessionId: breakerOne.result.session.id, title: "Breaker run 1" });
+    const breakerRunTwo = await breakerRuntime.startRun({ sessionId: breakerTwo.result.session.id, title: "Breaker run 2" });
+    const breakerRunThree = await breakerRuntime.startRun({ sessionId: breakerThree.result.session.id, title: "Breaker run 3" });
+    const breakerTaskOne = await breakerRuntime.startBackgroundTask({
+      sessionId: breakerOne.result.session.id,
+      title: "Breaker task 1",
+      command: "sleep 5",
+      kind: "task",
+    });
+    const breakerTaskTwo = await breakerRuntime.startBackgroundTask({
+      sessionId: breakerTwo.result.session.id,
+      title: "Breaker task 2",
+      command: "sleep 5",
+      kind: "task",
+    });
+    const breakerTaskThree = await breakerRuntime.startBackgroundTask({
+      sessionId: breakerThree.result.session.id,
+      title: "Breaker task 3",
+      command: "sleep 5",
+      kind: "task",
+    });
+    await breakerRuntime.backgroundTasks.executionService.writeState(breakerTaskOne, {
+      version: 1,
+      taskId: breakerTaskOne.id,
+      kind: "task",
+      status: "running",
+      pid: breakerTaskOne.execution.processId ?? 9999,
+      startedAt: breakerTaskOne.execution.startedAt ?? breakerTaskOne.updatedAt,
+      updatedAt: breakerTaskOne.updatedAt,
+      outputFile: breakerTaskOne.execution.outputFile,
+      cwd: breakerTaskOne.cwd,
+      command: breakerTaskOne.command,
+    });
+    await expect(breakerServer.handle({ method: "sessions.platformInventory" })).resolves.toMatchObject({
+      ok: true,
+      result: {
+        items: [
+          {
+            platform: "gateway",
+            remoteCount: 3,
+            control: { state: "mixed" },
+          },
+        ],
+      },
+    });
+
+    await breakerRuntime.backgroundTasks.executionService.writeState(breakerTaskTwo, {
+      version: 1,
+      taskId: breakerTaskTwo.id,
+      kind: "task",
+      status: "running",
+      pid: breakerTaskTwo.execution.processId ?? 9999,
+      startedAt: breakerTaskTwo.execution.startedAt ?? breakerTaskTwo.updatedAt,
+      updatedAt: breakerTaskTwo.updatedAt,
+      outputFile: breakerTaskTwo.execution.outputFile,
+      cwd: breakerTaskTwo.cwd,
+      command: breakerTaskTwo.command,
+    });
+    await expect(breakerServer.handle({ method: "sessions.platformInventory" })).resolves.toMatchObject({
+      ok: true,
+      result: {
+        items: [
+          {
+            platform: "gateway",
+            remoteCount: 3,
+            control: {
+              state: "degraded",
+              source: "automatic",
+              failureCount: 2,
+              threshold: 2,
+              reason: expect.stringContaining("background task missing-process"),
+            },
+          },
+        ],
+      },
+    });
+    await expect(
+      breakerServer.handle({ method: "sessions.platformStatus", params: { platform: "gateway" } }),
+    ).resolves.toMatchObject({
+      ok: true,
+      result: {
+        platform: "gateway",
+        remoteCount: 3,
+        control: {
+          state: "degraded",
+          source: "automatic",
+          failureCount: 2,
+          threshold: 2,
+        },
+      },
+    });
+
+    await breakerRuntime.backgroundTasks.executionService.writeState(breakerTaskThree, {
+      version: 1,
+      taskId: breakerTaskThree.id,
+      kind: "task",
+      status: "running",
+      pid: breakerTaskThree.execution.processId ?? 9999,
+      startedAt: breakerTaskThree.execution.startedAt ?? breakerTaskThree.updatedAt,
+      updatedAt: breakerTaskThree.updatedAt,
+      outputFile: breakerTaskThree.execution.outputFile,
+      cwd: breakerTaskThree.cwd,
+      command: breakerTaskThree.command,
+    });
+    await expect(breakerServer.handle({ method: "sessions.remoteStatus", params: { identifier: "device-breaker-3" } })).resolves.toMatchObject({
+      ok: true,
+      result: {
+        remoteId: "device-breaker-3",
+        control: { state: "degraded", reason: expect.stringContaining("automatic retryable failures 3/3") },
+        activeRun: { id: breakerRunThree.id, status: "paused" },
+      },
+    });
+    await expect(breakerServer.handle({ method: "sessions.platformInventory" })).resolves.toMatchObject({
+      ok: true,
+      result: {
+        items: [
+          {
+            platform: "gateway",
+            remoteCount: 3,
+            control: {
+              state: "paused",
+              source: "automatic",
+              failureCount: 3,
+              threshold: 3,
+              reason: expect.stringContaining("background task missing-process"),
+            },
+          },
+        ],
+      },
+    });
+    await expect(breakerRuntime.getRun(breakerRunOne.id)).resolves.toMatchObject({
+      id: breakerRunOne.id,
+      status: "paused",
+      metadata: {
+        remoteControlSource: "platform-breaker",
+        remoteControlAction: "pause",
+      },
+    });
+    await expect(breakerRuntime.getRun(breakerRunTwo.id)).resolves.toMatchObject({
+      id: breakerRunTwo.id,
+      status: "paused",
+      metadata: {
+        remoteControlSource: "platform-breaker",
+        remoteControlAction: "pause",
+      },
+    });
+    await expect(breakerRuntime.getRun(breakerRunThree.id)).resolves.toMatchObject({
+      id: breakerRunThree.id,
+      status: "paused",
+      metadata: {
+        remoteControlSource: "platform-breaker",
+        remoteControlAction: "pause",
+      },
+    });
+
+    await breakerRuntime.syncBackgroundTask(breakerTaskOne.id);
+    await breakerRuntime.syncBackgroundTask(breakerTaskTwo.id);
+    await breakerRuntime.syncBackgroundTask(breakerTaskThree.id);
+    await expect(breakerServer.handle({ method: "sessions.platformInventory" })).resolves.toMatchObject({
+      ok: true,
+      result: {
+        items: [
+          {
+            platform: "gateway",
+            remoteCount: 3,
+            control: { state: "paused" },
+          },
+        ],
+      },
+    });
+    const restartedBreakerServer = new OperatorControlPlaneServer({ runtime: breakerRuntime });
+    await expect(restartedBreakerServer.handle({ method: "sessions.platformInventory" })).resolves.toMatchObject({
+      ok: true,
+      result: {
+        items: [
+          {
+            platform: "gateway",
+            remoteCount: 3,
+            control: { state: "paused" },
+          },
+        ],
       },
     });
     await expect(

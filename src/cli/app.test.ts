@@ -428,7 +428,7 @@ describe("OperatorCliApp", () => {
     const remoteTask = await app.runtime.startBackgroundTask({
       sessionId: pairedBootstrap.result.session.id,
       title: "Remote task",
-      command: "printf remote",
+      command: "sleep 5",
       kind: "task",
     });
     const degradedBootstrap = await app.server.handle({

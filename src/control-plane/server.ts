@@ -211,6 +211,9 @@ export type SessionPlatformInventoryItem = {
   control: {
     state: SessionPlatformControlState;
     reason?: string;
+    source?: PlatformBreakerRecord["source"];
+    failureCount?: number;
+    threshold?: number;
   };
 };
 
@@ -275,6 +278,9 @@ export type SpawnSubagentResult = {
   };
 };
 
+const AUTOMATIC_PLATFORM_DEGRADE_AFTER = 2;
+const AUTOMATIC_PLATFORM_PAUSE_AFTER = 3;
+
 export class OperatorControlPlaneServer {
   private readonly cron: OperatorCronService;
   private readonly pairing: FilePairingStore;
@@ -317,6 +323,80 @@ export class OperatorControlPlaneServer {
 
   clearRemoteQuarantine(remoteId: string): void {
     this.quarantinedRemotes.delete(remoteId);
+  }
+
+  private async refreshAutomaticPlatformBreakers(): Promise<void> {
+    const inventory = await buildSessionRemoteInventoryResult(
+      this.options.runtime,
+      this.pairing,
+      this.getGatewaySessionHealth.bind(this),
+      this.getRemoteQuarantine.bind(this),
+    );
+    const retryablePlatforms = new Set<string>();
+    for (const item of inventory.items) {
+      const platform = normalizePlatformName(item.remoteSource);
+      const observation = getRetryableFailureObservation(item);
+      if (!observation) {
+        continue;
+      }
+      retryablePlatforms.add(platform);
+      await this.platformBreakers.recordAutomaticFailure({
+        platform,
+        fingerprint: observation.fingerprint,
+        reason: observation.reason,
+        remoteId: item.remoteId,
+        degradeAfter: AUTOMATIC_PLATFORM_DEGRADE_AFTER,
+        pauseAfter: AUTOMATIC_PLATFORM_PAUSE_AFTER,
+      });
+    }
+
+    const store = await this.platformBreakers.load();
+    const automaticPlatforms = new Set<string>([
+      ...Object.keys(store.observations),
+      ...Object.values(store.breakers)
+        .filter((breaker) => breaker.source === "automatic")
+        .map((breaker) => breaker.platform),
+    ]);
+    for (const platform of automaticPlatforms) {
+      const breaker = store.breakers[platform];
+      if (retryablePlatforms.has(platform)) {
+        continue;
+      }
+      if (breaker?.source === "automatic" && breaker.state === "paused") {
+        continue;
+      }
+      await this.platformBreakers.clearBreaker(platform);
+    }
+
+    for (const breaker of Object.values(store.breakers)) {
+      if (breaker.source !== "automatic" || breaker.state !== "paused") {
+        continue;
+      }
+      await this.pauseAutomaticPlatformRuns(breaker, inventory.items);
+    }
+  }
+
+  private async pauseAutomaticPlatformRuns(
+    breaker: PlatformBreakerRecord,
+    items: SessionRemoteInventoryItem[],
+  ): Promise<void> {
+    for (const item of items) {
+      if (normalizePlatformName(item.remoteSource) !== breaker.platform || !item.session?.id) {
+        continue;
+      }
+      const activeRun = await this.options.runtime.getActiveRun(item.session.id);
+      const remoteControlSource = typeof activeRun?.metadata?.remoteControlSource === "string"
+        ? activeRun.metadata.remoteControlSource
+        : undefined;
+      if (!activeRun || activeRun.status === "paused" || remoteControlSource === "remote-control") {
+        continue;
+      }
+      await this.options.runtime.updateRunStatus(activeRun.id, "paused", {
+        remoteControlAction: "pause",
+        remoteControlSource: "platform-breaker",
+        remoteControlReason: breaker.reason,
+      });
+    }
   }
 
   private quarantineRemote(params: GatewaySessionHealth): void {
@@ -391,6 +471,7 @@ export class OperatorControlPlaneServer {
         }
         case "sessions.remoteStatus": {
           const identifier = getString(request.params, "identifier");
+          await this.refreshAutomaticPlatformBreakers();
           const status = await buildSessionRemoteStatusResult(
             this.options.runtime,
             this.pairing,
@@ -401,6 +482,7 @@ export class OperatorControlPlaneServer {
           return status ? ok(status) : notFound(`unknown remote or session: ${identifier}`);
         }
         case "sessions.remoteInventory":
+          await this.refreshAutomaticPlatformBreakers();
           return ok(await buildSessionRemoteInventoryResult(
             this.options.runtime,
             this.pairing,
@@ -409,6 +491,7 @@ export class OperatorControlPlaneServer {
             getOptionalString(request.params, "remoteSource"),
           ));
         case "sessions.platformInventory": {
+          await this.refreshAutomaticPlatformBreakers();
           const remoteInventory = await buildSessionRemoteInventoryResult(
             this.options.runtime,
             this.pairing,
@@ -419,6 +502,7 @@ export class OperatorControlPlaneServer {
           return ok(buildSessionPlatformInventoryResult(remoteInventory, breakers));
         }
         case "sessions.platformStatus": {
+          await this.refreshAutomaticPlatformBreakers();
           const platform = getString(request.params, "platform");
           const remoteInventory = await buildSessionRemoteInventoryResult(
             this.options.runtime,
@@ -431,6 +515,7 @@ export class OperatorControlPlaneServer {
           return status ? ok(status) : notFound(`unknown platform: ${platform}`);
         }
         case "sessions.platformControl": {
+          await this.refreshAutomaticPlatformBreakers();
           const platform = getString(request.params, "platform");
           const normalizedPlatform = normalizePlatformName(platform);
           const action = getRemoteControlAction(request.params, "action");
@@ -449,11 +534,14 @@ export class OperatorControlPlaneServer {
             await this.platformBreakers.setBreaker({
               platform: normalizedPlatform,
               reason: getOptionalString(request.params, "reason"),
+              state: "paused",
+              source: "manual",
             });
           }
           if (action === "resume") {
             await this.platformBreakers.clearBreaker(normalizedPlatform);
           }
+          const reason = getOptionalString(request.params, "reason");
           const results: SessionPlatformControlResult["results"] = [];
           for (const remote of status.remotes) {
             const sessionIdentifier = remote.session?.id ?? remote.remoteId;
@@ -467,10 +555,7 @@ export class OperatorControlPlaneServer {
               continue;
             }
             if (action === "pause") {
-              const pausedRun = await this.options.runtime.pauseActiveRun(
-                session.id,
-                getOptionalString(request.params, "reason"),
-              );
+              const pausedRun = await this.options.runtime.pauseActiveRun(session.id, reason);
               if (!pausedRun) {
                 results.push({
                   remoteId: remote.remoteId,
@@ -1287,11 +1372,20 @@ function normalizePlatformName(value?: string): string {
 function derivePlatformControlStatus(
   remotes: SessionRemoteInventoryItem[],
   breaker?: PlatformBreakerRecord,
-): { state: SessionPlatformControlState; reason?: string } {
+): {
+  state: SessionPlatformControlState;
+  reason?: string;
+  source?: PlatformBreakerRecord["source"];
+  failureCount?: number;
+  threshold?: number;
+} {
   if (breaker) {
     return {
-      state: "paused",
+      state: breaker.state,
       ...(breaker.reason ? { reason: breaker.reason } : {}),
+      source: breaker.source,
+      ...(typeof breaker.failureCount === "number" ? { failureCount: breaker.failureCount } : {}),
+      ...(typeof breaker.threshold === "number" ? { threshold: breaker.threshold } : {}),
     };
   }
   const controls = remotes.map((remote) => remote.control).filter(Boolean);
@@ -1311,6 +1405,22 @@ function derivePlatformControlStatus(
     state: firstControl.state,
     ...(sameReason && firstControl.reason ? { reason: firstControl.reason } : {}),
   };
+}
+
+function getRetryableFailureObservation(
+  item: SessionRemoteInventoryItem,
+): { reason: string; fingerprint: string } | undefined {
+  const cause = item.diagnostics?.cause;
+  if (!cause) {
+    return undefined;
+  }
+  if (cause === "background task missing-process" || cause === "background task missing-state") {
+    return {
+      reason: cause,
+      fingerprint: `${item.remoteId}:${cause}:${item.diagnostics?.taskId ?? ""}`,
+    };
+  }
+  return undefined;
 }
 
 function buildInventoryItemFromStatus(

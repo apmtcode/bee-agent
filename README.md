@@ -171,10 +171,13 @@ Current platform behavior in this tranche:
 - platforms are currently derived from existing remote `remoteSource` values rather than a new durable routing model
 - platform inventory summarizes grouped remote count plus an aggregate `control` state
 - platform status returns the member remotes for a platform and can surface a grouped `mixed` state when members differ
-- platform pause and resume now also persist a platform-level breaker keyed by normalized platform name, so later inventory/status calls retain the platform-level pause reason
-- per-remote control and diagnostics remain authoritative for individual remotes; the persisted breaker only changes the grouped platform summary
+- platform pause and resume persist a platform-level breaker keyed by normalized platform name, so later inventory/status calls retain the platform-level control summary
+- repeated retryable remote failures now accumulate as automatic platform observations and escalate a platform from `degraded` to `paused`
+- automatic breaker summaries now expose `source`, `failureCount`, and `threshold` metadata in the control-plane payload so later replay/UI work can distinguish manual vs automatic pauses
+- when an automatic breaker reaches `paused`, active runs on that platform are paused with `remoteControlSource="platform-breaker"`, while explicit `/platform pause` and `/remote pause` continue to use the existing manual control path
+- per-remote control and diagnostics remain authoritative for individual remotes; manual pause/resume still overrides and clears automatic observations for that platform
 - the operator CLI exposes `/platform list`, `/platform status <platform>`, `/platform pause <platform> [reason]`, and `/platform resume <platform>`
-- richer breaker policy, platform routing, account selection, and durable platform identity remain out of scope in this tranche
+- platform routing, account selection, richer retry classification, and durable platform identity remain out of scope in this tranche
 
 ## Remote subagent spawn
 
