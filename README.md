@@ -57,6 +57,10 @@ Current slash commands:
 - `/tasks`
 - `/task-create <subject>`
 - `/task-update <taskId> <pending|in_progress|completed>`
+- `/messages`
+- `/inbox`
+- `/outbox`
+- `/send <sessionId> <message>`
 - `/skills`
 - `/run-skill <id>`
 - `/background`
@@ -94,6 +98,18 @@ Current task behavior in this tranche:
 - bootstrapped session streams inherit `sessionId` for `tasks.create` and `tasks.list`
 - the CLI exposes `/tasks`, `/task-create <subject>`, and `/task-update <taskId> <pending|in_progress|completed>` for narrow local task inspection and status updates
 - team ownership rules, assignment arbitration, and richer dependency editing syntax remain out of scope in this tranche
+
+## Session messaging
+
+Operator now also has a first narrow persisted mailbox surface for session-to-session coordination.
+
+Current messaging behavior in this tranche:
+- messages are persisted as append-only records with `fromSessionId`, `toSessionId`, `summary`, `message`, optional `metadata`, and timestamps
+- the runtime exposes send, get, list, inbox, and outbox flows through the existing control-plane RPC surface as `messages.send`, `messages.get`, `messages.list`, `messages.inbox`, and `messages.outbox`
+- sending a message emits a `message.sent` runtime event and can be replayed or filtered through the `message` event family
+- bootstrapped session streams inherit `fromSessionId` for `messages.send` and `sessionId` for `messages.list`, `messages.inbox`, and `messages.outbox`
+- the CLI exposes `/messages`, `/inbox`, `/outbox`, and `/send <sessionId> <message>` for narrow local mailbox inspection and delivery
+- richer mailbox threading, unread state, assignment semantics, and team arbitration remain out of scope in this tranche
 
 ## Remote session stream
 

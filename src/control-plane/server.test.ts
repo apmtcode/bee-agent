@@ -166,6 +166,53 @@ describe("OperatorControlPlaneServer", () => {
         expect.objectContaining({ type: "task.updated", payload: expect.objectContaining({ id: task.id, status: "in_progress" }) }),
       ]),
     });
+    const messageSend = await server.handle({
+      method: "messages.send",
+      params: {
+        fromSessionId: session.id,
+        toSessionId: childSession.id,
+        summary: "Need deploy logs",
+        message: "Please collect the latest deploy logs.",
+        metadata: { priority: "high" },
+      },
+    });
+    expect(messageSend).toMatchObject({
+      ok: true,
+      result: {
+        fromSessionId: session.id,
+        toSessionId: childSession.id,
+        summary: "Need deploy logs",
+        message: "Please collect the latest deploy logs.",
+        metadata: { priority: "high" },
+      },
+    });
+    const message = messageSend.ok ? messageSend.result : undefined;
+    expect(message).toBeDefined();
+    if (!message) {
+      throw new Error("expected message to be sent");
+    }
+    await expect(server.handle({ method: "messages.get", params: { messageId: message.id } })).resolves.toMatchObject({
+      ok: true,
+      result: { id: message.id, fromSessionId: session.id, toSessionId: childSession.id, summary: "Need deploy logs" },
+    });
+    await expect(server.handle({ method: "messages.list", params: { sessionId: session.id } })).resolves.toMatchObject({
+      ok: true,
+      result: [expect.objectContaining({ id: message.id, fromSessionId: session.id, toSessionId: childSession.id })],
+    });
+    await expect(server.handle({ method: "messages.inbox", params: { sessionId: childSession.id } })).resolves.toMatchObject({
+      ok: true,
+      result: [expect.objectContaining({ id: message.id, toSessionId: childSession.id })],
+    });
+    await expect(server.handle({ method: "messages.outbox", params: { sessionId: session.id } })).resolves.toMatchObject({
+      ok: true,
+      result: [expect.objectContaining({ id: message.id, fromSessionId: session.id })],
+    });
+    await expect(server.handle({ method: "runs.events", params: { sessionId: session.id, family: "message" } })).resolves.toMatchObject({
+      ok: true,
+      result: [
+        expect.objectContaining({ type: "message.sent", payload: expect.objectContaining({ id: message.id, fromSessionId: session.id, toSessionId: childSession.id }) }),
+      ],
+    });
     const runCreate = await server.handle({
       method: "runs.start",
       params: { sessionId: session.id, title: "Investigate deploy", metadata: { source: "rpc" } },
@@ -1638,6 +1685,10 @@ describe("OperatorControlPlaneServer", () => {
     await expect(server.handle({ method: "tasks.update", params: { taskId: "missing", status: "completed" } })).resolves.toEqual({
       ok: false,
       error: { code: "NOT_FOUND", message: "unknown task: missing" },
+    });
+    await expect(server.handle({ method: "messages.get", params: { messageId: "missing" } })).resolves.toEqual({
+      ok: false,
+      error: { code: "NOT_FOUND", message: "unknown message: missing" },
     });
     await expect(server.handle({ method: "background.tasks.sync", params: { taskId: "missing" } })).resolves.toEqual({
       ok: false,

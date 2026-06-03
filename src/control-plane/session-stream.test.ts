@@ -253,6 +253,89 @@ describe("OperatorControlPlaneSessionStream", () => {
     ]);
   });
 
+  it("binds message requests and streams message events for a bootstrapped session", async () => {
+    const runtime = new StandaloneOperatorRuntime({
+      rootDir: await makeTempDir(),
+      backgroundTaskIsProcessRunning: () => false,
+    });
+    const server = new OperatorControlPlaneServer({ runtime });
+    const recipient = await runtime.startSession({ title: "Recipient", agentId: "worker" });
+    const stream = new OperatorControlPlaneSessionStream(server);
+
+    const bootstrapped = await stream.bootstrap({ title: "Message session", family: "message" });
+    expect(bootstrapped.created).toBe(true);
+    expect(bootstrapped.events).toEqual([]);
+
+    const sent = await stream.request<{
+      id: string;
+      fromSessionId: string;
+      toSessionId: string;
+      summary: string;
+    }>({
+      method: "messages.send",
+      params: { toSessionId: recipient.id, message: "Please collect the latest logs." },
+    });
+    expect(sent.ok).toBe(true);
+    if (!sent.ok) {
+      throw new Error("expected sent message");
+    }
+    expect(sent.result).toMatchObject({
+      fromSessionId: bootstrapped.session.id,
+      toSessionId: recipient.id,
+      summary: "Please collect the latest logs.",
+    });
+
+    const listed = await stream.request<Array<{ id: string; fromSessionId: string; toSessionId: string }>>({
+      method: "messages.list",
+      params: {},
+    });
+    expect(listed.ok).toBe(true);
+    if (!listed.ok) {
+      throw new Error("expected listed messages");
+    }
+    expect(listed.result).toEqual([
+      expect.objectContaining({
+        id: sent.result.id,
+        fromSessionId: bootstrapped.session.id,
+        toSessionId: recipient.id,
+      }),
+    ]);
+
+    const eventIterator = stream.events({ family: "message" })[Symbol.asyncIterator]();
+    const second = await stream.request<{ id: string; fromSessionId: string; toSessionId: string; summary: string }>({
+      method: "messages.send",
+      params: { toSessionId: recipient.id, message: "Collected and attached." },
+    });
+    expect(second.ok).toBe(true);
+    if (!second.ok) {
+      throw new Error("expected second sent message");
+    }
+
+    const nextEvent = await eventIterator.next();
+    expect(nextEvent.done).toBe(false);
+    expect(nextEvent.value?.type).toBe("message.sent");
+    expect(nextEvent.value?.payload).toMatchObject({
+      id: second.result.id,
+      fromSessionId: bootstrapped.session.id,
+      toSessionId: recipient.id,
+      summary: "Collected and attached.",
+    });
+    await eventIterator.return?.();
+
+    const replay = await stream.request<Array<{ type: string; payload?: { id?: string; fromSessionId?: string; toSessionId?: string } }>>({
+      method: "runs.events",
+      params: { family: "message" },
+    });
+    expect(replay.ok).toBe(true);
+    if (!replay.ok) {
+      throw new Error("expected message replay");
+    }
+    expect(replay.result).toEqual([
+      expect.objectContaining({ type: "message.sent", payload: expect.objectContaining({ id: sent.result.id, fromSessionId: bootstrapped.session.id, toSessionId: recipient.id }) }),
+      expect.objectContaining({ type: "message.sent", payload: expect.objectContaining({ id: second.result.id, fromSessionId: bootstrapped.session.id, toSessionId: recipient.id }) }),
+    ]);
+  });
+
   it("reattaches to an idle session and returns only session-scoped bootstrap state", async () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),

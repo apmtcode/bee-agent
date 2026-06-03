@@ -715,6 +715,27 @@ export class OperatorControlPlaneServer {
           });
           return task ? ok(task) : notFound(`unknown task: ${taskId}`);
         }
+        case "messages.send":
+          return ok(
+            await this.options.runtime.sendMessage({
+              fromSessionId: getString(request.params, "fromSessionId"),
+              toSessionId: getString(request.params, "toSessionId"),
+              summary: getOptionalString(request.params, "summary"),
+              message: getString(request.params, "message"),
+              metadata: getOptionalRecord(request.params, "metadata"),
+            }),
+          );
+        case "messages.get": {
+          const messageId = getString(request.params, "messageId");
+          const message = await this.options.runtime.getMessage(messageId);
+          return message ? ok(message) : notFound(`unknown message: ${messageId}`);
+        }
+        case "messages.list":
+          return ok(await this.options.runtime.listMessages(getOptionalString(request.params, "sessionId")));
+        case "messages.inbox":
+          return ok(await this.options.runtime.listInbox(getString(request.params, "sessionId")));
+        case "messages.outbox":
+          return ok(await this.options.runtime.listOutbox(getString(request.params, "sessionId")));
         case "runs.get": {
           const runId = getString(request.params, "runId");
           const run = await this.options.runtime.getRun(runId);
@@ -1612,7 +1633,7 @@ function getOptionalRuntimeEventFamily(
   if (value == null) {
     return undefined;
   }
-  if (value === "run" || value === "approval" || value === "background-task" || value === "skill" || value === "subagent" || value === "task") {
+  if (value === "run" || value === "approval" || value === "background-task" || value === "skill" || value === "subagent" || value === "task" || value === "message") {
     return value;
   }
   throw new Error(`Invalid runtime event family: ${key}`);

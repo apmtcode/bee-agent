@@ -58,6 +58,10 @@ describe("parseSlashCommand", () => {
     expect(parseSlashCommand("/tasks")).toEqual({ kind: "tasks" });
     expect(parseSlashCommand("/task-create Inspect logs")).toEqual({ kind: "task-create", subject: "Inspect logs" });
     expect(parseSlashCommand("/task-update task-1 in_progress")).toEqual({ kind: "task-update", taskId: "task-1", status: "in_progress" });
+    expect(parseSlashCommand("/messages")).toEqual({ kind: "messages" });
+    expect(parseSlashCommand("/inbox")).toEqual({ kind: "inbox" });
+    expect(parseSlashCommand("/outbox")).toEqual({ kind: "outbox" });
+    expect(parseSlashCommand("/send session-2 Please collect logs")).toEqual({ kind: "send", toSessionId: "session-2", message: "Please collect logs" });
     expect(parseSlashCommand("/background")).toEqual({ kind: "background-list" });
     expect(parseSlashCommand("/background start smoke -- printf ok")).toEqual({
       kind: "background-start",
@@ -148,6 +152,22 @@ describe("parseSlashCommand", () => {
       kind: "invalid",
       message: "Usage: /task-update <taskId> <pending|in_progress|completed>",
     });
+    expect(parseSlashCommand("/messages later")).toEqual({
+      kind: "invalid",
+      message: "Usage: /messages",
+    });
+    expect(parseSlashCommand("/inbox later")).toEqual({
+      kind: "invalid",
+      message: "Usage: /inbox",
+    });
+    expect(parseSlashCommand("/outbox later")).toEqual({
+      kind: "invalid",
+      message: "Usage: /outbox",
+    });
+    expect(parseSlashCommand("/send session-2")).toEqual({
+      kind: "invalid",
+      message: "Usage: /send <sessionId> <message>",
+    });
     expect(parseSlashCommand("/watch nope")).toEqual({
       kind: "invalid",
       message: "Usage: /watch [active|run <runId>|task <taskId>]",
@@ -200,6 +220,34 @@ describe("OperatorCliApp", () => {
 
     const updatedTask = await app.runtime.getTask(task.id);
     expect(updatedTask).toMatchObject({ id: task.id, status: "completed", subject: "Inspect logs" });
+  });
+
+  it("sends and lists operator messages", async () => {
+    const rootDir = await makeTempDir();
+    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    const sender = await app.runtime.startSession({ title: "sender cli", cwd: rootDir, agentId: "operator-cli" });
+    const recipient = await app.runtime.startSession({ title: "recipient cli", cwd: rootDir, agentId: "worker" });
+
+    const sentOutput = await app.dispatchSlashCommand({ kind: "send", toSessionId: recipient.id, message: "Please collect logs." }, sender.id);
+    expect(sentOutput).toContain("Sent message");
+    expect(sentOutput).toContain(`to=${recipient.id}`);
+    expect(sentOutput).toContain("summary=Please collect logs.");
+
+    const messages = await app.runtime.listMessages(sender.id);
+    expect(messages).toHaveLength(1);
+    const [message] = messages;
+    if (!message) {
+      throw new Error("expected operator message");
+    }
+
+    const listOutput = await app.dispatchSlashCommand({ kind: "messages" }, sender.id);
+    expect(listOutput).toContain(`${message.id} from=${sender.id} to=${recipient.id} Please collect logs.`);
+
+    const inboxOutput = await app.dispatchSlashCommand({ kind: "inbox" }, recipient.id);
+    expect(inboxOutput).toContain(`${message.id} from=${sender.id} to=${recipient.id} Please collect logs.`);
+
+    const outboxOutput = await app.dispatchSlashCommand({ kind: "outbox" }, sender.id);
+    expect(outboxOutput).toContain(`${message.id} from=${sender.id} to=${recipient.id} Please collect logs.`);
   });
 
   it("streams in-flight freeform run updates and reuses transcript context across resume", async () => {

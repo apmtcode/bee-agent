@@ -40,6 +40,10 @@ export type OperatorCliSlashCommand =
   | { kind: "tasks" }
   | { kind: "task-create"; subject: string }
   | { kind: "task-update"; taskId: string; status: "pending" | "in_progress" | "completed" }
+  | { kind: "messages" }
+  | { kind: "inbox" }
+  | { kind: "outbox" }
+  | { kind: "send"; toSessionId: string; message: string }
   | { kind: "skills" }
   | { kind: "run-skill"; skillId: string }
   | { kind: "watch-run"; runId?: string }
@@ -210,6 +214,10 @@ export class OperatorCliApp {
           "  /tasks",
           "  /task-create <subject>",
           "  /task-update <taskId> <pending|in_progress|completed>",
+          "  /messages",
+          "  /inbox",
+          "  /outbox",
+          "  /send <sessionId> <message>",
           "  /skills",
           "  /run-skill <id>",
           "  /watch run [runId]",
@@ -508,6 +516,30 @@ export class OperatorCliApp {
       case "task-update": {
         const task = await this.runtime.updateTask(command.taskId, { status: command.status });
         return task ? `Updated task ${task.id} ${task.status} ${task.subject}` : `Unknown task: ${command.taskId}`;
+      }
+      case "messages": {
+        const activeSessionId = this.requireActiveSessionId(sessionId);
+        const messages = await this.runtime.listMessages(activeSessionId);
+        return formatOperatorMessages(messages);
+      }
+      case "inbox": {
+        const activeSessionId = this.requireActiveSessionId(sessionId);
+        const messages = await this.runtime.listInbox(activeSessionId);
+        return formatOperatorMessages(messages);
+      }
+      case "outbox": {
+        const activeSessionId = this.requireActiveSessionId(sessionId);
+        const messages = await this.runtime.listOutbox(activeSessionId);
+        return formatOperatorMessages(messages);
+      }
+      case "send": {
+        const activeSessionId = this.requireActiveSessionId(sessionId);
+        const message = await this.runtime.sendMessage({
+          fromSessionId: activeSessionId,
+          toSessionId: command.toSessionId,
+          message: command.message,
+        });
+        return `Sent message ${message.id} to=${message.toSessionId} summary=${message.summary}`;
       }
       case "skills": {
         const promoted = await this.runtime.listPromotedSkills();
@@ -818,12 +850,12 @@ export class OperatorCliApp {
   }
 
   private requireActiveSessionId(sessionId?: string): string {
-    if (this.activeSessionId) {
-      return this.activeSessionId;
-    }
     if (sessionId) {
       this.activeSessionId = sessionId;
       return sessionId;
+    }
+    if (this.activeSessionId) {
+      return this.activeSessionId;
     }
     throw new Error("No active session.");
   }
@@ -905,6 +937,20 @@ function formatOperatorTasks(tasks: Array<{
       ].filter(Boolean).join(" ");
       return details ? `${task.id} ${task.status} ${task.subject} ${details}` : `${task.id} ${task.status} ${task.subject}`;
     })
+    .join("\n");
+}
+
+function formatOperatorMessages(messages: Array<{
+  id: string;
+  fromSessionId: string;
+  toSessionId: string;
+  summary: string;
+}>): string {
+  if (messages.length === 0) {
+    return "No messages.";
+  }
+  return messages
+    .map((message) => `${message.id} from=${message.fromSessionId} to=${message.toSessionId} ${message.summary}`)
     .join("\n");
 }
 
@@ -1084,6 +1130,14 @@ export function parseSlashCommand(input: string): OperatorCliSlashCommand | unde
       return tail ? { kind: "task-create", subject: tail } : { kind: "invalid", message: "Usage: /task-create <subject>" };
     case "task-update":
       return parseTaskUpdateCommand(tail);
+    case "messages":
+      return tail ? { kind: "invalid", message: "Usage: /messages" } : { kind: "messages" };
+    case "inbox":
+      return tail ? { kind: "invalid", message: "Usage: /inbox" } : { kind: "inbox" };
+    case "outbox":
+      return tail ? { kind: "invalid", message: "Usage: /outbox" } : { kind: "outbox" };
+    case "send":
+      return parseSendCommand(tail);
     case "skills":
       return { kind: "skills" };
     case "run-skill":
@@ -1315,6 +1369,15 @@ function parseTaskUpdateCommand(tail: string): OperatorCliSlashCommand {
     return { kind: "invalid", message: "Usage: /task-update <taskId> <pending|in_progress|completed>" };
   }
   return { kind: "task-update", taskId, status };
+}
+
+function parseSendCommand(tail: string): OperatorCliSlashCommand {
+  const [toSessionId, ...messageParts] = tail.split(/\s+/).filter(Boolean);
+  const message = messageParts.join(" ").trim();
+  if (!toSessionId || !message) {
+    return { kind: "invalid", message: "Usage: /send <sessionId> <message>" };
+  }
+  return { kind: "send", toSessionId, message };
 }
 
 function parseCronCommand(tail: string): OperatorCliSlashCommand {

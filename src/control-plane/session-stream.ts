@@ -64,6 +64,12 @@ export class OperatorControlPlaneSessionStream {
         identifier: params?.identifier ?? this.boundSessionId,
       };
     }
+    if (method === "messages.send") {
+      return {
+        ...(params ?? {}),
+        fromSessionId: params?.fromSessionId ?? this.boundSessionId,
+      };
+    }
     if (!requiresSessionBinding(method)) {
       return params;
     }
@@ -102,6 +108,10 @@ function requiresSessionBinding(method: string): boolean {
     method === "background.tasks.recoverAll" ||
     method === "tasks.create" ||
     method === "tasks.list" ||
+    method === "messages.send" ||
+    method === "messages.list" ||
+    method === "messages.inbox" ||
+    method === "messages.outbox" ||
     method === "skills.executable.run"
   );
 }

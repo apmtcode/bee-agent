@@ -1,7 +1,7 @@
 import type { OperatorEvent, OperatorEventFilter } from "../kernel/event-bus.js";
 import type { OperatorRunProgressEvent, StandaloneOperatorRuntime } from "../orchestrator/operator-runtime.js";
 
-export type RuntimeEventFamily = "run" | "approval" | "background-task" | "skill" | "subagent" | "task";
+export type RuntimeEventFamily = "run" | "approval" | "background-task" | "skill" | "subagent" | "task" | "message";
 
 export type RuntimeEventSubscriptionOptions = {
   replay?: boolean;
@@ -24,7 +24,7 @@ export function buildRuntimeEventFilter(options: RuntimeEventSubscriptionOptions
     filters.push(options.filter);
   }
   if (options.sessionId) {
-    filters.push((event) => getEventSessionId(event) === options.sessionId);
+    filters.push((event) => getEventSessionIds(event).includes(options.sessionId!));
   }
   if (options.runId) {
     filters.push((event) => getEventRunId(event) === options.runId);
@@ -54,21 +54,32 @@ function matchesFamily(type: string, family: RuntimeEventFamily): boolean {
   if (family === "task") {
     return type.startsWith("task.");
   }
+  if (family === "message") {
+    return type.startsWith("message.");
+  }
   return type.startsWith("subagent.");
 }
 
-function getEventSessionId(event: OperatorEvent): string | undefined {
+function getEventSessionIds(event: OperatorEvent): string[] {
   const payload = event.payload;
   if (!payload || typeof payload !== "object") {
-    return undefined;
+    return [];
   }
+
+  const sessionIds = new Set<string>();
   if (typeof (payload as { sessionId?: unknown }).sessionId === "string") {
-    return (payload as { sessionId: string }).sessionId;
+    sessionIds.add((payload as { sessionId: string }).sessionId);
   }
   if (event.type === "run.progress") {
-    return (payload as OperatorRunProgressEvent).sessionId;
+    sessionIds.add((payload as OperatorRunProgressEvent).sessionId);
   }
-  return undefined;
+  if (typeof (payload as { fromSessionId?: unknown }).fromSessionId === "string") {
+    sessionIds.add((payload as { fromSessionId: string }).fromSessionId);
+  }
+  if (typeof (payload as { toSessionId?: unknown }).toSessionId === "string") {
+    sessionIds.add((payload as { toSessionId: string }).toSessionId);
+  }
+  return [...sessionIds];
 }
 
 function getEventRunId(event: OperatorEvent): string | undefined {

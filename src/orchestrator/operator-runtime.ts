@@ -45,6 +45,7 @@ import { FileMemoryStore } from "../memory/memory-store.js";
 import { OperatorEventBus, type OperatorEvent } from "../kernel/event-bus.js";
 import { FileRunStore, type OperatorRunRecord } from "./run-store.js";
 import { FileTaskStore, type OperatorTaskRecord, type OperatorTaskStatus } from "./task-store.js";
+import { FileMessageStore, type OperatorMessageRecord } from "./message-store.js";
 import { FileSubagentRegistry, type SubagentRunRecord } from "./subagent-registry.js";
 import {
   FileTrainingJobStore,
@@ -150,6 +151,14 @@ export type UpdateTaskParams = {
   metadata?: Record<string, unknown>;
   blocks?: string[];
   blockedBy?: string[];
+};
+
+export type SendMessageParams = {
+  fromSessionId: string;
+  toSessionId: string;
+  summary?: string;
+  message: string;
+  metadata?: Record<string, unknown>;
 };
 
 export type RegisterSubagentParams = {
@@ -261,6 +270,7 @@ export type OperatorRuntimeEventType =
   | "run.progress"
   | "task.created"
   | "task.updated"
+  | "message.sent"
   | "subagent.registered"
   | "subagent.updated"
   | "training-job.created"
@@ -300,6 +310,7 @@ export class StandaloneOperatorRuntime {
   readonly replays: ReplayRuntimeService;
   readonly runs: FileRunStore;
   readonly tasks: FileTaskStore;
+  readonly messages: FileMessageStore;
   readonly subagents: FileSubagentRegistry;
   readonly backgroundTasks: FileBackgroundTaskStore;
   readonly trainingJobs: FileTrainingJobStore;
@@ -324,6 +335,7 @@ export class StandaloneOperatorRuntime {
     this.replays = new ReplayRuntimeService(this.sessions, this.trajectories);
     this.runs = new FileRunStore(path.join(options.rootDir, "runs.json"));
     this.tasks = new FileTaskStore(path.join(options.rootDir, "tasks.json"));
+    this.messages = new FileMessageStore(path.join(options.rootDir, "messages.json"));
     this.subagents = new FileSubagentRegistry(options.rootDir);
     this.backgroundTasks = new FileBackgroundTaskStore(
       path.join(options.rootDir, "background-tasks.json"),
@@ -562,6 +574,28 @@ export class StandaloneOperatorRuntime {
 
   async listTasks(sessionId?: string): Promise<OperatorTaskRecord[]> {
     return sessionId ? await this.tasks.listBySession(sessionId) : await this.tasks.list();
+  }
+
+  async sendMessage(params: SendMessageParams): Promise<OperatorMessageRecord> {
+    const message = await this.messages.send(params);
+    this.events.publish({ type: "message.sent", payload: message, ts: Date.now() });
+    return message;
+  }
+
+  async getMessage(messageId: string): Promise<OperatorMessageRecord | undefined> {
+    return await this.messages.get(messageId);
+  }
+
+  async listMessages(sessionId?: string): Promise<OperatorMessageRecord[]> {
+    return sessionId ? await this.messages.listBySession(sessionId) : await this.messages.list();
+  }
+
+  async listInbox(sessionId: string): Promise<OperatorMessageRecord[]> {
+    return await this.messages.listInbox(sessionId);
+  }
+
+  async listOutbox(sessionId: string): Promise<OperatorMessageRecord[]> {
+    return await this.messages.listOutbox(sessionId);
   }
 
   async pauseActiveRun(sessionId: string, reason?: string): Promise<OperatorRunRecord | undefined> {

@@ -285,6 +285,11 @@ export {
   type RunStoreShape,
 } from "./orchestrator/run-store.js";
 export {
+  FileMessageStore,
+  type MessageStoreShape,
+  type OperatorMessageRecord,
+} from "./orchestrator/message-store.js";
+export {
   FileSubagentRegistry,
   type SubagentRunRecord,
   type SubagentRegistryShape,
@@ -299,6 +304,7 @@ export {
   type RecoverBackgroundTasksParams,
   type RecordTurnParams,
   type ReviewTrajectoryParams as RuntimeReviewTrajectoryParams,
+  type SendMessageParams,
   type SpawnSubagentParams,
   type SpawnSubagentResult,
   type SessionLifecycleEventType,
