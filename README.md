@@ -62,6 +62,7 @@ Current slash commands:
 - `/outbox`
 - `/send <sessionId> <message>`
 - `/notify <status> <message>`
+- `/statusline [command|off]`
 - `/skills`
 - `/run-skill <id>`
 - `/background`
@@ -111,6 +112,17 @@ Current messaging behavior in this tranche:
 - bootstrapped session streams inherit `fromSessionId` for `messages.send` and `sessionId` for `messages.list`, `messages.inbox`, and `messages.outbox`
 - the CLI exposes `/messages`, `/inbox`, `/outbox`, and `/send <sessionId> <message>` for narrow local mailbox inspection and delivery
 - richer mailbox threading, unread state, assignment semantics, and team arbitration remain out of scope in this tranche
+
+## Status line setup
+
+Operator now also has a first narrow status-line configuration surface for Claude Code-style local session visibility.
+
+Current status-line behavior in this tranche:
+- the CLI exposes `/statusline [command|off]` to inspect, set, or remove a local status-line command
+- status-line config is stored in `<cwd>/.claude/settings.local.json` under `statusLine`
+- the supported shape mirrors the narrow Claude Code command-backed form: `{ "type": "command", "command": "..." }`
+- exported helpers can resolve the merged `statusLine` command config or persist a project-local override
+- this tranche remains intentionally narrow and does not yet execute the command, stream session JSON to it, or render a live terminal status line
 
 ## Push notifications
 

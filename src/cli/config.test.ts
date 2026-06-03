@@ -6,6 +6,8 @@ import {
   OperatorCliConfigLoader,
   deepMergeConfig,
   resolveOperatorCliExecutionConfig,
+  resolveOperatorCliStatusLineConfig,
+  setProjectStatusLineConfig,
 } from "./config.js";
 
 const tempDirs: string[] = [];
@@ -122,5 +124,34 @@ describe("OperatorCliConfigLoader", () => {
       },
       unsupportedHookKeys: [],
     });
+  });
+
+  it("extracts status line command settings from merged config", () => {
+    expect(resolveOperatorCliStatusLineConfig({
+      statusLine: {
+        type: "command",
+        command: "node .claude/statusline.js",
+        padding: 1,
+        refreshInterval: 5,
+        hideVimModeIndicator: true,
+      },
+    })).toEqual({
+      type: "command",
+      command: "node .claude/statusline.js",
+      padding: 1,
+      refreshInterval: 5,
+      hideVimModeIndicator: true,
+    });
+  });
+
+  it("writes and removes project status line settings", async () => {
+    const cwd = await makeTempDir();
+    await setProjectStatusLineConfig(cwd, { type: "command", command: "node .claude/statusline.js" });
+    await expect(fs.readFile(path.join(cwd, ".claude", "settings.local.json"), "utf8")).resolves.toContain("statusLine");
+    await expect(fs.readFile(path.join(cwd, ".claude", "settings.local.json"), "utf8")).resolves.toContain("node .claude/statusline.js");
+
+    await setProjectStatusLineConfig(cwd, undefined);
+    const removed = JSON.parse(await fs.readFile(path.join(cwd, ".claude", "settings.local.json"), "utf8")) as Record<string, unknown>;
+    expect(removed).not.toHaveProperty("statusLine");
   });
 });

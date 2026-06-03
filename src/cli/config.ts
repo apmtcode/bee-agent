@@ -1,5 +1,5 @@
 import path from "node:path";
-import { readJsonFile } from "../shared/fs.js";
+import { readJsonFile, writeJsonAtomic } from "../shared/fs.js";
 
 export type OperatorCliConfigSource = "user" | "project" | "local";
 
@@ -17,6 +17,14 @@ export type OperatorCliConfigObject = {
 export type OperatorCliRuntimeConfig = {
   merged: OperatorCliConfigObject;
   loadedEntries: OperatorCliConfigEntry[];
+};
+
+export type OperatorCliStatusLineConfig = {
+  type: "command";
+  command: string;
+  padding?: number;
+  refreshInterval?: number;
+  hideVimModeIndicator?: boolean;
 };
 
 export type OperatorCliPermissionMode = "default" | "acceptEdits" | "bypassPermissions" | "plan";
@@ -147,6 +155,42 @@ export function resolveOperatorCliExecutionConfig(
     },
     unsupportedHookKeys,
   };
+}
+
+export function resolveOperatorCliStatusLineConfig(
+  config?: OperatorCliRuntimeConfig | OperatorCliConfigObject,
+): OperatorCliStatusLineConfig | undefined {
+  const merged = !config ? {} : "merged" in config ? config.merged : config;
+  const rawStatusLine = merged.statusLine;
+  if (!isConfigObject(rawStatusLine) || rawStatusLine.type !== "command" || typeof rawStatusLine.command !== "string") {
+    return undefined;
+  }
+  const command = rawStatusLine.command.trim();
+  if (!command) {
+    return undefined;
+  }
+  const padding = typeof rawStatusLine.padding === "number" ? rawStatusLine.padding : undefined;
+  const refreshInterval = typeof rawStatusLine.refreshInterval === "number" ? rawStatusLine.refreshInterval : undefined;
+  const hideVimModeIndicator = typeof rawStatusLine.hideVimModeIndicator === "boolean" ? rawStatusLine.hideVimModeIndicator : undefined;
+  return {
+    type: "command",
+    command,
+    ...(padding === undefined ? {} : { padding }),
+    ...(refreshInterval === undefined ? {} : { refreshInterval }),
+    ...(hideVimModeIndicator === undefined ? {} : { hideVimModeIndicator }),
+  };
+}
+
+export async function setProjectStatusLineConfig(cwd: string, statusLine?: OperatorCliStatusLineConfig): Promise<void> {
+  const filePath = path.join(cwd, ".claude", "settings.local.json");
+  const current = await readOptionalConfigObject(filePath) ?? {};
+  const next = { ...current };
+  if (statusLine) {
+    next.statusLine = cloneConfigValue(statusLine) as OperatorCliConfigValue;
+  } else {
+    delete next.statusLine;
+  }
+  await writeJsonAtomic(filePath, next);
 }
 
 async function readOptionalConfigObject(filePath: string): Promise<OperatorCliConfigObject | undefined> {

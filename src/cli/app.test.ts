@@ -64,6 +64,8 @@ describe("parseSlashCommand", () => {
     expect(parseSlashCommand("/outbox")).toEqual({ kind: "outbox" });
     expect(parseSlashCommand("/send session-2 Please collect logs")).toEqual({ kind: "send", toSessionId: "session-2", message: "Please collect logs" });
     expect(parseSlashCommand("/notify success Deploy finished")).toEqual({ kind: "notify", status: "success", message: "Deploy finished" });
+    expect(parseSlashCommand("/statusline")).toEqual({ kind: "statusline" });
+    expect(parseSlashCommand("/statusline node .claude/statusline.js")).toEqual({ kind: "statusline", command: "node .claude/statusline.js" });
     expect(parseSlashCommand("/background")).toEqual({ kind: "background-list" });
     expect(parseSlashCommand("/background start smoke -- printf ok")).toEqual({
       kind: "background-start",
@@ -274,6 +276,29 @@ describe("OperatorCliApp", () => {
     const deliveryLog = await fs.readFile(path.join(rootDir, "delivery-local.jsonl"), "utf8");
     expect(deliveryLog).toContain("\"kind\":\"push-notification\"");
     expect(deliveryLog).toContain("Deploy finished.");
+  });
+
+  it("shows, configures, and disables the status line command", async () => {
+    const rootDir = await makeTempDir();
+    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    const session = await app.runtime.startSession({ title: "statusline cli", cwd: rootDir, agentId: "operator-cli" });
+
+    await expect(app.dispatchSlashCommand({ kind: "statusline" }, session.id)).resolves.toBe("statusLine disabled");
+
+    const configured = await app.dispatchSlashCommand({ kind: "statusline", command: "node .claude/statusline.js" }, session.id);
+    expect(configured).toContain("Configured status line command=node .claude/statusline.js");
+
+    await expect(app.dispatchSlashCommand({ kind: "statusline" }, session.id)).resolves.toBe("statusLine command=node .claude/statusline.js");
+
+    const settingsText = await fs.readFile(path.join(rootDir, ".claude", "settings.local.json"), "utf8");
+    expect(settingsText).toContain("statusLine");
+    expect(settingsText).toContain("node .claude/statusline.js");
+
+    const disabled = await app.dispatchSlashCommand({ kind: "statusline", command: "off" }, session.id);
+    expect(disabled).toContain("Disabled status line");
+
+    const settings = JSON.parse(await fs.readFile(path.join(rootDir, ".claude", "settings.local.json"), "utf8")) as Record<string, unknown>;
+    expect(settings).not.toHaveProperty("statusLine");
   });
 
   it("streams in-flight freeform run updates and reuses transcript context across resume", async () => {

@@ -7,6 +7,8 @@ import type { TranscriptRecord } from "../harness/transcript-store.js";
 import {
   OperatorCliConfigLoader,
   resolveOperatorCliExecutionConfig,
+  resolveOperatorCliStatusLineConfig,
+  setProjectStatusLineConfig,
   type OperatorCliRuntimeConfig,
 } from "./config.js";
 import { runOperatorCliConversationTurn } from "./conversation.js";
@@ -45,6 +47,7 @@ export type OperatorCliSlashCommand =
   | { kind: "outbox" }
   | { kind: "send"; toSessionId: string; message: string }
   | { kind: "notify"; status: string; message: string }
+  | { kind: "statusline"; command?: string }
   | { kind: "skills" }
   | { kind: "run-skill"; skillId: string }
   | { kind: "watch-run"; runId?: string }
@@ -221,6 +224,7 @@ export class OperatorCliApp {
           "  /outbox",
           "  /send <sessionId> <message>",
           "  /notify <status> <message>",
+          "  /statusline [command|off]",
           "  /skills",
           "  /run-skill <id>",
           "  /watch run [runId]",
@@ -556,6 +560,21 @@ export class OperatorCliApp {
           ? "suppressed"
           : notification.deliveryResults.map((result) => result.status).join(",");
         return `Sent notification ${notification.id} status=${notification.status} delivery=${delivered} message=${notification.message}`;
+      }
+      case "statusline": {
+        if (!command.command) {
+          const effectiveConfig = config ?? (await this.loadRuntimeConfig());
+          const statusLine = resolveOperatorCliStatusLineConfig(effectiveConfig);
+          return statusLine
+            ? `statusLine command=${statusLine.command}`
+            : "statusLine disabled";
+        }
+        if (command.command === "off") {
+          await setProjectStatusLineConfig(this.cwd, undefined);
+          return `Disabled status line in ${this.cwd}/.claude/settings.local.json`;
+        }
+        await setProjectStatusLineConfig(this.cwd, { type: "command", command: command.command });
+        return `Configured status line command=${command.command}`;
       }
       case "skills": {
         const promoted = await this.runtime.listPromotedSkills();
@@ -1165,6 +1184,8 @@ export function parseSlashCommand(input: string): OperatorCliSlashCommand | unde
       return parseSendCommand(tail);
     case "notify":
       return parseNotifyCommand(tail);
+    case "statusline":
+      return parseStatusLineCommand(tail);
     case "skills":
       return { kind: "skills" };
     case "run-skill":
@@ -1206,6 +1227,13 @@ function parseNotifyCommand(tail: string): OperatorCliSlashCommand {
   return status && message
     ? { kind: "notify", status, message }
     : { kind: "invalid", message: "Usage: /notify <status> <message>" };
+}
+
+function parseStatusLineCommand(tail: string): OperatorCliSlashCommand {
+  if (!tail) {
+    return { kind: "statusline" };
+  }
+  return { kind: "statusline", command: tail };
 }
 
 function parseWatchCommand(tail: string): OperatorCliSlashCommand {
