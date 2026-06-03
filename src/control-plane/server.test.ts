@@ -1806,7 +1806,11 @@ describe("OperatorControlPlaneServer", () => {
       });
       return new Response(JSON.stringify({ id: "msg_123", type: "message" }), {
         status: 200,
-        headers: { "content-type": "application/json" },
+        headers: {
+          "content-type": "application/json",
+          "request-id": "req_123",
+          "anthropic-ratelimit-requests-remaining": "42",
+        },
       });
     });
     const server = new OperatorControlPlaneServer({
@@ -1829,7 +1833,11 @@ describe("OperatorControlPlaneServer", () => {
       }),
     })).resolves.toMatchObject({
       status: 200,
-      headers: { "content-type": "application/json" },
+      headers: {
+        "content-type": "application/json",
+        "request-id": "req_123",
+        "anthropic-ratelimit-requests-remaining": "42",
+      },
       body: JSON.stringify({ id: "msg_123", type: "message" }),
     });
     expect(fetchImpl).toHaveBeenCalledTimes(1);
@@ -1850,7 +1858,11 @@ describe("OperatorControlPlaneServer", () => {
           },
         }), {
           status: 200,
-          headers: { "content-type": "text/event-stream" },
+          headers: {
+            "content-type": "text/event-stream",
+            "request-id": "req_stream_123",
+            "anthropic-request-id": "anth_req_stream_123",
+          },
         });
       }
       return new Response(JSON.stringify({ id: "msg_456", type: "message" }), {
@@ -1877,7 +1889,11 @@ describe("OperatorControlPlaneServer", () => {
       body: JSON.stringify({ model: "claude-sonnet-4-6", messages: [], max_tokens: 8, stream: true }),
     });
     expect(streamingResponse.status).toBe(200);
-    expect(streamingResponse.headers).toEqual({ "content-type": "text/event-stream" });
+    expect(streamingResponse.headers).toEqual({
+      "content-type": "text/event-stream",
+      "request-id": "req_stream_123",
+      "anthropic-request-id": "anth_req_stream_123",
+    });
     expect(streamingResponse.body).toBe("");
     expect(streamingResponse.bodyStream).toBeTruthy();
   });

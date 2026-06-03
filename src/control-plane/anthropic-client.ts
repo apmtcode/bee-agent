@@ -81,9 +81,7 @@ export async function forwardAnthropicMessagesRequest(params: {
   });
   return {
     status: response.status,
-    headers: {
-      "content-type": response.headers.get("content-type") ?? "application/json",
-    },
+    headers: copyAnthropicResponseHeaders(response, "application/json"),
     body: await response.text(),
   };
 }
@@ -102,11 +100,22 @@ export async function forwardAnthropicMessagesStreamRequest(params: {
   });
   return {
     status: response.status,
-    headers: {
-      "content-type": response.headers.get("content-type") ?? "text/event-stream",
-    },
+    headers: copyAnthropicResponseHeaders(response, "text/event-stream"),
     bodyStream: response.body,
   };
+}
+
+function copyAnthropicResponseHeaders(response: Response, defaultContentType: string): Record<string, string> {
+  const headers: Record<string, string> = {
+    "content-type": response.headers.get("content-type") ?? defaultContentType,
+  };
+  for (const name of ["request-id", "anthropic-request-id", "anthropic-organization-id", "anthropic-ratelimit-requests-limit", "anthropic-ratelimit-requests-remaining", "anthropic-ratelimit-requests-reset", "retry-after"]) {
+    const value = response.headers.get(name);
+    if (value) {
+      headers[name] = value;
+    }
+  }
+  return headers;
 }
 
 function readProcessEnv(name: string): string | undefined {

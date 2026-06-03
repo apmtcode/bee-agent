@@ -324,6 +324,7 @@ Current behavior in this tranche:
 - the control plane can now forward both non-streaming and SSE streaming `POST /v1/messages` requests through a minimal Anthropic client path
 - forwarded requests send Claude-style `x-api-key` auth and optional `Authorization: Bearer ...` when `ANTHROPIC_AUTH_TOKEN` is present
 - base URL resolution now honors `ANTHROPIC_BASE_URL`
+- non-streaming and streaming responses preserve key upstream transport metadata like `request-id`, Anthropic request IDs, selected rate-limit headers, and `retry-after`
 - streaming responses now pass through raw `text/event-stream` bodies instead of being rejected at the control-plane boundary
 - this tranche is intentionally narrow and still does not add retries, SSE event normalization, or broader provider routing
 

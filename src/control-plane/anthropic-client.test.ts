@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildAnthropicMessagesRequest,
+  forwardAnthropicMessagesRequest,
   forwardAnthropicMessagesStreamRequest,
   resolveAnthropicAuthConfig,
 } from "./anthropic-client.js";
@@ -43,6 +44,35 @@ describe("anthropic-client", () => {
     });
   });
 
+  it("preserves response metadata for non-streaming requests", async () => {
+    const response = await forwardAnthropicMessagesRequest({
+      body: JSON.stringify({ model: "claude-opus-4-7", stream: false }),
+      fetchImpl: async () => new Response(JSON.stringify({ id: "msg_1" }), {
+        status: 200,
+        headers: {
+          "content-type": "application/json",
+          "request-id": "req_123",
+          "anthropic-ratelimit-requests-remaining": "42",
+          "retry-after": "1",
+        },
+      }),
+      env: (name) => ({
+        ANTHROPIC_API_KEY: "meta-key",
+      })[name],
+    });
+
+    expect(response).toEqual({
+      status: 200,
+      headers: {
+        "content-type": "application/json",
+        "request-id": "req_123",
+        "anthropic-ratelimit-requests-remaining": "42",
+        "retry-after": "1",
+      },
+      body: JSON.stringify({ id: "msg_1" }),
+    });
+  });
+
   it("forwards streaming requests without consuming the SSE body", async () => {
     const stream = new ReadableStream<Uint8Array>({
       start(controller) {
@@ -58,7 +88,11 @@ describe("anthropic-client", () => {
       });
       return new Response(stream, {
         status: 200,
-        headers: { "content-type": "text/event-stream" },
+        headers: {
+          "content-type": "text/event-stream",
+          "request-id": "req_stream_123",
+          "anthropic-request-id": "anth_req_stream_123",
+        },
       });
     };
 
@@ -73,7 +107,11 @@ describe("anthropic-client", () => {
     });
 
     expect(response.status).toBe(200);
-    expect(response.headers).toEqual({ "content-type": "text/event-stream" });
+    expect(response.headers).toEqual({
+      "content-type": "text/event-stream",
+      "request-id": "req_stream_123",
+      "anthropic-request-id": "anth_req_stream_123",
+    });
     expect(response.bodyStream).toBe(stream);
   });
 
