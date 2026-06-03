@@ -1816,13 +1816,24 @@ describe("OperatorControlPlaneServer", () => {
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
-  it("falls back to ANTHROPIC_AUTH_TOKEN for x-api-key and rejects streaming /v1/messages requests", async () => {
+  it("falls back to ANTHROPIC_AUTH_TOKEN for x-api-key and forwards streaming /v1/messages requests", async () => {
     const runtime = new StandaloneOperatorRuntime({ rootDir: await makeTempDir() });
     const fetchImpl = vi.fn<typeof fetch>(async (_input, init) => {
       expect(init?.headers).toMatchObject({
         "x-api-key": "token-only",
         authorization: "Bearer token-only",
       });
+      if (typeof init?.body === "string" && JSON.parse(init.body).stream === true) {
+        return new Response(new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode("event: message_start\n\n"));
+            controller.close();
+          },
+        }), {
+          status: 200,
+          headers: { "content-type": "text/event-stream" },
+        });
+      }
       return new Response(JSON.stringify({ id: "msg_456", type: "message" }), {
         status: 200,
         headers: { "content-type": "application/json" },
@@ -1841,14 +1852,15 @@ describe("OperatorControlPlaneServer", () => {
       path: "/v1/messages",
       body: JSON.stringify({ model: "claude-sonnet-4-6", messages: [], max_tokens: 8 }),
     })).resolves.toMatchObject({ status: 200 });
-    await expect(server.handleHttp({
+    const streamingResponse = await server.handleHttp({
       method: "POST",
       path: "/v1/messages",
       body: JSON.stringify({ model: "claude-sonnet-4-6", messages: [], max_tokens: 8, stream: true }),
-    })).resolves.toMatchObject({
-      status: 400,
-      body: JSON.stringify({ error: { type: "invalid_request", message: "Streaming is not supported in this tranche." } }),
     });
+    expect(streamingResponse.status).toBe(200);
+    expect(streamingResponse.headers).toEqual({ "content-type": "text/event-stream" });
+    expect(streamingResponse.body).toBe("");
+    expect(streamingResponse.bodyStream).toBeTruthy();
   });
 
   it("handles cron methods", async () => {

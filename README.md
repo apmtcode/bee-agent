@@ -320,10 +320,11 @@ Current subagent model behavior in this tranche:
 Operator now also has a first narrow Anthropic-compatible HTTP seam alongside the RPC control plane.
 
 Current behavior in this tranche:
-- the control plane can now forward non-streaming `POST /v1/messages` requests through a minimal Anthropic client path
+- the control plane can now forward both non-streaming and SSE streaming `POST /v1/messages` requests through a minimal Anthropic client path
 - forwarded requests send Claude-style `x-api-key` auth and optional `Authorization: Bearer ...` when `ANTHROPIC_AUTH_TOKEN` is present
 - base URL resolution now honors `ANTHROPIC_BASE_URL`
-- this tranche is intentionally narrow and only covers non-streaming request forwarding, not SSE streaming, retries, or broader provider routing
+- streaming responses now pass through raw `text/event-stream` bodies instead of being rejected at the control-plane boundary
+- this tranche is intentionally narrow and still does not add retries, SSE event normalization, or broader provider routing
 
 ## Current gaps to parity
 

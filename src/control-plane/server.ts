@@ -1,7 +1,7 @@
 import type { ApprovalDecision, ApprovalRequest } from "./approvals.js";
 import {
   forwardAnthropicMessagesRequest,
-  type AnthropicMessageForwardResponse,
+  forwardAnthropicMessagesStreamRequest,
   type EnvReader,
 } from "./anthropic-client.js";
 import { OperatorCronService } from "./cron-service.js";
@@ -69,6 +69,7 @@ export type ControlPlaneHttpResponse = {
   status: number;
   headers?: Record<string, string>;
   body: string;
+  bodyStream?: ReadableStream<Uint8Array> | null;
 };
 
 export type ControlPlaneServerOptions = {
@@ -457,10 +458,16 @@ export class OperatorControlPlaneServer {
       }
       const parsed = JSON.parse(request.body) as Record<string, unknown>;
       if (parsed.stream === true) {
+        const forwarded = await forwardAnthropicMessagesStreamRequest({
+          body: JSON.stringify(parsed),
+          fetchImpl: this.fetchImpl,
+          env: this.env,
+        });
         return {
-          status: 400,
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ error: { type: "invalid_request", message: "Streaming is not supported in this tranche." } }),
+          status: forwarded.status,
+          headers: forwarded.headers,
+          body: "",
+          bodyStream: forwarded.bodyStream,
         };
       }
       const forwarded = await forwardAnthropicMessagesRequest({

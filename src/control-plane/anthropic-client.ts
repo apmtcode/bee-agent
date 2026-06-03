@@ -21,6 +21,12 @@ export type AnthropicMessageForwardResponse = {
   body: string;
 };
 
+export type AnthropicMessageStreamForwardResponse = {
+  status: number;
+  headers: Record<string, string>;
+  bodyStream: ReadableStream<Uint8Array> | null;
+};
+
 function readNonEmptyEnv(env: EnvReader, names: string[]): string | undefined {
   for (const name of names) {
     const value = env(name)?.trim();
@@ -79,6 +85,27 @@ export async function forwardAnthropicMessagesRequest(params: {
       "content-type": response.headers.get("content-type") ?? "application/json",
     },
     body: await response.text(),
+  };
+}
+
+export async function forwardAnthropicMessagesStreamRequest(params: {
+  body: string;
+  fetchImpl?: typeof fetch;
+  env?: EnvReader;
+}): Promise<AnthropicMessageStreamForwardResponse> {
+  const request = buildAnthropicMessagesRequest(params.body, resolveAnthropicAuthConfig(params.env));
+  const response = await (params.fetchImpl ?? fetch)(request.url, {
+    method: "POST",
+    headers: request.headers,
+    body: request.body,
+    signal: AbortSignal.timeout(30_000),
+  });
+  return {
+    status: response.status,
+    headers: {
+      "content-type": response.headers.get("content-type") ?? "text/event-stream",
+    },
+    bodyStream: response.body,
   };
 }
 

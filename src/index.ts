@@ -103,9 +103,11 @@ export {
   resolveAnthropicAuthConfig,
   buildAnthropicMessagesRequest,
   forwardAnthropicMessagesRequest,
+  forwardAnthropicMessagesStreamRequest,
   type AnthropicAuthConfig,
   type AnthropicHttpRequest,
   type AnthropicMessageForwardResponse,
+  type AnthropicMessageStreamForwardResponse,
   type EnvReader,
 } from "./control-plane/anthropic-client.js";
 export {
