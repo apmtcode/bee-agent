@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import process from "node:process";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 import { OperatorCliApp, parseSlashCommand } from "./app.js";
@@ -539,6 +540,24 @@ describe("OperatorCliApp", () => {
 
     const settings = JSON.parse(await fs.readFile(path.join(rootDir, ".claude", "settings.local.json"), "utf8")) as Record<string, unknown>;
     expect(settings).not.toHaveProperty("statusLine");
+  });
+
+  it("updates the live status line controller when slash commands change config", async () => {
+    const rootDir = await makeTempDir();
+    const stdout = process.stdout as typeof process.stdout & { columns?: number };
+    stdout.isTTY = true;
+    stdout.columns = 80;
+    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25", stdout });
+    const session = await app.runtime.startSession({ title: "statusline live cli", cwd: rootDir, agentId: "operator-cli" });
+
+    await app["configureStatusLine"](undefined, session.id);
+    expect(app["statusLineController"]?.currentLine).toBeUndefined();
+
+    await app.dispatchSlashCommand({ kind: "statusline", command: "printf live-status" }, session.id);
+    expect(app["statusLineController"]?.currentLine).toBe("live-status");
+
+    await app.dispatchSlashCommand({ kind: "statusline", command: "off" }, session.id);
+    expect(app["statusLineController"]?.currentLine).toBeUndefined();
   });
 
   it("enters keeps and removes git worktrees", async () => {

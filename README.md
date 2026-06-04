@@ -157,14 +157,16 @@ Current plan behavior in this tranche:
 
 ## Status line setup
 
-Operator now also has a first narrow status-line configuration surface for Claude Code-style local session visibility.
+Operator now also has a first narrow live status-line surface for Claude Code-style local session visibility.
 
 Current status-line behavior in this tranche:
 - the CLI exposes `/statusline [command|off]` to inspect, set, or remove a local status-line command
 - status-line config is stored in `<cwd>/.claude/settings.local.json` under `statusLine`
 - the supported shape mirrors the narrow Claude Code command-backed form: `{ "type": "command", "command": "..." }`
-- exported helpers can resolve the merged `statusLine` command config or persist a project-local override
-- this tranche remains intentionally narrow and does not yet execute the command, stream session JSON to it, or render a live terminal status line
+- the interactive CLI executes the configured command in a fresh shell on a short refresh loop when stdout is a TTY
+- the command receives compact session JSON on stdin, including cwd, date, permission mode, session status, pending approvals, task counts, and active run/task summaries when present
+- command output is normalized to a single rendered line, bounded by timeout and output-size limits, and ignored on failure
+- rendering remains intentionally narrow: one prompt-safe line in the local REPL only, without multiline widgets, long-lived status subprocesses, or a full TUI rewrite
 
 ## Worktree entry and exit
 

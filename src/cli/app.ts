@@ -2,7 +2,9 @@ import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
+import { clearLine, clearScreenDown, cursorTo } from "node:readline";
 import readline from "node:readline/promises";
+import type { Interface as ReadlineInterface } from "node:readline/promises";
 import { promisify } from "node:util";
 import { subscribeRuntimeEvents } from "../control-plane/subscriptions.js";
 import { OperatorControlPlaneServer } from "../control-plane/server.js";
@@ -19,6 +21,11 @@ import {
 } from "./config.js";
 import { runOperatorCliConversationTurn } from "./conversation.js";
 import { discoverPromptContext, type OperatorCliPromptContext } from "./prompt.js";
+import {
+  buildOperatorCliStatusLineSnapshot,
+  formatOperatorCliPrompt,
+  OperatorCliStatusLineController,
+} from "./status-line.js";
 import { FileOperatorCliTeamStore } from "./team-store.js";
 
 export type OperatorCliSlashCommand =
@@ -128,6 +135,8 @@ export class OperatorCliApp {
   private activeSessionId?: string;
   private readonly approvedCommandFingerprints = new Set<string>();
   private worktreeSession?: OperatorCliWorktreeSession;
+  private statusLineController?: OperatorCliStatusLineController;
+  private activeReader?: ReadlineInterface;
   readonly teams: FileOperatorCliTeamStore;
 
   constructor(private readonly options: OperatorCliAppOptions) {
@@ -156,24 +165,42 @@ export class OperatorCliApp {
     const promptContext = await this.loadPromptContext(config);
     const session = await this.runtime.startSession({ title: "Operator CLI", cwd: this.cwd, agentId: "operator-cli" });
     this.activeSessionId = session.id;
-    this.stdout.write("Standalone Operator CLI\n");
-    this.stdout.write(`Session: ${session.id}\n`);
-    this.stdout.write(`Loaded config files: ${config.loadedEntries.length}\n`);
-    this.stdout.write(`Loaded instruction files: ${promptContext.project.instructionFiles.length}\n`);
-    this.stdout.write("Type /help for commands. Ctrl+D exits.\n");
 
-    const reader = readline.createInterface({ input: this.stdin, output: this.stdout });
+    this.writeCliOutput("Standalone Operator CLI");
+    this.writeCliOutput(`Session: ${session.id}`);
+    this.writeCliOutput(`Loaded config files: ${config.loadedEntries.length}`);
+    this.writeCliOutput(`Loaded instruction files: ${promptContext.project.instructionFiles.length}`);
+    this.writeCliOutput("Type /help for commands. Ctrl+D exits.");
+
+    const reader = readline.createInterface({
+      input: this.stdin,
+      output: this.stdout,
+      prompt: formatOperatorCliPrompt(undefined),
+    });
+    this.activeReader = reader;
+
+    await this.configureStatusLine(config, session.id);
+    this.renderPrompt();
     try {
       while (true) {
-        const line = await reader.question("operator> ");
+        const line = await reader.question("");
         if (!line.trim()) {
+          this.renderPrompt();
           continue;
         }
-        this.stdout.write(`${await this.handleInput(line)}\n`);
+        const output = await this.handleInput(line);
+        this.writeCliOutput(output);
+        await this.configureStatusLine(await this.loadRuntimeConfig());
+        await this.refreshStatusLine();
+        this.renderPrompt();
       }
     } catch {
+      this.clearInteractivePrompt();
       this.stdout.write("\n");
     } finally {
+      this.activeReader = undefined;
+      await this.statusLineController?.stop();
+      this.statusLineController = undefined;
       reader.close();
     }
   }
@@ -709,9 +736,12 @@ export class OperatorCliApp {
         }
         if (command.command === "off") {
           await setProjectStatusLineConfig(this.cwd, undefined);
+          await this.configureStatusLine(undefined, this.activeSessionId);
           return `Disabled status line in ${this.cwd}/.claude/settings.local.json`;
         }
-        await setProjectStatusLineConfig(this.cwd, { type: "command", command: command.command });
+        const nextStatusLine = { type: "command" as const, command: command.command };
+        await setProjectStatusLineConfig(this.cwd, nextStatusLine);
+        await this.configureStatusLine({ merged: { statusLine: nextStatusLine }, loadedEntries: [] }, this.activeSessionId);
         return `Configured status line command=${command.command}`;
       }
       case "worktree": {
@@ -1111,7 +1141,73 @@ export class OperatorCliApp {
   }
 
   writeError(message: string): void {
+    this.clearInteractivePrompt();
     this.stderr.write(`${message}\n`);
+    this.renderPrompt();
+  }
+
+  private async configureStatusLine(config: OperatorCliRuntimeConfig | undefined, sessionId?: string): Promise<void> {
+    const activeSessionId = sessionId ?? this.activeSessionId;
+    const statusLineConfig = resolveOperatorCliStatusLineConfig(config);
+    if (!activeSessionId) {
+      await this.statusLineController?.updateConfig(statusLineConfig);
+      return;
+    }
+    const buildSnapshot = async () => buildOperatorCliStatusLineSnapshot({
+      runtime: this.runtime,
+      sessionId: activeSessionId,
+      cwd: this.cwd,
+      currentDate: this.currentDate,
+      config,
+    });
+    if (!this.statusLineController) {
+      this.statusLineController = new OperatorCliStatusLineController({
+        config: statusLineConfig,
+        stdout: this.stdout as NodeJS.WritableStream & { isTTY?: boolean; columns?: number },
+        buildSnapshot,
+        onRenderedLineChange: () => {
+          this.renderPrompt();
+        },
+      });
+      await this.statusLineController.start();
+      return;
+    }
+    await this.statusLineController.updateConfig(statusLineConfig);
+  }
+
+  private async refreshStatusLine(): Promise<void> {
+    await this.statusLineController?.refresh();
+  }
+
+  private writeCliOutput(message: string): void {
+    this.clearInteractivePrompt();
+    this.stdout.write(`${message}\n`);
+  }
+
+  private clearInteractivePrompt(): void {
+    if (!this.activeReader || !this.isInteractiveTTY()) {
+      return;
+    }
+    this.activeReader.pause();
+    cursorTo(this.stdout, 0);
+    clearLine(this.stdout, 0);
+    clearScreenDown(this.stdout);
+  }
+
+  private renderPrompt(): void {
+    if (!this.activeReader) {
+      return;
+    }
+    const prompt = formatOperatorCliPrompt(this.statusLineController?.currentLine);
+    this.activeReader.setPrompt(prompt);
+    if (!this.isInteractiveTTY()) {
+      return;
+    }
+    this.activeReader.prompt(true);
+  }
+
+  private isInteractiveTTY(): boolean {
+    return Boolean((this.stdout as NodeJS.WritableStream & { isTTY?: boolean }).isTTY);
   }
 
   private async enterWorktree(name?: string): Promise<string> {
