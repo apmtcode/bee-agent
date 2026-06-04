@@ -125,6 +125,9 @@ function requiresSessionBinding(method: string): boolean {
     method === "background.tasks.list" ||
     method === "background.tasks.active" ||
     method === "background.tasks.recoverAll" ||
+    method === "monitors.start" ||
+    method === "monitors.list" ||
+    method === "monitors.active" ||
     method === "tasks.create" ||
     method === "tasks.list" ||
     method === "plans.get" ||

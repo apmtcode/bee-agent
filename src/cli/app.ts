@@ -83,6 +83,12 @@ export type OperatorCliSlashCommand =
   | { kind: "background-cancel"; taskId: string }
   | { kind: "task-stop"; taskId: string }
   | { kind: "background" }
+  | { kind: "monitor-list" }
+  | { kind: "monitor-start"; title: string; command: string }
+  | { kind: "monitor-view"; taskId: string; lines?: number }
+  | { kind: "monitor-sync"; taskId: string }
+  | { kind: "monitor-stop"; taskId: string }
+  | { kind: "monitor" }
   | { kind: "training" }
   | { kind: "cron-list" }
   | { kind: "cron-create"; cron: string; prompt: string; delivery?: { onSuccess?: string[]; onFailure?: string[] } }
@@ -286,6 +292,11 @@ export class OperatorCliApp {
           "  /background sync <taskId>",
           "  /background cancel <taskId>",
           "  /task-stop <taskId>",
+          "  /monitor",
+          "  /monitor start <title> -- <command>",
+          "  /monitor view <taskId> [lines]",
+          "  /monitor sync <taskId>",
+          "  /monitor stop <taskId>",
           "  /training",
           "  /cron",
           "  /cron create <cronExpr> <prompt>",
@@ -826,6 +837,17 @@ export class OperatorCliApp {
           ? "No background tasks."
           : tasks.map((task) => `${task.id} ${task.status} ${task.title}`).join("\n");
       }
+      case "monitor":
+      case "monitor-list": {
+        const activeSessionId = this.requireActiveSessionId(sessionId);
+        const response = await this.server.handle({ method: "monitors.list", params: { sessionId: activeSessionId } });
+        if (!response.ok) {
+          return response.error.message;
+        }
+        return response.result.length === 0
+          ? "No monitors."
+          : response.result.map((task) => `${task.id} ${task.status} ${task.title}`).join("\n");
+      }
       case "background-start": {
         const activeSessionId = this.requireActiveSessionId(sessionId);
         const effectiveConfig = config ?? (await this.loadRuntimeConfig());
@@ -865,6 +887,51 @@ export class OperatorCliApp {
           .filter(Boolean)
           .join("\n");
       }
+      case "monitor-start": {
+        const activeSessionId = this.requireActiveSessionId(sessionId);
+        const effectiveConfig = config ?? (await this.loadRuntimeConfig());
+        const executionConfig = resolveOperatorCliExecutionConfig(effectiveConfig);
+        const authorization = await this.runtime.authorizeCommandExecution({
+          sessionId: activeSessionId,
+          cwd: this.cwd,
+          command: command.command,
+          title: command.title,
+          kind: "background.start",
+          source: "cli",
+          executionConfig,
+          approvedFingerprints: this.approvedCommandFingerprints,
+        });
+        if (!authorization.allowed) {
+          return authorization.message;
+        }
+        const response = await this.server.handle({
+          method: "monitors.start",
+          params: {
+            sessionId: activeSessionId,
+            title: authorization.title ?? command.title,
+            command: authorization.command,
+            cwd: this.cwd,
+          },
+        });
+        if (!response.ok) {
+          return response.error.message;
+        }
+        const postHookResults = await this.runtime.runPostCommandHooks({
+          sessionId: activeSessionId,
+          cwd: this.cwd,
+          command: authorization.command,
+          ...(authorization.title ? { title: authorization.title } : {}),
+          kind: "background.start",
+          source: "cli",
+          executionConfig,
+        });
+        return [
+          `Started monitor ${response.result.id} (${response.result.status}) ${response.result.title}`,
+          ...postHookResults.map((result) => formatHookResult(result)),
+        ]
+          .filter(Boolean)
+          .join("\n");
+      }
       case "background-view": {
         const task = await this.runtime.syncBackgroundTask(command.taskId);
         if (!task) {
@@ -876,13 +943,41 @@ export class OperatorCliApp {
           output?.output?.trim() ? output.output : "<no output>",
         ].join("\n");
       }
+      case "monitor-view": {
+        const response = await this.server.handle({ method: "monitors.sync", params: { taskId: command.taskId } });
+        if (!response.ok) {
+          return response.error.message;
+        }
+        const outputResponse = await this.server.handle({ method: "monitors.output", params: { taskId: command.taskId, lineLimit: command.lines ?? 50 } });
+        if (!outputResponse.ok) {
+          return outputResponse.error.message;
+        }
+        return [
+          `${response.result.id} ${response.result.status} ${response.result.title}`,
+          outputResponse.result.output.trim() ? outputResponse.result.output : "<no output>",
+        ].join("\n");
+      }
       case "background-sync": {
         const task = await this.runtime.syncBackgroundTask(command.taskId);
         return task ? `${task.id} ${task.status} ${task.title}` : `Unknown background task: ${command.taskId}`;
       }
+      case "monitor-sync": {
+        const response = await this.server.handle({ method: "monitors.sync", params: { taskId: command.taskId } });
+        if (!response.ok) {
+          return response.error.message;
+        }
+        return `${response.result.id} ${response.result.status} ${response.result.title}`;
+      }
       case "background-cancel": {
         const task = await this.runtime.cancelBackgroundTask(command.taskId);
         return task ? `Cancelled background task ${task.id}.` : `Unknown background task: ${command.taskId}`;
+      }
+      case "monitor-stop": {
+        const response = await this.server.handle({ method: "monitors.stop", params: { taskId: command.taskId } });
+        if (!response.ok) {
+          return response.error.message;
+        }
+        return `Stopped monitor ${response.result.id}.`;
       }
       case "task-stop": {
         const response = await this.server.handle({ method: "tasks.stop", params: { taskId: command.taskId } });
@@ -1561,6 +1656,8 @@ export function parseSlashCommand(input: string): OperatorCliSlashCommand | unde
       return parseWatchCommand(tail);
     case "background":
       return parseBackgroundCommand(tail);
+    case "monitor":
+      return parseMonitorCommand(tail);
     case "training":
       return { kind: "training" };
     case "cron":
@@ -1940,6 +2037,60 @@ function parseBackgroundCommand(tail: string): OperatorCliSlashCommand {
     return taskId ? { kind: "background-cancel", taskId } : { kind: "invalid", message: "Usage: /background cancel <taskId>" };
   }
   return { kind: "invalid", message: "Usage: /background [start|view|sync|cancel] ..." };
+}
+
+function parseMonitorCommand(tail: string): OperatorCliSlashCommand {
+  if (!tail) {
+    return { kind: "monitor-list" };
+  }
+  if (tail === "list") {
+    return { kind: "monitor-list" };
+  }
+  if (tail === "view") {
+    return { kind: "invalid", message: "Usage: /monitor view <taskId> [lines]" };
+  }
+  if (tail === "sync") {
+    return { kind: "invalid", message: "Usage: /monitor sync <taskId>" };
+  }
+  if (tail === "stop") {
+    return { kind: "invalid", message: "Usage: /monitor stop <taskId>" };
+  }
+  if (tail.startsWith("start ")) {
+    const rest = tail.slice("start ".length);
+    const delimiter = " -- ";
+    const delimiterIndex = rest.indexOf(delimiter);
+    if (delimiterIndex < 0) {
+      return { kind: "invalid", message: "Usage: /monitor start <title> -- <command>" };
+    }
+    const title = rest.slice(0, delimiterIndex).trim();
+    const command = rest.slice(delimiterIndex + delimiter.length).trim();
+    if (!title || !command) {
+      return { kind: "invalid", message: "Usage: /monitor start <title> -- <command>" };
+    }
+    return { kind: "monitor-start", title, command };
+  }
+  if (tail.startsWith("view ")) {
+    const [taskId, lines] = tail.slice("view ".length).trim().split(/\s+/, 2);
+    if (!taskId) {
+      return { kind: "invalid", message: "Usage: /monitor view <taskId> [lines]" };
+    }
+    if (!lines) {
+      return { kind: "monitor-view", taskId };
+    }
+    const parsedLines = parseOptionalPositiveInteger(lines);
+    return typeof parsedLines === "number"
+      ? { kind: "monitor-view", taskId, lines: parsedLines }
+      : { kind: "invalid", message: "Usage: /monitor view <taskId> [lines]" };
+  }
+  if (tail.startsWith("sync ")) {
+    const taskId = tail.slice("sync ".length).trim();
+    return taskId ? { kind: "monitor-sync", taskId } : { kind: "invalid", message: "Usage: /monitor sync <taskId>" };
+  }
+  if (tail.startsWith("stop ")) {
+    const taskId = tail.slice("stop ".length).trim();
+    return taskId ? { kind: "monitor-stop", taskId } : { kind: "invalid", message: "Usage: /monitor stop <taskId>" };
+  }
+  return { kind: "invalid", message: "Usage: /monitor [start|view|sync|stop] ..." };
 }
 
 function parseTaskUpdateCommand(tail: string): OperatorCliSlashCommand {

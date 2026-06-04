@@ -1,7 +1,7 @@
 import type { OperatorEvent, OperatorEventFilter } from "../kernel/event-bus.js";
 import type { OperatorRunProgressEvent, StandaloneOperatorRuntime } from "../orchestrator/operator-runtime.js";
 
-export type RuntimeEventFamily = "run" | "approval" | "background-task" | "skill" | "subagent" | "task" | "plan" | "message" | "notification";
+export type RuntimeEventFamily = "run" | "approval" | "background-task" | "monitor" | "skill" | "subagent" | "task" | "plan" | "message" | "notification";
 
 export type RuntimeEventSubscriptionOptions = {
   replay?: boolean;
@@ -30,7 +30,7 @@ export function buildRuntimeEventFilter(options: RuntimeEventSubscriptionOptions
     filters.push((event) => getEventRunId(event) === options.runId);
   }
   if (options.family) {
-    filters.push((event) => matchesFamily(event.type, options.family ?? "run"));
+    filters.push((event) => matchesFamily(event, options.family ?? "run"));
   }
   if (filters.length === 0) {
     return undefined;
@@ -38,7 +38,8 @@ export function buildRuntimeEventFilter(options: RuntimeEventSubscriptionOptions
   return (event) => filters.every((filter) => filter(event));
 }
 
-function matchesFamily(type: string, family: RuntimeEventFamily): boolean {
+function matchesFamily(event: OperatorEvent, family: RuntimeEventFamily): boolean {
+  const type = event.type;
   if (family === "run") {
     return type === "run.started" || type === "run.updated" || type === "run.progress";
   }
@@ -47,6 +48,9 @@ function matchesFamily(type: string, family: RuntimeEventFamily): boolean {
   }
   if (family === "background-task") {
     return type.startsWith("background-task.");
+  }
+  if (family === "monitor") {
+    return type.startsWith("background-task.") && getBackgroundTaskKind(event) === "monitor";
   }
   if (family === "skill") {
     return type.startsWith("skill.");
@@ -64,6 +68,15 @@ function matchesFamily(type: string, family: RuntimeEventFamily): boolean {
     return type.startsWith("notification.");
   }
   return type.startsWith("subagent.");
+}
+
+function getBackgroundTaskKind(event: OperatorEvent): string | undefined {
+  const payload = event.payload;
+  if (!payload || typeof payload !== "object") {
+    return undefined;
+  }
+  const kind = (payload as { kind?: unknown }).kind;
+  return typeof kind === "string" ? kind : undefined;
 }
 
 function getEventSessionIds(event: OperatorEvent): string[] {

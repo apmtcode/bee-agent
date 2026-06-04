@@ -1175,6 +1175,17 @@ export class OperatorControlPlaneServer {
               metadata: getOptionalRecord(request.params, "metadata"),
             }),
           );
+        case "monitors.start":
+          return ok(
+            await this.options.runtime.startBackgroundTask({
+              sessionId: getOptionalString(request.params, "sessionId"),
+              title: getString(request.params, "title"),
+              command: getString(request.params, "command"),
+              cwd: getOptionalString(request.params, "cwd"),
+              kind: "monitor",
+              metadata: getOptionalRecord(request.params, "metadata"),
+            }),
+          );
         case "background.tasks.get": {
           const taskId = getString(request.params, "taskId");
           const task = await this.options.runtime.getBackgroundTask(taskId);
@@ -1182,21 +1193,48 @@ export class OperatorControlPlaneServer {
         }
         case "background.tasks.list":
           return ok(await this.options.runtime.listBackgroundTasks(getOptionalString(request.params, "sessionId")));
+        case "monitors.list":
+          return ok((await this.options.runtime.listBackgroundTasks(getOptionalString(request.params, "sessionId")))
+            .filter((task) => task.kind === "monitor"));
         case "background.tasks.active": {
           const sessionId = getOptionalString(request.params, "sessionId");
           const task = await this.options.runtime.getActiveBackgroundTask(sessionId);
           return task ? ok(task) : notFound(`no active background task${sessionId ? ` for session: ${sessionId}` : ""}`);
+        }
+        case "monitors.active": {
+          const sessionId = getOptionalString(request.params, "sessionId");
+          const task = [...await this.options.runtime.listBackgroundTasks(sessionId)]
+            .reverse()
+            .find((item) => item.kind === "monitor" && (item.status === "running" || item.status === "planned"));
+          return task ? ok(task) : notFound(`no active monitor${sessionId ? ` for session: ${sessionId}` : ""}`);
         }
         case "background.tasks.sync": {
           const taskId = getString(request.params, "taskId");
           const task = await this.options.runtime.syncBackgroundTask(taskId);
           return task ? ok(task) : notFound(`unknown background task: ${taskId}`);
         }
+        case "monitors.sync": {
+          const taskId = getString(request.params, "taskId");
+          const task = await this.options.runtime.syncBackgroundTask(taskId);
+          if (!task || task.kind !== "monitor") {
+            return notFound(`unknown monitor: ${taskId}`);
+          }
+          return ok(task);
+        }
         case "background.tasks.cancel":
         case "tasks.stop": {
           const taskId = getString(request.params, "taskId");
           const task = await this.options.runtime.cancelBackgroundTask(taskId);
           return task ? ok(task) : notFound(`unknown background task: ${taskId}`);
+        }
+        case "monitors.stop": {
+          const taskId = getString(request.params, "taskId");
+          const existing = await this.options.runtime.getBackgroundTask(taskId);
+          if (!existing || existing.kind !== "monitor") {
+            return notFound(`unknown monitor: ${taskId}`);
+          }
+          const task = await this.options.runtime.cancelBackgroundTask(taskId);
+          return task ? ok(task) : notFound(`unknown monitor: ${taskId}`);
         }
         case "background.tasks.state": {
           const taskId = getString(request.params, "taskId");
@@ -1219,6 +1257,15 @@ export class OperatorControlPlaneServer {
           const taskId = getString(request.params, "taskId");
           const output = await this.options.runtime.getBackgroundTaskOutput(taskId, getOptionalNumber(request.params, "lineLimit"));
           return output ? ok(output) : notFound(`unknown background task: ${taskId}`);
+        }
+        case "monitors.output": {
+          const taskId = getString(request.params, "taskId");
+          const task = await this.options.runtime.getBackgroundTask(taskId);
+          if (!task || task.kind !== "monitor") {
+            return notFound(`unknown monitor: ${taskId}`);
+          }
+          const output = await this.options.runtime.getBackgroundTaskOutput(taskId, getOptionalNumber(request.params, "lineLimit"));
+          return output ? ok(output) : notFound(`unknown monitor: ${taskId}`);
         }
         case "training.exports.create":
           return ok(
@@ -2035,7 +2082,7 @@ function getOptionalRuntimeEventFamily(
   if (value == null) {
     return undefined;
   }
-  if (value === "run" || value === "approval" || value === "background-task" || value === "skill" || value === "subagent" || value === "task" || value === "plan" || value === "message" || value === "notification") {
+  if (value === "run" || value === "approval" || value === "background-task" || value === "monitor" || value === "skill" || value === "subagent" || value === "task" || value === "plan" || value === "message" || value === "notification") {
     return value;
   }
   throw new Error(`Invalid runtime event family: ${key}`);

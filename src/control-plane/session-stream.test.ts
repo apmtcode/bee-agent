@@ -275,6 +275,93 @@ describe("OperatorControlPlaneSessionStream", () => {
     ]);
   });
 
+  it("binds monitor requests and streams monitor events for a bootstrapped session", async () => {
+    const runtime = new StandaloneOperatorRuntime({
+      rootDir: await makeTempDir(),
+      backgroundTaskIsProcessRunning: () => false,
+    });
+    const server = new OperatorControlPlaneServer({ runtime });
+    const stream = new OperatorControlPlaneSessionStream(server);
+
+    const bootstrapped = await stream.bootstrap({ title: "Monitor session", family: "monitor" });
+    expect(bootstrapped.created).toBe(true);
+    expect(bootstrapped.events).toEqual([]);
+
+    const started = await stream.request<{
+      id: string;
+      sessionId: string;
+      title: string;
+      kind: string;
+      status: string;
+    }>({
+      method: "monitors.start",
+      params: { title: "Watch logs", command: "printf monitor-line" },
+    });
+    expect(started.ok).toBe(true);
+    if (!started.ok) {
+      throw new Error("expected created monitor");
+    }
+    expect(started.result).toMatchObject({
+      sessionId: bootstrapped.session.id,
+      title: "Watch logs",
+      kind: "monitor",
+      status: "running",
+    });
+
+    const listed = await stream.request<Array<{ id: string; sessionId: string; title: string; kind: string }>>({
+      method: "monitors.list",
+      params: {},
+    });
+    expect(listed.ok).toBe(true);
+    if (!listed.ok) {
+      throw new Error("expected listed monitors");
+    }
+    expect(listed.result).toEqual([
+      expect.objectContaining({
+        id: started.result.id,
+        sessionId: bootstrapped.session.id,
+        title: "Watch logs",
+        kind: "monitor",
+      }),
+    ]);
+
+    const active = await stream.request<{ id: string; sessionId: string; title: string; kind: string; status: string }>({
+      method: "monitors.active",
+      params: {},
+    });
+    expect(active.ok).toBe(true);
+    if (!active.ok) {
+      throw new Error("expected active monitor");
+    }
+    expect(active.result).toMatchObject({
+      id: started.result.id,
+      sessionId: bootstrapped.session.id,
+      kind: "monitor",
+      status: "running",
+    });
+
+    const eventIterator = stream.events({ family: "monitor" })[Symbol.asyncIterator]();
+    await runtime.syncBackgroundTask(started.result.id);
+    const nextEvent = await eventIterator.next();
+    expect(nextEvent.done).toBe(false);
+    expect(nextEvent.value?.type).toBe("background-task.updated");
+    expect(nextEvent.value?.payload).toMatchObject({ id: started.result.id, sessionId: bootstrapped.session.id, kind: "monitor" });
+    await eventIterator.return?.();
+
+    const replay = await stream.request<Array<{ type: string; payload?: { id?: string; sessionId?: string; kind?: string } }>>({
+      method: "runs.events",
+      params: { family: "monitor" },
+    });
+    expect(replay.ok).toBe(true);
+    if (!replay.ok) {
+      throw new Error("expected monitor replay");
+    }
+    expect(replay.result).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: "background-task.started", payload: expect.objectContaining({ id: started.result.id, sessionId: bootstrapped.session.id, kind: "monitor" }) }),
+      expect.objectContaining({ type: "background-task.updated", payload: expect.objectContaining({ id: started.result.id, sessionId: bootstrapped.session.id, kind: "monitor" }) }),
+    ]));
+  });
+
   it("binds plan requests and streams plan events for a bootstrapped session", async () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),

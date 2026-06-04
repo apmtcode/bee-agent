@@ -127,6 +127,17 @@ describe("parseSlashCommand", () => {
     expect(parseSlashCommand("/background view task-1 25")).toEqual({ kind: "background-view", taskId: "task-1", lines: 25 });
     expect(parseSlashCommand("/background sync task-1")).toEqual({ kind: "background-sync", taskId: "task-1" });
     expect(parseSlashCommand("/background cancel task-1")).toEqual({ kind: "background-cancel", taskId: "task-1" });
+    expect(parseSlashCommand("/monitor")).toEqual({ kind: "monitor-list" });
+    expect(parseSlashCommand("/monitor list")).toEqual({ kind: "monitor-list" });
+    expect(parseSlashCommand("/monitor start smoke -- printf ok")).toEqual({
+      kind: "monitor-start",
+      title: "smoke",
+      command: "printf ok",
+    });
+    expect(parseSlashCommand("/monitor view task-1")).toEqual({ kind: "monitor-view", taskId: "task-1" });
+    expect(parseSlashCommand("/monitor view task-1 25")).toEqual({ kind: "monitor-view", taskId: "task-1", lines: 25 });
+    expect(parseSlashCommand("/monitor sync task-1")).toEqual({ kind: "monitor-sync", taskId: "task-1" });
+    expect(parseSlashCommand("/monitor stop task-1")).toEqual({ kind: "monitor-stop", taskId: "task-1" });
     expect(parseSlashCommand("/watch active")).toEqual({ kind: "watch-active" });
     expect(parseSlashCommand("/watch run run-1")).toEqual({ kind: "watch-run", runId: "run-1" });
     expect(parseSlashCommand("/watch task task-1")).toEqual({ kind: "watch-task", taskId: "task-1" });
@@ -163,6 +174,22 @@ describe("parseSlashCommand", () => {
     expect(parseSlashCommand("/background view")).toEqual({
       kind: "invalid",
       message: "Usage: /background view <taskId> [lines]",
+    });
+    expect(parseSlashCommand("/monitor start smoke")).toEqual({
+      kind: "invalid",
+      message: "Usage: /monitor start <title> -- <command>",
+    });
+    expect(parseSlashCommand("/monitor view")).toEqual({
+      kind: "invalid",
+      message: "Usage: /monitor view <taskId> [lines]",
+    });
+    expect(parseSlashCommand("/monitor sync")).toEqual({
+      kind: "invalid",
+      message: "Usage: /monitor sync <taskId>",
+    });
+    expect(parseSlashCommand("/monitor stop")).toEqual({
+      kind: "invalid",
+      message: "Usage: /monitor stop <taskId>",
     });
     expect(parseSlashCommand("/cron create * * *")).toEqual({
       kind: "invalid",
@@ -1014,7 +1041,7 @@ describe("OperatorCliApp", () => {
     expect(promptOutput).toContain("instructionFiles=");
   });
 
-  it("supports background task watch and cron commands", async () => {
+  it("supports background and monitor task commands plus cron commands", async () => {
     const rootDir = await makeTempDir();
     const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
     const session = await app.runtime.startSession({ title: "CLI ops", cwd: rootDir, agentId: "operator-cli" });
@@ -1052,6 +1079,48 @@ describe("OperatorCliApp", () => {
 
     const stopOutput = await app.dispatchSlashCommand({ kind: "task-stop", taskId: task.id }, session.id);
     expect(stopOutput).toContain(`Stopped task ${task.id}.`);
+
+    const monitorStartOutput = await app.dispatchSlashCommand(
+      { kind: "monitor-start", title: "watch-logs", command: "printf monitor-ok" },
+      session.id,
+    );
+    expect(monitorStartOutput).toContain("Started monitor");
+    expect(monitorStartOutput).toContain("watch-logs");
+
+    const monitorTasks = await app.runtime.listBackgroundTasks(session.id);
+    const monitor = monitorTasks.find((item) => item.kind === "monitor");
+    if (!monitor) {
+      throw new Error("expected monitor task");
+    }
+    await app.runtime.backgroundTasks.executionService.writeOutput(monitor, "monitor-ok\n");
+    await app.runtime.backgroundTasks.executionService.writeState(monitor, {
+      version: 1,
+      taskId: monitor.id,
+      kind: "monitor",
+      status: "completed",
+      pid: monitor.execution.processId ?? 1234,
+      startedAt: monitor.execution.startedAt ?? monitor.updatedAt,
+      updatedAt: monitor.updatedAt,
+      completedAt: monitor.updatedAt,
+      exitCode: 0,
+      outputFile: monitor.execution.outputFile,
+      cwd: monitor.cwd,
+      command: monitor.command,
+    });
+
+    const monitorListOutput = await app.dispatchSlashCommand({ kind: "monitor-list" }, session.id);
+    expect(monitorListOutput).toContain(monitor.id);
+    expect(monitorListOutput).toContain("watch-logs");
+
+    const monitorSyncOutput = await app.dispatchSlashCommand({ kind: "monitor-sync", taskId: monitor.id }, session.id);
+    expect(monitorSyncOutput).toContain(monitor.id);
+
+    const monitorViewOutput = await app.dispatchSlashCommand({ kind: "monitor-view", taskId: monitor.id, lines: 20 }, session.id);
+    expect(monitorViewOutput).toContain(monitor.id);
+    expect(monitorViewOutput).toContain("monitor-ok");
+
+    const monitorStopOutput = await app.dispatchSlashCommand({ kind: "monitor-stop", taskId: monitor.id }, session.id);
+    expect(monitorStopOutput).toContain(`Stopped monitor ${monitor.id}.`);
 
     const cronCreate = await app.dispatchSlashCommand(
       {

@@ -1458,6 +1458,27 @@ describe("OperatorControlPlaneServer", () => {
       cwd: monitorTask.cwd,
       command: monitorTask.command,
     });
+    await runtime.backgroundTasks.executionService.writeOutput(monitorTask, "monitor-line-1\nmonitor-line-2\n");
+    await expect(server.handle({ method: "monitors.start", params: { sessionId: session.id, title: "Monitor alias", command: "printf alias" } })).resolves.toMatchObject({
+      ok: true,
+      result: { sessionId: session.id, title: "Monitor alias", kind: "monitor", status: "running" },
+    });
+    await expect(server.handle({ method: "monitors.list", params: { sessionId: session.id } })).resolves.toMatchObject({
+      ok: true,
+      result: expect.arrayContaining([expect.objectContaining({ id: monitorTask.id, sessionId: session.id, kind: "monitor", title: "Watch logs" })]),
+    });
+    await expect(server.handle({ method: "monitors.active", params: { sessionId: session.id } })).resolves.toMatchObject({
+      ok: true,
+      result: expect.objectContaining({ id: expect.any(String), sessionId: session.id, kind: "monitor", status: "running" }),
+    });
+    await expect(server.handle({ method: "monitors.output", params: { taskId: monitorTask.id, lineLimit: 1 } })).resolves.toEqual({
+      ok: true,
+      result: { taskId: monitorTask.id, output: "monitor-line-2" },
+    });
+    await expect(server.handle({ method: "monitors.sync", params: { taskId: monitorTask.id } })).resolves.toMatchObject({
+      ok: true,
+      result: { id: monitorTask.id, kind: "monitor" },
+    });
     const monitorTaskStopStart = await server.handle({
       method: "background.tasks.start",
       params: {
@@ -1485,6 +1506,14 @@ describe("OperatorControlPlaneServer", () => {
       cwd: monitorTaskStop.cwd,
       command: monitorTaskStop.command,
     });
+    await expect(server.handle({ method: "monitors.sync", params: { taskId: backgroundTask.id } })).resolves.toEqual({
+      ok: false,
+      error: { code: "NOT_FOUND", message: `unknown monitor: ${backgroundTask.id}` },
+    });
+    await expect(server.handle({ method: "monitors.output", params: { taskId: backgroundTask.id } })).resolves.toEqual({
+      ok: false,
+      error: { code: "NOT_FOUND", message: `unknown monitor: ${backgroundTask.id}` },
+    });
     const originalKill = process.kill;
     process.kill = (() => true) as typeof process.kill;
     try {
@@ -1492,9 +1521,13 @@ describe("OperatorControlPlaneServer", () => {
         ok: true,
         result: { id: monitorTask.id, status: "cancelled", execution: { signal: "SIGTERM" } },
       });
-      await expect(server.handle({ method: "tasks.stop", params: { taskId: monitorTaskStop.id } })).resolves.toMatchObject({
+      await expect(server.handle({ method: "monitors.stop", params: { taskId: monitorTaskStop.id } })).resolves.toMatchObject({
         ok: true,
         result: { id: monitorTaskStop.id, status: "cancelled", execution: { signal: "SIGTERM" } },
+      });
+      await expect(server.handle({ method: "monitors.stop", params: { taskId: backgroundTask.id } })).resolves.toEqual({
+        ok: false,
+        error: { code: "NOT_FOUND", message: `unknown monitor: ${backgroundTask.id}` },
       });
     } finally {
       process.kill = originalKill;
@@ -2024,6 +2057,8 @@ describe("OperatorControlPlaneServer", () => {
     const taskA = await runtime.createTask({ sessionId: sessionA.id, subject: "Inspect A", description: "Inspect session A." });
     await runtime.updateTask(taskA.id, { status: "completed" });
     await runtime.createTask({ sessionId: sessionB.id, subject: "Inspect B", description: "Inspect session B." });
+    const monitorA = await runtime.startBackgroundTask({ sessionId: sessionA.id, title: "Monitor A", command: "printf a", kind: "monitor" });
+    const monitorB = await runtime.startBackgroundTask({ sessionId: sessionB.id, title: "Monitor B", command: "printf b", kind: "monitor" });
 
     const sessionARunEvents = runtime.events.snapshot(buildRuntimeEventFilter({ sessionId: sessionA.id, family: "run" }));
     expect(sessionARunEvents).toEqual(
@@ -2070,6 +2105,19 @@ describe("OperatorControlPlaneServer", () => {
       expect.objectContaining({ type: "task.created", payload: expect.objectContaining({ id: taskA.id, sessionId: sessionA.id, subject: "Inspect A" }) }),
       expect.objectContaining({ type: "task.updated", payload: expect.objectContaining({ id: taskA.id, status: "completed", sessionId: sessionA.id }) }),
     ]);
+
+    const sessionAMonitorEvents = runtime.events.snapshot(buildRuntimeEventFilter({ family: "monitor", sessionId: sessionA.id }));
+    expect(sessionAMonitorEvents).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: "background-task.started", payload: expect.objectContaining({ id: monitorA.id, sessionId: sessionA.id, kind: "monitor", title: "Monitor A" }) }),
+    ]));
+    expect(sessionAMonitorEvents.some((event) => (
+      event.type.startsWith("background-task.")
+      && "payload" in event
+      && typeof event.payload === "object"
+      && event.payload != null
+      && "id" in event.payload
+      && event.payload.id === monitorB.id
+    ))).toBe(false);
   });
 
   it("forwards non-streaming /v1/messages requests with Claude-compatible auth headers", async () => {
