@@ -19,6 +19,14 @@ import {
   type PlatformBreakerRecord,
 } from "./platform-breaker-store.js";
 import { buildRuntimeEventFilter, type RuntimeEventFamily } from "./subscriptions.js";
+import {
+  buildWebhookChatRemoteId,
+  buildWebhookChatReplyRequest,
+  buildWebhookChatSessionMetadata,
+  hasWebhookChatDeliveryId,
+  markWebhookChatReplyDelivered,
+  normalizeWebhookChatPayload,
+} from "./webhook-chat.js";
 import type { BackgroundTaskKind, BackgroundTaskRecoveryReason } from "../harness/background-tasks.js";
 import type { TranscriptReadOptions } from "../harness/transcript-store.js";
 import type { SessionRecord } from "../harness/types.js";
@@ -483,42 +491,24 @@ export class OperatorControlPlaneServer {
 
   async handleHttp(request: ControlPlaneHttpRequest): Promise<ControlPlaneHttpResponse> {
     try {
-      if (request.method !== "POST" || request.path !== "/v1/messages") {
+      if (request.method !== "POST") {
         return {
           status: 404,
           headers: { "content-type": "application/json" },
           body: JSON.stringify({ error: { type: "not_found", message: `unknown path: ${request.method} ${request.path}` } }),
         };
       }
-      if (!request.body?.trim()) {
-        return {
-          status: 400,
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ error: { type: "invalid_request", message: "Request body is required." } }),
-        };
+      if (request.path === "/v1/messages") {
+        return await this.handleAnthropicMessagesHttp(request);
       }
-      const parsed = normalizeAnthropicMessagesPayload(JSON.parse(request.body) as Record<string, unknown>);
-      if (parsed.stream === true) {
-        const forwarded = await forwardAnthropicMessagesStreamRequest({
-          body: JSON.stringify(parsed),
-          fetchImpl: this.fetchImpl,
-          env: this.env,
-          headers: request.headers,
-        });
-        return {
-          status: forwarded.status,
-          headers: forwarded.headers,
-          body: "",
-          bodyStream: forwarded.bodyStream,
-        };
+      if (request.path.startsWith("/webhooks/chat/")) {
+        return await this.handleWebhookChatHttp(request);
       }
-      const forwarded = await forwardAnthropicMessagesRequest({
-        body: JSON.stringify({ ...parsed, stream: false }),
-        fetchImpl: this.fetchImpl,
-        env: this.env,
-        headers: request.headers,
-      });
-      return forwarded;
+      return {
+        status: 404,
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ error: { type: "not_found", message: `unknown path: ${request.method} ${request.path}` } }),
+      };
     } catch (error) {
       return {
         status: 500,
@@ -526,6 +516,163 @@ export class OperatorControlPlaneServer {
         body: JSON.stringify({ error: { type: "internal_error", message: error instanceof Error ? error.message : String(error) } }),
       };
     }
+  }
+
+  private async handleAnthropicMessagesHttp(request: ControlPlaneHttpRequest): Promise<ControlPlaneHttpResponse> {
+    if (!request.body?.trim()) {
+      return {
+        status: 400,
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ error: { type: "invalid_request", message: "Request body is required." } }),
+      };
+    }
+    const parsed = normalizeAnthropicMessagesPayload(JSON.parse(request.body) as Record<string, unknown>);
+    if (parsed.stream === true) {
+      const forwarded = await forwardAnthropicMessagesStreamRequest({
+        body: JSON.stringify(parsed),
+        fetchImpl: this.fetchImpl,
+        env: this.env,
+        headers: request.headers,
+      });
+      return {
+        status: forwarded.status,
+        headers: forwarded.headers,
+        body: "",
+        bodyStream: forwarded.bodyStream,
+      };
+    }
+    const forwarded = await forwardAnthropicMessagesRequest({
+      body: JSON.stringify({ ...parsed, stream: false }),
+      fetchImpl: this.fetchImpl,
+      env: this.env,
+      headers: request.headers,
+    });
+    return forwarded;
+  }
+
+  private async handleWebhookChatHttp(request: ControlPlaneHttpRequest): Promise<ControlPlaneHttpResponse> {
+    if (!request.body?.trim()) {
+      return {
+        status: 400,
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ error: { type: "invalid_request", message: "Request body is required." } }),
+      };
+    }
+    const channel = request.path.slice("/webhooks/chat/".length);
+    try {
+      const payload = normalizeWebhookChatPayload(JSON.parse(request.body) as Record<string, unknown>);
+      const remoteId = buildWebhookChatRemoteId(channel, payload);
+      const bootstrap = await this.handle({
+        method: "sessions.bootstrap",
+        params: {
+          title: `Webhook chat ${channel}`,
+          agentId: "webhook-chat",
+          remoteId,
+          remoteSource: `webhook-chat:${channel}`,
+        },
+      });
+      if (!bootstrap.ok) {
+        return this.toHttpResponse(bootstrap);
+      }
+      const session = bootstrap.result.session;
+      const existingMetadata = session.metadata.webhookChat;
+      if (hasWebhookChatDeliveryId(existingMetadata, payload.deliveryId)) {
+        return {
+          status: 200,
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            ok: true,
+            duplicate: true,
+            sessionId: session.id,
+            remoteId,
+          }),
+        };
+      }
+
+      const webhookChat = buildWebhookChatSessionMetadata(channel, remoteId, payload, existingMetadata);
+      const updatedSession = await this.options.runtime.updateSessionMetadata(session.id, { webhookChat });
+      const effectiveSession = updatedSession ?? session;
+      const assistantText = this.buildWebhookChatAssistantReply(payload.text, effectiveSession.id);
+      await this.options.runtime.recordTurn({
+        sessionId: effectiveSession.id,
+        userText: payload.text,
+        assistantText,
+        trajectorySummary: `Webhook chat reply for ${webhookChat.channel}`,
+      });
+      await this.options.runtime.sendMessage({
+        fromSessionId: effectiveSession.id,
+        toSessionId: effectiveSession.id,
+        summary: `Webhook reply ${webhookChat.conversationId}`,
+        message: assistantText,
+        metadata: {
+          type: "webhook_chat_reply",
+          channel: webhookChat.channel,
+          remoteId,
+          conversationId: webhookChat.conversationId,
+          ...(webhookChat.threadId ? { threadId: webhookChat.threadId } : {}),
+        },
+      });
+      const replyRequest = buildWebhookChatReplyRequest({
+        metadata: webhookChat,
+        sessionId: effectiveSession.id,
+        text: assistantText,
+      });
+      const replyResponse = await this.fetchImpl(replyRequest.url, {
+        method: "POST",
+        headers: replyRequest.headers,
+        body: replyRequest.body,
+      });
+      if (!replyResponse.ok) {
+        return {
+          status: 502,
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            error: {
+              type: "bad_gateway",
+              message: `reply callback failed: ${replyResponse.status}`,
+            },
+          }),
+        };
+      }
+      await this.options.runtime.updateSessionMetadata(effectiveSession.id, {
+        webhookChat: markWebhookChatReplyDelivered(webhookChat),
+      });
+      return {
+        status: 200,
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          ok: true,
+          duplicate: false,
+          sessionId: effectiveSession.id,
+          remoteId,
+          reply: { delivered: true },
+        }),
+      };
+    } catch (error) {
+      return {
+        status: 400,
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ error: { type: "invalid_request", message: error instanceof Error ? error.message : String(error) } }),
+      };
+    }
+  }
+
+  private buildWebhookChatAssistantReply(input: string, sessionId: string): string {
+    const trimmed = input.trim();
+    return [
+      `Webhook session ${sessionId}.`,
+      trimmed ? `Received: ${trimmed}` : "Received an empty message.",
+      "This narrow webhook channel loop is active.",
+    ].join("\n");
+  }
+
+  private toHttpResponse(response: ControlPlaneFailure): ControlPlaneHttpResponse {
+    const status = response.error.code === "NOT_FOUND" ? 404 : response.error.code === "INVALID_REQUEST" ? 400 : 500;
+    return {
+      status,
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ error: { type: response.error.code.toLowerCase(), message: response.error.message } }),
+    };
   }
 
   async handle(request: ControlPlaneRequest): Promise<ControlPlaneResponse> {

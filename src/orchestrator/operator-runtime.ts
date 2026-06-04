@@ -86,7 +86,7 @@ import type {
   SkillCandidate,
   SkillCandidateStatus,
 } from "../memory/types.js";
-import type { OperatorResolvedModelSelection, SessionRecord } from "../harness/types.js";
+import type { OperatorResolvedModelSelection, SessionMetadata, SessionRecord } from "../harness/types.js";
 import type { ReviewedExportManifest, TrainingMode } from "../training/export-manifest.js";
 import type { LocalTrainingJobManifest, LocalTrainingJobStatus } from "../training/job-manifest.js";
 import type { TrainingExecutionState } from "../training/execution-service.js";
@@ -502,6 +502,10 @@ export class StandaloneOperatorRuntime {
 
   async listSessions(): Promise<SessionRecord[]> {
     return await this.sessions.list();
+  }
+
+  async updateSessionMetadata(sessionId: string, metadata: SessionMetadata): Promise<SessionRecord | undefined> {
+    return await this.sessions.update(sessionId, { metadata });
   }
 
   async findSessionByRemoteId(remoteId: string): Promise<SessionRecord | undefined> {

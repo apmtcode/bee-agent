@@ -176,6 +176,39 @@ describe("StandaloneOperatorRuntime", () => {
     await expect(runtime.listSessions()).resolves.toHaveLength(1);
   });
 
+  it("updates session metadata for webhook chat bindings", async () => {
+    const runtime = new StandaloneOperatorRuntime({ rootDir: await makeTempDir() });
+    const session = await runtime.startSession({ title: "Webhook", agentId: "webhook-chat", remoteId: "local-web:thread-1", remoteSource: "webhook-chat:local-web" });
+
+    await expect(runtime.updateSessionMetadata(session.id, {
+      webhookChat: {
+        channel: "local-web",
+        remoteId: "local-web:thread-1",
+        conversationId: "conversation-1",
+        threadId: "thread-1",
+        senderId: "user-1",
+        senderName: "Pat",
+        reply: { url: "https://example.test/reply" },
+        recentDeliveryIds: ["delivery-1"],
+        lastInboundAt: "2026-06-04T00:00:00.000Z",
+      },
+    })).resolves.toMatchObject({
+      metadata: {
+        remoteId: "local-web:thread-1",
+        remoteSource: "webhook-chat:local-web",
+        webhookChat: {
+          channel: "local-web",
+          conversationId: "conversation-1",
+          threadId: "thread-1",
+          senderId: "user-1",
+          senderName: "Pat",
+          reply: { url: "https://example.test/reply" },
+          recentDeliveryIds: ["delivery-1"],
+        },
+      },
+    });
+  });
+
   it("runs configured lifecycle hooks for session and approval events", async () => {
     const rootDir = await makeTempDir();
     const sessionStartFile = path.join(rootDir, "session-start.jsonl");

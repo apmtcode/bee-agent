@@ -93,6 +93,8 @@ export type {
   SessionRecord,
   SessionStatus,
   TranscriptMessageRole,
+  WebhookChatReplyTarget,
+  WebhookChatSessionMetadata,
 } from "./harness/types.js";
 export {
   FileApprovalStore,
@@ -184,6 +186,18 @@ export {
   OperatorControlPlaneSessionStream,
   type SessionStreamBootstrapParams,
 } from "./control-plane/session-stream.js";
+export {
+  normalizeWebhookChatPayload,
+  buildWebhookChatRemoteId,
+  buildWebhookChatSessionMetadata,
+  hasWebhookChatDeliveryId,
+  markWebhookChatReplyDelivered,
+  buildWebhookChatReplyRequest,
+  type WebhookChatInboundMessage,
+  type WebhookChatPayload,
+  type NormalizedWebhookChatPayload,
+  type WebhookChatReplyRequest,
+} from "./control-plane/webhook-chat.js";
 export {
   OperatorGatewayTransportConnection,
   type GatewayClientMessage,

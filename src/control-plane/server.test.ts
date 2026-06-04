@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { OperatorControlPlaneServer } from "./server.js";
+import { buildWebhookChatRemoteId } from "./webhook-chat.js";
 import { OperatorCronService } from "./cron-service.js";
 import { OperatorDeliveryService } from "./delivery.js";
 import { buildRuntimeEventFilter, subscribeRuntimeEvents } from "./subscriptions.js";
@@ -2287,6 +2288,128 @@ describe("OperatorControlPlaneServer", () => {
     });
     expect(streamingResponse.body).toBe("");
     expect(streamingResponse.bodyStream).toBeTruthy();
+  });
+
+  it("binds webhook chat deliveries to sessions and posts replies", async () => {
+    const runtime = new StandaloneOperatorRuntime({ rootDir: await makeTempDir() });
+    const fetchImpl = vi.fn<typeof fetch>(async (input, init) => {
+      if (String(input).includes("/reply")) {
+        expect(init?.method).toBe("POST");
+        expect(init?.headers).toMatchObject({
+          "content-type": "application/json",
+          authorization: "Bearer reply-token",
+        });
+        const body = typeof init?.body === "string" ? JSON.parse(init.body) : null;
+        expect(body).toMatchObject({
+          channel: "local-web",
+          conversationId: "conversation-1",
+          threadId: "thread-1",
+          recipient: { senderId: "user-1", senderName: "Pat" },
+        });
+        expect(body?.text).toContain("Received: hello operator");
+        return new Response(null, { status: 204 });
+      }
+      throw new Error(`unexpected fetch target: ${String(input)}`);
+    });
+    const server = new OperatorControlPlaneServer({ runtime, fetchImpl });
+
+    const response = await server.handleHttp({
+      method: "POST",
+      path: "/webhooks/chat/local-web",
+      body: JSON.stringify({
+        deliveryId: "delivery-1",
+        conversationId: "conversation-1",
+        threadId: "thread-1",
+        message: { text: "hello operator", senderId: "user-1", senderName: "Pat" },
+        reply: { url: "https://example.test/reply", headers: { authorization: "Bearer reply-token" } },
+      }),
+    });
+    expect(response).toMatchObject({ status: 200, headers: { "content-type": "application/json" } });
+    expect(JSON.parse(response.body)).toMatchObject({ ok: true, duplicate: false, remoteId: buildWebhookChatRemoteId("local-web", { conversationId: "conversation-1", threadId: "thread-1" }) });
+
+    const sessions = await runtime.listSessions();
+    expect(sessions).toHaveLength(1);
+    expect(sessions[0]).toMatchObject({
+      metadata: {
+        remoteId: "local-web:thread-1",
+        remoteSource: "webhook-chat:local-web",
+        webhookChat: {
+          channel: "local-web",
+          conversationId: "conversation-1",
+          threadId: "thread-1",
+          senderId: "user-1",
+          senderName: "Pat",
+          reply: { url: "https://example.test/reply", headers: { authorization: "Bearer reply-token" } },
+          recentDeliveryIds: ["delivery-1"],
+          lastOutboundAt: expect.any(String),
+        },
+      },
+    });
+    expect(await runtime.getLatestAssistantText(sessions[0].id)).toContain("Received: hello operator");
+    expect(await runtime.listMessages(sessions[0].id)).toEqual([
+      expect.objectContaining({
+        fromSessionId: sessions[0].id,
+        toSessionId: sessions[0].id,
+        metadata: expect.objectContaining({
+          type: "webhook_chat_reply",
+          channel: "local-web",
+          conversationId: "conversation-1",
+          threadId: "thread-1",
+        }),
+      }),
+    ]);
+  });
+
+  it("deduplicates repeated webhook chat deliveries and reuses the same bound session", async () => {
+    const runtime = new StandaloneOperatorRuntime({ rootDir: await makeTempDir() });
+    const fetchImpl = vi.fn<typeof fetch>(async (input) => {
+      if (String(input).includes("/reply")) {
+        return new Response(null, { status: 204 });
+      }
+      throw new Error(`unexpected fetch target: ${String(input)}`);
+    });
+    const server = new OperatorControlPlaneServer({ runtime, fetchImpl });
+
+    const payload = JSON.stringify({
+      deliveryId: "delivery-1",
+      conversationId: "conversation-1",
+      threadId: "thread-1",
+      message: { text: "hello operator", senderId: "user-1" },
+      reply: { url: "https://example.test/reply" },
+    });
+
+    const first = await server.handleHttp({ method: "POST", path: "/webhooks/chat/local-web", body: payload });
+    const second = await server.handleHttp({ method: "POST", path: "/webhooks/chat/local-web", body: payload });
+
+    expect(first.status).toBe(200);
+    expect(second).toMatchObject({ status: 200, headers: { "content-type": "application/json" } });
+    expect(JSON.parse(second.body)).toMatchObject({ ok: true, duplicate: true });
+    expect((await runtime.listSessions())).toHaveLength(1);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns safe errors for invalid webhook payloads and callback failures", async () => {
+    const runtime = new StandaloneOperatorRuntime({ rootDir: await makeTempDir() });
+    const server = new OperatorControlPlaneServer({
+      runtime,
+      fetchImpl: vi.fn<typeof fetch>(async () => new Response(null, { status: 502 })),
+    });
+
+    await expect(server.handleHttp({
+      method: "POST",
+      path: "/webhooks/chat/local-web",
+      body: JSON.stringify({ conversationId: "conversation-1" }),
+    })).resolves.toMatchObject({ status: 400 });
+
+    await expect(server.handleHttp({
+      method: "POST",
+      path: "/webhooks/chat/local-web",
+      body: JSON.stringify({
+        conversationId: "conversation-1",
+        message: { text: "hello", senderId: "user-1" },
+        reply: { url: "https://example.test/reply" },
+      }),
+    })).resolves.toMatchObject({ status: 502, headers: { "content-type": "application/json" } });
   });
 
   it("handles cron methods", async () => {

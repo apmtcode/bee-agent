@@ -168,6 +168,19 @@ Current status-line behavior in this tranche:
 - command output is normalized to a single rendered line, bounded by timeout and output-size limits, and ignored on failure
 - rendering remains intentionally narrow: one prompt-safe line in the local REPL only, without multiline widgets, long-lived status subprocesses, or a full TUI rewrite
 
+## Webhook chat channel
+
+Operator now also has a first narrow inbound webhook chat surface for external session binding.
+
+Current webhook chat behavior in this tranche:
+- the control plane accepts `POST /webhooks/chat/<channel>` with a provider-neutral JSON payload containing `conversationId`, optional `threadId`, inbound message text/sender metadata, and a reply callback target
+- inbound deliveries bind deterministically to sessions through existing remote bootstrap metadata using `remoteSource=webhook-chat:<channel>` and `remoteId=<channel>:<threadId|conversationId>`
+- reply-target, sender, conversation, and recent delivery-id metadata are persisted on the bound session through existing session metadata storage
+- the narrow flow records the inbound turn through existing runtime/session/transcript plumbing and persists an outbound mailbox message tagged as `webhook_chat_reply`
+- the final assistant reply is POSTed back to the provided callback target with the bound conversation/thread metadata
+- duplicate delivery ids are ignored safely for an already bound session
+- this tranche remains intentionally narrow: one HTTP webhook source and one final callback reply, without retries, channel directories, multi-platform routing, live gateway presence, or websocket chat streaming
+
 ## Worktree entry and exit
 
 Operator now also has a first narrow worktree surface for Claude Code-style isolated local edits.

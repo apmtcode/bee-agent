@@ -8,6 +8,24 @@ export type OperatorResolvedModelSelection = {
   source: OperatorModelSelectionSource;
 };
 
+export type WebhookChatReplyTarget = {
+  url: string;
+  headers?: Record<string, string>;
+};
+
+export type WebhookChatSessionMetadata = {
+  channel: string;
+  remoteId: string;
+  conversationId: string;
+  threadId?: string;
+  senderId: string;
+  senderName?: string;
+  reply: WebhookChatReplyTarget;
+  recentDeliveryIds?: string[];
+  lastInboundAt?: string;
+  lastOutboundAt?: string;
+};
+
 export type SessionMetadata = {
   cwd?: string;
   title?: string;
@@ -17,6 +35,7 @@ export type SessionMetadata = {
   parentSessionId?: string;
   tags?: string[];
   modelSelection?: OperatorResolvedModelSelection;
+  webhookChat?: WebhookChatSessionMetadata;
 };
 
 export type SessionRecord = {
