@@ -82,7 +82,7 @@ export class OperatorControlPlaneSessionStream {
         sessionId: params?.sessionId ?? this.boundSessionId,
       };
     }
-    if (method === "notifications.send") {
+    if (method === "notifications.send" || method === "push.subscriptions.create" || method === "push.subscriptions.list" || method === "push.subscriptions.delete" || method === "push.test") {
       return {
         ...(params ?? {}),
         sessionId: params?.sessionId ?? this.boundSessionId,
@@ -135,6 +135,10 @@ function requiresSessionBinding(method: string): boolean {
     method === "plans.verify" ||
     method === "messages.send" ||
     method === "notifications.send" ||
+    method === "push.subscriptions.create" ||
+    method === "push.subscriptions.list" ||
+    method === "push.subscriptions.delete" ||
+    method === "push.test" ||
     method === "messages.list" ||
     method === "messages.inbox" ||
     method === "messages.outbox" ||

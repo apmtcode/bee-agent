@@ -103,6 +103,7 @@ export type StandaloneOperatorOptions = {
   backgroundTaskSpawnProcess?: Parameters<typeof FileBackgroundTaskStore>[1];
   backgroundTaskIsProcessRunning?: Parameters<typeof FileBackgroundTaskStore>[2];
   executionConfig?: OperatorCliExecutionConfig;
+  delivery?: OperatorDeliveryService;
 };
 
 export type StartSessionParams = {
@@ -447,7 +448,7 @@ export class StandaloneOperatorRuntime {
     this.plans = new FilePlanStore(path.join(options.rootDir, "plans.json"));
     this.messages = new FileMessageStore(path.join(options.rootDir, "messages.json"));
     this.teams = new FileOperatorCliTeamStore(options.rootDir);
-    this.delivery = new OperatorDeliveryService(options.rootDir);
+    this.delivery = options.delivery ?? new OperatorDeliveryService(options.rootDir);
     this.subagents = new FileSubagentRegistry(options.rootDir);
     this.backgroundTasks = new FileBackgroundTaskStore(
       path.join(options.rootDir, "background-tasks.json"),

@@ -220,6 +220,18 @@ Current notification behavior in this tranche:
 - the CLI exposes `/notify <status> <message>` for first-class local push notification delivery
 - this tranche remains intentionally narrow and does not yet add notification history, mobile platform integrations, retry queues, or acknowledgement state
 
+## Browser push notifications
+
+Operator now also has a first narrow browser push-notification surface for out-of-band session alerts.
+
+Current browser push behavior in this tranche:
+- the control plane exposes `push.subscriptions.create`, `push.subscriptions.list`, `push.subscriptions.delete`, and `push.test`
+- browser push subscriptions are persisted in a small session-scoped store keyed by the operator session instead of introducing account-level identity state
+- `push.test` reuses the existing notification and delivery seams, so successful sends still produce `notification.sent` runtime events and normal delivery summaries
+- bootstrapped session streams inherit `sessionId` for the new push RPCs the same way they already do for `notifications.send`
+- browser push targets use VAPID credentials from `OPERATOR_VAPID_PUBLIC_KEY`, `OPERATOR_VAPID_PRIVATE_KEY`, and optional `OPERATOR_VAPID_SUBJECT`
+- this tranche remains intentionally narrow and does not yet add service-worker assets, browser UI, global notification preferences, retry queues, or full remote-session handoff
+
 ## Remote session stream
 
 The control plane now also exposes a first remote session-stream seam for future gateway/channel work.

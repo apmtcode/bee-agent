@@ -18,6 +18,11 @@ import {
   FilePlatformBreakerStore,
   type PlatformBreakerRecord,
 } from "./platform-breaker-store.js";
+import {
+  FilePushStore,
+  normalizeWebPushSubscriptionPayload,
+  type PushSubscriptionRecord,
+} from "./push-store.js";
 import { buildRuntimeEventFilter, type RuntimeEventFamily } from "./subscriptions.js";
 import {
   buildWebhookChatRemoteId,
@@ -355,6 +360,7 @@ export class OperatorControlPlaneServer {
   private readonly cron: OperatorCronService;
   private readonly pairing: FilePairingStore;
   private readonly platformBreakers: FilePlatformBreakerStore;
+  private readonly pushStore: FilePushStore;
   private readonly fetchImpl: typeof fetch;
   private readonly env: EnvReader;
   private readonly gatewaySessions = new Map<string, GatewaySessionHealth>();
@@ -368,6 +374,7 @@ export class OperatorControlPlaneServer {
     this.cron = options.cron ?? new OperatorCronService(options.runtime.rootDir, { runtime: options.runtime });
     this.pairing = options.pairing ?? new FilePairingStore(buildPairingStoreFilePath(options.runtime.rootDir));
     this.platformBreakers = options.platformBreakers ?? new FilePlatformBreakerStore(buildPlatformBreakerStoreFilePath(options.runtime.rootDir));
+    this.pushStore = new FilePushStore(buildPushStoreFilePath(options.runtime.rootDir));
     this.fetchImpl = options.fetchImpl ?? fetch;
     this.env = options.env ?? ((name) => process.env[name]);
   }
@@ -1121,6 +1128,74 @@ export class OperatorControlPlaneServer {
             ...summarizeDeliveryResults(notification.deliveryResults),
           });
         }
+        case "push.subscriptions.create": {
+          const sessionId = getString(request.params, "sessionId");
+          const session = await this.options.runtime.getSession(sessionId);
+          if (!session) {
+            return notFound(`unknown session: ${sessionId}`);
+          }
+          try {
+            return ok(await this.pushStore.upsertSubscription({
+              sessionId,
+              subscription: normalizeWebPushSubscriptionPayload(request.params?.subscription),
+              label: getOptionalString(request.params, "label"),
+              userAgent: getOptionalString(request.params, "userAgent"),
+            }));
+          } catch (error) {
+            return invalidRequest(error instanceof Error ? error.message : String(error));
+          }
+        }
+        case "push.subscriptions.list": {
+          const sessionId = getOptionalString(request.params, "sessionId");
+          if (sessionId) {
+            const session = await this.options.runtime.getSession(sessionId);
+            if (!session) {
+              return notFound(`unknown session: ${sessionId}`);
+            }
+          }
+          return ok(await this.pushStore.listSubscriptions(sessionId));
+        }
+        case "push.subscriptions.delete": {
+          const sessionId = getOptionalString(request.params, "sessionId");
+          if (sessionId) {
+            const session = await this.options.runtime.getSession(sessionId);
+            if (!session) {
+              return notFound(`unknown session: ${sessionId}`);
+            }
+          }
+          try {
+            return ok({
+              deleted: await this.pushStore.deleteSubscription({
+                id: getOptionalString(request.params, "id"),
+                endpoint: getOptionalString(request.params, "endpoint"),
+                sessionId,
+              }),
+            });
+          } catch (error) {
+            return invalidRequest(error instanceof Error ? error.message : String(error));
+          }
+        }
+        case "push.test": {
+          const sessionId = getString(request.params, "sessionId");
+          const session = await this.options.runtime.getSession(sessionId);
+          if (!session) {
+            return notFound(`unknown session: ${sessionId}`);
+          }
+          const targets = buildBrowserPushDeliveryTargets(await this.pushStore.listSubscriptions(sessionId));
+          if (targets.length === 0) {
+            return invalidRequest(`no push subscriptions for session: ${sessionId}`);
+          }
+          const notification = await this.options.runtime.sendNotification({
+            sessionId,
+            status: getOptionalString(request.params, "status") ?? "push-test",
+            message: getOptionalString(request.params, "message") ?? "Operator browser push test.",
+            targets,
+          });
+          return ok({
+            ...notification,
+            ...summarizeDeliveryResults(notification.deliveryResults),
+          });
+        }
         case "messages.get": {
           const messageId = getString(request.params, "messageId");
           const message = await this.options.runtime.getMessage(messageId);
@@ -1596,6 +1671,10 @@ function buildPairingStoreFilePath(rootDir: string): string {
 
 function buildPlatformBreakerStoreFilePath(rootDir: string): string {
   return `${rootDir}/platform-breakers.json`;
+}
+
+function buildPushStoreFilePath(rootDir: string): string {
+  return `${rootDir}/push-subscriptions.json`;
 }
 
 async function buildSessionBootstrapResult(
@@ -2558,6 +2637,14 @@ function getOptionalCronModelSelection(
   };
 }
 
+function buildBrowserPushDeliveryTargets(subscriptions: PushSubscriptionRecord[]): DeliveryTarget[] {
+  return subscriptions.map((subscription) => ({
+    kind: "browser-push",
+    endpoint: subscription.endpoint,
+    keys: subscription.keys,
+  }));
+}
+
 function getOptionalDeliveryTargets(
   params: Record<string, unknown> | undefined,
   key: string,
@@ -2613,7 +2700,25 @@ function getDeliveryTarget(value: unknown, key: string): DeliveryTarget {
       ...(target.headers ? { headers: getOptionalStringRecord(target.headers, `${key}.headers`) } : {}),
     };
   }
+  if (target.kind === "browser-push") {
+    return {
+      kind: "browser-push",
+      endpoint: getString(target, "endpoint"),
+      keys: getWebPushKeys(target.keys, `${key}.keys`),
+    };
+  }
   throw new Error(`Invalid delivery target kind: ${key}`);
+}
+
+function getWebPushKeys(value: unknown, key: string): { p256dh: string; auth: string } {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`Invalid push subscription keys: ${key}`);
+  }
+  const record = value as Record<string, unknown>;
+  return {
+    p256dh: getString(record, "p256dh"),
+    auth: getString(record, "auth"),
+  };
 }
 
 function getOptionalStringRecord(value: unknown, key: string): Record<string, string> | undefined {

@@ -126,6 +126,7 @@ export {
 export {
   OperatorDeliveryService,
   summarizeDeliveryResults,
+  type BrowserPushDeliveryTarget,
   type CronDeliveryConfig,
   type CronTerminalDeliveryPayload,
   type PushNotificationDeliveryPayload,
@@ -182,6 +183,13 @@ export {
   type PlatformBreakerRecord,
   type PlatformBreakerStoreShape,
 } from "./control-plane/platform-breaker-store.js";
+export {
+  FilePushStore,
+  type PushStoreShape,
+  type PushSubscriptionRecord,
+  type WebPushSubscriptionKeys,
+  type WebPushSubscriptionPayload,
+} from "./control-plane/push-store.js";
 export {
   OperatorControlPlaneSessionStream,
   type SessionStreamBootstrapParams,

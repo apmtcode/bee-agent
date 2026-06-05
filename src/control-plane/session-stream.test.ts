@@ -566,6 +566,82 @@ describe("OperatorControlPlaneSessionStream", () => {
     ]);
   });
 
+  it("binds push requests for a bootstrapped session", async () => {
+    const delivery = new (await import("./delivery.js")).OperatorDeliveryService(await makeTempDir(), {
+      sendBrowserPush: async () => {},
+    });
+    const runtime = new StandaloneOperatorRuntime({
+      rootDir: await makeTempDir(),
+      backgroundTaskIsProcessRunning: () => false,
+      delivery,
+    });
+    const server = new OperatorControlPlaneServer({ runtime });
+    const stream = new OperatorControlPlaneSessionStream(server);
+
+    const bootstrapped = await stream.bootstrap({ title: "Push session", family: "notification" });
+    const created = await stream.request<{ id: string; sessionId: string; endpoint: string }>({
+      method: "push.subscriptions.create",
+      params: {
+        subscription: {
+          endpoint: "https://push.example.test/sub-1",
+          keys: { p256dh: "p256dh-1", auth: "auth-1" },
+        },
+      },
+    });
+    expect(created.ok).toBe(true);
+    if (!created.ok) {
+      throw new Error("expected push subscription");
+    }
+    expect(created.result).toMatchObject({
+      sessionId: bootstrapped.session.id,
+      endpoint: "https://push.example.test/sub-1",
+    });
+
+    const listed = await stream.request<Array<{ sessionId: string; endpoint: string }>>({
+      method: "push.subscriptions.list",
+      params: {},
+    });
+    expect(listed.ok).toBe(true);
+    if (!listed.ok) {
+      throw new Error("expected push subscription list");
+    }
+    expect(listed.result).toEqual([
+      expect.objectContaining({ sessionId: bootstrapped.session.id, endpoint: "https://push.example.test/sub-1" }),
+    ]);
+
+    const pushed = await stream.request<{ sessionId: string; status: string; message: string; deliveryResults: Array<{ target: { kind: string } }> }>({
+      method: "push.test",
+      params: { message: "Push from stream." },
+    });
+    expect(pushed.ok).toBe(true);
+    if (!pushed.ok) {
+      throw new Error("expected push test notification");
+    }
+    expect(pushed.result).toMatchObject({
+      sessionId: bootstrapped.session.id,
+      status: "push-test",
+      message: "Push from stream.",
+      deliveryResults: [expect.objectContaining({ target: expect.objectContaining({ kind: "browser-push" }) })],
+    });
+
+    await expect(stream.request({
+      method: "push.subscriptions.delete",
+      params: { id: created.result.id },
+    })).resolves.toMatchObject({ ok: true, result: { deleted: true } });
+
+    const replay = await stream.request<Array<{ type: string; payload?: { sessionId?: string; status?: string } }>>({
+      method: "runs.events",
+      params: { family: "notification" },
+    });
+    expect(replay.ok).toBe(true);
+    if (!replay.ok) {
+      throw new Error("expected notification replay");
+    }
+    expect(replay.result).toEqual([
+      expect.objectContaining({ type: "notification.sent", payload: expect.objectContaining({ sessionId: bootstrapped.session.id, status: "push-test" }) }),
+    ]);
+  });
+
   it("binds teammate requests for a bootstrapped session", async () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),

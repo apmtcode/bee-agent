@@ -80,9 +80,13 @@ const exportManifest: ReviewedExportManifest = {
 
 describe("OperatorControlPlaneServer", () => {
   it("handles session, transcript, approval, trajectory, memory, and orchestration methods", async () => {
+    const rootDir = await makeTempDir();
     const runtime = new StandaloneOperatorRuntime({
-      rootDir: await makeTempDir(),
+      rootDir,
       backgroundTaskIsProcessRunning: () => false,
+      delivery: new OperatorDeliveryService(rootDir, {
+        sendBrowserPush: async () => {},
+      }),
     });
     const server = new OperatorControlPlaneServer({ runtime });
     const session = await runtime.startSession({ title: "RPC", agentId: "main" });
@@ -366,6 +370,77 @@ describe("OperatorControlPlaneServer", () => {
         expect.objectContaining({ type: "notification.sent", payload: expect.objectContaining({ id: notification.id, sessionId: session.id, status: "task-complete" }) }),
       ],
     });
+
+    const pushCreate = await server.handle({
+      method: "push.subscriptions.create",
+      params: {
+        sessionId: session.id,
+        subscription: {
+          endpoint: "https://push.example.test/sub-1",
+          keys: { p256dh: "p256dh-1", auth: "auth-1" },
+        },
+        label: "Chrome",
+        userAgent: "Browser/1.0",
+      },
+    });
+    expect(pushCreate).toMatchObject({
+      ok: true,
+      result: {
+        sessionId: session.id,
+        endpoint: "https://push.example.test/sub-1",
+        label: "Chrome",
+        userAgent: "Browser/1.0",
+      },
+    });
+    const pushSubscription = pushCreate.ok ? pushCreate.result : undefined;
+    expect(pushSubscription).toBeDefined();
+    if (!pushSubscription) {
+      throw new Error("expected push subscription");
+    }
+
+    await expect(server.handle({
+      method: "push.subscriptions.list",
+      params: { sessionId: session.id },
+    })).resolves.toMatchObject({
+      ok: true,
+      result: [expect.objectContaining({ id: pushSubscription.id, sessionId: session.id, endpoint: "https://push.example.test/sub-1" })],
+    });
+
+    const pushTest = await server.handle({
+      method: "push.test",
+      params: {
+        sessionId: session.id,
+        message: "Browser push test.",
+      },
+    });
+    expect(pushTest).toMatchObject({
+      ok: true,
+      result: {
+        sessionId: session.id,
+        status: "push-test",
+        message: "Browser push test.",
+        lastDeliveryStatus: "sent",
+        deliveryResults: [
+          {
+            status: "sent",
+            target: {
+              kind: "browser-push",
+              endpoint: "https://push.example.test/sub-1",
+              keys: { p256dh: "p256dh-1", auth: "auth-1" },
+            },
+          },
+        ],
+      },
+    });
+
+    await expect(server.handle({
+      method: "push.subscriptions.delete",
+      params: { sessionId: session.id, id: pushSubscription.id },
+    })).resolves.toMatchObject({ ok: true, result: { deleted: true } });
+    await expect(server.handle({
+      method: "push.subscriptions.list",
+      params: { sessionId: session.id },
+    })).resolves.toMatchObject({ ok: true, result: [] });
     const runCreate = await server.handle({
       method: "runs.start",
       params: { sessionId: session.id, title: "Investigate deploy", metadata: { source: "rpc" } },
@@ -2410,6 +2485,34 @@ describe("OperatorControlPlaneServer", () => {
         reply: { url: "https://example.test/reply" },
       }),
     })).resolves.toMatchObject({ status: 502, headers: { "content-type": "application/json" } });
+  });
+
+  it("returns safe errors for invalid push requests", async () => {
+    const rootDir = await makeTempDir();
+    const runtime = new StandaloneOperatorRuntime({
+      rootDir,
+      delivery: new OperatorDeliveryService(rootDir, {
+        sendBrowserPush: async () => {},
+      }),
+    });
+    const server = new OperatorControlPlaneServer({ runtime });
+    const session = await runtime.startSession({ title: "Push", agentId: "gateway" });
+
+    await expect(server.handle({
+      method: "push.subscriptions.create",
+      params: {
+        sessionId: session.id,
+        subscription: {
+          endpoint: "http://push.example.test/sub-1",
+          keys: { p256dh: "p256dh-1", auth: "auth-1" },
+        },
+      },
+    })).resolves.toMatchObject({ ok: false, error: { code: "INVALID_REQUEST", message: "Invalid push subscription endpoint" } });
+
+    await expect(server.handle({
+      method: "push.test",
+      params: { sessionId: session.id },
+    })).resolves.toMatchObject({ ok: false, error: { code: "INVALID_REQUEST", message: `no push subscriptions for session: ${session.id}` } });
   });
 
   it("handles cron methods", async () => {
