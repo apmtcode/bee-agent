@@ -127,7 +127,7 @@ export class FileTrajectoryStore {
     }
     const trajectories = await this.listReviewed("approved");
     return trajectories
-      .map((trajectory) => {
+      .flatMap((trajectory) => {
         const reasons: RecallMatchReason[] = [];
         let score = 0;
         score += pushReason(reasons, "outcome", scoreMatch(trajectory.outcome?.summary, needle));
@@ -143,9 +143,9 @@ export class FileTrajectoryStore {
           score += pushReason(reasons, "transcript", scoreMatch(message.content, needle));
         }
         if (score === 0) {
-          return null;
+          return [];
         }
-        return {
+        const hit: Omit<TrajectoryRecallHit, "preview"> = {
           kind: "trajectory",
           score,
           reasons,
@@ -162,9 +162,9 @@ export class FileTrajectoryStore {
           summary: getReviewedSummary(trajectory),
           sourceObservationCount: (trajectory.review?.redactedObservations ?? trajectory.observations).length,
           sourceActionCount: (trajectory.review?.redactedActions ?? trajectory.actions).length,
-        } satisfies Omit<TrajectoryRecallHit, "preview">;
+        };
+        return [hit];
       })
-      .filter((hit): hit is Omit<TrajectoryRecallHit, "preview"> => hit !== null)
       .sort((a, b) => b.score - a.score || b.createdAt.localeCompare(a.createdAt));
   }
 }

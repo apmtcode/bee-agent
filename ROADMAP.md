@@ -8,17 +8,20 @@ unchecked items are queued. Keep this richer than you found it each run.
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`
       (2026-06-22).
-- [ ] **Pay down typecheck debt** (surfaced by the new `typecheck` script). Known
-      `tsc --noEmit` errors as of 2026-06-22:
-  - `src/index.ts`: duplicate identifiers `SpawnSubagentResult`,
+- [ ] **Pay down typecheck debt** (surfaced by the `typecheck` script). Full
+      `tsc --noEmit` count was **397** on 2026-06-22; now **390** after greening
+      `src/capture/`. Remaining by file (fix one module per run, no mass-rewrite):
+  - [x] `src/capture/` (trajectory-store.ts, replay-service.ts) — DONE run 2.
+  - [ ] `src/cli/app.ts` (63) — largest source-file cluster.
+  - [ ] `src/index.ts` (6): duplicate identifiers `SpawnSubagentResult`,
     `CreateCaptureConsentParams`, `CreateTrainingJobParams` (re-exported twice).
-  - `src/orchestrator/operator-runtime.ts`: `FileBackgroundTaskStore` used as a
-    type-arg constraint that expects a callable; optional-vs-required `sessionId`
-    mismatch (~L1103); `string | undefined` not assignable to `string` (~L1855).
-  - `src/control-plane/session-stream.test.ts` &
-    `src/orchestrator/operator-runtime.test.ts`: `() => boolean` assigned to
-    `undefined`-typed field; `unknown` result access.
-      Fix incrementally (a few per run); do not mass-rewrite.
+  - [ ] `src/cli/config.ts` (6).
+  - [ ] `src/orchestrator/operator-runtime.ts` (4): `FileBackgroundTaskStore`
+    used as a callable type-arg constraint; optional-vs-required `sessionId`
+    (~L1103); `string | undefined` not assignable to `string` (~L1855).
+  - [ ] `src/control-plane/server.ts` (4).
+  - [ ] Test files (bulk): `server.test.ts` (234), `app.test.ts` (41),
+    `session-stream.test.ts` (15), `gateway-transport.test.ts` (15), others.
 - [ ] Add a `verify` npm script (`typecheck && build && test`) and have the
       engine run it as a pre-push self-check each cycle.
 - [ ] Add a minimal CI workflow mirroring `verify` for human-opened PRs.
@@ -55,3 +58,7 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Coordination guard between the parallel cloud + local self-evolve runs
       (e.g. a lightweight lock/heartbeat file) to avoid duplicated work and
       merge churn.
+- [ ] Per-module typecheck ratchet: record each module's current `tsc` error
+      count to a baseline file and fail if a module regresses above it. Lets the
+      engine pay debt down module-by-module without one green-gate blocking
+      progress, and prevents backsliding while the total is still > 0.

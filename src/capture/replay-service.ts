@@ -55,6 +55,6 @@ export class ReplayRuntimeService {
   async listSessionReplays(): Promise<ReplayManifest[]> {
     const sessions = await this.sessions.list();
     const replays = await Promise.all(sessions.map(async (session) => await this.getSessionReplay(session.id)));
-    return replays.filter((replay): replay is ReplayManifest => Boolean(replay) && replay.eventCount > 0);
+    return replays.filter((replay): replay is ReplayManifest => replay !== undefined && replay.eventCount > 0);
   }
 }
