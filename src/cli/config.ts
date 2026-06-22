@@ -82,10 +82,30 @@ export class OperatorCliConfigLoader {
   }
 }
 
+/**
+ * Normalize the two accepted shapes (a loaded runtime config or a bare merged
+ * object) into a plain config object. A plain `"merged" in config` check is
+ * insufficient because `OperatorCliRuntimeConfig` is structurally assignable to
+ * the index-signature `OperatorCliConfigObject`, so the narrowing collapses to
+ * `OperatorCliConfigValue`. Discriminate on the runtime shape instead.
+ */
+function resolveMergedConfig(
+  config?: OperatorCliRuntimeConfig | OperatorCliConfigObject,
+): OperatorCliConfigObject {
+  if (!config) {
+    return {};
+  }
+  const candidate = config as OperatorCliRuntimeConfig;
+  if (isConfigObject(candidate.merged) && Array.isArray(candidate.loadedEntries)) {
+    return candidate.merged;
+  }
+  return config as OperatorCliConfigObject;
+}
+
 export function resolveOperatorCliExecutionConfig(
   config?: OperatorCliRuntimeConfig | OperatorCliConfigObject,
 ): OperatorCliExecutionConfig {
-  const merged = !config ? {} : "merged" in config ? config.merged : config;
+  const merged = resolveMergedConfig(config);
   const rawPermissionMode = merged.permissionMode;
   const permissionMode =
     typeof rawPermissionMode === "string" && SUPPORTED_PERMISSION_MODES.has(rawPermissionMode as OperatorCliPermissionMode)
@@ -160,7 +180,7 @@ export function resolveOperatorCliExecutionConfig(
 export function resolveOperatorCliStatusLineConfig(
   config?: OperatorCliRuntimeConfig | OperatorCliConfigObject,
 ): OperatorCliStatusLineConfig | undefined {
-  const merged = !config ? {} : "merged" in config ? config.merged : config;
+  const merged = resolveMergedConfig(config);
   const rawStatusLine = merged.statusLine;
   if (!isConfigObject(rawStatusLine) || rawStatusLine.type !== "command" || typeof rawStatusLine.command !== "string") {
     return undefined;

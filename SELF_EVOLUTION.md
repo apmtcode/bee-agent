@@ -6,6 +6,40 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-06-22 (run 3) — Typecheck debt: `src/index.ts` + `src/cli/config.ts` greened
+
+**Audited:** Remaining `tsc --noEmit` source-file errors. Picked two small,
+self-contained source modules (avoided the 63-error `app.ts` cluster, too large
+for one reviewable hour).
+
+**Changed:**
+- `src/cli/config.ts` (6 errors, one root cause): `resolveOperatorCli*Config`
+  derived `merged` via `"merged" in config ? config.merged : config`. Because
+  `OperatorCliRuntimeConfig` is *structurally assignable* to the index-signature
+  `OperatorCliConfigObject`, the `in` narrowing collapsed `merged` to
+  `OperatorCliConfigValue` (nullable, no known props) → TS18047/TS2339 on
+  `.permissionMode`/`.hooks`/`.statusLine`. Added a `resolveMergedConfig` helper
+  that discriminates on the runtime shape (`isConfigObject(merged)` +
+  `Array.isArray(loadedEntries)`) and used it in both functions.
+- `src/index.ts` (6 errors): the barrel re-exported three names that are defined
+  independently in two modules each — `SpawnSubagentResult`
+  (control-plane/server + orchestrator/operator-runtime),
+  `CreateCaptureConsentParams` (capture/ingestion + operator-runtime),
+  `CreateTrainingJobParams` (training/job-store + operator-runtime) → TS2300
+  duplicate identifiers. Confirmed none are imported via the barrel internally,
+  then aliased the operator-runtime exports with the `Runtime` prefix already
+  established for `RuntimeReviewTrajectoryParams`. No type definitions touched.
+
+**Test results:** typecheck **390 → 378** (index.ts + config.ts now CLEAN).
+Build ✅. Tests ✅ **174/174**. Pure type-safety/barrel-naming changes.
+
+**New idea (logged to ROADMAP):** A barrel-collision lint — a tiny script that
+scans `src/index.ts` re-exports for names exported from more than one module and
+flags them, so future duplicate-identifier debt is caught at authoring time
+instead of accumulating silently.
+
+---
+
 ## 2026-06-22 (run 2) — Typecheck debt: `src/capture/` greened
 
 **Audited:** Full `tsc --noEmit` output. The roadmap's earlier note massively

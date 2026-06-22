@@ -9,13 +9,13 @@ unchecked items are queued. Keep this richer than you found it each run.
 - [x] Make config loading hermetic in tests via an injectable `configHome`
       (2026-06-22).
 - [ ] **Pay down typecheck debt** (surfaced by the `typecheck` script). Full
-      `tsc --noEmit` count was **397** on 2026-06-22; now **390** after greening
-      `src/capture/`. Remaining by file (fix one module per run, no mass-rewrite):
+      `tsc --noEmit` count was **397** on 2026-06-22; now **378** after greening
+      `src/capture/`, `src/index.ts`, and `src/cli/config.ts`. Remaining by file
+      (fix one module per run, no mass-rewrite):
   - [x] `src/capture/` (trajectory-store.ts, replay-service.ts) — DONE run 2.
+  - [x] `src/index.ts` (6) — DONE run 3 (barrel alias for cross-module dupes).
+  - [x] `src/cli/config.ts` (6) — DONE run 3 (`resolveMergedConfig` helper).
   - [ ] `src/cli/app.ts` (63) — largest source-file cluster.
-  - [ ] `src/index.ts` (6): duplicate identifiers `SpawnSubagentResult`,
-    `CreateCaptureConsentParams`, `CreateTrainingJobParams` (re-exported twice).
-  - [ ] `src/cli/config.ts` (6).
   - [ ] `src/orchestrator/operator-runtime.ts` (4): `FileBackgroundTaskStore`
     used as a callable type-arg constraint; optional-vs-required `sessionId`
     (~L1103); `string | undefined` not assignable to `string` (~L1855).
@@ -58,6 +58,9 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Coordination guard between the parallel cloud + local self-evolve runs
       (e.g. a lightweight lock/heartbeat file) to avoid duplicated work and
       merge churn.
+- [ ] Barrel-collision lint: scan `src/index.ts` re-exports for names exported
+      from more than one module and flag them, so duplicate-identifier debt is
+      caught at authoring time instead of accumulating silently.
 - [ ] Per-module typecheck ratchet: record each module's current `tsc` error
       count to a baseline file and fail if a module regresses above it. Lets the
       engine pay debt down module-by-module without one green-gate blocking
