@@ -46,6 +46,31 @@ describe("OperatorCliConfigLoader", () => {
     });
   });
 
+  it("honors an explicit configHome and never reads the real $HOME/.claude", async () => {
+    const root = await makeTempDir();
+    const cwd = path.join(root, "project");
+    const realHome = path.join(root, "real-home");
+    const isolatedHome = path.join(root, "isolated", ".claude");
+    await fs.mkdir(path.join(realHome, ".claude"), { recursive: true });
+    await fs.mkdir(isolatedHome, { recursive: true });
+    // A settings.json under the real $HOME that MUST NOT leak into the loader.
+    await fs.writeFile(path.join(realHome, ".claude", "settings.json"), '{"statusLine":{"type":"command","command":"leaked"}}');
+
+    const previousHome = process.env.HOME;
+    process.env.HOME = realHome;
+    try {
+      const loaded = await new OperatorCliConfigLoader(cwd, isolatedHome).load();
+      expect(loaded.loadedEntries.map((entry) => entry.source)).toEqual([]);
+      expect(resolveOperatorCliStatusLineConfig(loaded)).toBeUndefined();
+    } finally {
+      if (previousHome === undefined) {
+        delete process.env.HOME;
+      } else {
+        process.env.HOME = previousHome;
+      }
+    }
+  });
+
   it("deep merges nested config objects", () => {
     expect(
       deepMergeConfig(

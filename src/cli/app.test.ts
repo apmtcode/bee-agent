@@ -521,7 +521,8 @@ describe("OperatorCliApp", () => {
 
   it("shows, configures, and disables the status line command", async () => {
     const rootDir = await makeTempDir();
-    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    const configHome = path.join(rootDir, "user-home");
+    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25", configHome });
     const session = await app.runtime.startSession({ title: "statusline cli", cwd: rootDir, agentId: "operator-cli" });
 
     await expect(app.dispatchSlashCommand({ kind: "statusline" }, session.id)).resolves.toBe("statusLine disabled");

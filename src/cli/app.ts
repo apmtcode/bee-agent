@@ -111,6 +111,12 @@ export type OperatorCliAppOptions = {
   rootDir: string;
   cwd?: string;
   currentDate?: string;
+  /**
+   * Root of the user-level config (the `.claude` directory). Defaults to
+   * `CLAUDE_CONFIG_HOME` / `$HOME/.claude` in production. Tests should set this
+   * to an isolated path so the developer's real global config never leaks in.
+   */
+  configHome?: string;
   stdin?: NodeJS.ReadableStream;
   stdout?: NodeJS.WritableStream;
   stderr?: NodeJS.WritableStream;
@@ -151,7 +157,7 @@ export class OperatorCliApp {
   }
 
   async loadRuntimeConfig(): Promise<OperatorCliRuntimeConfig> {
-    const config = await new OperatorCliConfigLoader(this.cwd).load();
+    const config = await new OperatorCliConfigLoader(this.cwd, this.options.configHome).load();
     this.runtime.setExecutionConfig(resolveOperatorCliExecutionConfig(config));
     return config;
   }
