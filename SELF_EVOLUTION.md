@@ -6,6 +6,43 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-06-23 (run 7) — 🎯 `app.ts` fully green: ALL source files typecheck + source-only gate
+
+**Audited:** The final 15 `app.ts` errors (10 composed control returns + 5
+unrelated) plus the status-line controller's stdout typing.
+
+**Changed:**
+- **Two genuine latent bugs fixed** (`src/cli/app.ts`): the cron delivery-target
+  labels did `target.kind === "local" ? "local" : target.url`, but
+  `DeliveryTarget` is `local | webhook | browser-push` — so a `browser-push`
+  target (no `.url`) would print `undefined` at runtime. Added
+  `formatDeliveryTargetLabel(target)` with an exhaustive `switch` over all three
+  kinds and used it at the 4 sites (cron-list/runs/tick).
+- `src/cli/status-line.ts`: the controller required `stdout: Writable & {…}` but
+  only ever reads `.isTTY`/`.columns`; loosened it to `NodeJS.WritableStream &
+  {…}` (what it actually needs), which also matches the app's stdout field. Drop
+  the now-unused `Writable` import.
+- `src/control-plane/server.ts`: mapped the two composed control methods —
+  `sessions.platformControl` → the already-exported `SessionPlatformControlResult`
+  (status & { action, results }); `sessions.remoteControl` →
+  `NonNullable<Awaited<ReturnType<typeof buildSessionRemoteStatusResult>>>` (it
+  returns a refreshed status, same as remoteStatus).
+- **New source-only typecheck gate:** added `tsconfig.src.json` (extends base,
+  excludes `**/*.test.ts`) + `typecheck:src` script. It currently **passes
+  (exit 0)** — locking in the milestone below.
+
+**Test results:** 🎯 **ALL `src/**` non-test files now typecheck clean** —
+`app.ts` 15 → 0; the non-test error list is empty. Full `tsc` total **244 → 229**
+(the remaining 229 are entirely in test files). `npm run typecheck:src` ✅.
+Build ✅. Tests ✅ **174/174**.
+
+**New idea:** wire `typecheck:src` into the engine's per-run pre-push self-check
+now (cheap insurance against a source regression), and keep the full `typecheck`
+(incl. tests) as the longer-horizon target. Longer term: a `verify` script =
+`typecheck:src && build && test` as the canonical green gate.
+
+---
+
 ## 2026-06-23 (run 6) — Extend `handle()` result map: app.ts 43→15, total 274→244
 
 **Audited:** The 43 remaining `app.ts` errors (all the untyped-`handle` family) and

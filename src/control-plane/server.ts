@@ -102,10 +102,10 @@ export interface ControlPlaneResultMap {
   "sessions.platformInventory": ReturnType<typeof buildSessionPlatformInventoryResult>;
   "sessions.platformStatus": NonNullable<ReturnType<typeof buildSessionPlatformStatusResult>>;
   "sessions.remoteRepair": ReturnType<typeof buildSessionRemoteRepairResult>;
-  // NOTE: sessions.platformControl and sessions.remoteControl return *composed*
-  // objects (`ok({ ...status, action, … })`) rather than a single builder
-  // result, so they need a dedicated named result type — left as `unknown` for
-  // now (tracked in ROADMAP).
+  // remoteControl returns the same shape as remoteStatus (a refreshed status).
+  "sessions.remoteControl": NonNullable<Awaited<ReturnType<typeof buildSessionRemoteStatusResult>>>;
+  // platformControl returns the platform status composed with action + results.
+  "sessions.platformControl": SessionPlatformControlResult;
 }
 
 /** Resolve the typed result for a method, defaulting to `unknown` when unmapped. */

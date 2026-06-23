@@ -8,6 +8,7 @@ import type { Interface as ReadlineInterface } from "node:readline/promises";
 import { promisify } from "node:util";
 import { subscribeRuntimeEvents } from "../control-plane/subscriptions.js";
 import { OperatorControlPlaneServer } from "../control-plane/server.js";
+import type { DeliveryTarget } from "../control-plane/delivery.js";
 import { StandaloneOperatorRuntime } from "../orchestrator/operator-runtime.js";
 import type { TranscriptRecord } from "../harness/transcript-store.js";
 import {
@@ -1038,8 +1039,8 @@ export class OperatorCliApp {
           : response.result
               .map((job) => {
                 const deliveryTargets = [
-                  ...(job.delivery?.onSuccess?.map((target) => `success:${target.kind === "local" ? "local" : target.url}`) ?? []),
-                  ...(job.delivery?.onFailure?.map((target) => `failure:${target.kind === "local" ? "local" : target.url}`) ?? []),
+                  ...(job.delivery?.onSuccess?.map((target) => `success:${formatDeliveryTargetLabel(target)}`) ?? []),
+                  ...(job.delivery?.onFailure?.map((target) => `failure:${formatDeliveryTargetLabel(target)}`) ?? []),
                 ];
                 return `${job.id} ${job.cron} recurring=${job.recurring} next=${job.nextRunAt ?? "<none>"} last=${job.lastRunAt ?? "<none>"} status=${job.lastStatus ?? "<none>"} prompt=${job.prompt}${job.lastError ? ` error=${job.lastError}` : ""}${job.lastDeliveryStatus ? ` delivery=${job.lastDeliveryStatus}` : ""}${job.lastDeliveryError ? ` deliveryError=${job.lastDeliveryError}` : ""}${deliveryTargets.length > 0 ? ` targets=${deliveryTargets.join(",")}` : ""}`;
               })
@@ -1082,7 +1083,7 @@ export class OperatorCliApp {
           ? "No cron runs."
           : response.result
               .map((run) => {
-                const delivery = run.deliveryResults?.map((result) => `${result.target.kind === "local" ? "local" : result.target.url}:${result.status}${result.error ? `:${result.error}` : ""}`).join(",");
+                const delivery = run.deliveryResults?.map((result) => `${formatDeliveryTargetLabel(result.target)}:${result.status}${result.error ? `:${result.error}` : ""}`).join(",");
                 return `${run.id} job=${run.jobId} ${run.status}${run.outcome ? ` outcome=${run.outcome}` : ""}${run.sessionId ? ` session=${run.sessionId}` : ""}${run.operatorRunId ? ` run=${run.operatorRunId}` : ""}${run.summary ? ` summary=${run.summary}` : ""}${run.error ? ` error=${run.error}` : ""}${delivery ? ` delivery=${delivery}` : ""}`;
               })
               .join("\n");
@@ -1096,7 +1097,7 @@ export class OperatorCliApp {
           ? "No due cron jobs."
           : response.result
               .map((run) => {
-                const delivery = run.deliveryResults?.map((result) => `${result.target.kind === "local" ? "local" : result.target.url}:${result.status}${result.error ? `:${result.error}` : ""}`).join(",");
+                const delivery = run.deliveryResults?.map((result) => `${formatDeliveryTargetLabel(result.target)}:${result.status}${result.error ? `:${result.error}` : ""}`).join(",");
                 return `${run.id} job=${run.jobId} ${run.status}${run.outcome ? ` outcome=${run.outcome}` : ""}${run.sessionId ? ` session=${run.sessionId}` : ""}${run.operatorRunId ? ` run=${run.operatorRunId}` : ""}${run.summary ? ` summary=${run.summary}` : ""}${run.error ? ` error=${run.error}` : ""}${delivery ? ` delivery=${delivery}` : ""}`;
               })
               .join("\n");
@@ -2359,4 +2360,16 @@ function parseOptionalPositiveInteger(value: string): number | undefined {
   }
   const parsed = Number.parseInt(value, 10);
   return parsed > 0 ? parsed : undefined;
+}
+
+/** Render a delivery target as a short CLI label, covering every target kind. */
+function formatDeliveryTargetLabel(target: DeliveryTarget): string {
+  switch (target.kind) {
+    case "local":
+      return "local";
+    case "webhook":
+      return target.url;
+    case "browser-push":
+      return `browser-push:${target.endpoint}`;
+  }
 }

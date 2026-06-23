@@ -1,5 +1,4 @@
 import { spawn } from "node:child_process";
-import type { Writable } from "node:stream";
 import process from "node:process";
 import type { StandaloneOperatorRuntime } from "../orchestrator/operator-runtime.js";
 import { resolveOperatorCliExecutionConfig, type OperatorCliRuntimeConfig, type OperatorCliStatusLineConfig } from "./config.js";
@@ -37,7 +36,7 @@ export type OperatorCliStatusLineSnapshot = {
 
 export type OperatorCliStatusLineControllerOptions = {
   config?: OperatorCliStatusLineConfig;
-  stdout: Writable & { isTTY?: boolean; columns?: number };
+  stdout: NodeJS.WritableStream & { isTTY?: boolean; columns?: number };
   buildSnapshot: () => Promise<OperatorCliStatusLineSnapshot>;
   onRenderedLineChange?: (line?: string) => void;
   commandTimeoutMs?: number;

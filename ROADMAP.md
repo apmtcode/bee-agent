@@ -9,27 +9,22 @@ unchecked items are queued. Keep this richer than you found it each run.
 - [x] Make config loading hermetic in tests via an injectable `configHome`
       (2026-06-22).
 - [ ] **Pay down typecheck debt** (surfaced by the `typecheck` script). Full
-      `tsc --noEmit` count was **397** on 2026-06-22; now **244**. All source
-      files except `app.ts` are clean; `app.ts` down to **15** (was 63) via the
-      typed `handle()` result map. Fix one module/family per run, no mass-rewrite:
+      `tsc --noEmit` count was **397** on 2026-06-22; now **229**. 🎯 **ALL
+      source (`src/**` non-test) files now typecheck clean** as of run 7; the
+      remaining 229 errors are entirely in test files. Fix per file, no
+      mass-rewrite:
   - [x] `src/capture/` (trajectory-store.ts, replay-service.ts) — DONE run 2.
   - [x] `src/index.ts` (6) — DONE run 3 (barrel alias for cross-module dupes).
   - [x] `src/cli/config.ts` (6) — DONE run 3 (`resolveMergedConfig` helper).
   - [x] `src/control-plane/server.ts` (4) — DONE run 4.
   - [x] `src/orchestrator/operator-runtime.ts` (4 + cascade) — DONE run 4.
-  - [~] `src/cli/app.ts` (63 → 15) — **last source file**. Root cause: untyped
-    `server.handle()` results. Runs 5–6 added `ControlPlaneResultMap` + typed
-    `handle<M>` overload and seeded **cron**, **pairing**, **monitors.***,
-    **tasks.stop**, and the direct-builder **sessions** methods
-    (remoteStatus/remoteInventory/platformInventory/platformStatus/remoteRepair).
-    Remaining 15 errors, now a mix (no longer one root cause):
-    - [ ] `sessions.platformControl` + `sessions.remoteControl` (10 errors) —
-      return *composed* objects `ok({ ...status, action, results, … })`. Define a
-      named exported result type for each (e.g. `SessionRemoteControlResult`) and
-      map to it; can't use a bare `ReturnType<>` because the shape is inline.
-    - [ ] `BrowserPushDeliveryTarget | { kind:"webhook"; url } ` union (4 errors,
-      ~L1041-1099): narrow on `.kind === "webhook"` before reading `.url`.
-    - [ ] `WritableStream` vs `Writable` stream-type mismatch (~L1172).
+  - [x] `src/cli/app.ts` (63 → 0) — DONE run 7. Runs 5–6 built the typed
+    `handle()` result map (cron, pairing, monitors, tasks.stop, direct-builder
+    sessions); run 7 mapped the composed `sessions.platformControl`
+    (`SessionPlatformControlResult`) + `sessions.remoteControl` (refreshed
+    status), fixed a real delivery-target bug (`formatDeliveryTargetLabel` covers
+    `browser-push`, not just local/webhook), and loosened the status-line
+    controller's `stdout` to `NodeJS.WritableStream`.
   - [ ] Map-coverage test: assert every `case "x.y":` in `handle`'s switch has a
     `ControlPlaneResultMap` entry or is explicitly allow-listed as `unknown`, so
     new untyped RPC methods are caught instead of silently `unknown`.
@@ -40,10 +35,9 @@ unchecked items are queued. Keep this richer than you found it each run.
     `session-stream.test.ts` (15), `gateway-transport.test.ts` (15), others.
 - [ ] Add a `verify` npm script (`typecheck && build && test`) and have the
       engine run it as a pre-push self-check each cycle.
-- [ ] Interim **source-only typecheck gate**: once `app.ts` is green, add
-      `typecheck:src` (`tsc --noEmit` filtered to `src/**` minus `*.test.ts`) and
-      gate on it now, locking in the source-clean state without waiting for the
-      ~284 test-file errors to clear.
+- [x] Interim **source-only typecheck gate** — DONE run 7. `tsconfig.src.json`
+      (excludes `**/*.test.ts`) + `typecheck:src` script; passes (exit 0). Next:
+      have the engine run it as a per-run pre-push self-check.
 - [ ] Add a minimal CI workflow mirroring `verify` for human-opened PRs.
 
 ## Capability parity (audit reference agents → port gaps)
