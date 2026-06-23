@@ -9,6 +9,7 @@ import {
   runOperatorCommandHooks,
   runOperatorHooks,
   runOperatorPreToolUseHooks,
+  type OperatorExecutionAction,
   type OperatorHookResult,
 } from "../cli/execution-policy.js";
 import { FileApprovalStore } from "../control-plane/approval-store.js";
@@ -100,8 +101,8 @@ import { LocalTrainingExporter, type CreateReviewedExportParams } from "../train
 export type StandaloneOperatorOptions = {
   rootDir: string;
   replayLimit?: number;
-  backgroundTaskSpawnProcess?: Parameters<typeof FileBackgroundTaskStore>[1];
-  backgroundTaskIsProcessRunning?: Parameters<typeof FileBackgroundTaskStore>[2];
+  backgroundTaskSpawnProcess?: ConstructorParameters<typeof FileBackgroundTaskStore>[1];
+  backgroundTaskIsProcessRunning?: ConstructorParameters<typeof FileBackgroundTaskStore>[2];
   executionConfig?: OperatorCliExecutionConfig;
   delivery?: OperatorDeliveryService;
 };
@@ -1092,7 +1093,7 @@ export class StandaloneOperatorRuntime {
       };
     }
 
-    let effectiveAction = action;
+    let effectiveAction: OperatorExecutionAction = action;
     let preHookResults: OperatorHookResult[] = [];
 
     try {
@@ -1852,7 +1853,7 @@ export class StandaloneOperatorRuntime {
           return { output: authorization.message };
         }
         authorizedCommand = authorization.command;
-        authorizedTitle = authorization.title;
+        authorizedTitle = authorization.title ?? authorizedTitle;
       }
       const { stdout, stderr } = await execFileAsync("bash", ["-lc", authorizedCommand], { cwd: this.rootDir, maxBuffer: 1024 * 1024 });
       const postHookResults = params.executionConfig

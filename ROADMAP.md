@@ -9,21 +9,23 @@ unchecked items are queued. Keep this richer than you found it each run.
 - [x] Make config loading hermetic in tests via an injectable `configHome`
       (2026-06-22).
 - [ ] **Pay down typecheck debt** (surfaced by the `typecheck` script). Full
-      `tsc --noEmit` count was **397** on 2026-06-22; now **378** after greening
-      `src/capture/`, `src/index.ts`, and `src/cli/config.ts`. Remaining by file
-      (fix one module per run, no mass-rewrite):
+      `tsc --noEmit` count was **397** on 2026-06-22; now **347**. **All source
+      files except `app.ts` are clean** — remaining errors are app.ts (63) + test
+      files (~284). Fix one module per run, no mass-rewrite:
   - [x] `src/capture/` (trajectory-store.ts, replay-service.ts) — DONE run 2.
   - [x] `src/index.ts` (6) — DONE run 3 (barrel alias for cross-module dupes).
   - [x] `src/cli/config.ts` (6) — DONE run 3 (`resolveMergedConfig` helper).
-  - [ ] `src/cli/app.ts` (63) — largest source-file cluster.
-  - [ ] `src/orchestrator/operator-runtime.ts` (4): `FileBackgroundTaskStore`
-    used as a callable type-arg constraint; optional-vs-required `sessionId`
-    (~L1103); `string | undefined` not assignable to `string` (~L1855).
-  - [ ] `src/control-plane/server.ts` (4).
-  - [ ] Test files (bulk): `server.test.ts` (234), `app.test.ts` (41),
+  - [x] `src/control-plane/server.ts` (4) — DONE run 4.
+  - [x] `src/orchestrator/operator-runtime.ts` (4 + cascade) — DONE run 4.
+  - [ ] `src/cli/app.ts` (63) — **last source file**; largest single cluster.
+  - [ ] Test files (bulk, ~284): `server.test.ts` (234), `app.test.ts` (41),
     `session-stream.test.ts` (15), `gateway-transport.test.ts` (15), others.
 - [ ] Add a `verify` npm script (`typecheck && build && test`) and have the
       engine run it as a pre-push self-check each cycle.
+- [ ] Interim **source-only typecheck gate**: once `app.ts` is green, add
+      `typecheck:src` (`tsc --noEmit` filtered to `src/**` minus `*.test.ts`) and
+      gate on it now, locking in the source-clean state without waiting for the
+      ~284 test-file errors to clear.
 - [ ] Add a minimal CI workflow mirroring `verify` for human-opened PRs.
 
 ## Capability parity (audit reference agents → port gaps)

@@ -581,7 +581,7 @@ export class OperatorControlPlaneServer {
       if (!bootstrap.ok) {
         return this.toHttpResponse(bootstrap);
       }
-      const session = bootstrap.result.session;
+      const session = (bootstrap.result as SessionBootstrapResult).session;
       const existingMetadata = session.metadata.webhookChat;
       if (hasWebhookChatDeliveryId(existingMetadata, payload.deliveryId)) {
         return {
@@ -1695,7 +1695,7 @@ async function buildSessionBootstrapResult(
     approvals: await runtime.listApprovals(session.id),
     taskPlan: buildSessionTaskPlan(await runtime.listTasks(session.id)),
     ...(plan ? { plan: buildSessionPlan(plan) } : {}),
-    events: typeof options.afterTs === "number" ? events.filter((event) => event.ts > options.afterTs!) : events,
+    events: typeof options.afterTs === "number" ? events.filter((event) => event.ts !== undefined && event.ts > options.afterTs!) : events,
   };
 }
 
@@ -1913,7 +1913,7 @@ function derivePlatformControlStatus(
       ...(typeof breaker.threshold === "number" ? { threshold: breaker.threshold } : {}),
     };
   }
-  const controls = remotes.map((remote) => remote.control).filter(Boolean);
+  const controls = remotes.map((remote) => remote.control).filter((control): control is NonNullable<typeof control> => control != null);
   if (controls.length === 0) {
     return { state: "active" };
   }

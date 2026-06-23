@@ -6,6 +6,36 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-06-22 (run 4) — Typecheck debt: `server.ts` + `operator-runtime.ts` greened (app.ts is the last source file)
+
+**Audited:** Remaining source-file `tsc --noEmit` errors (operator-runtime 4,
+control-plane/server 4).
+
+**Changed:**
+- `src/control-plane/server.ts` (4): cast the generic RPC `bootstrap.result`
+  (typed `unknown` by the method-agnostic `handle()` dispatcher) to the existing
+  `SessionBootstrapResult`; guard `event.ts !== undefined` before comparing to
+  `afterTs`; replace a non-narrowing `.filter(Boolean)` on remote controls with a
+  `control is NonNullable<…>` predicate so the later `.every` callbacks typecheck.
+- `src/orchestrator/operator-runtime.ts` (4 + cascade): `Parameters<typeof
+  FileBackgroundTaskStore>` → `ConstructorParameters<…>` (it's a class, not a
+  call signature); annotate `let effectiveAction: OperatorExecutionAction`
+  (optional vs required `sessionId` mismatch) and import that type; fall back with
+  `authorization.title ?? authorizedTitle` to keep the title a `string`.
+
+**Test results:** typecheck **378 → 347** (server + operator-runtime CLEAN; the
+`effectiveAction` annotation cascaded to clear downstream inference errors too).
+**Milestone: `src/cli/app.ts` (63) is now the ONLY source file with typecheck
+errors** — every other `src/**` non-test module is clean. The remaining ~284 are
+all in test files. Build ✅. Tests ✅ **174/174**.
+
+**New idea (logged to ROADMAP):** Once `app.ts` is green, flip on a
+*source-only* typecheck gate (`tsc --noEmit` over `src/**` excluding `*.test.ts`)
+in the `verify` script before tackling the larger test-file debt — locks in the
+source-clean state immediately rather than waiting for all 347 to clear.
+
+---
+
 ## 2026-06-22 (run 3) — Typecheck debt: `src/index.ts` + `src/cli/config.ts` greened
 
 **Audited:** Remaining `tsc --noEmit` source-file errors. Picked two small,
