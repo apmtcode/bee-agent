@@ -91,6 +91,21 @@ export interface ControlPlaneResultMap {
   "pairing.list": Awaited<ReturnType<FilePairingStore["listTickets"]>>;
   "pairing.create": Awaited<ReturnType<FilePairingStore["createTicket"]>>;
   "pairing.resolve": Awaited<ReturnType<FilePairingStore["resolveTicket"]>>;
+  "monitors.list": Awaited<ReturnType<StandaloneOperatorRuntime["listBackgroundTasks"]>>;
+  "monitors.start": Awaited<ReturnType<StandaloneOperatorRuntime["startBackgroundTask"]>>;
+  "monitors.sync": NonNullable<Awaited<ReturnType<StandaloneOperatorRuntime["syncBackgroundTask"]>>>;
+  "monitors.stop": NonNullable<Awaited<ReturnType<StandaloneOperatorRuntime["cancelBackgroundTask"]>>>;
+  "monitors.output": NonNullable<Awaited<ReturnType<StandaloneOperatorRuntime["getBackgroundTaskOutput"]>>>;
+  "tasks.stop": NonNullable<Awaited<ReturnType<StandaloneOperatorRuntime["cancelBackgroundTask"]>>>;
+  "sessions.remoteStatus": NonNullable<Awaited<ReturnType<typeof buildSessionRemoteStatusResult>>>;
+  "sessions.remoteInventory": Awaited<ReturnType<typeof buildSessionRemoteInventoryResult>>;
+  "sessions.platformInventory": ReturnType<typeof buildSessionPlatformInventoryResult>;
+  "sessions.platformStatus": NonNullable<ReturnType<typeof buildSessionPlatformStatusResult>>;
+  "sessions.remoteRepair": ReturnType<typeof buildSessionRemoteRepairResult>;
+  // NOTE: sessions.platformControl and sessions.remoteControl return *composed*
+  // objects (`ok({ ...status, action, … })`) rather than a single builder
+  // result, so they need a dedicated named result type — left as `unknown` for
+  // now (tracked in ROADMAP).
 }
 
 /** Resolve the typed result for a method, defaulting to `unknown` when unmapped. */

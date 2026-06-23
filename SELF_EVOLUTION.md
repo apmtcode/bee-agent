@@ -6,6 +6,41 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-06-23 (run 6) — Extend `handle()` result map: app.ts 43→15, total 274→244
+
+**Audited:** The 43 remaining `app.ts` errors (all the untyped-`handle` family) and
+the matching server-side result expressions for the `monitors.*`, `tasks.stop`,
+and `sessions.platform*/remote*` methods.
+
+**Changed (additive) in `src/control-plane/server.ts`:** extended
+`ControlPlaneResultMap` with 11 more compiler-verified entries:
+- `monitors.list/start/sync/stop/output` + `tasks.stop` via
+  `Awaited<ReturnType<StandaloneOperatorRuntime[…]>>` (with `NonNullable<>` for
+  the null-checked `sync`/`stop`/`output`/`cancel` cases).
+- `sessions.remoteStatus/remoteInventory/platformInventory/platformStatus/
+  remoteRepair` via `ReturnType<typeof build…Result>` (the methods that return a
+  single builder result directly; `NonNullable<>`/`Awaited<>` as appropriate).
+
+**Deliberately left as `unknown` (documented):** `sessions.platformControl` and
+`sessions.remoteControl` return *composed* objects (`ok({ ...status, action,
+results, … })`), not a single builder result, so they need a dedicated named
+result type rather than a `ReturnType<>` reference — tracked in ROADMAP.
+
+**Test results:** typecheck **274 → 244** (`app.ts` 43 → 15). server.ts stayed
+CLEAN. Build ✅. Tests ✅ **174/174**. The 15 remaining `app.ts` errors are now a
+*mix*, not one root cause: 10 from the two composed control returns, plus 5
+genuinely unrelated (4× a `BrowserPushDeliveryTarget | webhook` union that needs
+`.kind` narrowing before `.url`; 1× a `WritableStream` vs `Writable` stream-type
+mismatch ~L1172).
+
+**New idea:** now that the RPC result types are centralized, generate a typed
+client facade (`createControlPlaneClient(server)`) exposing one method per
+mapped RPC with inferred params/results — so call sites read
+`client.cronList()` instead of `handle({method:"cron.list"})`, and unmapped
+methods are a compile error rather than a silent `unknown`.
+
+---
+
 ## 2026-06-23 (run 5) — Typed `handle()` result map: app.ts 63→43, total 347→274
 
 **Audited:** The 63 `app.ts` errors. Found 48 are the *same* root cause —

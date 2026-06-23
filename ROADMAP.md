@@ -9,25 +9,33 @@ unchecked items are queued. Keep this richer than you found it each run.
 - [x] Make config loading hermetic in tests via an injectable `configHome`
       (2026-06-22).
 - [ ] **Pay down typecheck debt** (surfaced by the `typecheck` script). Full
-      `tsc --noEmit` count was **397** on 2026-06-22; now **274**. All source
-      files except `app.ts` are clean; `app.ts` down to **43** (was 63) via the
+      `tsc --noEmit` count was **397** on 2026-06-22; now **244**. All source
+      files except `app.ts` are clean; `app.ts` down to **15** (was 63) via the
       typed `handle()` result map. Fix one module/family per run, no mass-rewrite:
   - [x] `src/capture/` (trajectory-store.ts, replay-service.ts) — DONE run 2.
   - [x] `src/index.ts` (6) — DONE run 3 (barrel alias for cross-module dupes).
   - [x] `src/cli/config.ts` (6) — DONE run 3 (`resolveMergedConfig` helper).
   - [x] `src/control-plane/server.ts` (4) — DONE run 4.
   - [x] `src/orchestrator/operator-runtime.ts` (4 + cascade) — DONE run 4.
-  - [~] `src/cli/app.ts` (63 → 43) — **last source file**. Root cause: untyped
-    `server.handle()` results. Run 5 added `ControlPlaneResultMap` + typed
-    `handle<M>` overload (server.ts) and seeded the **cron** + **pairing**
-    families. Remaining: extend the map with the families app.ts consumes —
-    `monitors.*` (list/start/sync/stop/output; use `Awaited<ReturnType<
-    StandaloneOperatorRuntime[…]>>`, `NonNullable<>` for null-checked ones),
-    `tasks.stop`, `sessions.platform*` + `sessions.remote*` (builder return
-    types). One family per run, compiler-verified.
+  - [~] `src/cli/app.ts` (63 → 15) — **last source file**. Root cause: untyped
+    `server.handle()` results. Runs 5–6 added `ControlPlaneResultMap` + typed
+    `handle<M>` overload and seeded **cron**, **pairing**, **monitors.***,
+    **tasks.stop**, and the direct-builder **sessions** methods
+    (remoteStatus/remoteInventory/platformInventory/platformStatus/remoteRepair).
+    Remaining 15 errors, now a mix (no longer one root cause):
+    - [ ] `sessions.platformControl` + `sessions.remoteControl` (10 errors) —
+      return *composed* objects `ok({ ...status, action, results, … })`. Define a
+      named exported result type for each (e.g. `SessionRemoteControlResult`) and
+      map to it; can't use a bare `ReturnType<>` because the shape is inline.
+    - [ ] `BrowserPushDeliveryTarget | { kind:"webhook"; url } ` union (4 errors,
+      ~L1041-1099): narrow on `.kind === "webhook"` before reading `.url`.
+    - [ ] `WritableStream` vs `Writable` stream-type mismatch (~L1172).
   - [ ] Map-coverage test: assert every `case "x.y":` in `handle`'s switch has a
     `ControlPlaneResultMap` entry or is explicitly allow-listed as `unknown`, so
     new untyped RPC methods are caught instead of silently `unknown`.
+- [ ] Typed client facade `createControlPlaneClient(server)`: one method per
+    mapped RPC with inferred params/results, so call sites read
+    `client.cronList()` and unmapped methods are a compile error, not `unknown`.
   - [ ] Test files (bulk, ~284): `server.test.ts` (234), `app.test.ts` (41),
     `session-stream.test.ts` (15), `gateway-transport.test.ts` (15), others.
 - [ ] Add a `verify` npm script (`typecheck && build && test`) and have the
