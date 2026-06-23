@@ -106,6 +106,38 @@ export interface ControlPlaneResultMap {
   "sessions.remoteControl": NonNullable<Awaited<ReturnType<typeof buildSessionRemoteStatusResult>>>;
   // platformControl returns the platform status composed with action + results.
   "sessions.platformControl": SessionPlatformControlResult;
+  // Orchestration families — all reference runtime method return types.
+  "sessions.list": Awaited<ReturnType<StandaloneOperatorRuntime["listSessions"]>>;
+  "sessions.get": NonNullable<Awaited<ReturnType<StandaloneOperatorRuntime["getSession"]>>>;
+  "sessions.resume": NonNullable<Awaited<ReturnType<StandaloneOperatorRuntime["resumeSession"]>>>;
+  "sessions.idle": NonNullable<Awaited<ReturnType<StandaloneOperatorRuntime["markSessionIdle"]>>>;
+  "sessions.complete": NonNullable<Awaited<ReturnType<StandaloneOperatorRuntime["completeSession"]>>>;
+  "sessions.fail": NonNullable<Awaited<ReturnType<StandaloneOperatorRuntime["failSession"]>>>;
+  "tasks.create": Awaited<ReturnType<StandaloneOperatorRuntime["createTask"]>>;
+  "tasks.get": NonNullable<Awaited<ReturnType<StandaloneOperatorRuntime["getTask"]>>>;
+  "tasks.list": Awaited<ReturnType<StandaloneOperatorRuntime["listTasks"]>>;
+  "tasks.update": NonNullable<Awaited<ReturnType<StandaloneOperatorRuntime["updateTask"]>>>;
+  "runs.start": Awaited<ReturnType<StandaloneOperatorRuntime["startRun"]>>;
+  "runs.get": NonNullable<Awaited<ReturnType<StandaloneOperatorRuntime["getRun"]>>>;
+  "runs.list": Awaited<ReturnType<StandaloneOperatorRuntime["listRuns"]>>;
+  "transcript.get": Awaited<ReturnType<StandaloneOperatorRuntime["getTranscript"]>>;
+  "approvals.list": Awaited<ReturnType<StandaloneOperatorRuntime["listApprovals"]>>;
+  "approvals.resolve": NonNullable<Awaited<ReturnType<StandaloneOperatorRuntime["resolveApproval"]>>>;
+  "sessions.bootstrap": SessionBootstrapResult;
+  "plans.get": NonNullable<Awaited<ReturnType<StandaloneOperatorRuntime["getPlan"]>>>;
+  "plans.upsert": Awaited<ReturnType<StandaloneOperatorRuntime["upsertPlan"]>>;
+  "plans.requestApproval": Awaited<ReturnType<StandaloneOperatorRuntime["requestPlanApproval"]>>;
+  "plans.respondApproval": Awaited<ReturnType<StandaloneOperatorRuntime["respondPlanApproval"]>>;
+  "plans.verify": Awaited<ReturnType<StandaloneOperatorRuntime["updatePlanVerification"]>>;
+  "messages.send": Awaited<ReturnType<StandaloneOperatorRuntime["sendMessage"]>>;
+  "messages.list": Awaited<ReturnType<StandaloneOperatorRuntime["listMessages"]>>;
+  "messages.inbox": Awaited<ReturnType<StandaloneOperatorRuntime["listInbox"]>>;
+  "messages.outbox": Awaited<ReturnType<StandaloneOperatorRuntime["listOutbox"]>>;
+  "teams.teammates.start": Awaited<ReturnType<StandaloneOperatorRuntime["startTeammate"]>>;
+  "teams.teammates.list": Awaited<ReturnType<StandaloneOperatorRuntime["listTeammates"]>>;
+  "teams.teammates.get": NonNullable<Awaited<ReturnType<StandaloneOperatorRuntime["getTeammate"]>>>;
+  "teams.teammates.update": NonNullable<Awaited<ReturnType<StandaloneOperatorRuntime["updateTeammateStatus"]>>>;
+  "teams.teammates.message": Awaited<ReturnType<StandaloneOperatorRuntime["sendTeammateMessage"]>>;
 }
 
 /** Resolve the typed result for a method, defaulting to `unknown` when unmapped. */

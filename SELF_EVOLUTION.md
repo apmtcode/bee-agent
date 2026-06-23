@@ -6,6 +6,40 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
+
+**Audited:** The remaining test-file typecheck debt. server.test.ts had 184
+errors; the dominant pattern (`Property 'id' does not exist on type '{}'` ×114)
+traces to the *same* root cause as the source errors — methods absent from
+`ControlPlaneResultMap` return `result: unknown`, and the tests' truthy-guards
+(`if (!x) throw`) narrow `unknown` to `{}`, so `.id` fails. Not a test bug; an
+unmapped-RPC consequence.
+
+**Changed (additive) in `src/control-plane/server.ts`:** extended
+`ControlPlaneResultMap` with the orchestration families the tests exercise — all
+referencing runtime method return types via `Awaited<ReturnType<…>>`
+(`NonNullable<>` where the handler does `ok(x) : notFound`, harmless otherwise):
+- `sessions.list/get/resume/idle/complete/fail` + `sessions.bootstrap`
+  (→ exported `SessionBootstrapResult`).
+- `tasks.create/get/list/update`, `runs.start/get/list`,
+  `approvals.list/resolve`, `transcript.get`.
+- `plans.get/upsert/requestApproval/respondApproval/verify`,
+  `messages.send/list/inbox/outbox`,
+  `teams.teammates.start/list/get/update/message`.
+
+**Test results:** full `tsc` **229 → 125** (server.test.ts 184 → 118;
+**app.test.ts 39 → 1** — it leans on bootstrap/sessions, so it nearly cleared via
+cascade). `typecheck:src` stayed CLEAN. Build ✅. Tests ✅ **174/174**.
+
+**New idea:** the map now covers ~37 methods. Worth auto-deriving the *expected*
+list from the handler switch (a build-time codegen or a test that scrapes
+`case "x.y":`) so the map and the dispatcher can't silently diverge — and so the
+handful of still-unmapped methods (skills.executable.*, push.subscriptions.*,
+trajectories.*, replays.*) are surfaced as an explicit TODO list rather than
+rediscovered by grep each run.
+
+---
+
 ## 2026-06-23 (run 7) — 🎯 `app.ts` fully green: ALL source files typecheck + source-only gate
 
 **Audited:** The final 15 `app.ts` errors (10 composed control returns + 5
