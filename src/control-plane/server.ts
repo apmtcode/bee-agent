@@ -73,6 +73,31 @@ export type ControlPlaneFailure = {
 
 export type ControlPlaneResponse<T = unknown> = ControlPlaneSuccess<T> | ControlPlaneFailure;
 
+/**
+ * Maps a control-plane method name to the success-result type that `handle`
+ * resolves for it. Entries reference the source-of-truth return types via
+ * `Awaited<ReturnType<...>>` so they cannot drift from the implementation.
+ *
+ * This map is intentionally partial: methods not listed here fall back to
+ * `unknown` (see `ControlPlaneResultFor`), preserving the prior behaviour.
+ * Extend it one method-family at a time as call sites are typed.
+ */
+export interface ControlPlaneResultMap {
+  "cron.list": Awaited<ReturnType<OperatorCronService["listJobs"]>>;
+  "cron.create": Awaited<ReturnType<OperatorCronService["createJob"]>>;
+  "cron.runs": Awaited<ReturnType<OperatorCronService["listRuns"]>>;
+  "cron.tick": Awaited<ReturnType<OperatorCronService["tick"]>>;
+  "cron.delete": { deleted: true };
+  "pairing.list": Awaited<ReturnType<FilePairingStore["listTickets"]>>;
+  "pairing.create": Awaited<ReturnType<FilePairingStore["createTicket"]>>;
+  "pairing.resolve": Awaited<ReturnType<FilePairingStore["resolveTicket"]>>;
+}
+
+/** Resolve the typed result for a method, defaulting to `unknown` when unmapped. */
+export type ControlPlaneResultFor<M extends string> = M extends keyof ControlPlaneResultMap
+  ? ControlPlaneResultMap[M]
+  : unknown;
+
 export type ControlPlaneHttpRequest = {
   method: string;
   path: string;
@@ -682,6 +707,9 @@ export class OperatorControlPlaneServer {
     };
   }
 
+  handle<M extends string>(
+    request: { method: M; params?: Record<string, unknown> },
+  ): Promise<ControlPlaneResponse<ControlPlaneResultFor<M>>>;
   async handle(request: ControlPlaneRequest): Promise<ControlPlaneResponse> {
     try {
       switch (request.method) {

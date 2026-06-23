@@ -6,6 +6,47 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-06-23 (run 5) — Typed `handle()` result map: app.ts 63→43, total 347→274
+
+**Audited:** The 63 `app.ts` errors. Found 48 are the *same* root cause —
+`server.handle()` is method-agnostic and returns `result: unknown`, so every
+`response.result.X` access errors, and the `.map((ticket) => …)` callbacks over
+those results inherit implicit-`any` (the 10 TS7006s are downstream of the same
+issue, not independent). Hand-casting 48 sites would be noise; the real fix is
+to type the RPC surface.
+
+**Changed (additive, backward-compatible) in `src/control-plane/server.ts`:**
+- Added `ControlPlaneResultMap` — a *partial* method→result-type interface whose
+  entries reference the source of truth via `Awaited<ReturnType<…>>` (e.g.
+  `OperatorCronService["listJobs"]`, `FilePairingStore["createTicket"]`), so they
+  cannot drift from the implementation.
+- Added `ControlPlaneResultFor<M>` = `M extends keyof ControlPlaneResultMap ?
+  … : unknown` — unmapped methods still resolve to `unknown`, exactly as before.
+- Added a typed `handle<M extends string>(request: { method: M; … })` overload
+  above the unchanged implementation signature. Object-literal `method:` fields
+  infer `M` to the string literal, so callers get typed results for free; callers
+  passing a `ControlPlaneRequest` (method: string) still get `unknown`. Zero
+  behaviour change.
+- Seeded the map with the **cron** (5) and **pairing** (3) families — the methods
+  `app.ts` consumes whose result types are cleanly referenceable.
+
+**Test results:** typecheck **347 → 274** (`app.ts` 63 → 43; the typed overload
+also cascaded correctness into test files, hence the larger total drop).
+server.ts stayed CLEAN. Build ✅. Tests ✅ **174/174**.
+
+**Next (documented in ROADMAP):** extend `ControlPlaneResultMap` with the
+remaining families `app.ts` uses — `monitors.*` (list/start/sync/stop/output →
+`Awaited<ReturnType<StandaloneOperatorRuntime[…]>>`, `NonNullable<>` for the
+null-checked ones), `tasks.stop`, and `sessions.platform*/remote*` (builder
+return types). Each family is a small, compiler-verified diff.
+
+**New idea:** the result map is now a single authoritative list of typed RPC
+methods — a tiny test can assert every `case "x.y":` in `handle`'s switch has a
+corresponding map entry (or is explicitly allow-listed as `unknown`), turning
+"untyped RPC method" into a caught regression rather than silent debt.
+
+---
+
 ## 2026-06-22 (run 4) — Typecheck debt: `server.ts` + `operator-runtime.ts` greened (app.ts is the last source file)
 
 **Audited:** Remaining source-file `tsc --noEmit` errors (operator-runtime 4,
