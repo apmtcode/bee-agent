@@ -62,13 +62,42 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      for a real on-device small model — DONE run 9. `MovementModelBackend`
+      interface + `MovementModelBackendRegistry` + serializable `MovementModel`
+      envelope in `src/training/movement-model.ts`; deterministic back-off n-gram
+      `MarkovMovementBackend` in `src/training/backends/`. 15 tests.
+- [~] Synthetic event-stream generator to validate capture→dataset→replay
+      round-trips without real OS input. Partial (run 9): the movement-model
+      tests build synthetic token sequences + tokenize synthetic trajectories/
+      replay manifests. Still want a richer generator that emits full
+      `DeviceCaptureInput`/`ReplayTimelineEvent` streams (taps/scrolls/typing
+      with timing) for end-to-end capture→ingest→export→train→replay coverage.
+- [x] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories — DONE run 9 (`evaluateMovementModel`:
+      teacher-forced next-token accuracy + back-off rate; tested on held-out
+      sequences sharing structure under novel prefixes).
+- [ ] `MovementReplayPolicy`: wrap a trained `MovementModel` behind the existing
+      replay-service so a recorded skill can be *executed* by sampling the model
+      (closes capture→train→replay→act), with a confidence gate that falls back
+      to literal replay when top-1 probability is below threshold.
+- [ ] Wire a second `MovementModelBackend` stub documenting the on-device seam
+      (e.g. an MLX/llama.cpp-shaped adapter that delegates to the existing
+      `runner.ts` artifacts) so the real-model path is concrete, not just typed.
+
+## Test stability / reliability
+- [ ] **Make process-spawning tests hermetic.** `app.test.ts`, `server.test.ts`,
+      and `operator-runtime.test.ts` each have one test that spawns real detached
+      OS processes and asserts on liveness (`control=active`, `Stopped task`).
+      These fail in sandboxes that don't retain detached children (4 deterministic
+      failures on clean HEAD as of run 9). `BackgroundTaskExecutionService`
+      already accepts injectable `SpawnBackgroundProcess` + `IsProcessRunning` —
+      thread a deterministic mock spawn + controllable "is-running" clock through
+      these tests to decouple them from real OS process semantics.
+- [x] State-recovery robustness: `BackgroundTaskExecutionService.readState`
+      tolerates a half-written/corrupt state file (returns undefined on
+      `SyntaxError`) instead of crashing the recovery sweep — DONE run 9.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

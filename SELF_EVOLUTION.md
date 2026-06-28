@@ -6,6 +6,73 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-06-28 (run 9) — Pluggable movement-model backend + deterministic n-gram learner (+ state-recovery robustness fix)
+
+**Audited:** The local-movement learning subsystem (standing objective #2) and
+its ROADMAP gaps. `src/capture/` already records movements into trajectories and
+`src/training/` exports reviewed datasets + generates *external* train scripts
+(`runner.ts` shells out to mlx/axolotl on apple-silicon). The missing piece: an
+**in-process, learnable model** — there was no backend that actually learns from
+recorded movements and can repeat/generalize them (objective #2c/#2d), and the
+runner is hardwired to one platform with no pluggable seam. This is also the top
+queued movement item in ROADMAP ("pluggable local-model backend interface with a
+deterministic mock backend").
+
+**Changed (additive):**
+- **`src/training/movement-model.ts`** — the backend-agnostic contract:
+  `MovementModelBackend` interface (`train`/`predict`/`generate`), uniform
+  serializable `MovementModel` envelope (routable by `backendId`, survives JSON
+  round-trip), `MovementModelBackendRegistry` for runtime resolution, token
+  encoders (`encodeMovementToken` normalizes case/whitespace so equivalent
+  movements collapse — the key to cross-session generalization),
+  `tokenizeTrajectory`/`tokenizeReplayManifest`/`buildMovementDataset` adapters
+  from the existing capture types, and `evaluateMovementModel` — a teacher-forced
+  next-token-accuracy + back-off-rate **generalization eval harness**.
+- **`src/training/backends/markov-movement-backend.ts`** — `MarkovMovementBackend`,
+  a deterministic back-off n-gram learner (counts contexts of length 0..order,
+  uses the longest context with evidence, backs off toward the unigram, add-k
+  smoothing). No native deps → trains in-process, fully reproducible, yet
+  generalizes (an unseen full-length context falls back to shorter seen ones).
+  This is the cloud/CI-safe reference backend; the interface is the seam for a
+  real on-device small model later.
+- **`src/index.ts`** — exported the new surface.
+- **Reliability fix (`src/harness/background-tasks.ts`):** `readState` now treats
+  an *unparseable* state file the same as a missing one (returns `undefined` on
+  `SyntaxError`) instead of throwing. A live/crashed task process writes its state
+  file non-atomically via the launch script, so reconciliation could observe a
+  half-written payload and crash the whole recovery sweep. This is exactly the
+  crash scenario recovery exists for. Fix made `operator-runtime.test.ts` green
+  again and removed one `app.test.ts` failure.
+
+**Test results:** `typecheck:src` ✅ CLEAN. Build ✅ (tsdown, 5 files). New tests
+**`movement-model.test.ts` 15/15 ✅** (token encoding, tokenizers, train envelope +
+JSON round-trip, exact-replay objective 2c, **back-off generalization objective
+2d**, ranked/deterministic tie-breaks, empty-model + eval harness, registry).
+
+**Pre-existing environment-dependent failures (NOT caused by this run):** On a
+clean HEAD checkout this sandbox shows **4 deterministic failures** (app.test 2,
+server.test 1, operator-runtime 1) — all rooted in *real OS process spawning*:
+the sandbox can't keep detached `spawn(..., {detached})` processes alive, so
+liveness assertions read `control=degraded:...missing-process` / `Stopped task`
+instead of `active`. (Run 8 logged 174/174 — that environment evidently retained
+detached children; this one doesn't.) **This run reduced the count 4 → 3** via
+the `readState` fix; the new 15 tests all pass. Net test health improved, nothing
+regressed. Pushed to the designated feature branch `claude/peaceful-dirac-s2y2xn`.
+
+**New idea:** `BackgroundTaskExecutionService` already accepts injectable
+`SpawnBackgroundProcess` + `IsProcessRunning` — the 3 remaining failing tests
+just don't use them, so they depend on real OS process semantics. Make those
+tests hermetic by injecting a deterministic mock spawn + a controllable
+"is-running" clock (the seam already exists). That converts 3 flaky
+environment-coupled tests into reliable ones and would restore a fully green
+suite in any sandbox. Logged to ROADMAP. Bigger idea: a `MovementReplayPolicy`
+that wraps a trained `MovementModel` behind the existing replay-service so a
+recorded skill can be *executed* by sampling the model (closing the
+capture→train→replay→act loop), with a confidence gate that falls back to literal
+replay when the model's top-1 probability is below threshold.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
