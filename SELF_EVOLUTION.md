@@ -6,6 +6,65 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-06-28 (run 9) — 🧠 Movement-model layer: pluggable backend + deterministic Markov mock that trains, repeats & generalizes
+
+**Audited:** Standing objective #2 (local-movement learning) and `src/training/`.
+Found the subsystem had capture (`src/capture/`), dataset export (`exporter.ts`),
+and an on-device job *launcher* (`runner.ts` emits MLX/axolotl launch scripts) —
+but **no model layer that runs in the cloud**: nothing actually trained on a
+recorded dataset, repeated the movements (objective 2c), or generalized to
+new-but-related ones (objective 2d). The roadmap's top movement item ("pluggable
+local-model backend + deterministic mock") was unmet.
+
+**Changed (additive, two new modules + barrel exports):**
+- **`src/training/movement-model.ts`** — the missing model layer, pure &
+  deterministic (no Date/Math.random), so the full train→predict→generate→eval
+  loop is cloud-testable:
+  - `deriveMovementToken` / `tokenizeTrajectory` / `buildMovementDataset` — turn
+    recorded `TrajectorySpan`s into a discrete movement dataset (the schema the
+    model trains on). Tokens are canonical `tool:verb:target`, preferring
+    structured metadata (gesture/event) over free text so phrasing doesn't fragment
+    the vocabulary.
+  - `MovementModelBackend` / `MovementModel` interfaces — the **pluggable seam**
+    for a real on-device small model (MLX/llama.cpp/etc.).
+  - `MarkovMovementBackend` — a deterministic order-k Markov mock with
+    **stupid-backoff**: an unseen full context falls back to the longest seen
+    suffix. That backoff IS the generalization mechanism (objective 2d), and it's
+    fully reproducible. Supports `predict`, `generate`, and `snapshot`/`restore`.
+  - `MovementBackendRegistry` + `createDefaultMovementBackendRegistry()` — register/
+    swap backends by id.
+  - `evaluateNextTokenAccuracy` — next-token eval harness; reports accuracy plus a
+    `generalizationRate` (share of correct hits that required backing off).
+- **`src/training/movement-synthetic.ts`** — seeded (mulberry32), deterministic
+  synthetic event-stream generator over a workflow library, so capture→dataset→
+  train→eval is validated without any real OS input (the real recording runs only
+  on the user's machine).
+
+**Test results:** new `movement-model.test.ts` — **15/15 pass** (tokenization,
+exact repeat via `generate`, backoff generalization, deterministic ranked
+alternatives, snapshot round-trip, registry, synthetic determinism, recall >0.7
+& held-out generalization >0.6). `npm run build` ✅. `npm run typecheck:src` ✅
+(exit 0 — source stays green; new files typecheck clean).
+
+**⚠️ Pre-existing failures (NOT caused by this run):** the full suite shows **3
+failed** in `operator-runtime.test.ts` / `app.test.ts` / `server.test.ts`, all in
+the **background-task recovery** path. Confirmed present on clean HEAD via
+`git stash -u` (3 failed there too). Root cause: `readJsonFile` (`src/shared/fs.ts`)
+throws `SyntaxError: Expected ',' or '}' after property value` while
+`reconcileTask` reads a background-task state file during recovery — a robustness
+gap (recovery should tolerate a torn/partial state write, not abort). Logged to
+ROADMAP. Because these are pre-existing/environmental and my diff is green, I
+pushed to the designated feature branch `claude/peaceful-dirac-9l5nx0` (not main).
+
+**New idea:** add a `MovementReplayBridge` that maps a generated `MovementToken`
+sequence back into concrete `DeviceCaptureInput`/`OsObservationInput` calls — so a
+trained policy can drive the existing capture adapters in a dry-run "simulated
+actuator" mode, closing the loop from *learned movement* → *executed movement*
+behind the same consent/mock seam used for recording. Also: a perplexity metric
+in the eval harness (not just top-1 accuracy) to grade backends more finely.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

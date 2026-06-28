@@ -62,13 +62,32 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      for a real on-device small model. **DONE run 9** — `MovementModelBackend`/
+      `MovementModel` interfaces + `MarkovMovementBackend` (order-k stupid-backoff)
+      + `MovementBackendRegistry` in `src/training/movement-model.ts`. Repeats
+      recorded movements (2c) and generalizes via backoff (2d).
+- [x] Synthetic event-stream generator to validate capture→dataset→replay
+      round-trips without real OS input. **DONE run 9** —
+      `src/training/movement-synthetic.ts` (seeded mulberry32, workflow library).
+- [x] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories. **DONE run 9** — `evaluateNextTokenAccuracy`
+      reports accuracy + `generalizationRate`. Next: add perplexity, not just top-1.
+- [ ] `MovementReplayBridge`: map a generated `MovementToken` sequence back into
+      `DeviceCaptureInput`/`OsObservationInput` calls so a trained policy can drive
+      the capture adapters in a dry-run "simulated actuator" mode — closing the
+      loop from learned movement → executed movement behind the consent/mock seam.
+
+## Bugs / robustness (discovered, not yet fixed)
+- [ ] **Background-task recovery aborts on a malformed state file.** Pre-existing
+      (clean HEAD): `operator-runtime.test.ts` / `app.test.ts` / `server.test.ts`
+      fail because `readJsonFile` (`src/shared/fs.ts`) throws
+      `SyntaxError: Expected ',' or '}' after property value` when
+      `FileBackgroundTaskStore.reconcileTask` reads a torn/partial state file
+      during `recoverBySession`. Recovery should treat an unparseable state file as
+      a recoverable "missing-process"/"corrupt-state" outcome rather than throwing.
+      Add a tolerant read (catch + classify) and a regression test. (Found run 9.)
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
