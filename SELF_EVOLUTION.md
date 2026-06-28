@@ -6,6 +6,68 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-06-28 (run 9) — Movement-learning model: pluggable backend + train/infer/generalize + eval
+
+**Audited:** Standing objective #2 (local-movement learning). Prior runs built
+the *plumbing* — `src/capture/` (recorder, trajectory schema, device/os/browser
+adapters, replay) and `src/training/` (exporter, job store, runner). But the
+runner only emits an MLX/axolotl **launch script** for a real Mac; there was **no
+in-process model** that actually learns from a dataset, predicts a movement, or
+generalizes — i.e. objective #2 parts (c) "post-train a local model … to repeat
+the recorded movements" and (d) "generalize to … new but related movements" had
+zero executable, cloud-testable code. That was the highest-value gap.
+
+**Changed (new `src/movement/` module, fully additive):**
+- `movement-dataset.ts` — `buildMovementDataset(trajectories)` derives supervised
+  `(context → action)` examples from trajectory spans (each action paired with
+  its most recent preceding observation), with app/tool/gesture/**target**
+  vocabularies. Honors the same `review.status === "approved"` consent gate the
+  training exporter uses (overridable for synthetic data).
+- `movement-backend.ts` — the **pluggable** `MovementModelBackend` /
+  `TrainedMovementModel` interface (swap in a real on-device model behind the
+  same seam) plus `MockMovementModelBackend`: a deterministic, dependency-free
+  k-NN policy. Scores examples by token-Jaccard over summary/screen/app + an
+  app-match and screen-match bonus; **recalls** the recorded action on a near-
+  exact context and **generalizes** otherwise — keeping the closest action's
+  gesture but performing *slot transfer* (retargeting to a known UI element the
+  query names but that context never paired with). Confidence = normalized score,
+  penalized when generalized.
+- `synthetic.ts` — `generateSyntheticTrajectories({seed,…})`: a reproducible
+  (mulberry32, no `Math.random`) event-stream generator. Each screen maps to a
+  canonical (target, gesture) so `context → action` is a genuine *learnable
+  function* — letting the eval actually measure recovery. Closes the roadmap's
+  "synthetic event-stream generator" item.
+- `generalization-eval.ts` — `evaluateMovementGeneralization(...)`: deterministic
+  train/holdout split, trains a backend, predicts held-out contexts, and reports
+  exact/tool accuracy + generalization rate. Closes the roadmap's "generalization
+  eval harness" item.
+- Wired all of the above through the `src/index.ts` barrel.
+
+**Test results:** 4 new test files, **14/14 passing** (dataset pairing + consent
+gate, deterministic recall + generalization/retarget + empty-dataset, synthetic
+determinism + dataset round-trip, eval split + ≥0.9 tool-accuracy + reproducibility).
+`npm run build` ✅. `npm run typecheck:src` ✅ (exit 0, source stays clean). Full
+suite **185 passing** (was 170), up by the 14 added.
+
+**Pre-existing failures (NOT introduced here, environmental):** 3–4 tests in
+`cli/app.test.ts`, `control-plane/server.test.ts`, `orchestrator/
+operator-runtime.test.ts` fail/flake in this cloud sandbox — they spawn **real
+background child processes** (errors: `background task missing-process`,
+`control=degraded: … retryable failures`) which the container can't keep alive.
+They fail on a clean checkout before any change this run, and the count varies
+run-to-run (4 then 3), confirming timing/process flakiness rather than a
+regression. Per the branch directive, pushing to the designated feature branch
+`claude/peaceful-dirac-p03d57`. **New roadmap item:** make these subprocess
+tests hermetic (inject a spawn/fake-process seam) so the suite is green in the
+cloud and the engine's pre-push gate becomes trustworthy.
+
+**New idea:** add a `MovementReplayBridge` that feeds a `TrainedMovementModel`'s
+predictions back into the existing `replay-service` as a *generated* trajectory —
+closing the loop so a learned policy can drive the replay engine (with a
+confidence gate + human-approval step before any real-device emission).
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

@@ -431,3 +431,42 @@ export type {
   FailTrainingJobParams,
   TrainingJobStoreShape,
 } from "./training/job-store.js";
+export {
+  buildMovementDataset,
+  tokenizeMovementText,
+} from "./movement/movement-dataset.js";
+export type {
+  BuildMovementDatasetOptions,
+  MovementAction,
+  MovementContext,
+  MovementDataset,
+  MovementExample,
+} from "./movement/movement-dataset.js";
+export {
+  MockMovementModelBackend,
+} from "./movement/movement-backend.js";
+export type {
+  MovementModelBackend,
+  MovementPrediction,
+  MovementQuery,
+  MovementTrainOptions,
+  TrainedMovementModel,
+  TrainedMovementModelStats,
+} from "./movement/movement-backend.js";
+export {
+  DEFAULT_SYNTHETIC_APPS,
+  generateSyntheticTrajectories,
+} from "./movement/synthetic.js";
+export type {
+  SyntheticAppProfile,
+  SyntheticStreamOptions,
+} from "./movement/synthetic.js";
+export {
+  evaluateMovementGeneralization,
+  splitMovementDataset,
+} from "./movement/generalization-eval.js";
+export type {
+  MovementEvalCase,
+  MovementGeneralizationReport,
+  MovementMatchLevel,
+} from "./movement/generalization-eval.js";

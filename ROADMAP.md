@@ -59,16 +59,32 @@ unchecked items are queued. Keep this richer than you found it each run.
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
 (exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
-      objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Inventory what `src/capture` + `src/training` already implement vs. the
+      objective's five pieces — DONE run 9. Plumbing (capture schema, adapters,
+      replay, exporter, job store, launch-script runner) existed; the missing
+      piece was an executable model (train/infer/generalize). Built in
+      `src/movement/`.
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      for a real on-device small model — DONE run 9 (`movement-backend.ts`:
+      `MovementModelBackend` interface + `MockMovementModelBackend` k-NN policy).
+- [x] Synthetic event-stream generator to validate capture→dataset→replay
+      round-trips without real OS input — DONE run 9 (`synthetic.ts`,
+      mulberry32-seeded, learnable screen→action grammar).
+- [x] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories — DONE run 9 (`generalization-eval.ts`:
+      train/holdout split + exact/tool accuracy + generalization rate).
+- [ ] `MovementReplayBridge`: feed a `TrainedMovementModel`'s predictions back
+      into `src/capture/replay-service` as a *generated* trajectory, gated by a
+      confidence threshold + human approval before any real-device emission —
+      closing capture→train→**act** loop.
+- [ ] Connect the movement model to the training runner: have
+      `LocalAppleSiliconTrainingRunner` also emit a `MovementDataset` (via
+      `buildMovementDataset`) alongside the launch script, so the on-device MLX
+      job and the in-process mock backend consume the *same* dataset artifact.
+- [ ] Richer movement features for the backend: incorporate `direction`,
+      `valueSummary`, and short *action n-grams* (previous action as context) so
+      the policy can model multi-step sequences, not just single transitions.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
@@ -80,6 +96,12 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Barrel-collision lint: scan `src/index.ts` re-exports for names exported
       from more than one module and flag them, so duplicate-identifier debt is
       caught at authoring time instead of accumulating silently.
+- [ ] **Make subprocess tests hermetic** (surfaced run 9): the failing
+      `cli/app.test.ts`, `control-plane/server.test.ts`, and
+      `orchestrator/operator-runtime.test.ts` cases spawn real background child
+      processes and flake in the cloud sandbox (`background task missing-process`,
+      `control=degraded`). Inject a spawn/fake-process seam so the suite is green
+      headless and the engine's pre-push gate becomes trustworthy.
 - [ ] Per-module typecheck ratchet: record each module's current `tsc` error
       count to a baseline file and fail if a module regresses above it. Lets the
       engine pay debt down module-by-module without one green-gate blocking
