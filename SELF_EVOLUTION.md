@@ -6,6 +6,57 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-06-28 (run 9) — 🐞 Real correctness bug: background-task `shellQuote` + launch-script JSON
+
+**Audited:** Project health gate first (the procedure's step 5). The suite was
+**NOT green** as the prior log assumed — `npm test` showed **3 failing tests**
+(`operator-runtime`, `app.test`, `server.test`). Root-caused them instead of
+papering over: all three traced to the background-task launch pipeline.
+
+**Two genuine, user-impacting bugs found & fixed in `src/harness/background-tasks.ts`:**
+1. **`shellQuote` mis-escaped single quotes.** Its escape sequence was
+   `"'"'"'` (6 chars, leading double-quote) instead of the correct POSIX
+   `'"'"'` (5 chars). Effect: every embedded `'` became `"'`, so **any
+   background-task command containing a single quote** (e.g. `printf 'x'`,
+   `bash -lc 'foo'`) was mangled before being passed to `bash -lc`, AND the
+   JSON state payload was corrupted. Verified the mis-escape directly in bash
+   (`a'b` → `a"'b`). Fixed to the 5-char sequence; commands now round-trip.
+2. **Initial running-state written via `printf | sed`.** The launch script
+   built `state.json` by `printf '%s' <json> | sed "…s/\"\$\$\"/$$/g"`. `sed`
+   treats `$` as an anchor, so `pid` stayed the literal `"$$"`, and combined
+   with bug #1 the on-disk JSON was invalid → `readState` threw `SyntaxError`,
+   silently breaking reconciliation/breaker health on real machines. Replaced
+   with a `python3`/`json` writer (matching the existing completed/failed
+   writers): the static payload is passed as one shell-quoted argv and parsed
+   with `json.loads`, so it round-trips for any command.
+
+**Tests:**
+- `src/harness/background-tasks.test.ts`: +2 regression tests that actually
+  **execute** the rendered launch script via `bash` and assert (a) `state.json`
+  is valid JSON with the command preserved, (b) `pid` is numeric, (c) the
+  command's output round-trips (`a"b`, `it's here`), and (d) the script no
+  longer contains `sed`.
+- Fixed a latent **test-isolation flake** the JSON bug had masked: the
+  `operator-runtime` and `server.test` breaker tests spawned **real** detached
+  processes (`sleep`/`tail`) that kept writing into the temp dir after teardown
+  (`ENOTEMPTY` on rmdir) and raced the test's explicit `writeState`. Injected a
+  no-op `backgroundTaskSpawnProcess` into both (they drive all state/output
+  explicitly), restoring the intended deterministic failure-staging
+  (mixed→degraded→paused) without depending on the old bug.
+
+**Test results:** **3 failing → 0**; suite **174 → 176** (+2 regression tests).
+Stress: full suite **5/5** green; the two real-spawn files **12/12** green
+together (previously flaky). Build ✅. `typecheck:src` ✅ (exit 0).
+
+**New idea:** add a tiny `shellQuote` property test (fuzz random strings with
+quotes/spaces/`$`/backticks, round-trip through `bash -lc 'printf %s'`) so this
+class of shell-escaping bug is caught generatively, not just for the two
+hand-picked commands. Bigger: a `verify` npm script (`typecheck:src && build &&
+test`) the engine runs as its pre-push gate — this run would have caught the red
+suite immediately instead of relying on the prior log's "174/174" claim.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

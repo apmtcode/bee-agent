@@ -531,6 +531,11 @@ describe("StandaloneOperatorRuntime", () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
       backgroundTaskIsProcessRunning: () => false,
+      // No-op spawn: the test drives all execution state/output explicitly via
+      // writeState/writeOutput, so it must not launch real detached processes
+      // (sleep/tail) that would keep writing into the temp dir after the test
+      // ends and race its cleanup (ENOTEMPTY on rmdir).
+      backgroundTaskSpawnProcess: () => ({ pid: 4242, unref: () => {} }),
     });
     const session = await runtime.startSession({ title: "Tasks", agentId: "main" });
 

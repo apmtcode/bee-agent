@@ -3,6 +3,20 @@
 Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
+## Correctness / reliability
+- [x] **Fix `shellQuote` single-quote mis-escaping** (run 9, 2026-06-28) — was
+      `"'"'"'`, corrupting any command/payload containing a `'`. Now POSIX
+      `'"'"'`.
+- [x] **Robust background-task running-state writer** (run 9) — replaced the
+      fragile `printf | sed` JSON writer with a `python3`/`json` writer; +2
+      regression tests that execute the real launch script.
+- [x] **De-flake real-spawn tests** (run 9) — inject a no-op spawn into the
+      `operator-runtime` + `server.test` breaker tests to kill the `ENOTEMPTY`
+      teardown race.
+- [ ] **`shellQuote` property/fuzz test** — round-trip random quote/space/`$`/
+      backtick strings through `bash -lc 'printf %s'` to catch shell-escaping
+      regressions generatively.
+
 ## Foundations / DX
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.

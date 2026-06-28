@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -369,5 +370,62 @@ describe("BackgroundTaskExecutionService", () => {
     await expect(fs.readFile(path.join(rootDir, task.execution.launchScript), "utf8")).resolves.toContain("bash -lc");
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
+  });
+
+  it("launch script writes a valid JSON state file even when the command contains quotes", async () => {
+    // Regression: the running-state was previously written by the launch script
+    // via `printf '%s' '<json>' | sed ...`, which (a) left `pid` as the literal
+    // "$$" because sed treats `$` as an anchor and (b) mangled embedded quotes in
+    // the `command` field, producing INVALID JSON on disk. readState then threw a
+    // SyntaxError, silently breaking reconciliation/breaker health on real
+    // machines. The initial state is now written by python/json like the
+    // completed/failed states, so it round-trips for any command string.
+    const rootDir = await makeTempDir();
+    const store = new FileBackgroundTaskStore(
+      path.join(rootDir, "background-tasks.json"),
+      () => ({ pid: 4242, unref() {} }),
+    );
+    // A command containing both single and double quotes — exactly what broke the
+    // old printf|sed writer.
+    const command = `printf 'a"b'`;
+    const task = await store.start({ title: "Quoted command", command, cwd: rootDir });
+    const scriptPath = path.join(rootDir, task.execution.launchScript);
+    const script = await fs.readFile(scriptPath, "utf8");
+    // The fragile printf|sed JSON writer must not come back.
+    expect(script).not.toContain("sed ");
+
+    // Run the launch script synchronously to completion (no detached process, so
+    // no temp-dir cleanup race).
+    execFileSync("bash", [scriptPath], { cwd: rootDir });
+
+    const raw = await fs.readFile(path.join(rootDir, task.execution.stateFile), "utf8");
+    const state = JSON.parse(raw) as BackgroundTaskExecutionState; // must not throw
+    expect(state.taskId).toBe(task.id);
+    expect(state.command).toBe(command);
+    expect(typeof state.pid).toBe("number");
+    expect(state.status).toBe("completed");
+
+    // The command itself must also execute correctly under `bash -lc`. The old
+    // shellQuote turned `'` into `"'`, so `printf 'a"b'` would have run mangled.
+    const output = await fs.readFile(path.join(rootDir, task.execution.outputFile), "utf8");
+    expect(output).toContain(`a"b`);
+  });
+
+  it("shellQuote round-trips a command containing single quotes through bash", async () => {
+    // Direct guard on the POSIX single-quote escaping used by the launch script.
+    const rootDir = await makeTempDir();
+    const store = new FileBackgroundTaskStore(
+      path.join(rootDir, "background-tasks.json"),
+      () => ({ pid: 4242, unref() {} }),
+    );
+    const command = `printf "%s" 'it'\\''s here'`;
+    const task = await store.start({ title: "Apostrophes", command, cwd: rootDir });
+    execFileSync("bash", [path.join(rootDir, task.execution.launchScript)], { cwd: rootDir });
+    const output = await fs.readFile(path.join(rootDir, task.execution.outputFile), "utf8");
+    expect(output).toContain(`it's here`);
+    const state = JSON.parse(
+      await fs.readFile(path.join(rootDir, task.execution.stateFile), "utf8"),
+    ) as BackgroundTaskExecutionState;
+    expect(state.command).toBe(command);
   });
 });

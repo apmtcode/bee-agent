@@ -1019,6 +1019,12 @@ describe("OperatorControlPlaneServer", () => {
     const breakerRuntime = new StandaloneOperatorRuntime({
       rootDir: breakerRootDir,
       backgroundTaskIsProcessRunning: () => false,
+      // Inject a no-op spawn so the launch script never runs and never writes a
+      // state file. This makes failure staging deterministic: a task only counts
+      // as a missing-process failure once the test explicitly writes its running
+      // state, so the breaker progresses mixed -> degraded -> paused as asserted
+      // below, independent of any real on-disk state written at spawn time.
+      backgroundTaskSpawnProcess: () => ({ pid: 4242, unref: () => {} }),
     });
     const breakerServer = new OperatorControlPlaneServer({ runtime: breakerRuntime });
     const breakerOne = await breakerServer.handle({
