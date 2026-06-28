@@ -6,6 +6,58 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-06-28 (run 9) — Movement-model backend (train→infer→generalize) + fixed a real shell-quoting bug + made background-task tests hermetic
+
+**Audited:** Standing objective #2 (local-movement learning). `src/capture/`
+covers capture→schema→dataset→replay and `src/training/` builds a real on-device
+MLX/axolotl *plan + launch script* — but parts (c) "post-train a local model to
+repeat movements" and (d) "generalize to new but related movements" had **no
+in-cloud-runnable implementation**: the replay engine only replays recorded
+events verbatim; nothing *learned* from the dataset and *generated* movements.
+
+**Changed — new capability (`src/training/movement-model.ts`, + 13 tests):**
+- `MovementModelBackend` / `MovementModelInference` — pluggable backend seam.
+- `MarkovMovementBackend` — a deterministic, in-process n-gram learner that
+  trains transition statistics from replay sequences and decodes by argmax
+  (stable tie-break). It *repeats* a recorded flow exactly (objective c) and,
+  trained across related trajectories, *blends* transitions into related-but-
+  novel sequences (objective d) — real generalization that runs in the cloud.
+- `extractMovementDataset()` folds reviewed-export `replays[].events` into
+  recurring movement tokens (`defaultMovementTokenizer` normalizes so identical
+  movements collapse to one token); `evaluateMovementModel()` is a teacher-
+  forced next-token generalization eval; `createMovementModelBackend()` is the
+  registry with a documented `'mlx'` on-device seam (throws in cloud, by design).
+- Exported the full surface from `src/index.ts`.
+
+**Changed — real source bug fix (`src/harness/background-tasks.ts`):**
+`shellQuote()` used the replacement `` `"'"'"'` `` (leading `"`) instead of the
+correct POSIX idiom `` `'"'"'` `` (as `runner.ts` already does). Every value
+containing a single quote got an **extra `"`** injected, so the detached launch
+script's `printf | sed` wrote **invalid JSON** to `state.json` for any command
+with a `'` (e.g. `printf 'line-1\nline-2\n'`). Fixed to the correct escape.
+
+**Changed — test hermeticity:** the background-task tests inject
+`backgroundTaskIsProcessRunning` but **not** a spawn mock, so they launched
+*real* detached shells. The older cloud image couldn't run them (hence the
+historical 174/174); today's image has bash+python3, so the shells executed and
+raced the tests' explicit `writeState()` — 3 pre-existing failures. Added a
+`backgroundTaskSpawnProcess` / `backgroundTaskIsProcessRunning` seam to
+`OperatorCliApp` (parity with `StandaloneOperatorRuntime`) and injected no-op
+spawn mocks (+ explicit output/state where a test relied on the shell's `printf`
+output) in the 4 affected tests so they're deterministic.
+
+**Test results:** `typecheck:src` ✅ (0 errors). Build ✅. Tests ✅ **187/187**
+(was 184/187 with 3 pre-existing env-induced failures; +13 new movement-model
+tests), green across two consecutive runs.
+
+**New idea:** add a higher-order *goal-conditioned* movement backend — prefix
+each sequence with a goal/intent token derived from the trajectory outcome/skill
+so `generate({ seed: [goalToken] })` produces the movement plan for a *named*
+intent. That turns the Markov learner into a tiny instruction-followable policy
+and gives the eval harness a success-vs-goal axis, not just next-token accuracy.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

@@ -44,6 +44,15 @@ unchecked items are queued. Keep this richer than you found it each run.
       (excludes `**/*.test.ts`) + `typecheck:src` script; passes (exit 0). Next:
       have the engine run it as a per-run pre-push self-check.
 - [ ] Add a minimal CI workflow mirroring `verify` for human-opened PRs.
+- [x] Make background-task tests hermetic — DONE run 9. Fixed a real
+      `shellQuote` POSIX-escape bug in `background-tasks.ts` (extra `"` injected
+      for values with `'`, corrupting `state.json`), added a
+      `backgroundTaskSpawnProcess`/`backgroundTaskIsProcessRunning` seam to
+      `OperatorCliApp`, and injected no-op spawn mocks so tests no longer launch
+      real detached shells that race state files. Suite: 184/187 → 187/187.
+- [ ] Audit the rest of the test suite for non-hermetic real-process / real-fs
+      spawning (the same class of bug the run-9 image change exposed) and inject
+      mocks; consider a shared `noopSpawn` test helper.
 
 ## Capability parity (audit reference agents → port gaps)
 - [ ] Build a "capability inventory" generator: enumerate bee-agent's exported
@@ -62,13 +71,25 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
-      deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+- [x] Pluggable local-model backend interface for the training runner with a
+      deterministic backend (so cloud/CI tests pass) and a documented seam
+      for a real on-device small model — DONE run 9 (`src/training/movement-model.ts`:
+      `MovementModelBackend`/`MovementModelInference`, `MarkovMovementBackend`,
+      `createMovementModelBackend('mlx')` documented on-device seam).
+- [~] Synthetic event-stream generator to validate capture→dataset→replay
+      round-trips without real OS input. Run 9 used inline synthetic replay
+      streams in `movement-model.test.ts`; still want a *reusable* generator
+      module (`src/capture/synthetic.ts`) shared across capture + training tests.
+- [x] Generalization eval harness: measure fidelity on held-out but related
+      synthetic trajectories — DONE run 9 (`evaluateMovementModel()`, teacher-
+      forced next-token accuracy with per-sequence breakdown).
+- [ ] Goal-conditioned movement backend: prefix each training sequence with a
+      goal/intent token (from trajectory outcome/skill) so `generate({ seed:
+      [goalToken] })` yields the movement plan for a *named* intent; extend the
+      eval harness with a success-vs-goal axis.
+- [ ] Persist/serialize movement artifacts to disk via the training job store
+      so a trained Markov model can be reloaded across sessions and surfaced
+      through a control-plane RPC (`movements.train`/`movements.generate`).
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
