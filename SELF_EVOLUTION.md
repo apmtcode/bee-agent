@@ -6,6 +6,60 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-06-28 (run 9) — Movement-model: in-process train→infer→generalize loop (objective #2 c+d)
+
+**Audited:** `src/training/` against standing objective #2. The whole training
+subsystem only emitted Mac-only `mlx`/`axolotl` **launch scripts**
+(`runner.ts` / `execution-service.ts`) — there was **no in-process, cloud-testable
+path** for "post-train a local model on recorded movements so it can repeat them
+and generalize" (objective #2 pieces c + d). The roadmap had queued exactly this:
+a pluggable backend with a deterministic mock, a synthetic event-stream generator,
+and a generalization eval harness. Nothing of it existed yet.
+
+**Changed (purely additive — three new modules + tests):**
+- `src/training/movement-model.ts` — `MovementToken` schema + tokenizers
+  (`tokenizeAction`/`tokenizeTrajectory`, deriving gesture/target/direction from
+  the existing capture metadata), a pluggable **`MovementModelBackend`** interface
+  and a dependency-free reference backend **`MarkovMovementBackend`**: a
+  deterministic n-gram policy with stupid-backoff **and** feature-similarity
+  generalization (unseen contexts fall back to the most feature-similar known
+  token → real generalization, flagged `generalized:true`). Includes
+  `predictNext`, `generate`, snapshot `toJSON`/`loadMovementModel` (persistence),
+  and a `trainMovementModel` convenience. Collision-resistant keys via control-char
+  separators; fully reproducible (no `Math.random`/`Date` in the model).
+- `src/training/synthetic-movements.ts` — seeded (xorshift32) synthetic
+  trajectory generator over named skill templates; same seed ⇒ byte-identical
+  dataset (validates capture→dataset→replay without real OS input, per the cloud
+  guardrail).
+- `src/training/movement-eval.ts` — generalization eval harness: top-1 / top-k
+  next-token accuracy, head-anchored **replay fidelity**, and **generalization
+  rate** (share of correct predictions needing similarity backoff). Works on raw
+  sequences or trajectory spans.
+- Barrel exports added in `src/index.ts`.
+
+**Test results:** **22 new tests, all green** (model 13, synthetic 6, eval 3 — incl.
+exact replay on unambiguous data, backoff to a shorter shared context,
+similarity generalization to an unseen token, and held-out generalization beating
+chance: top-3 > 0.6 on novel same-skill trajectories). `npm run build` ✅.
+`npm run typecheck:src` ✅ (the source-only gate stayed green; it caught one real
+bug mid-run — a missing `perSequence` field — before commit). Full `tsc` **125**,
+unchanged (my new files add 0 errors; the 125 remain entirely in pre-existing test
+files). **Pre-existing flaky failures unrelated to this change:** `server.test.ts`,
+`app.test.ts`, `operator-runtime.test.ts` each fail 1 timing-sensitive case
+*on the clean baseline too* (verified via `git stash`; the count varies 3↔4 across
+runs). Not introduced here; logged for a future stabilization pass.
+
+**New idea:** the model exposes a clean backend seam — next, wire a
+`MovementModelBackend` adapter that *reads back the artifacts the
+`LocalAppleSiliconTrainingRunner` produces* (the `mlx`/`axolotl` adapter dir), so
+the same `predictNext`/`generate`/eval surface drives both the in-process
+reference policy and a real on-device model — and the eval harness becomes the
+shared acceptance gate for "did local training actually learn the movements?"
+Also: stabilize the 3 flaky timing tests (inject a clock/await hooks) so the suite
+has a true green gate.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

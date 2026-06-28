@@ -59,18 +59,35 @@ unchecked items are queued. Keep this richer than you found it each run.
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
 (exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
-      objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
-      deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+- [~] Inventory what `src/capture` + `src/training` already implement vs. the
+      objective's five pieces (capture → schema → dataset → replay → train/infer).
+      run 9 found: capture (recorder/adapters/consent/ingestion) ✅, schema
+      (trajectory/replay) ✅, dataset (exporter/manifest) ✅, replay (replay.ts +
+      replay-service) ✅, **train/infer was launch-scripts only** → addressed by
+      run 9's in-process movement model.
+- [x] Pluggable local-model backend interface for the training runner with a
+      deterministic mock backend — DONE run 9 (`MovementModelBackend` +
+      `MarkovMovementBackend` in `src/training/movement-model.ts`; n-gram backoff +
+      similarity generalization; snapshot persistence).
+- [x] Synthetic event-stream generator to validate capture→dataset→replay
+      round-trips without real OS input — DONE run 9
+      (`src/training/synthetic-movements.ts`, seeded/reproducible).
+- [x] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories — DONE run 9 (`src/training/movement-eval.ts`;
+      top-1/top-k accuracy, head-anchored replay fidelity, generalization rate).
+- [ ] **Real on-device backend adapter**: a `MovementModelBackend` impl that loads
+      the artifacts `LocalAppleSiliconTrainingRunner` writes (mlx/axolotl adapter
+      dir) and exposes the same `predictNext`/`generate`/eval surface, so the
+      reference policy and a real model are interchangeable and share one
+      acceptance gate.
+- [ ] Wire the movement model into an RPC family (`movement.train`/`predict`/
+      `evaluate`) + control-plane so the agent can train/replay movements on demand.
 
 ## Innovation backlog
+- [ ] **Stabilize 3 flaky timing tests** (`server.test.ts`, `app.test.ts`,
+      `operator-runtime.test.ts` — one case each, fail intermittently on the clean
+      baseline; count varies 3↔4/run as of run 9). Inject a clock / await hooks so
+      the full suite has a true green gate. Until then `npm test` is unreliably red.
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in
       project health over time.
