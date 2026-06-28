@@ -4,6 +4,18 @@ Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
 ## Foundations / DX
+- [x] **De-flake the test suite + fix two real launch-script bugs** (run 9,
+      2026-06-28). Baseline had gone non-deterministically red (2–4 fails/run).
+      Fixed: (1) corrupt initial-state JSON built via `printf|sed` →
+      Node-written `.seed` + Python injection; (2) `shellQuote` single-quote
+      escape was `"'"'"'` not POSIX `'"'"'`; (3) made spawning suites hermetic
+      with an injected no-op `backgroundTaskSpawnProcess` (+ forwarding seam on
+      `OperatorCliApp`). Now 175/175 stable across 5 runs.
+- [ ] **Extract `src/harness/launch-script.ts`** shared by `background-tasks.ts`
+      and `training/runner.ts` (canonical `shellQuote`, `renderStateWriterPython`,
+      seed helper) — they are near-duplicates and one carried a `shellQuote` bug
+      the other didn't. Add a unit test for `shellQuote` over `'`, `"`, `$`,
+      spaces so the bug class is caught at the function level.
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`

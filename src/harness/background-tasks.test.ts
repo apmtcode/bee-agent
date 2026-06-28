@@ -1,7 +1,11 @@
+import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
+
+const execFileAsync = promisify(execFile);
 import {
   BackgroundTaskExecutionService,
   FileBackgroundTaskStore,
@@ -369,5 +373,34 @@ describe("BackgroundTaskExecutionService", () => {
     await expect(fs.readFile(path.join(rootDir, task.execution.launchScript), "utf8")).resolves.toContain("bash -lc");
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
+  });
+
+  it("writes a parseable state file even when the command contains quotes/newlines", async () => {
+    // Regression: the launch script used to build the initial JSON state via
+    // `printf | sed`, which corrupted the file whenever the command (or any
+    // field) contained double-quotes or newlines, breaking recovery with a
+    // JSON SyntaxError. The state is now seeded from Node and the script's
+    // Python only injects pid/startedAt, so any command round-trips cleanly.
+    const rootDir = await makeTempDir();
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"), () => ({
+      pid: 1234,
+      unref() {},
+    }));
+    // Single quotes exercise shellQuote; double-quotes were what corrupted the
+    // JSON state. Both must round-trip and the command must still run (exit 0).
+    const command = `printf '%s' 'he said "hi"'`;
+    const task = await store.start({ title: "Quote test", command, cwd: rootDir });
+    const service = new BackgroundTaskExecutionService(rootDir);
+
+    // Run the real launch script to completion (it uses bash + python3).
+    await execFileAsync("bash", [path.join(rootDir, task.execution.launchScript)], { cwd: rootDir });
+
+    const raw = await fs.readFile(path.join(rootDir, task.execution.stateFile), "utf8");
+    // The raw bytes must be valid JSON — this is what previously threw.
+    expect(() => JSON.parse(raw) as unknown).not.toThrow();
+
+    const state = await service.readState(task);
+    expect(state).toMatchObject({ taskId: task.id, status: "completed", command });
+    expect(typeof state?.pid).toBe("number");
   });
 });

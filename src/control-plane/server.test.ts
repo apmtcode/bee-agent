@@ -78,10 +78,17 @@ const exportManifest: ReviewedExportManifest = {
   ],
 };
 
+// Test-only: a no-op background-task spawn so suites never launch real detached
+// OS processes (e.g. `sleep 5`, `tail -f`) that leak past the test, starve the
+// parallel runner, and cause timing flakes. Lifecycle state is driven explicitly
+// via writeState/writeOutput in the tests that need it.
+let __noopBgPid = 40000;
+const noopBackgroundSpawn = () => ({ pid: (__noopBgPid += 1), unref() {} });
+
 describe("OperatorControlPlaneServer", () => {
   it("handles session, transcript, approval, trajectory, memory, and orchestration methods", async () => {
     const rootDir = await makeTempDir();
-    const runtime = new StandaloneOperatorRuntime({
+    const runtime = new StandaloneOperatorRuntime({ backgroundTaskSpawnProcess: noopBackgroundSpawn,
       rootDir,
       backgroundTaskIsProcessRunning: () => false,
       delivery: new OperatorDeliveryService(rootDir, {
@@ -950,7 +957,7 @@ describe("OperatorControlPlaneServer", () => {
     });
 
     const driftingRootDir = await makeTempDir();
-    const driftingRuntime = new StandaloneOperatorRuntime({
+    const driftingRuntime = new StandaloneOperatorRuntime({ backgroundTaskSpawnProcess: noopBackgroundSpawn,
       rootDir: driftingRootDir,
       backgroundTaskIsProcessRunning: () => false,
     });
@@ -1016,7 +1023,7 @@ describe("OperatorControlPlaneServer", () => {
     });
 
     const breakerRootDir = await makeTempDir();
-    const breakerRuntime = new StandaloneOperatorRuntime({
+    const breakerRuntime = new StandaloneOperatorRuntime({ backgroundTaskSpawnProcess: noopBackgroundSpawn,
       rootDir: breakerRootDir,
       backgroundTaskIsProcessRunning: () => false,
     });
@@ -2084,7 +2091,7 @@ describe("OperatorControlPlaneServer", () => {
   }, 120_000);
 
   it("streams runtime events through subscriptions", async () => {
-    const runtime = new StandaloneOperatorRuntime({ rootDir: await makeTempDir() });
+    const runtime = new StandaloneOperatorRuntime({ backgroundTaskSpawnProcess: noopBackgroundSpawn, rootDir: await makeTempDir() });
     const events = subscribeRuntimeEvents(runtime, { replay: true });
     const iterator = events[Symbol.asyncIterator]();
 
@@ -2098,7 +2105,7 @@ describe("OperatorControlPlaneServer", () => {
   });
 
   it("filters runtime events by session, run, and family", async () => {
-    const runtime = new StandaloneOperatorRuntime({ rootDir: await makeTempDir() });
+    const runtime = new StandaloneOperatorRuntime({ backgroundTaskSpawnProcess: noopBackgroundSpawn, rootDir: await makeTempDir() });
     const sessionA = await runtime.startSession({ title: "Session A" });
     const sessionB = await runtime.startSession({ title: "Session B" });
     const runA = await runtime.startRun({ sessionId: sessionA.id, title: "Run A" });
@@ -2197,7 +2204,7 @@ describe("OperatorControlPlaneServer", () => {
   });
 
   it("forwards non-streaming /v1/messages requests with Claude-compatible auth headers", async () => {
-    const runtime = new StandaloneOperatorRuntime({ rootDir: await makeTempDir() });
+    const runtime = new StandaloneOperatorRuntime({ backgroundTaskSpawnProcess: noopBackgroundSpawn, rootDir: await makeTempDir() });
     const fetchImpl = vi.fn<typeof fetch>(async (input, init) => {
       expect(input).toBe("https://example.anthropic.test/v1/messages");
       expect(init?.method).toBe("POST");
@@ -2285,7 +2292,7 @@ describe("OperatorControlPlaneServer", () => {
   });
 
   it("falls back to ANTHROPIC_AUTH_TOKEN for x-api-key and forwards streaming /v1/messages requests", async () => {
-    const runtime = new StandaloneOperatorRuntime({ rootDir: await makeTempDir() });
+    const runtime = new StandaloneOperatorRuntime({ backgroundTaskSpawnProcess: noopBackgroundSpawn, rootDir: await makeTempDir() });
     const fetchImpl = vi.fn<typeof fetch>(async (_input, init) => {
       expect(init?.headers).toMatchObject({
         "x-api-key": "token-only",
@@ -2366,7 +2373,7 @@ describe("OperatorControlPlaneServer", () => {
   });
 
   it("binds webhook chat deliveries to sessions and posts replies", async () => {
-    const runtime = new StandaloneOperatorRuntime({ rootDir: await makeTempDir() });
+    const runtime = new StandaloneOperatorRuntime({ backgroundTaskSpawnProcess: noopBackgroundSpawn, rootDir: await makeTempDir() });
     const fetchImpl = vi.fn<typeof fetch>(async (input, init) => {
       if (String(input).includes("/reply")) {
         expect(init?.method).toBe("POST");
@@ -2436,7 +2443,7 @@ describe("OperatorControlPlaneServer", () => {
   });
 
   it("deduplicates repeated webhook chat deliveries and reuses the same bound session", async () => {
-    const runtime = new StandaloneOperatorRuntime({ rootDir: await makeTempDir() });
+    const runtime = new StandaloneOperatorRuntime({ backgroundTaskSpawnProcess: noopBackgroundSpawn, rootDir: await makeTempDir() });
     const fetchImpl = vi.fn<typeof fetch>(async (input) => {
       if (String(input).includes("/reply")) {
         return new Response(null, { status: 204 });
@@ -2464,7 +2471,7 @@ describe("OperatorControlPlaneServer", () => {
   });
 
   it("returns safe errors for invalid webhook payloads and callback failures", async () => {
-    const runtime = new StandaloneOperatorRuntime({ rootDir: await makeTempDir() });
+    const runtime = new StandaloneOperatorRuntime({ backgroundTaskSpawnProcess: noopBackgroundSpawn, rootDir: await makeTempDir() });
     const server = new OperatorControlPlaneServer({
       runtime,
       fetchImpl: vi.fn<typeof fetch>(async () => new Response(null, { status: 502 })),
@@ -2489,7 +2496,7 @@ describe("OperatorControlPlaneServer", () => {
 
   it("returns safe errors for invalid push requests", async () => {
     const rootDir = await makeTempDir();
-    const runtime = new StandaloneOperatorRuntime({
+    const runtime = new StandaloneOperatorRuntime({ backgroundTaskSpawnProcess: noopBackgroundSpawn,
       rootDir,
       delivery: new OperatorDeliveryService(rootDir, {
         sendBrowserPush: async () => {},
@@ -2517,7 +2524,7 @@ describe("OperatorControlPlaneServer", () => {
 
   it("handles cron methods", async () => {
     const rootDir = await makeTempDir();
-    const runtime = new StandaloneOperatorRuntime({ rootDir });
+    const runtime = new StandaloneOperatorRuntime({ backgroundTaskSpawnProcess: noopBackgroundSpawn, rootDir });
     const delivery = new OperatorDeliveryService(rootDir, {
       fetchImpl: async () => new Response(null, { status: 204 }),
     });
@@ -2619,7 +2626,7 @@ describe("OperatorControlPlaneServer", () => {
   }, 30_000);
 
   it("returns not-found and invalid-method responses", async () => {
-    const runtime = new StandaloneOperatorRuntime({ rootDir: await makeTempDir() });
+    const runtime = new StandaloneOperatorRuntime({ backgroundTaskSpawnProcess: noopBackgroundSpawn, rootDir: await makeTempDir() });
     const server = new OperatorControlPlaneServer({ runtime });
 
     await expect(server.handle({ method: "sessions.get", params: { sessionId: "missing" } })).resolves.toEqual({

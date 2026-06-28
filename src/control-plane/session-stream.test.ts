@@ -18,9 +18,16 @@ afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })));
 });
 
+// Test-only: a no-op background-task spawn so suites never launch real detached
+// OS processes (e.g. `sleep 5`, `tail -f`) that leak past the test, starve the
+// parallel runner, and cause timing flakes. Lifecycle state is driven explicitly
+// via writeState/writeOutput in the tests that need it.
+let __noopBgPid = 40000;
+const noopBackgroundSpawn = () => ({ pid: (__noopBgPid += 1), unref() {} });
+
 describe("OperatorControlPlaneSessionStream", () => {
   it("bootstraps a session, binds requests, and filters live events", async () => {
-    const runtime = new StandaloneOperatorRuntime({
+    const runtime = new StandaloneOperatorRuntime({ backgroundTaskSpawnProcess: noopBackgroundSpawn,
       rootDir: await makeTempDir(),
       backgroundTaskIsProcessRunning: () => false,
     });
@@ -131,7 +138,7 @@ describe("OperatorControlPlaneSessionStream", () => {
   });
 
   it("replays and streams subagent events for a bootstrapped session", async () => {
-    const runtime = new StandaloneOperatorRuntime({
+    const runtime = new StandaloneOperatorRuntime({ backgroundTaskSpawnProcess: noopBackgroundSpawn,
       rootDir: await makeTempDir(),
       backgroundTaskIsProcessRunning: () => false,
     });
@@ -186,7 +193,7 @@ describe("OperatorControlPlaneSessionStream", () => {
   });
 
   it("binds task requests and streams task events for a bootstrapped session", async () => {
-    const runtime = new StandaloneOperatorRuntime({
+    const runtime = new StandaloneOperatorRuntime({ backgroundTaskSpawnProcess: noopBackgroundSpawn,
       rootDir: await makeTempDir(),
       backgroundTaskIsProcessRunning: () => false,
     });
@@ -276,7 +283,7 @@ describe("OperatorControlPlaneSessionStream", () => {
   });
 
   it("binds monitor requests and streams monitor events for a bootstrapped session", async () => {
-    const runtime = new StandaloneOperatorRuntime({
+    const runtime = new StandaloneOperatorRuntime({ backgroundTaskSpawnProcess: noopBackgroundSpawn,
       rootDir: await makeTempDir(),
       backgroundTaskIsProcessRunning: () => false,
     });
@@ -363,7 +370,7 @@ describe("OperatorControlPlaneSessionStream", () => {
   });
 
   it("binds plan requests and streams plan events for a bootstrapped session", async () => {
-    const runtime = new StandaloneOperatorRuntime({
+    const runtime = new StandaloneOperatorRuntime({ backgroundTaskSpawnProcess: noopBackgroundSpawn,
       rootDir: await makeTempDir(),
       backgroundTaskIsProcessRunning: () => false,
     });
@@ -484,7 +491,7 @@ describe("OperatorControlPlaneSessionStream", () => {
   });
 
   it("binds message requests and streams message events for a bootstrapped session", async () => {
-    const runtime = new StandaloneOperatorRuntime({
+    const runtime = new StandaloneOperatorRuntime({ backgroundTaskSpawnProcess: noopBackgroundSpawn,
       rootDir: await makeTempDir(),
       backgroundTaskIsProcessRunning: () => false,
     });
@@ -570,7 +577,7 @@ describe("OperatorControlPlaneSessionStream", () => {
     const delivery = new (await import("./delivery.js")).OperatorDeliveryService(await makeTempDir(), {
       sendBrowserPush: async () => {},
     });
-    const runtime = new StandaloneOperatorRuntime({
+    const runtime = new StandaloneOperatorRuntime({ backgroundTaskSpawnProcess: noopBackgroundSpawn,
       rootDir: await makeTempDir(),
       backgroundTaskIsProcessRunning: () => false,
       delivery,
@@ -643,7 +650,7 @@ describe("OperatorControlPlaneSessionStream", () => {
   });
 
   it("binds teammate requests for a bootstrapped session", async () => {
-    const runtime = new StandaloneOperatorRuntime({
+    const runtime = new StandaloneOperatorRuntime({ backgroundTaskSpawnProcess: noopBackgroundSpawn,
       rootDir: await makeTempDir(),
       backgroundTaskIsProcessRunning: () => false,
     });
@@ -718,7 +725,7 @@ describe("OperatorControlPlaneSessionStream", () => {
   });
 
   it("reattaches to an idle session and returns only session-scoped bootstrap state", async () => {
-    const runtime = new StandaloneOperatorRuntime({
+    const runtime = new StandaloneOperatorRuntime({ backgroundTaskSpawnProcess: noopBackgroundSpawn,
       rootDir: await makeTempDir(),
       backgroundTaskIsProcessRunning: () => false,
     });
@@ -771,7 +778,7 @@ describe("OperatorControlPlaneSessionStream", () => {
   });
 
   it("reattaches by remoteId when sessionId is absent", async () => {
-    const runtime = new StandaloneOperatorRuntime({
+    const runtime = new StandaloneOperatorRuntime({ backgroundTaskSpawnProcess: noopBackgroundSpawn,
       rootDir: await makeTempDir(),
       backgroundTaskIsProcessRunning: () => false,
     });
@@ -799,7 +806,7 @@ describe("OperatorControlPlaneSessionStream", () => {
   });
 
   it("redeems an approved pairing code through bootstrap", async () => {
-    const runtime = new StandaloneOperatorRuntime({
+    const runtime = new StandaloneOperatorRuntime({ backgroundTaskSpawnProcess: noopBackgroundSpawn,
       rootDir: await makeTempDir(),
       backgroundTaskIsProcessRunning: () => false,
     });

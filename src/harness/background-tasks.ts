@@ -162,6 +162,19 @@ export class BackgroundTaskExecutionService {
   async writeArtifacts(task: BackgroundTaskRecord): Promise<void> {
     const launchScriptPath = path.join(this.rootDir, task.execution.launchScript);
     await ensureParentDir(launchScriptPath);
+    // Write the static portion of the initial "running" state as correctly
+    // escaped JSON from Node, so the launch script never has to build JSON via
+    // shell string substitution (which corrupts on quotes/newlines in the
+    // command, cwd, or paths). The script's Python only injects pid/startedAt.
+    await writeJsonAtomic(path.join(this.rootDir, stateSeedFile(task)), {
+      version: 1,
+      taskId: task.id,
+      kind: task.kind,
+      status: "running",
+      outputFile: task.execution.outputFile,
+      cwd: task.cwd,
+      command: task.command,
+    });
     await fs.writeFile(launchScriptPath, renderLaunchScript(task), {
       encoding: "utf8",
       mode: 0o700,
@@ -731,31 +744,20 @@ function applyExecutionState(task: BackgroundTaskRecord, state: BackgroundTaskEx
 
 function renderLaunchScript(task: BackgroundTaskRecord): string {
   const quotedStatePath = shellQuote(task.execution.stateFile);
+  const quotedSeedPath = shellQuote(stateSeedFile(task));
   const quotedOutputFile = shellQuote(task.execution.outputFile);
   const quotedCwd = shellQuote(task.cwd);
   const quotedCommand = shellQuote(task.command);
-  const quotedStatePayload = shellQuote(
-    JSON.stringify({
-      version: 1,
-      taskId: task.id,
-      kind: task.kind,
-      status: "running",
-      pid: "$$",
-      startedAt: "__OPENCLAW_STARTED_AT__",
-      updatedAt: "__OPENCLAW_STARTED_AT__",
-      outputFile: task.execution.outputFile,
-      cwd: task.cwd,
-      command: task.command,
-    }),
-  );
 
   return [
     "#!/usr/bin/env bash",
     "set -euo pipefail",
     `mkdir -p $(dirname ${quotedStatePath}) $(dirname ${quotedOutputFile})`,
     "started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-    `printf '%s' ${quotedStatePayload} | sed "s/__OPENCLAW_STARTED_AT__/$started_at/g; s/\"\$\$\"/$$/g" > ${quotedStatePath}`,
-    `printf '%s\n' "starting ${task.kind} ${task.id}" >> ${quotedOutputFile}`,
+    `python3 - ${quotedSeedPath} ${quotedStatePath} $$ "$started_at" <<'PY'`,
+    ...renderInitialStateWriterPython(),
+    "PY",
+    `printf '%s\\n' "starting ${task.kind} ${task.id}" >> ${quotedOutputFile}`,
     `if cd ${quotedCwd} && bash -lc ${quotedCommand} >> ${quotedOutputFile} 2>&1; then`,
     "  completed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
     `  python3 - ${quotedStatePath} $$ "$completed_at" 0 <<'PY'`,
@@ -771,6 +773,23 @@ function renderLaunchScript(task: BackgroundTaskRecord): string {
     "fi",
     "",
   ].join("\n");
+}
+
+function renderInitialStateWriterPython(): string[] {
+  return [
+    "import json",
+    "import pathlib",
+    "import sys",
+    "seed_path = pathlib.Path(sys.argv[1])",
+    "state_path = pathlib.Path(sys.argv[2])",
+    "pid = int(sys.argv[3])",
+    "started_at = sys.argv[4]",
+    "state = json.loads(seed_path.read_text())",
+    "state['pid'] = pid",
+    "state['startedAt'] = started_at",
+    "state['updatedAt'] = started_at",
+    "state_path.write_text(json.dumps(state, indent=2) + '\\n')",
+  ];
 }
 
 function renderStateWriterPython(status: BackgroundTaskExecutionState["status"]): string[] {
@@ -793,6 +812,14 @@ function renderStateWriterPython(status: BackgroundTaskExecutionState["status"])
   ];
 }
 
+function stateSeedFile(task: BackgroundTaskRecord): string {
+  return `${task.execution.stateFile}.seed`;
+}
+
 function shellQuote(value: string): string {
-  return `'${value.replaceAll(`'`, `"'"'"'`)}'`;
+  // POSIX-safe single-quote escaping: close the quote, emit an escaped quote
+  // (`'"'"'`), reopen. The previous form (`"'"'"'`) inserted a spurious double
+  // quote, so any command containing a single quote produced a malformed
+  // `bash -lc` argument ("unexpected EOF while looking for matching `''").
+  return `'${value.replaceAll(`'`, `'"'"'`)}'`;
 }

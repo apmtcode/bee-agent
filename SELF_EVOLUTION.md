@@ -6,6 +6,61 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-06-28 (run 9) — 🐞 Two real shell-quoting bugs in background-task launch; suite de-flaked
+
+**Audited:** The test suite health (procedure step 5). Found the baseline was
+**no longer green** — `npm test` failed 2–4 tests *non-deterministically* (run it
+4× at baseline: 3,3,2,3 failures). Two distinct root causes, both real product
+bugs in `src/harness/background-tasks.ts`:
+
+1. **Corrupt initial state JSON (deterministic).** The launch script built the
+   initial `running` state file by shell-substituting a JSON template
+   (`printf '%s' <payload> | sed "…/\"\$\$\"/$$/g"`). Any command/cwd/path
+   containing a quote or newline produced **invalid JSON**, so recovery
+   (`recoverBackgroundTasks` → `readState` → `JSON.parse`) threw a `SyntaxError`.
+   Captured the actual bad file to confirm: `"command":"printf "'…` — unbalanced
+   quotes mid-object. **Fix:** write the static portion of the state from Node via
+   the already-escaping `writeJsonAtomic` (new `<stateFile>.seed`), and have the
+   script's Python only inject `pid`/`startedAt`. No more shell-built JSON.
+
+2. **Broken `shellQuote` (latent).** Single quotes were escaped as `"'"'"'`
+   (6 chars) instead of the POSIX-correct `'"'"'` (5 chars) — the buggy form
+   inserts a spurious `"`, so any command containing a `'` produced a malformed
+   `bash -lc` argument (`unexpected EOF while looking for matching '`). The sibling
+   `training/runner.ts` had the correct form; this file diverged. **Fix:** aligned
+   it to `'"'"'`.
+
+3. **Non-hermetic tests (flake source).** Several suites started **real** detached
+   background processes (`sleep 5` ×4, `tail -f` ×∞) that leaked past the test and
+   starved the parallel runner → timing flakes in unrelated files (gateway-transport
+   pong/reconnect). The `.test` suites already drive lifecycle state explicitly via
+   `writeState`/`writeOutput`, so the real spawn was incidental. Injected a no-op
+   `backgroundTaskSpawnProcess` into the spawning suites (script-applied to 13/8/11
+   sites in server/gateway/session tests + operator-runtime), and added an additive
+   `backgroundTaskSpawnProcess`/`backgroundTaskIsProcessRunning` forwarding seam to
+   `OperatorCliApp`. One app test that *intentionally* exercises real end-to-end
+   execution (`printf ok`, short-lived) was kept on the real spawn — and it passes
+   now precisely because of fix #1.
+
+**New test:** `background-tasks.test.ts` → "writes a parseable state file even when
+the command contains quotes/newlines" runs the **real** launch script (bash+python3)
+with a command containing both `'` and `"`, asserts the raw state bytes
+`JSON.parse` cleanly and the command round-trips — covering both #1 and #2.
+
+**Test results:** baseline flaky 2–4 fails → **175/175 passing, stable across 5
+consecutive full runs**. Build ✅. `typecheck:src` ✅ CLEAN. Full `tsc` unchanged at
+**125** (no regression; all in test files). `+1` net test.
+
+**New idea:** the launch-script renderers in `background-tasks.ts` and
+`training/runner.ts` are near-duplicates (same `shellQuote`, same Python
+state-writer pattern, and one had a bug the other didn't). Extract a shared
+`src/harness/launch-script.ts` (canonical `shellQuote` + `renderStateWriterPython`
++ seed helper) so a fix in one can't silently miss the other — and add a tiny unit
+test for `shellQuote` covering `'`, `"`, `$`, and spaces so this class of bug is
+caught at the function level, not via a full process round-trip.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

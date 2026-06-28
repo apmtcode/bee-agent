@@ -26,9 +26,16 @@ class InMemoryGatewayTransport {
   }
 }
 
+// Test-only: a no-op background-task spawn so suites never launch real detached
+// OS processes (e.g. `sleep 5`, `tail -f`) that leak past the test, starve the
+// parallel runner, and cause timing flakes. Lifecycle state is driven explicitly
+// via writeState/writeOutput in the tests that need it.
+let __noopBgPid = 40000;
+const noopBackgroundSpawn = () => ({ pid: (__noopBgPid += 1), unref() {} });
+
 describe("OperatorGatewayTransportConnection", () => {
   it("bootstraps a remote connection, binds requests, and forwards live events", async () => {
-    const runtime = new StandaloneOperatorRuntime({
+    const runtime = new StandaloneOperatorRuntime({ backgroundTaskSpawnProcess: noopBackgroundSpawn,
       rootDir: await makeTempDir(),
       backgroundTaskIsProcessRunning: () => false,
     });
@@ -143,7 +150,7 @@ describe("OperatorGatewayTransportConnection", () => {
   });
 
   it("rejects requests before bootstrap and filters unrelated events", async () => {
-    const runtime = new StandaloneOperatorRuntime({
+    const runtime = new StandaloneOperatorRuntime({ backgroundTaskSpawnProcess: noopBackgroundSpawn,
       rootDir: await makeTempDir(),
       backgroundTaskIsProcessRunning: () => false,
     });
@@ -203,7 +210,7 @@ describe("OperatorGatewayTransportConnection", () => {
   });
 
   it("reattaches by remoteId across gateway connections", async () => {
-    const runtime = new StandaloneOperatorRuntime({
+    const runtime = new StandaloneOperatorRuntime({ backgroundTaskSpawnProcess: noopBackgroundSpawn,
       rootDir: await makeTempDir(),
       backgroundTaskIsProcessRunning: () => false,
     });
@@ -241,7 +248,7 @@ describe("OperatorGatewayTransportConnection", () => {
   });
 
   it("replays task plans in gateway bootstrap and forwards task-family events", async () => {
-    const runtime = new StandaloneOperatorRuntime({
+    const runtime = new StandaloneOperatorRuntime({ backgroundTaskSpawnProcess: noopBackgroundSpawn,
       rootDir: await makeTempDir(),
       backgroundTaskIsProcessRunning: () => false,
     });
@@ -291,7 +298,7 @@ describe("OperatorGatewayTransportConnection", () => {
   });
 
   it("forwards subagent-family events across the gateway", async () => {
-    const runtime = new StandaloneOperatorRuntime({
+    const runtime = new StandaloneOperatorRuntime({ backgroundTaskSpawnProcess: noopBackgroundSpawn,
       rootDir: await makeTempDir(),
       backgroundTaskIsProcessRunning: () => false,
     });
@@ -320,7 +327,7 @@ describe("OperatorGatewayTransportConnection", () => {
   });
 
   it("passes pairingCode through gateway bootstrap", async () => {
-    const runtime = new StandaloneOperatorRuntime({
+    const runtime = new StandaloneOperatorRuntime({ backgroundTaskSpawnProcess: noopBackgroundSpawn,
       rootDir: await makeTempDir(),
       backgroundTaskIsProcessRunning: () => false,
     });
@@ -352,7 +359,7 @@ describe("OperatorGatewayTransportConnection", () => {
   });
 
   it("sends heartbeat pings, marks stale without pong, and reports stale remote status", async () => {
-    const runtime = new StandaloneOperatorRuntime({
+    const runtime = new StandaloneOperatorRuntime({ backgroundTaskSpawnProcess: noopBackgroundSpawn,
       rootDir: await makeTempDir(),
       backgroundTaskIsProcessRunning: () => false,
     });
@@ -399,7 +406,7 @@ describe("OperatorGatewayTransportConnection", () => {
   });
 
   it("replays only missed events after reconnect cursor and reports healthy status after pong", async () => {
-    const runtime = new StandaloneOperatorRuntime({
+    const runtime = new StandaloneOperatorRuntime({ backgroundTaskSpawnProcess: noopBackgroundSpawn,
       rootDir: await makeTempDir(),
       backgroundTaskIsProcessRunning: () => false,
     });
