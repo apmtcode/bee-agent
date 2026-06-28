@@ -733,7 +733,14 @@ describe("OperatorCliApp", () => {
     const rootDir = await makeTempDir();
     await fs.mkdir(path.join(rootDir, ".claude"), { recursive: true });
     await fs.writeFile(path.join(rootDir, ".claude", "settings.local.json"), '{"permissionMode":"default"}');
-    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    const app = new OperatorCliApp({
+      rootDir,
+      cwd: rootDir,
+      currentDate: "2026-05-25",
+      // Inert spawn: don't launch a real `rm -rf build` process for this policy test.
+      backgroundTaskSpawnProcess: () => ({ pid: 4242, unref() {} }),
+      backgroundTaskIsProcessRunning: () => true,
+    });
     const session = await app.runtime.startSession({ title: "freeform policy", cwd: rootDir, agentId: "operator-cli" });
 
     const firstAttempt = await app.handleInput("start background wipe -- rm -rf build", session.id);
@@ -801,7 +808,19 @@ describe("OperatorCliApp", () => {
 
   it("supports session lifecycle, transcript, approvals, pairing, config, and prompt commands", async () => {
     const rootDir = await makeTempDir();
-    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    const app = new OperatorCliApp({
+      rootDir,
+      cwd: rootDir,
+      currentDate: "2026-05-25",
+      // Inert spawn so no real OS process is launched (the default shell launch
+      // script races this test's writeState calls and its liveness is
+      // environment-dependent). Launched tasks get the fake pid 4242 and are
+      // treated as alive; the sentinel pid 999999 this test injects later to
+      // simulate a crashed process is treated as dead — making the control-state
+      // assertions (active vs degraded:background task failed) deterministic.
+      backgroundTaskSpawnProcess: () => ({ pid: 4242, unref() {} }),
+      backgroundTaskIsProcessRunning: (pid) => pid !== 999999,
+    });
     const firstSession = await app.runtime.startSession({ title: "first", cwd: rootDir, agentId: "operator-cli" });
     const secondSession = await app.runtime.startSession({ title: "second", cwd: rootDir, agentId: "operator-cli" });
 
@@ -1063,7 +1082,17 @@ describe("OperatorCliApp", () => {
 
   it("supports background and monitor task commands plus cron commands", async () => {
     const rootDir = await makeTempDir();
-    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    const app = new OperatorCliApp({
+      rootDir,
+      cwd: rootDir,
+      currentDate: "2026-05-25",
+      // Inert spawn so no real OS process is launched. The default shell launch
+      // script writes the task's output/state asynchronously, racing this test's
+      // explicit writes (and its output is environment-dependent). With an inert
+      // spawn the test drives output/state itself, keeping it deterministic.
+      backgroundTaskSpawnProcess: () => ({ pid: 4242, unref() {} }),
+      backgroundTaskIsProcessRunning: () => true,
+    });
     const session = await app.runtime.startSession({ title: "CLI ops", cwd: rootDir, agentId: "operator-cli" });
 
     const startOutput = await app.dispatchSlashCommand(
@@ -1078,6 +1107,9 @@ describe("OperatorCliApp", () => {
     if (!task) {
       throw new Error("expected background task");
     }
+    // The inert spawn never runs `printf ok`, so write the expected output
+    // explicitly (the real launch script would have produced this).
+    await app.runtime.backgroundTasks.executionService.writeOutput(task, "ok\n");
 
     const listOutput = await app.dispatchSlashCommand({ kind: "background-list" });
     expect(listOutput).toContain(task.id);
@@ -1184,7 +1216,14 @@ describe("OperatorCliApp", () => {
     const rootDir = await makeTempDir();
     await fs.mkdir(path.join(rootDir, ".claude"), { recursive: true });
     await fs.writeFile(path.join(rootDir, ".claude", "settings.local.json"), '{"permissionMode":"default"}');
-    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    const app = new OperatorCliApp({
+      rootDir,
+      cwd: rootDir,
+      currentDate: "2026-05-25",
+      // Inert spawn: don't launch a real `rm -rf build` process for this policy test.
+      backgroundTaskSpawnProcess: () => ({ pid: 4242, unref() {} }),
+      backgroundTaskIsProcessRunning: () => true,
+    });
     const session = await app.runtime.startSession({ title: "policy", cwd: rootDir, agentId: "operator-cli" });
 
     const firstAttempt = await app.dispatchSlashCommand(
@@ -1227,7 +1266,15 @@ describe("OperatorCliApp", () => {
         },
       }),
     );
-    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    const app = new OperatorCliApp({
+      rootDir,
+      cwd: rootDir,
+      currentDate: "2026-05-25",
+      // Inert spawn: the hooks (not the background process) produce the asserted
+      // output, so no real process needs to launch.
+      backgroundTaskSpawnProcess: () => ({ pid: 4242, unref() {} }),
+      backgroundTaskIsProcessRunning: () => true,
+    });
     const session = await app.runtime.startSession({ title: "hooks", cwd: rootDir, agentId: "operator-cli" });
 
     const output = await app.dispatchSlashCommand(

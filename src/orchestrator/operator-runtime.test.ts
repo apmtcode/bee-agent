@@ -530,6 +530,12 @@ describe("StandaloneOperatorRuntime", () => {
   it("starts, syncs, recovers, lists, and cancels background tasks", async () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
+      // Inert spawn: never launch a real OS process. The default spawn runs a
+      // shell launch script that rewrites the state file non-atomically, which
+      // races this test's explicit writeState/readState calls (manifesting as a
+      // mid-write JSON parse error). Returning a fake child keeps the test
+      // hermetic and deterministic in any environment.
+      backgroundTaskSpawnProcess: () => ({ pid: 4242, unref() {} }),
       backgroundTaskIsProcessRunning: () => false,
     });
     const session = await runtime.startSession({ title: "Tasks", agentId: "main" });

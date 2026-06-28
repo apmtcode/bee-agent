@@ -6,6 +6,57 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-06-28 (run 9) — 🟢 Hermetic background-task tests: kill real-process flakiness (174/174 deterministic)
+
+**Audited:** The actual `npm test` baseline on this run — found it **red**, not the
+174/174 run 8 logged. 3 tests failed *non-deterministically* (count varied run to
+run: 3, then 1, then a different 1). All in the background-task surface:
+`operator-runtime.test.ts` (recover), `server.test.ts` (remoteControl→active),
+`app.test.ts` (platform control + monitor stop). The code was unchanged since run
+8 (clean tree), so these are **environment-dependent failures**, not regressions.
+
+**Root cause:** these tests injected only `backgroundTaskIsProcessRunning` but let
+the runtime spawn **real OS processes**. The default launch path runs a shell
+script that (a) writes the task's state file via a *non-atomic* `printf > file`
+redirect and (b) produces the task's output by actually running the command.
+Both race the tests' own `writeState`/`readState`/`writeOutput` calls and depend
+on PID liveness that differs between machines (`process.kill(-pid,0)` →
+`EPERM`=alive on the run-8 host vs `ESRCH`=dead in this cloud sandbox). Symptoms:
+a mid-write `SyntaxError` parsing partial JSON, and spurious
+`control=degraded:… background task missing-process` where `active` was expected.
+The health check (`server.ts:2175`) only degrades when a *running* state file's
+pid is dead — so eliminating the real launch script (no state file written by a
+process) removes the whole class.
+
+**Changed (test-only + one additive seam):**
+- `src/cli/app.ts`: threaded `backgroundTaskSpawnProcess` /
+  `backgroundTaskIsProcessRunning` through `OperatorCliAppOptions` into the
+  runtime (production leaves them `undefined` → unchanged real behaviour). This
+  is the missing injection seam that let the app tests stay hermetic.
+- Injected an **inert spawn** (`() => ({ pid: 4242, unref(){} })`) — never
+  launches a real process — at every test site that starts background tasks:
+  `operator-runtime.test.ts` (1), `server.test.ts` (3), `app.test.ts` (5). Each
+  pairs it with a liveness stub matched to intent: `() => true` where launched
+  tasks must read alive, and `(pid) => pid !== 999999` where the test later
+  injects a sentinel "crashed" pid so the degraded→repair path stays exercised.
+- `app.test.ts`: where a test asserted on output the real process used to print
+  (`"ok"`), added an explicit `writeOutput(task, "ok\n")` (mirroring how the
+  monitor case already drives its own output/state).
+
+**Test results:** `npm test` **174/174, green on 3 consecutive runs** (was
+flaky 3→1 failures before). `typecheck:src` ✅ exit 0. Full `tsc` **125**
+(unchanged — no new test-file errors). Build ✅.
+
+**New idea:** the flakiness was invisible to a single-shot gate — it only showed
+on re-run. Two follow-ups: (1) a tiny **test-lint** that fails if a test
+constructs a `StandaloneOperatorRuntime`/`OperatorCliApp` and calls
+`startBackgroundTask`/`background-start` *without* injecting
+`backgroundTaskSpawnProcess`, so real-process flakiness can't be reintroduced;
+(2) make the engine's pre-push self-check **run the suite 2–3×** (or seed-shuffle)
+so non-deterministic failures are caught before a push, not after.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

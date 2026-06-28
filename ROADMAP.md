@@ -4,6 +4,18 @@ Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
 ## Foundations / DX
+- [x] **Hermetic background-task tests** (2026-06-28, run 9) — the suite was
+      flaky in cloud because tests spawned real OS processes (non-atomic state
+      writes + machine-dependent PID liveness). Threaded an injection seam
+      through `OperatorCliAppOptions` and gave every task-starting test an inert
+      spawn. 174/174 now green on 3 consecutive runs.
+- [ ] **Test-lint: require inert spawn for background-task tests** — fail if a
+      test builds a `StandaloneOperatorRuntime`/`OperatorCliApp` and starts a
+      background task without injecting `backgroundTaskSpawnProcess`, so
+      real-process flakiness can't be reintroduced.
+- [ ] **Flakiness-aware pre-push self-check** — have the engine run `npm test`
+      2–3× (or with seed-shuffle) each cycle so non-deterministic failures are
+      caught before pushing, not discovered the next run.
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`
