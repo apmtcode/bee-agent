@@ -6,6 +6,72 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-06-28 (run 9) — 🧠 Pluggable movement-model backend (train + generalize) + real shellQuote/atomic-write bug fixes
+
+**Audited:** The local-movement learning subsystem (standing objective #2). The
+pipeline had capture → schema → dataset → replay → a *training-plan/launch-script
+runner* (`src/training/runner.ts`, builds mlx/axolotl shell commands) — but **no
+actual model backend**: nothing that learns from captured trajectories, repeats
+recorded movements, or generalizes. Objective #2 (c)+(d) and the top
+movement-subsystem ROADMAP item were both unmet.
+
+**Changed — new `src/training/movement-model.ts` (+ exports in `src/index.ts`):**
+- **Pluggable backend seam** `MovementModelBackend` (`train`/`load`) + `MovementModel`
+  (`predictNext`/`generate`/`classOf`). A real on-device neural backend (e.g. an
+  MLX LoRA adapter from the runner) can implement the same interface and drop in.
+- **`MarkovMovementBackend`** — a deterministic, GPU-free, on-device-trainable
+  count-based Markov **backoff** n-gram. Tokenizes actions into `tool/kind/slot`
+  specifics + `tool/kind/*` gesture **classes**. Prediction tries exact-context
+  match first (faithful **replay**), then class-mapped context (**generalization**
+  to new-but-related targets), then unigram prior. `structuralClass()` derives a
+  token's class from its shape, so *unseen* targets still generalize.
+- Dataset builders from trajectory spans **and** from privacy-reviewed exported
+  replay manifests; serializable `MovementModelArtifact` (save → ship → reload);
+  `evaluateMovementModel()` reporting `top1Accuracy` (replay fidelity) +
+  `classAccuracy`/`generalizationRate` (generalization quality).
+- **10 new tests** (`movement-model.test.ts`) on synthetic trajectories: exact
+  replay round-trip, artifact (de)serialization determinism, and held-out
+  generalization (class accuracy > exact accuracy on unseen fields).
+
+**Real bug fixed (found while greening the suite):** `shellQuote()` in
+`src/harness/background-tasks.ts` escaped embedded single quotes as `"'"'"'`
+(wrong) instead of the POSIX `'\''` idiom — so any background-task command
+containing a single quote (e.g. `printf 'x'`) produced a **corrupted launch
+script → malformed state JSON**, which then threw on read. Fixed to `'\''`.
+Also made the launch script's state writes **atomic** (temp file + `mv`/
+`os.replace`) in both `background-tasks.ts` and `training/runner.ts`, so a
+concurrent `reconcileTask` read can never observe a half-written state file.
+Stabilized the racy `operator-runtime` background-task test by injecting the
+already-existing `backgroundTaskSpawnProcess` seam (the test drives state via
+`writeState`, so a real subprocess must not run).
+
+**Test results:** movement-model **10/10** ✅; `background-tasks`, `runner`,
+`operator-runtime` ✅; `typecheck:src` ✅; build ✅. Full suite **182/184**
+(was 181/184 with **3** failing files at run start — `operator-runtime` now
+green; **2** pre-existing failures remain). Net strictly better.
+
+**Blocker (pre-existing, documented):** `server.test.ts` + `app.test.ts` each
+have one big integration test that starts **real** background subprocesses while
+mocking `isProcessRunning → false`. Recovery then emits
+`background-task.failed`/`missing-process` events, and `deriveRemoteDiagnostics`
+turns those into a `degraded` control state — so the tests' expected
+`active`/`mixed` states are timing-dependent (they only held when the status
+check raced *ahead* of the subprocess's state write). Root cause confirmed via
+targeted debug. Proper fix needs a **simulated process-lifecycle harness** (or an
+additive `backgroundTaskSpawnProcess` seam on `OperatorCliApp`, which currently
+exposes none) so these tests stop spawning real processes — a focused follow-up,
+queued in ROADMAP. Left untouched this run to avoid a risky test redesign.
+
+**New idea:** a **generalization eval CLI/RPC** — load a `MovementModelArtifact`,
+run `evaluateMovementModel` against a held-out synthetic trajectory set, and gate
+training-export promotion on a minimum `classAccuracy` threshold. Pairs naturally
+with a **synthetic event-stream generator** (parametric workflows: open→tap→
+type→submit with randomized targets) to produce held-out sets without real OS
+input — turning the movement subsystem into a measurable, regression-tracked
+capability rather than an untested pipeline.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

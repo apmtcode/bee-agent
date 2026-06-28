@@ -62,13 +62,42 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
-      deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+- [x] Pluggable local-model backend interface for the training runner with a
+      deterministic backend (so cloud/CI tests pass) and a documented seam for a
+      real on-device small model — DONE run 9 (`src/training/movement-model.ts`:
+      `MovementModelBackend`/`MovementModel` interfaces + `MarkovMovementBackend`,
+      a deterministic count-based Markov backoff learner; trains, replays, and
+      generalizes via gesture-class backoff; serializable artifact; 10 tests).
+- [~] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories — PARTIAL run 9 (`evaluateMovementModel`
+      returns top1/class accuracy + generalization rate; tested on held-out
+      synthetic trajectories). Next: a CLI/RPC that gates export promotion on a
+      minimum `classAccuracy`.
+- [ ] Synthetic event-stream generator (reusable, exported) to validate
+      capture→dataset→replay round-trips and feed the eval harness without real
+      OS input. Run 9 used an inline synthetic builder in tests; promote it to a
+      shared `src/capture/synthetic.ts` with parametric workflows.
+- [ ] Wire a real on-device neural `MovementModelBackend` (MLX LoRA adapter from
+      `LocalAppleSiliconTrainingRunner`) behind the new interface; keep
+      `MarkovMovementBackend` as the cloud/CI default.
+
+## Test reliability (pre-existing failures)
+- [x] Fix `shellQuote` single-quote corruption in `background-tasks.ts`
+      (`"'"'"'` → POSIX `'\''`) — DONE run 9. Commands like `printf 'x'` no longer
+      corrupt the generated launch script / state JSON.
+- [x] Make launch-script state writes atomic (temp + `mv`/`os.replace`) in
+      `background-tasks.ts` and `training/runner.ts` — DONE run 9. Prevents
+      partial-read JSON parse errors during concurrent `reconcileTask`.
+- [ ] **Simulate process lifecycle in integration tests.** `server.test.ts` and
+      `app.test.ts` each have one big test that spawns **real** background
+      subprocesses while mocking `isProcessRunning → false`; recovery then emits
+      `background-task.failed`/`missing-process` events and
+      `deriveRemoteDiagnostics` reports `degraded`, so expected `active`/`mixed`
+      states are timing-dependent. `operator-runtime.test.ts` was fixed run 9 by
+      injecting `backgroundTaskSpawnProcess`. For app.test.ts, add an additive
+      `backgroundTaskSpawnProcess` option to `OperatorCliApp` (it exposes none)
+      and inject a deterministic spawn; for server.test.ts, inject the seam and
+      align the multi-remote health setup so no spurious missing-process fires.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
