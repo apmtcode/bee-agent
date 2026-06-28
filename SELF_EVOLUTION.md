@@ -6,6 +6,60 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-06-28 (run 9) — 🐛 Real bug: background-task state JSON corrupted by shell munging; suite was red
+
+**Audited:** The pre-push green gate itself. Before touching anything I ran the
+suite — and it was **failing 3–4/174**, contradicting run 8's "174/174" claim
+(the races are timing/scheduling sensitive, so they were latent on the original
+author's faster machine). Traced every failure to one subsystem:
+`src/harness/background-tasks.ts` background-task execution state.
+
+**Root cause (a genuine production bug, not just test flake):** the launch
+script `renderLaunchScript` built the initial *running* `state.json` by
+embedding the task fields into a JSON string and rewriting it at runtime with
+`printf '<json>' | sed 's/__STARTED__/.../; s/"$$"/<pid>/'`. Two defects:
+1. **JSON corruption for any command containing quotes/newlines.** The captured
+   debug payload for command `printf 'line-1\nline-2\n'` produced
+   `…"command":"printf "'line-1\nline-2\n"'"…` — the single quotes broke the
+   shell-quoting → invalid JSON → `readState`/reconcile threw
+   `SyntaxError: Expected ',' or '}'`. **Any** real background task whose command
+   contained a `'`, `"`, newline, or `$$` would write a malformed state file.
+2. The `s/"$$"/pid/` substitution often didn't fire, leaving `"pid":"$$"`.
+   Writes were also non-atomic (truncate-then-write → torn reads under concurrent
+   reconcile).
+
+**Changed (additive, production-safe):**
+- `src/harness/background-tasks.ts`: replaced the `printf|sed` JSON munging with a
+  `python3` running-state writer (`renderRunningStateWriterPython`) that takes the
+  task fields as **shell-safe argv** and builds the dict with `json.dumps` — no
+  quoting can corrupt it. Made **every** state write atomic via a shared
+  `PYTHON_ATOMIC_WRITE` helper (`tmp = state_path + '.tmp.<pid>'; write; replace`),
+  so readers never see a partial/invalid file. Same approach already used for the
+  completed/failed writers, now unified.
+- `src/cli/app.ts`: added optional `backgroundTaskSpawnProcess` /
+  `backgroundTaskIsProcessRunning` to `OperatorCliAppOptions`, forwarded to the
+  runtime (production default unchanged — real `spawn`). A small DX/testability
+  seam: tests can now inject a deterministic spawner instead of racing a real
+  detached process.
+- Tests made deterministic where they drive state explicitly (no dependence on a
+  real process's async writes): `operator-runtime.test.ts`,
+  `control-plane/server.test.ts` (main + drifting + breaker runtimes via a
+  `noopBackgroundSpawn` helper), and `cli/app.test.ts` (the degraded-remote
+  scenario). Tests that genuinely assert real process *output* (e.g.
+  `printf ok` → background-view) keep the real spawner — the corruption fix is
+  what makes them reliable.
+
+**Test results:** **174/174 green, 10/10 consecutive full-suite runs** (was
+3–4 failing every run). Build ✅. `typecheck:src` ✅ (exit 0). Full `tsc` total
+**125 → 125** (no new debt; the new test code typechecks clean). The fix restores
+the engine's own verification gate, which was silently broken.
+
+**New idea:** add a **fuzz/property test for the launch script** — generate
+commands with adversarial characters (`'`, `"`, `` ` ``, `$`, newlines, unicode)
+and assert the spawned task's `state.json` round-trips to exactly the input
+command. That would have caught this class of bug at authoring time, and guards
+the whole shell-rendering surface (output redirection, cwd, etc.) going forward.
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

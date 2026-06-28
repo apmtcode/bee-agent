@@ -528,9 +528,15 @@ describe("StandaloneOperatorRuntime", () => {
   });
 
   it("starts, syncs, recovers, lists, and cancels background tasks", async () => {
+    // Use a mock spawn so the launch never runs a real detached process. This
+    // test drives every execution-state transition explicitly via writeState/
+    // writeOutput; a real process would write its own "running" state at an
+    // unpredictable later time and clobber the controlled scenario (flaky).
+    let spawnPid = 90000;
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
       backgroundTaskIsProcessRunning: () => false,
+      backgroundTaskSpawnProcess: () => ({ pid: ++spawnPid, unref: () => {} }),
     });
     const session = await runtime.startSession({ title: "Tasks", agentId: "main" });
 

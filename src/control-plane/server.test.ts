@@ -22,6 +22,15 @@ afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })));
 });
 
+let backgroundPidSeq = 80000;
+// Deterministic stub: launching a background task returns a synthetic pid but
+// never starts a real detached process. Tests below drive every execution-state
+// transition explicitly via writeState/syncBackgroundTask; a real process would
+// write its own state asynchronously and clobber the controlled scenario (flaky).
+function noopBackgroundSpawn(): { pid: number; unref(): void } {
+  return { pid: ++backgroundPidSeq, unref: () => {} };
+}
+
 const exportManifest: ReviewedExportManifest = {
   version: 1,
   createdAt: "2026-01-01T00:00:00.000Z",
@@ -84,6 +93,7 @@ describe("OperatorControlPlaneServer", () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir,
       backgroundTaskIsProcessRunning: () => false,
+      backgroundTaskSpawnProcess: noopBackgroundSpawn,
       delivery: new OperatorDeliveryService(rootDir, {
         sendBrowserPush: async () => {},
       }),
@@ -951,6 +961,7 @@ describe("OperatorControlPlaneServer", () => {
 
     const driftingRootDir = await makeTempDir();
     const driftingRuntime = new StandaloneOperatorRuntime({
+      backgroundTaskSpawnProcess: noopBackgroundSpawn,
       rootDir: driftingRootDir,
       backgroundTaskIsProcessRunning: () => false,
     });
@@ -1017,6 +1028,7 @@ describe("OperatorControlPlaneServer", () => {
 
     const breakerRootDir = await makeTempDir();
     const breakerRuntime = new StandaloneOperatorRuntime({
+      backgroundTaskSpawnProcess: noopBackgroundSpawn,
       rootDir: breakerRootDir,
       backgroundTaskIsProcessRunning: () => false,
     });

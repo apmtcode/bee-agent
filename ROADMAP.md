@@ -70,6 +70,22 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Generalization eval harness: measure replay fidelity on held-out but
       related synthetic trajectories.
 
+## Reliability / correctness
+- [x] **Background-task state JSON corruption** (2026-06-28, run 9): the launch
+      script built `state.json` via `printf|sed` string munging, which produced
+      invalid JSON for any command containing quotes/newlines/`$$` and left
+      `"pid":"$$"` unsubstituted. Replaced with a `python3` argv-based writer
+      (`json.dumps`, atomic `tmp + os.replace`). Restored the suite to 174/174
+      (was 3–4 failing). Added an injectable `backgroundTaskSpawnProcess` seam to
+      `OperatorCliApp` for deterministic tests.
+- [ ] **Launch-script fuzz/property test**: generate commands with adversarial
+      characters (`'"` `` ` `` `$` newlines, unicode) and assert the spawned
+      task's `state.json` round-trips the command exactly. Catches shell-rendering
+      corruption (state payload, output redirection, cwd) at authoring time.
+- [ ] Audit other shell-rendering sites for the same class of bug (anywhere a
+      task field is interpolated into a generated script rather than passed as
+      argv / via a file).
+
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in
