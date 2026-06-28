@@ -6,6 +6,59 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-06-28 (run 9) — 🐛 Fix three real background-task launch bugs (suite was red on a fresh machine)
+
+**Audited:** The build/test gate itself. On this fresh cloud container the suite
+was **failing 3/174** (operator-runtime, app, server) — a regression vs. the
+"174/174" recorded in run 8, which had only ever run on the original dev
+machine. Root-caused each failure instead of papering over it; all three traced
+to the background-task launch pipeline in `src/harness/background-tasks.ts`.
+
+**Three genuine production bugs found & fixed (additive, in `renderLaunchScript`
+/ `renderStateWriterPython` / `shellQuote`):**
+1. **Broken `shellQuote` escape (root cause of the hard failure).** It embedded
+   a literal single quote with `"'"'"'` (wrong quote order) instead of the
+   canonical POSIX idiom `'\''`. The stray leading `"` corrupted any command
+   containing a single quote (e.g. `printf 'line-1\nline-2\n'`), so the launched
+   task wrote **unparseable state JSON** → `JSON.parse` threw on recovery. Other
+   test commands (`sleep 5`, `tail -f`, `printf a`) have no single quotes, which
+   is why it stayed latent.
+2. **Broken `sed` pid substitution.** The program `s/\"\$\$\"/$$/g` lives in a
+   TS template literal, which strips the `\"`/`\$` backslashes, so the script
+   got `s/"$$"/$$/g`; the unescaped `"` broke out of bash's double-quoted sed
+   argument, leaving the pid placeholder unsubstituted. Replaced the `"$$"`
+   placeholder with a plain `__OPENCLAW_PID__` token matched via a
+   **single-quoted** sed pattern that can't break the shell quoting.
+3. **Non-atomic state writes.** Both the initial `sed > state.json` and the
+   Python completion writer truncated-in-place, so any concurrent reader
+   (recovery/sync) could observe a torn file under load. Both now write to a
+   temp file and `mv`/`os.replace` into place — true atomic publishes.
+
+**Test hermeticity (so the suite is deterministic in the cloud):** the
+background-task tests relied on a *race* (real detached subprocess hadn't
+written state yet → control read as "active"). Added an additive
+`runtimeOptions` pass-through to `OperatorCliApp` (mirrors run 1's `configHome`
+seam) and injected a no-op `backgroundTaskSpawnProcess` in the app/server/
+operator-runtime tests so no real OS subprocess runs. Added a **regression
+test** that executes the *real* launch script for a single-quoted command and
+asserts the state file is valid JSON (verified it fails against the old
+`shellQuote`); it skips gracefully when bash/python3 are absent.
+
+**Test results:** suite **3 failed → 0**, now **175/175** (added the regression
+test), green across 6 consecutive full runs (was flaky 1/174 before the
+hermeticity fix). Build ✅. `typecheck:src` ✅ (exit 0). Full `tsc` unchanged at
+**125** (test-file debt untouched).
+
+**New idea:** the suite now mocks spawn everywhere, so the real launch pipeline
+is exercised by exactly one test. Generalize that one test into a tiny
+**shell-quoting property test** — round-trip a table of nasty strings (single
+quotes, double quotes, `$`, backticks, newlines, `&`, globs) through
+`shellQuote` + `bash -c 'printf %s'` and assert byte-equality — so the next
+quoting regression is caught directly at the unit level rather than as a
+mysterious JSON-parse error three layers up.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

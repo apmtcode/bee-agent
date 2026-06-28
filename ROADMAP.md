@@ -4,6 +4,13 @@ Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
 ## Foundations / DX
+- [x] **Fix background-task launch pipeline bugs** (2026-06-28, run 9) — suite
+      was red 3/174 on a fresh machine. Fixed `shellQuote` (canonical `'\''`
+      escape, was `"'"'"'`), `sed` pid substitution (single-quoted placeholder),
+      and made the initial + completion state writes atomic. Added a
+      `runtimeOptions` pass-through to `OperatorCliApp` + no-op spawn in tests
+      for hermeticity, plus a regression test running the real launch script.
+      Now 175/175, stable across 6 runs.
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`
@@ -84,3 +91,9 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
       count to a baseline file and fail if a module regresses above it. Lets the
       engine pay debt down module-by-module without one green-gate blocking
       progress, and prevents backsliding while the total is still > 0.
+- [ ] **Shell-quoting property test** (from run 9): round-trip a table of nasty
+      strings (single/double quotes, `$`, backticks, newlines, `&`, globs)
+      through `shellQuote` + `bash -c 'printf %s'` and assert byte-equality, so
+      quoting regressions are caught at the unit level instead of surfacing as a
+      JSON-parse error deep in recovery. (The suite now mocks spawn everywhere,
+      so the real launch pipeline is exercised by only one end-to-end test.)

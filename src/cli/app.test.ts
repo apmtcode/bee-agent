@@ -10,6 +10,18 @@ import { OperatorCliApp, parseSlashCommand } from "./app.js";
 const tempDirs: string[] = [];
 const execFileAsync = promisify(execFile);
 
+/**
+ * A background-task spawn that launches nothing, so tests never depend on a
+ * real detached OS subprocess writing the execution-state file. The returned
+ * pid lets the store mark the task "running" while no execution state ever
+ * appears on disk (the healthy "just started" condition the diagnostics treat
+ * as `active`).
+ */
+const noopBackgroundSpawn = (): { pid: number; unref(): void } => ({
+  pid: 424242,
+  unref() {},
+});
+
 async function makeTempDir(): Promise<string> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "operator-cli-app-"));
   tempDirs.push(dir);
@@ -801,7 +813,12 @@ describe("OperatorCliApp", () => {
 
   it("supports session lifecycle, transcript, approvals, pairing, config, and prompt commands", async () => {
     const rootDir = await makeTempDir();
-    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    const app = new OperatorCliApp({
+      rootDir,
+      cwd: rootDir,
+      currentDate: "2026-05-25",
+      runtimeOptions: { backgroundTaskSpawnProcess: noopBackgroundSpawn },
+    });
     const firstSession = await app.runtime.startSession({ title: "first", cwd: rootDir, agentId: "operator-cli" });
     const secondSession = await app.runtime.startSession({ title: "second", cwd: rootDir, agentId: "operator-cli" });
 

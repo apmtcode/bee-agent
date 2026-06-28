@@ -740,7 +740,7 @@ function renderLaunchScript(task: BackgroundTaskRecord): string {
       taskId: task.id,
       kind: task.kind,
       status: "running",
-      pid: "$$",
+      pid: "__OPENCLAW_PID__",
       startedAt: "__OPENCLAW_STARTED_AT__",
       updatedAt: "__OPENCLAW_STARTED_AT__",
       outputFile: task.execution.outputFile,
@@ -754,7 +754,14 @@ function renderLaunchScript(task: BackgroundTaskRecord): string {
     "set -euo pipefail",
     `mkdir -p $(dirname ${quotedStatePath}) $(dirname ${quotedOutputFile})`,
     "started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-    `printf '%s' ${quotedStatePayload} | sed "s/__OPENCLAW_STARTED_AT__/$started_at/g; s/\"\$\$\"/$$/g" > ${quotedStatePath}`,
+    // Substitute the runtime placeholders, then write the initial state
+    // atomically (temp file + rename) so concurrent readers (recovery/sync)
+    // never observe a torn, half-written JSON file. The pid replacement uses a
+    // single-quoted sed pattern so the literal double quotes around the JSON
+    // value can never break out of the surrounding shell quoting (a prior bug:
+    // an unescaped `"$$"` pattern split the sed argument and left pid unset,
+    // producing malformed state JSON).
+    `printf '%s' ${quotedStatePayload} | sed -e "s/__OPENCLAW_STARTED_AT__/$started_at/g" -e 's/"__OPENCLAW_PID__"/'"$$"'/g' > ${quotedStatePath}.tmp.$$ && mv ${quotedStatePath}.tmp.$$ ${quotedStatePath}`,
     `printf '%s\n' "starting ${task.kind} ${task.id}" >> ${quotedOutputFile}`,
     `if cd ${quotedCwd} && bash -lc ${quotedCommand} >> ${quotedOutputFile} 2>&1; then`,
     "  completed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
@@ -776,6 +783,7 @@ function renderLaunchScript(task: BackgroundTaskRecord): string {
 function renderStateWriterPython(status: BackgroundTaskExecutionState["status"]): string[] {
   return [
     "import json",
+    "import os",
     "import pathlib",
     "import sys",
     "state_path = pathlib.Path(sys.argv[1])",
@@ -789,10 +797,17 @@ function renderStateWriterPython(status: BackgroundTaskExecutionState["status"])
     "state['completedAt'] = timestamp",
     "state['exitCode'] = exit_code",
     `state['error'] = None if '${status}' == 'completed' else f'background task exited non-zero ({exit_code})'`,
-    "state_path.write_text(json.dumps(state, indent=2) + '\\n')",
+    "tmp_path = state_path.with_name(state_path.name + f'.tmp.{pid}')",
+    "tmp_path.write_text(json.dumps(state, indent=2) + '\\n')",
+    "os.replace(tmp_path, state_path)",
   ];
 }
 
 function shellQuote(value: string): string {
-  return `'${value.replaceAll(`'`, `"'"'"'`)}'`;
+  // Wrap in single quotes and embed any literal single quote using the
+  // canonical POSIX idiom `'\''` (close-quote, escaped quote, reopen-quote).
+  // The previous escape (`"'"'"'`) had the quotes in the wrong order, which
+  // injected a stray double quote and corrupted any command containing a
+  // single quote (e.g. `printf 'x'`), producing malformed state JSON.
+  return `'${value.replaceAll("'", `'\\''`)}'`;
 }

@@ -15,6 +15,17 @@ async function makeTempDir(): Promise<string> {
   return dir;
 }
 
+/**
+ * Background-task spawn that launches nothing, so the test never depends on a
+ * real detached OS subprocess writing (and racing) the execution-state file.
+ * The test drives state/output explicitly via `executionService.writeState` /
+ * `writeOutput`.
+ */
+const noopBackgroundSpawn = (): { pid: number; unref(): void } => ({
+  pid: 424242,
+  unref() {},
+});
+
 function buildHookCaptureCommand(outputFile: string): string {
   const script = [
     "import fs from 'node:fs';",
@@ -531,6 +542,7 @@ describe("StandaloneOperatorRuntime", () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
       backgroundTaskIsProcessRunning: () => false,
+      backgroundTaskSpawnProcess: noopBackgroundSpawn,
     });
     const session = await runtime.startSession({ title: "Tasks", agentId: "main" });
 

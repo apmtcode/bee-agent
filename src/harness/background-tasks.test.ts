@@ -1,6 +1,8 @@
+import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   BackgroundTaskExecutionService,
@@ -8,12 +10,23 @@ import {
   type BackgroundTaskExecutionState,
 } from "./background-tasks.js";
 
+const execFileAsync = promisify(execFile);
+
 const tempDirs: string[] = [];
 
 async function makeTempDir(): Promise<string> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "background-task-"));
   tempDirs.push(dir);
   return dir;
+}
+
+async function hasCommand(command: string): Promise<boolean> {
+  try {
+    await execFileAsync(command, ["--version"]);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 afterEach(async () => {
@@ -369,5 +382,35 @@ describe("BackgroundTaskExecutionService", () => {
     await expect(fs.readFile(path.join(rootDir, task.execution.launchScript), "utf8")).resolves.toContain("bash -lc");
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
+  });
+
+  it("renders a launch script that writes valid state JSON for a single-quoted command", async () => {
+    // Regression for a shell-quoting bug: the launch script's `shellQuote`
+    // used the escape `"'"'"'` (wrong quote order) instead of the canonical
+    // `'\''`, which injected a stray double quote into any command containing a
+    // single quote and produced unparseable state JSON. The sed placeholder
+    // substitution and atomic write are also exercised here end-to-end. Skipped
+    // when the shell toolchain is unavailable (the rest of the suite mocks
+    // spawn, so this is the only test that runs the real launch pipeline).
+    if (!(await hasCommand("bash")) || !(await hasCommand("python3"))) {
+      return;
+    }
+    const rootDir = await makeTempDir();
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"), () => ({
+      pid: 2222,
+      unref() {},
+    }));
+    const command = "printf 'alpha\nbeta\n'";
+    const task = await store.start({ title: "Quoted command", command, cwd: rootDir });
+
+    const scriptPath = path.join(rootDir, task.execution.launchScript);
+    await execFileAsync("bash", [scriptPath], { cwd: rootDir });
+
+    const raw = await fs.readFile(path.join(rootDir, task.execution.stateFile), "utf8");
+    const state = JSON.parse(raw) as BackgroundTaskExecutionState; // must not throw
+    expect(state.command).toBe(command);
+    expect(state.status).toBe("completed");
+    expect(typeof state.pid).toBe("number");
+    expect(state.exitCode).toBe(0);
   });
 });
