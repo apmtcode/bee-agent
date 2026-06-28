@@ -6,6 +6,60 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-06-28 (run 9) — 🐞 Real bug: `shellQuote` JSON corruption + de-flaked the suite
+
+**Audited:** Started from the build/test gate itself. On a fresh clone the suite
+was **3 failing / 171 passing** (prior runs logged 174/174) — so before adding
+features I traced why a clean checkout regressed.
+
+**Root cause (genuine production bug), `src/harness/background-tasks.ts`:** the
+background-task launch script single-quotes a JSON state payload for the shell.
+`shellQuote()` escaped embedded apostrophes with `"'"'"'` (an extra leading `"`)
+instead of the POSIX-correct `'"'"'`. For any task whose **command contained a
+single quote** (e.g. `printf 'line-1\nline-2\n'`), the escape injected stray
+double-quotes, so the rendered state file was **invalid JSON** — which crashed
+both the in-script python state-writer (`json.loads`) and `readState`
+(`SyntaxError: Expected ',' or '}'`). The sibling `src/training/runner.ts` had
+the *correct* form, confirming this was a one-character typo. Fixed to `'"'"'`.
+- Verified by reproduction (corrupt → valid JSON round-trip) and a new
+  **regression test** that executes the real launch script for a quoted command
+  and asserts the state file parses (`background-tasks.test.ts`). Confirmed the
+  test **fails against the old escape** and passes against the fix.
+
+**Why the other failures (test hermeticity, not bugs):** three integration tests
+(`operator-runtime`, `control-plane/server`, `cli/app`) spawned **real detached
+processes** via the default `spawn`, then also wrote task state by hand — a race.
+They passed in earlier runs only by luck of `sleep`/`printf` process timing.
+Fixed deterministically by injecting the already-supported
+`backgroundTaskSpawnProcess` (no-op/`pid:4242`) and an appropriate
+`backgroundTaskIsProcessRunning` probe so the tests drive task state explicitly:
+- `operator-runtime.test.ts`: no-op spawn (manual `writeState` controls state).
+- `control-plane/server.test.ts`: no-op spawn on all three sub-runtimes (main +
+  drifting + breaker); no state file ⇒ tasks read "active", seeded "running"
+  states still reconcile to missing-process where asserted.
+- `cli/app.test.ts`: two tests — the platform/remote one (sentinel probe
+  `pid !== 999999` for the forced degradation) and the background/monitor CLI one
+  (always-alive probe + explicit `writeOutput` seed so the task stays running).
+- **New plumbing (additive):** `OperatorCliApp` now forwards optional
+  `backgroundTaskSpawnProcess` / `backgroundTaskIsProcessRunning` to its runtime
+  (production defaults unchanged — real spawn / real liveness probe). This is the
+  same hermeticity seam established for `configHome` in run 1.
+
+**Test results:** suite **3 failed → 0**; **175/175 passing** (was 174 + the new
+regression test), **stable across 6 consecutive full runs** and 5× per-file
+reruns. Build ✅. `typecheck:src` ✅ (exit 0). Full `typecheck` unchanged at 125
+(all test-only). No source behaviour changed except the `shellQuote` fix.
+
+**New idea:** add a tiny **hermeticity lint** for tests — flag any test that
+constructs `StandaloneOperatorRuntime`/`OperatorCliApp` and exercises background
+tasks *without* injecting `backgroundTaskSpawnProcess`, so real-process races
+can't silently creep back in. More broadly, ban the default real `spawn` in the
+vitest environment (a setup file that throws if `child_process.spawn` is called
+unmocked) to convert "accidentally spawns a real process" from a flaky pass into
+a hard, immediate failure.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

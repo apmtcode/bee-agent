@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -369,5 +370,33 @@ describe("BackgroundTaskExecutionService", () => {
     await expect(fs.readFile(path.join(rootDir, task.execution.launchScript), "utf8")).resolves.toContain("bash -lc");
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
+  });
+
+  // Regression: the launch script single-quotes the JSON state payload for the
+  // shell. A miswritten escape sequence injected stray double-quotes whenever
+  // the command itself contained an apostrophe, producing a corrupt state file
+  // that neither the in-script python writer nor readState could parse.
+  it("renders a valid JSON state file for commands containing single quotes", async () => {
+    const rootDir = await makeTempDir();
+    // Spawn that actually executes the generated launch script synchronously,
+    // so the real shellQuote/sed/python pipeline writes the state file.
+    const store = new FileBackgroundTaskStore(
+      path.join(rootDir, "background-tasks.json"),
+      (command, _args, options) => {
+        execFileSync("bash", [command], { cwd: options.cwd, stdio: "ignore" });
+        return { pid: 4242, unref() {} };
+      },
+      () => true,
+    );
+
+    const command = "printf 'line-1\nline-2\n'";
+    const task = await store.start({ title: "Quoted command", command, cwd: rootDir, kind: "task" });
+
+    // Must not throw on the corrupt-JSON path, and must round-trip the command.
+    const state = await store.executionService.readState(task);
+    expect(state).toBeDefined();
+    expect(state?.command).toBe(command);
+    expect(state?.status).toBe("completed");
+    expect(state?.exitCode).toBe(0);
   });
 });

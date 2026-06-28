@@ -4,6 +4,14 @@ Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
 ## Foundations / DX
+- [x] **Fix `shellQuote` JSON corruption + de-flake the suite** (2026-06-28,
+      run 9). Real bug: the background-task launch script escaped apostrophes as
+      `"'"'"'` instead of `'"'"'`, corrupting the JSON state file for any command
+      containing a single quote. Fixed + added a launch-script regression test.
+      Also made 4 integration tests hermetic by injecting
+      `backgroundTaskSpawnProcess`/`backgroundTaskIsProcessRunning` (added the
+      forwarding option to `OperatorCliApp`) so they stop spawning real detached
+      processes that raced with assertions. Suite: 3 failing → 175/175, stable.
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`
@@ -84,3 +92,9 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
       count to a baseline file and fail if a module regresses above it. Lets the
       engine pay debt down module-by-module without one green-gate blocking
       progress, and prevents backsliding while the total is still > 0.
+- [ ] **Test hermeticity guard** (run 9 idea): a vitest setup file that throws if
+      `child_process.spawn` is called unmocked, plus a lint flagging any test that
+      builds `StandaloneOperatorRuntime`/`OperatorCliApp` and starts background
+      tasks without injecting `backgroundTaskSpawnProcess`. Converts "accidentally
+      spawns a real detached process" from a flaky pass into a hard failure, so
+      the real-process races fixed in run 9 cannot silently return.
