@@ -423,6 +423,35 @@ export type {
   SftTrainingConfig,
 } from "./training/job-manifest.js";
 export {
+  DEFAULT_MOVEMENT_BACKEND_ID,
+  DEFAULT_MOVEMENT_MODEL_ORDER,
+  MOVEMENT_END_TOKEN,
+  MOVEMENT_START_TOKEN,
+  MarkovMovementBackend,
+  createMovementModelBackend,
+  evaluateMovementModel,
+  listMovementModelBackends,
+  movementDatasetFromReplays,
+  movementDatasetFromTrajectories,
+  registerMovementModelBackend,
+  tokenizeReplayEvent,
+  tokenizeReplayEvents,
+} from "./training/movement-model.js";
+export type {
+  GenerateMovementOptions,
+  LocalMovementModelBackend,
+  MovementBackendFactory,
+  MovementDataset,
+  MovementEvalResult,
+  MovementModelArtifact,
+  MovementPrediction,
+  MovementSequence,
+  MovementToken,
+  MovementTokenizerOptions,
+  PredictMovementOptions,
+  TrainMovementModelOptions,
+} from "./training/movement-model.js";
+export {
   FileTrainingJobStore,
 } from "./training/job-store.js";
 export type {

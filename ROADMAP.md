@@ -62,13 +62,36 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
+      for a real on-device small model — DONE run 9
+      (`src/training/movement-model.ts`: `LocalMovementModelBackend` interface +
+      `MarkovMovementBackend` back-off reference + registry).
+- [x] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories — DONE run 9 (`evaluateMovementModel`:
+      top-1 next-token accuracy + exact-sequence reproduction).
 - [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      round-trips without real OS input (dataset *builders* exist now —
+      `movementDatasetFromReplays`/`FromTrajectories`; still need a generator
+      that *fabricates* related synthetic trajectories for eval).
+- [ ] `MovementModelTrainer`: wire `LocalTrainingExporter` → dataset → backend →
+      eval, persist the artifact next to the launch script, so the real
+      on-device job and the in-cloud mock share one dataset/eval contract.
+- [ ] Add a **perplexity** metric to `evaluateMovementModel` for smoother
+      grading of partial generalization (top-1 accuracy is coarse).
+
+## Known pre-existing failures (not regressions — fix opportunistically)
+- [ ] **Bash launch-script state-writer emits malformed JSON in cloud.**
+      `src/training/runner.ts`'s generated launch script writes the training
+      state file with a `sed` + heredoc-python pipeline; in the cloud env this
+      produces invalid JSON (`SyntaxError: Expected ',' or '}' … position 311`),
+      failing 3 lifecycle/recovery tests
+      (`operator-runtime.test.ts` background-task recovery, `server.test.ts`
+      orchestration, `app.test.ts` session lifecycle). Confirmed pre-existing
+      via clean-tree run (run 9). Fix: make the state write robust (single
+      `python3 -c` JSON dump instead of `sed` placeholder substitution), or
+      gate the bash-execution path so the JSON is well-formed regardless of
+      `date`/`sed` quirks. Add a unit test that parses the emitted state file.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

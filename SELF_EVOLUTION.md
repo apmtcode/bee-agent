@@ -6,6 +6,64 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-06-28 (run 9) — 🧠 Movement-learning: pluggable local-model backend + deterministic Markov train/infer/generalize
+
+**Audited:** Standing objective #2 (local-movement learning), specifically parts
+(c) *post-train a local model to repeat recorded movements* and (d) *generalize
+to new-but-related movements*. Found the gap: `src/training/` could only **emit
+a launch script** for real Apple-Silicon training (`runner.ts` → mlx/axolotl) —
+there was **no in-process model that learns from a movement dataset and does
+inference**, so the train/infer/generalize loop was completely unvalidatable in
+the cloud. This is also the top movement-subsystem item in ROADMAP.
+
+**Changed (additive — new module, no existing code touched):**
+- **`src/training/movement-model.ts`** — the missing train/infer/generalize piece:
+  - `LocalMovementModelBackend` interface (`train`/`predict`/`generate` over a
+    plain-JSON `MovementModelArtifact`) — the pluggable seam a real on-device
+    small model would implement.
+  - `MarkovMovementBackend` — a deterministic variable-order (n-gram with
+    **back-off**) reference backend. It genuinely learns transition statistics
+    from movement-token sequences; `generate()` reproduces recorded movements
+    **exactly** (replay), and from a *novel* prefix it backs off to the
+    highest matching context order to produce a learned continuation
+    (generalization). No `Math.random`/`Date.now` → reproducible in CI.
+  - Pluggable **registry**: `registerMovementModelBackend` /
+    `createMovementModelBackend` / `listMovementModelBackends`
+    (`DEFAULT_MOVEMENT_BACKEND_ID = "markov-backoff"`).
+  - Capture→dataset **bridges**: `tokenizeReplayEvents`,
+    `movementDatasetFromReplays`, `movementDatasetFromTrajectories` — turn
+    existing `ReplayManifest`/`TrajectorySpan` data into token sequences.
+  - **Generalization eval harness** `evaluateMovementModel` (ROADMAP item):
+    teacher-forced top-1 next-token accuracy + exact-sequence reproduction rate
+    on held-out related sequences.
+- **`src/training/movement-model.test.ts`** — 14 tests: exact replay, novel-prefix
+  generalization via back-off, frequency-ranked predictions with deterministic
+  tie-break, unigram fallback, end-sentinel handling, JSON round-trip, the three
+  dataset bridges, registry behaviour, and both eval metrics.
+- Exported the full surface from `src/index.ts`.
+
+**Test results:** new module **14/14** ✅. Build ✅ (tsdown, 5 files). 
+`typecheck:src` ✅ (exit 0 — source stays green). Full suite **185/188**; the
+**3 failures are PRE-EXISTING and unrelated** — confirmed by `git stash` →
+clean tree also shows `3 failed | 47 passed`. They are environment-specific:
+`runner.ts`'s generated bash launch-script writes the training **state file via
+`sed`/python**, which yields malformed JSON in this cloud env
+(`SyntaxError: Expected ',' or '}' … in JSON at position 311`), tripping
+`operator-runtime`/`server`/`app` lifecycle+recovery tests. Not caused by this
+run; logged to ROADMAP.
+
+**New idea:** the Markov backend is a perfect **offline regression oracle** for
+the whole capture→export→replay pipeline — train on an export, then assert
+`evaluateMovementModel(...).exactSequenceMatch === 1` round-trips every reviewed
+trajectory. A future increment can add a `MovementModelTrainer` that wires
+`LocalTrainingExporter` → dataset → backend → eval and persists the artifact next
+to the launch script, so the *real* on-device job and the *mock* in-cloud job
+share one dataset/eval contract (the on-device backend just swaps in for the
+Markov one). Also worth: a **perplexity** metric alongside top-1 accuracy to
+grade partial generalization more smoothly.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
