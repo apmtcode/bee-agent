@@ -6,6 +6,70 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-06-28 (run 9) — 🧠 In-process movement-policy model: learn → repeat → generalize (objective #2c/d)
+
+**Audited:** The local-movement learning subsystem (`src/capture/` + `src/training/`)
+against objective #2's five pieces (capture → schema → dataset → replay →
+train/infer). Finding: pieces 1–4 exist, but **piece 5 (train + infer) had no
+in-process implementation** — `runner.ts` only emits MLX/axolotl *launch scripts*
+that shell out to Python on Apple Silicon, so the actual "post-train a model to
+repeat and generalize movements" capability could neither run nor be tested in
+the cloud. That is the heart of the objective and was entirely unexercised.
+
+**Changed (additive, new module `src/training/movement-policy.ts`):** a small,
+fully deterministic, dependency-free learner that runs in-process — both a real
+capability and a CI-safe stand-in:
+- **Tokenizer** `tokenizeMovementAction` — derives a stable token from a
+  trajectory action, preferring movement metadata (gesture/key/button/target/
+  direction) over free-text summary so semantically identical movements collapse
+  to one token (the basis for generalization).
+- **Dataset builders** from trajectories (`buildMovementDatasetFromTrajectories`,
+  metadata-aware) and from replay manifests (`buildMovementDatasetFromReplays`,
+  summary-based since the manifest drops metadata) — one ordered token sequence
+  per trajectory.
+- **Pluggable backend interface** `MovementModelBackend` + a concrete
+  **`NgramMovementBackend`** (order-N with **backoff** + optional add-k
+  smoothing). Backoff is what generalizes: an unseen full-order context drops to
+  shorter shared contexts and still recovers the right continuation. Fully
+  deterministic (count-then-lexical tie-break; no RNG).
+- **Model** `predictNext` / `generate` (stops at `<end>` sentinel) /
+  `serialize` + `deserializeMovementModel` — JSON-persistable and replayable.
+- **Generalization eval harness** `evaluateMovementModel` — teacher-forced
+  next-token accuracy + free-rollout fidelity (LCP ratio) + exact-rollout rate
+  on held-out sequences. (Closes the roadmap's "generalization eval harness" and
+  "pluggable local-model backend" items.)
+- Exported the surface from `src/index.ts` (10 values + 9 types; unique names,
+  no barrel collisions).
+
+**Test results:** new `movement-policy.test.ts` ✅ **12/12** (tokenization,
+ordered-dataset build, replay-derived dataset, exact repeat-from-seed,
+deterministic prediction, end-sentinel termination, **backoff generalization**,
+serialize round-trip, perfect-fidelity eval, empty-eval guard). `typecheck:src`
+✅ CLEAN. Build ✅.
+
+**⚠️ Pre-existing blocker (NOT caused by this change):** 3 tests fail on the
+*clean tree* in this cloud shell — `operator-runtime`/`server`/`app`'s
+background-task lifecycle. Root cause: the bash launch-script **state writer**
+(`src/harness/background-tasks.ts` state files via the `runner.ts`/background
+scripts) emits **malformed JSON** here — `readJsonFile` throws `SyntaxError:
+Expected ',' or '}' ... at position 311`. The `sed "s/\"\$\$\"/$$/g"`
+pid-substitution in the generated script behaves differently in this shell than
+the environment where prior runs saw 174/174. Logged to ROADMAP as a real bug to
+fix (replace the sed/printf state bootstrap with the same Python state-writer the
+completion path already uses). My module is fully green and independent of it, so
+I pushed to the designated feature branch.
+
+**New idea:** a **`MlxMovementBackend`** that implements the same
+`MovementModelBackend` interface but *emits* the existing MLX launch plan
+(reusing `runner.ts`) for on-device training, with the in-process
+`NgramMovementBackend` as the deterministic fallback/oracle the eval harness
+scores against — so the cloud can validate the *pipeline* (dataset → train →
+infer → eval) while the device runs the *real* model, both behind one seam. The
+n-gram model's `evaluateMovementModel` output then becomes the acceptance gate a
+freshly-trained on-device model must beat before it is trusted to replay.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

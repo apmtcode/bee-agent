@@ -44,6 +44,15 @@ unchecked items are queued. Keep this richer than you found it each run.
       (excludes `**/*.test.ts`) + `typecheck:src` script; passes (exit 0). Next:
       have the engine run it as a per-run pre-push self-check.
 - [ ] Add a minimal CI workflow mirroring `verify` for human-opened PRs.
+- [ ] **Fix background-task launch-script state writer (real bug, found run 9).**
+      3 tests (`operator-runtime`, `server`, `app` background-task lifecycle)
+      fail on a clean tree in the cloud shell: the generated bash script's
+      `sed "s/\"\$\$\"/$$/g"` pid-substitution emits malformed JSON, so
+      `readJsonFile`/`readState` throws `SyntaxError: Expected ',' or '}' ...`.
+      Fix: replace the sed/printf state bootstrap with the same Python
+      state-writer the completion path already uses (`renderStateWriterPython`),
+      so the *initial* "running" state is written as valid JSON too. This is the
+      reason the suite is no longer 174/174 in this environment.
 
 ## Capability parity (audit reference agents → port gaps)
 - [ ] Build a "capability inventory" generator: enumerate bee-agent's exported
@@ -62,13 +71,27 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
-      deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+- [x] Pluggable local-model backend interface for the training runner with a
+      deterministic backend (so cloud/CI tests pass) and a documented seam for a
+      real on-device small model — DONE run 9 (`src/training/movement-policy.ts`:
+      `MovementModelBackend` interface + deterministic `NgramMovementBackend`
+      with backoff; serialize/deserialize for persistence).
+- [~] Synthetic event-stream generator to validate capture→dataset→replay
+      round-trips without real OS input. Partial: run 9's tests build synthetic
+      trajectories inline and round-trip them through dataset→train→infer. Next:
+      extract a reusable `generateSyntheticMovementStream(pattern, count, noise)`
+      helper (with controllable noise/variation) so capture-adapter and replay
+      tests can share it.
+- [x] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories — DONE run 9 (`evaluateMovementModel`:
+      next-token accuracy + rollout fidelity (LCP) + exact-rollout rate).
+- [ ] **`MlxMovementBackend`**: implement `MovementModelBackend` by emitting the
+      existing MLX launch plan (`runner.ts`) for on-device training, with
+      `NgramMovementBackend` as the in-process oracle the eval harness scores
+      against. Same seam, real model on device + deterministic fallback in cloud.
+- [ ] Wire movement-policy training into the control-plane RPC surface
+      (`trajectories.*`/`training.*`) so a session can train + infer a movement
+      model over its own approved trajectories end to end.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
