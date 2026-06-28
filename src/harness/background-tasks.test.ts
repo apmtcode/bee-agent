@@ -370,4 +370,38 @@ describe("BackgroundTaskExecutionService", () => {
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
   });
+
+  // Regression: the launch script shell-quotes the command and substitutes the
+  // real pid into the state JSON. A broken `shellQuote` (swapped quote escaping)
+  // corrupts the state file into invalid JSON, and a mis-escaped `sed` leaves the
+  // pid as the literal string "$$". Exercise the real launcher (bash/printf/sed/
+  // python) on a single-quoted command and assert the persisted state is sane.
+  it("launches single-quoted commands and persists valid JSON state with the real pid", async () => {
+    const rootDir = await makeTempDir();
+    // Default constructor → real spawn, executing the rendered launch script.
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"));
+    const command = "printf '%s' 'hello-world'";
+    const task = await store.start({ title: "Echo quoted", command, cwd: rootDir, kind: "task" });
+
+    // The launch subprocess writes execution state asynchronously; poll until it
+    // reaches a terminal status. readState throws if the JSON is corrupt.
+    const deadline = Date.now() + 5000;
+    let state: BackgroundTaskExecutionState | undefined;
+    while (Date.now() < deadline) {
+      state = await store.executionService.readState(task);
+      if (state && (state.status === "completed" || state.status === "failed")) {
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+
+    expect(state?.status).toBe("completed");
+    // sed fix: "$$" must be substituted to a finite numeric pid, not left literal.
+    expect(typeof state?.pid).toBe("number");
+    expect(Number.isFinite(state?.pid as number)).toBe(true);
+    // shellQuote fix: the single-quoted command round-trips intact through the
+    // state JSON instead of being mangled into invalid JSON.
+    expect(state?.command).toBe(command);
+    await expect(store.executionService.readOutput(task, { lineLimit: 1 })).resolves.toBe("hello-world");
+  });
 });

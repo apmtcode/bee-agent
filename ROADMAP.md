@@ -70,6 +70,22 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Generalization eval harness: measure replay fidelity on held-out but
       related synthetic trajectories.
 
+## Reliability / correctness
+- [x] **Fix background-task launch-script corruption** (run 9). `shellQuote` used
+      the wrong single-quote escape (`"'"'"'` vs POSIX `'"'"'`) → invalid state
+      JSON for any command with `'`; the `sed` pid substitution was collapsed by
+      the JS template literal → `pid` stayed the literal `"$$"`. Both fixed in
+      `src/harness/background-tasks.ts`; clean-tree suite green again (175/175).
+- [x] **Make spawn-backed tests deterministic** (run 9): inject the no-op
+      `backgroundTaskSpawnProcess` seam in `operator-runtime`/`server` tests so a
+      real subprocess's async state write no longer races the assertions.
+- [ ] **Shell-quoting matrix/fuzz guard** (NEW, run 9): render+execute a launch
+      script for adversarial commands (single/double quotes, `$VAR`, backticks,
+      newlines, spaces, unicode) and round-trip the state JSON. Catches the
+      environment-fragile quoting class that mocked-spawn unit tests miss.
+- [ ] Audit `src/training/runner.ts` and any other shell-script generators for
+      the same quoting/`sed`-escape class of bug now that the pattern is known.
+
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in

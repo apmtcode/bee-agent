@@ -6,6 +6,55 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-06-28 (run 9) — 🔴→🟢 Fixed 3 broken tests: background-task launch-script corruption
+
+**Audited:** Project health. The suite was **RED on a clean tree** — 3 failing
+tests (`operator-runtime.test.ts`, `control-plane/server.test.ts`,
+`cli/app.test.ts`) despite run 8 logging "174/174". The failures were *real
+product bugs*, environment-sensitive enough to slip past the prior run.
+
+**Two genuine product bugs in `src/harness/background-tasks.ts`'s
+`renderLaunchScript`/`shellQuote`** (the bash script every background task spawns
+to track its own execution state):
+1. **`shellQuote` (line 797) used the wrong single-quote escape** — replacement
+   was `"'"'"'` (starts with `"`) instead of the correct POSIX `'"'"'` (starts
+   with `'`). Any command containing a single quote (e.g. `printf 'line-1\n'`)
+   had its quoting swapped, so the launch script wrote **invalid JSON** to the
+   state file → `readState` threw `SyntaxError: Expected ',' or '}'` and recovery
+   /diagnostics blew up. `src/training/runner.ts` had the *correct* form, which
+   confirmed this was a typo, not intent.
+2. **The `sed` pid substitution was double-collapsed by the JS template
+   literal** (line 757). The source wrote `s/\"\$\$\"/$$/g`, but inside a JS
+   backtick string `\"`→`"` and `\$`→`$`, so bash received `s/"$$"/$$/g`; the
+   `"$$"` broke bash quoting and the substitution replaced the pid with itself.
+   Result: every state file kept `"pid":"$$"` (a literal string), so liveness
+   checks (`isProcessRunning`) always failed → spurious `missing-process` /
+   `degraded` everywhere. Fixed by escaping the backslashes (`s/\\"\\$\\$\\"…`)
+   so bash receives `\"\$\$\"`.
+
+**Two racy tests made deterministic (test-only):** `operator-runtime.test.ts`
+and `server.test.ts` mocked `isProcessRunning` but still used the **real**
+`spawn`, so the actual subprocess wrote `running` state files at unpredictable
+times that fought the tests' manual `writeState`/diagnostic assertions. Injected
+the existing `backgroundTaskSpawnProcess` seam with a no-op fake
+(`() => ({ pid: ++n, unref() {} })`) so state is fully test-controlled.
+
+**New regression test** (`background-tasks.test.ts`) runs the **real** launcher
+(bash/printf/sed/python) on a single-quoted command and asserts the persisted
+state is valid JSON, `pid` is a finite **number** (not `"$$"`), and the command
+round-trips — verified to fail when either fix is reverted.
+
+**Test results:** **175/175 pass** (was 174, +1 regression test);
+`typecheck:src` ✅ exit 0; `build` ✅. The clean-tree suite is green again.
+
+**New idea (innovation):** add a tiny **`scripts/smoke-launch.mjs`** (or a
+`@smoke`-tagged test) that renders + executes a launch script for a matrix of
+adversarial commands (single quotes, double quotes, `$VAR`, backticks, newlines,
+spaces, unicode) and round-trips the state JSON. Shell-quoting bugs like this are
+exactly the class that unit tests with mocked spawn miss — a dedicated quoting
+fuzz/matrix guards the most environment-fragile seam in the codebase. Queued in
+ROADMAP under Innovation.
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
