@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { writeFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -19,6 +20,38 @@ async function makeTempDir(): Promise<string> {
 afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })));
 });
+
+/**
+ * A background-task spawn stub that deterministically simulates a *live*
+ * process instead of running the real detached launch script (which depends on
+ * bash/python3 and races with the test). It derives the task's state/output
+ * paths from the launch-script path and writes a `running` state plus seeded
+ * output, so tests that exercise the live task lifecycle stay hermetic.
+ */
+function simulateLiveSpawn(pid = 4321): (command: string) => { pid: number; unref(): void } {
+  return (command: string) => {
+    const dir = path.dirname(command);
+    const taskId = path.basename(dir);
+    const outputFile = path.posix.join("background-tasks", taskId, "output.log");
+    writeFileSync(
+      path.join(dir, "state.json"),
+      `${JSON.stringify({
+        version: 1,
+        taskId,
+        kind: "task",
+        status: "running",
+        pid,
+        startedAt: "2026-05-25T00:00:00.000Z",
+        updatedAt: "2026-05-25T00:00:00.000Z",
+        outputFile,
+        cwd: dir,
+        command: "simulated",
+      })}\n`,
+    );
+    writeFileSync(path.join(dir, "output.log"), "starting task\nok\n");
+    return { pid, unref() {} };
+  };
+}
 
 describe("parseSlashCommand", () => {
   it("parses supported slash commands", () => {
@@ -801,7 +834,14 @@ describe("OperatorCliApp", () => {
 
   it("supports session lifecycle, transcript, approvals, pairing, config, and prompt commands", async () => {
     const rootDir = await makeTempDir();
-    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    const app = new OperatorCliApp({
+      rootDir,
+      cwd: rootDir,
+      currentDate: "2026-05-25",
+      // Stub the spawn so the detached launch script never races with the
+      // background-task state files this test writes by hand.
+      backgroundTaskSpawnProcess: () => ({ pid: 4321, unref() {} }),
+    });
     const firstSession = await app.runtime.startSession({ title: "first", cwd: rootDir, agentId: "operator-cli" });
     const secondSession = await app.runtime.startSession({ title: "second", cwd: rootDir, agentId: "operator-cli" });
 
@@ -1063,7 +1103,15 @@ describe("OperatorCliApp", () => {
 
   it("supports background and monitor task commands plus cron commands", async () => {
     const rootDir = await makeTempDir();
-    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    const app = new OperatorCliApp({
+      rootDir,
+      cwd: rootDir,
+      currentDate: "2026-05-25",
+      // Simulate a live background process deterministically (no real bash /
+      // python3, no race) so the live-task lifecycle assertions are hermetic.
+      backgroundTaskSpawnProcess: simulateLiveSpawn(),
+      backgroundTaskIsProcessRunning: () => true,
+    });
     const session = await app.runtime.startSession({ title: "CLI ops", cwd: rootDir, agentId: "operator-cli" });
 
     const startOutput = await app.dispatchSlashCommand(

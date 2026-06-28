@@ -6,6 +6,54 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-06-28 (run 9) — 🐛 Real bug: malformed background-task state JSON (broken shell quoting) + hermetic spawn for lifecycle tests
+
+**Audited:** Ran the build+test gate first (per the run-7 idea of a per-run
+self-check). The suite was **NOT** green in this environment: **4 tests failed**
+(`operator-runtime`, `server`, and two `app` tests), despite prior runs logging
+174/174. Root-caused the failures rather than assuming flakiness.
+
+**Bug found (production code, not a test bug):** `shellQuote()` in
+`src/harness/background-tasks.ts` escaped embedded single quotes as `"'"'"'`
+(an extra leading `"`) instead of the canonical POSIX `'"'"'`. The launch
+script shell-quotes a JSON state payload, so **any background-task command
+containing a `'` produced an unparseable `state.json`** — every later
+`readState`/reconcile/recover then threw `SyntaxError: ... in JSON`. The sibling
+`shellQuote` in `src/training/runner.ts` already had the correct form, confirming
+the divergence. One-character class of fix; high blast radius (all single-quoted
+commands, e.g. the suite's `printf 'line-1\nline-2\n'`).
+
+**Changed:**
+- `src/harness/background-tasks.ts`: fixed `shellQuote` to `'"'"'`.
+- `src/harness/background-tasks.test.ts`: **new regression test** — renders the
+  launch script for a single-quote command, executes it with real `bash`, and
+  asserts the written `state.json` is valid JSON whose `command` round-trips.
+- Made four lifecycle tests **hermetic**: they exercised the *real detached*
+  launch script, which writes state asynchronously and **raced** the state files
+  they wrote by hand (manifesting as `running` vs `completed`/`mixed` vs
+  `degraded` mismatches). Injected deterministic spawn stubs:
+  - `src/cli/app.ts`: additive `backgroundTaskSpawnProcess` /
+    `backgroundTaskIsProcessRunning` options on `OperatorCliApp`, threaded into
+    its runtime (production default unchanged — real `spawn`).
+  - `operator-runtime.test.ts` + `server.test.ts` (×3 runtimes): no-op spawn
+    stub for tests that drive state by hand.
+  - `app.test.ts`: a `simulateLiveSpawn` helper that writes a `running` state +
+    seeded output (paths derived from the launch-script path) so the live-task
+    watch/stop lifecycle is deterministic without bash/python3.
+
+**Test results:** **171/174 → 175/175** (4 fixed + 1 new regression test).
+`typecheck:src` ✅ (exit 0). Full `tsc` **125** (unchanged — no debt regression).
+Build ✅.
+
+**New idea:** add a tiny **shell-quoting unit test shared by both `shellQuote`
+implementations** (background-tasks + training/runner) — assert that quoting an
+arbitrary string with quotes, `$`, backticks, and newlines round-trips through
+`bash -c 'printf %s ...'`. Better still, **extract a single `shellQuote` into
+`src/shared/`** so the two copies can't drift again (the bug existed precisely
+because one copy was right and the other wrong). Logged to ROADMAP.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

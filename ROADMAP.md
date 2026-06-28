@@ -70,6 +70,20 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Generalization eval harness: measure replay fidelity on held-out but
       related synthetic trajectories.
 
+## Reliability / correctness
+- [x] **Fix malformed background-task state JSON** (2026-06-28, run 9):
+      `shellQuote` in `background-tasks.ts` used `"'"'"'` instead of the
+      canonical `'"'"'`, corrupting `state.json` for any command containing a
+      single quote. Fixed + regression test that executes the real launch script.
+- [x] **Make background-task lifecycle tests hermetic** (run 9): added injectable
+      spawn/liveness stubs (`OperatorCliApp` options + per-test stubs) so tests no
+      longer depend on real detached `bash`/`python3` and stop racing
+      hand-written state files. Suite now 175/175 green in the cloud env.
+- [ ] **De-duplicate `shellQuote`**: two copies exist (`harness/background-tasks.ts`,
+      `training/runner.ts`) — one was correct, one buggy. Extract one shared
+      `shellQuote` into `src/shared/` + a unit test that round-trips strings with
+      quotes/`$`/backticks/newlines through `bash -c 'printf %s ...'`.
+
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in

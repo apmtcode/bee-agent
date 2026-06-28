@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -107,6 +108,45 @@ describe("FileBackgroundTaskStore", () => {
       status: "completed",
       execution: { exitCode: 0 },
     });
+  });
+
+  it("renders a launch script whose initial state file is valid JSON for commands with single quotes", async () => {
+    const rootDir = await makeTempDir();
+    const filePath = path.join(rootDir, "background-tasks.json");
+    // Mock spawn so start() only writes artifacts (does not actually run the script).
+    const store = new FileBackgroundTaskStore(filePath, () => ({ pid: 1357, unref() {} }));
+
+    // A command containing single quotes is the exact case that broke shell quoting
+    // of the JSON state payload (the state file became unparseable JSON).
+    const command = "printf 'hello '\\''world'\\''\\n'";
+    const task = await store.start({
+      title: "Quoted command",
+      command,
+      cwd: rootDir,
+      kind: "task",
+    });
+
+    const launchScriptPath = path.join(rootDir, task.execution.launchScript);
+    const statePath = path.join(rootDir, task.execution.stateFile);
+
+    // Execute the rendered launch script with real bash. The initial running
+    // state is written by the script prologue before the (optional) python3
+    // terminal-state writer, so we wait for exit but do not gate on its code —
+    // the JSON-validity assertion below is what matters and is independent of
+    // whether python3 is installed in the environment.
+    await new Promise<void>((resolve, reject) => {
+      const child = spawn("bash", [launchScriptPath], { cwd: rootDir });
+      child.on("error", reject);
+      child.on("exit", () => resolve());
+    });
+
+    const raw = await fs.readFile(statePath, "utf8");
+    // The core regression: the state file must be valid JSON...
+    const parsed = JSON.parse(raw) as BackgroundTaskExecutionState;
+    // ...and the single-quoted command must round-trip intact (status may be
+    // "running" or a terminal value depending on whether python3 ran).
+    expect(parsed.command).toBe(command);
+    expect(parsed.taskId).toBe(task.id);
   });
 
   it("cancels running tasks and records cancelled state", async () => {
