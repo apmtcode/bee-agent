@@ -6,6 +6,59 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-06-28 (run 9) — Fix `shellQuote` state-file corruption + deterministic background-task tests
+
+**Audited:** The actual test/build health on this run's machine (not just the
+typecheck ledger). `npm test` was **RED** at HEAD here: **3 failing tests**
+(server.test, app.test, operator-runtime.test) — a genuine regression surfaced
+by this environment, not the 174/174 the log claimed from a prior box.
+
+**Root cause (real bug, not a test artifact):** Background tasks spawn a detached
+bash launch script that writes the task's `state.json`. `shellQuote()` in
+`src/harness/background-tasks.ts` used the replacement sequence `"'"'"'` to escape
+embedded single quotes, but the POSIX-correct sequence is `'"'"'` (close-quote,
+quoted-quote, reopen). So **any command containing a single quote** — `printf
+'…'`, `awk '…'`, `git commit -m '…'` — was mangled when interpolated into the
+state payload, producing an invalid-JSON state file. Every later `readState()`
+then threw `SyntaxError: Expected ',' or '}' …`, cascading into sync/recover
+failures. Reproduced and dumped the corrupt file
+(`"command":"printf "'line-1…"'"`) to confirm before fixing.
+
+**Changed (additive, `src/`):**
+- **`shellQuote` fix** (`harness/background-tasks.ts`): corrected the escape to
+  the standard `'"'"'`; commands with single quotes now round-trip exactly.
+- **Atomic state writes** in the launch script: the shell `sed` redirect and the
+  Python terminal-state writer now write a temp file and `mv -f` / `os.replace`
+  it into place, so a concurrent reader of a *running* task's state can never
+  observe a half-written file (matches `writeJsonAtomic`'s contract).
+- **CLI app injection seam** (`cli/app.ts`): `OperatorCliAppOptions` now accepts
+  `backgroundTaskSpawnProcess` / `backgroundTaskIsProcessRunning`, forwarded to
+  the runtime. Production unchanged (real detached processes); embedders & tests
+  get a deterministic executor.
+- **Deterministic tests:** operator-runtime, server (×3 runtime sites) and the
+  app background/monitor + session-lifecycle tests now inject a no-op spawn (and,
+  where the test asserts a task is *active*, `isProcessRunning: () => true`) so
+  task lifecycle is driven by the store + explicit `writeState`, not by racing
+  real process timing.
+- **New regression test** (`harness/background-tasks.test.ts`): runs the *real*
+  launch script for a single-quoted command and asserts the resulting state file
+  is valid JSON with the command round-tripped and exitCode 0 — directly guards
+  the fixed bug.
+
+**Test results:** `npm test` **3 failing → 175/175 passing** (174 prior + 1 new
+regression test), stable across repeated runs. `typecheck:src` ✅ exit 0. Build
+✅. Full `tsc` unchanged at **125** (test-only debt; no regression).
+
+**New idea:** the failures were only visible because something *ran* the suite —
+the typecheck ledger looked fine while the runtime was broken. Add a tiny
+`scripts/health.json` the engine appends to each run (date, `tsc` count,
+test pass/fail, build ms). A red-at-HEAD baseline like today's would then be an
+explicit, queryable signal at the *start* of a run instead of a surprise. Also:
+audit the codebase for other `process.kill`/shell-interpolation sites that assume
+shell-safe input — `shellQuote` is the only escaper and it was silently wrong.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

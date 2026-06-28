@@ -370,4 +370,32 @@ describe("BackgroundTaskExecutionService", () => {
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
   });
+
+  // Regression: the launch script shell-quotes the command into the state-file
+  // payload. A command containing a single quote (printf '...', awk '...', git
+  // commit -m '...') must round-trip exactly; a buggy escape sequence used to
+  // emit a corrupt, non-JSON state file that crashed every later readState.
+  it("round-trips a single-quoted command through the real launch script into valid JSON state", async () => {
+    const rootDir = await makeTempDir();
+    // No spawn override → exercises the real detached launch script (bash + python3).
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"));
+    const command = "printf 'evolve-ok\\n'";
+    const task = await store.start({ title: "Quoted command", command, cwd: rootDir, kind: "task" });
+
+    // Poll until the launch script writes a terminal state (it should never be
+    // observed mid-write thanks to the atomic temp-file + rename it now uses).
+    let state: BackgroundTaskExecutionState | undefined;
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      state = await store.executionService.readState(task); // throws if the file is invalid JSON
+      if (state && (state.status === "completed" || state.status === "failed")) {
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+
+    expect(state?.status).toBe("completed");
+    expect(state?.exitCode).toBe(0);
+    expect(state?.command).toBe(command);
+    await expect(store.executionService.readOutput(task)).resolves.toContain("evolve-ok");
+  });
 });

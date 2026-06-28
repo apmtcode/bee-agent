@@ -4,6 +4,13 @@ Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
 ## Foundations / DX
+- [x] **Fix `shellQuote` state-file corruption + green the suite** (2026-06-28,
+      run 9). The launch-script shell-quote escape was the wrong POSIX sequence,
+      so any single-quoted command corrupted its `state.json`; `npm test` was red
+      (3 failing) at HEAD on this box. Fixed the escape, made state writes atomic,
+      added a CLI spawn/liveness injection seam, made the racy background-task
+      tests deterministic, and added a real-launch-script regression test.
+      Suite: **175/175**.
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`
@@ -71,6 +78,17 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
       related synthetic trajectories.
 
 ## Innovation backlog
+- [ ] **Health snapshot per run** (raised run 9): append `{date, tscErrors,
+      testsPassed, testsFailed, buildMs}` to a `scripts/health.json` (or
+      `.evolution/health.jsonl`) at the *start* of each run, so a red-at-HEAD
+      baseline (like run 9's 3 pre-existing failures) is an explicit signal
+      rather than a surprise discovered mid-run. Supersedes/refines the
+      self-check telemetry item below.
+- [ ] **Shell-safety audit** (raised run 9): `shellQuote` (harness/background-
+      tasks.ts) is the only shell escaper and was silently emitting a wrong POSIX
+      sequence. Sweep for other shell-interpolation / `process.kill(-pid)` /
+      command-construction sites that assume shell-safe input and add round-trip
+      tests for quotes, spaces, and newlines.
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in
       project health over time.
