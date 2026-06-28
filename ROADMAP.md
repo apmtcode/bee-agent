@@ -62,13 +62,37 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      for a real on-device small model. **DONE run 9** —
+      `src/training/movement-model.ts`: `MovementModelBackend`/`MovementModel`
+      interfaces + registry (`createMovementBackend`/`registerMovementBackend`)
+      and a deterministic `MarkovMovementBackend` reference impl with JSON
+      snapshot/restore.
+- [x] Synthetic event-stream generator to validate capture→dataset→replay
+      round-trips without real OS input. **DONE run 9** —
+      `synthesizeMovementTrajectories` (Mulberry32 PRNG, OS-free, shared motifs).
+- [x] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories. **DONE run 9** — `evaluateReplayFidelity`
+      (teacher-forced + exact-match) and `evaluateGeneralization` (mean accuracy
+      + full-order coverage).
+- [ ] **Online movement-policy adapter**: plug a trained `MovementModel` into
+      `replay-service` as a next-movement suggester + divergence/drift detector
+      (turns the offline model into a live signal during replay).
+- [ ] Second movement backend (frequency / prefix-tree) to exercise the
+      pluggable seam against a non-Markov algorithm and benchmark generalization.
+
+## Test stability
+- [ ] **Stabilize flaky process/timing tests** (surfaced run 9). Four tests fail
+      non-deterministically (count varies 1↔2 across runs) on a clean tree —
+      independent of any source change: `cli/app.test.ts` (platform
+      `control=active` vs `degraded … background task missing-process`;
+      `[task <id>]` watch output), `control-plane/server.test.ts` (orchestration
+      methods), `orchestrator/operator-runtime.test.ts` (background-task
+      start/sync/recover/cancel; malformed-JSON state read at a fixed position).
+      Root cause is real child-process spawning + PID-liveness/state-file races.
+      Fix by injecting a deterministic clock + mock process/liveness probe (or a
+      fake `SpawnProcess`) so these paths don't depend on wall-clock timing.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

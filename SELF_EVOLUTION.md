@@ -6,6 +6,72 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-06-28 (run 9) — Pluggable in-process movement-model backend (objective #2 c/d)
+
+**Audited:** The local-movement learning subsystem (`src/training/` runner +
+execution-service). Finding: the *entire* training path only generates **shell
+plans** for heavyweight on-device runtimes (`mlx_lm.lora`, `axolotl`) that run
+solely on the user's Apple-silicon machine. Nothing in the repo could actually
+**train a model and run inference in the cloud**, so standing objective #2(c)
+("post-train a local model to repeat the recorded movements") and #2(d)
+("generalize to new but related movements") had zero testable implementation.
+This is the exact ROADMAP item "Pluggable local-model backend interface … with a
+deterministic mock backend".
+
+**Changed (additive — new files only + one barrel edit):**
+- **`src/training/movement-model.ts`** — a dependency-free, fully deterministic
+  movement-model subsystem:
+  - **Dataset schema**: `MovementToken`/`MovementSequence`/`MovementDataset`,
+    plus `tokenizeAction`, `datasetFromTrajectories`, and `datasetFromReplayEvents`
+    so the model consumes the *real* capture format (trajectory actions and
+    replay-manifest action events tokenize identically — covered by a test).
+  - **Pluggable seam**: `MovementModelBackend` / `MovementModel` interfaces +
+    a backend registry (`registerMovementBackend`/`createMovementBackend`/
+    `listMovementBackends`) so a real on-device small model can drop in behind
+    the same interface later.
+  - **Reference backend**: `MarkovMovementBackend` — an order-k Markov model
+    with stupid-backoff. **Repeats** recorded movements exactly (greedy argmax,
+    lexicographic tiebreak ⇒ deterministic) and **generalizes** to unseen-but-
+    related sequences by backing off to shorter known contexts. JSON
+    snapshot/restore for persistence.
+  - **Eval harness**: `evaluateReplayFidelity` (teacher-forced accuracy +
+    end-to-end exact-match) and `evaluateGeneralization` (mean accuracy +
+    full-order coverage on held-out sequences).
+  - **Synthetic event-stream generator**: `synthesizeMovementTrajectories`
+    (Mulberry32 PRNG, no `Math.random`) emits OS-free trajectories sharing
+    latent motifs, so train/held-out splits are meaningfully related — exercises
+    the capture→dataset→train→infer→eval loop with no real input devices.
+- **`src/training/movement-model.test.ts`** — 12 tests: tokenization stability,
+  dataset/replay equivalence, exact replay reproduction, cross-training
+  determinism, generalization >0.6 accuracy on genuinely-novel held-out
+  trajectories, backoff correctness, snapshot round-trip, registry pluggability,
+  PRNG determinism.
+- Exported the surface from `src/index.ts`.
+
+**Test results:** new tests ✅ **12/12**. `npm run typecheck:src` ✅ (exit 0).
+`npm run build` ✅. Full `npm test`: **182/186** — my 12 all pass; the **4
+failures are PRE-EXISTING and flaky** (confirmed: they reproduce identically on a
+clean `git stash`-ed tree, and the count varies 1↔2 across consecutive runs).
+They live in `cli/app.test.ts`, `control-plane/server.test.ts`,
+`orchestrator/operator-runtime.test.ts` and all trace to **real process-spawning
+/ PID-liveness timing races** in the background-task + platform-control paths
+(`control=degraded … background task missing-process`, malformed-JSON state
+reads). Not touched by this run; fixing them means editing working orchestration
+code, which would violate the focused-diff guardrail for this increment. Logged
+as a ROADMAP stabilization item. Pushed to the designated dev branch
+`claude/peaceful-dirac-u8sql4` (per this run's branch requirement) with the new
+capability fully isolated and green.
+
+**New idea:** add a `replay→movement-policy` *online* adapter so a trained
+`MovementModel` can be plugged into the existing `replay-service` as a
+suggestion engine — when replaying a trajectory it proposes the next movement
+and flags divergence from the recorded stream, turning the model into a live
+drift detector (and a generalization signal) rather than only an offline
+evaluator. Also: a second backend (`frequency`/prefix-tree) to validate the
+pluggable seam against a non-Markov algorithm and benchmark generalization.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
