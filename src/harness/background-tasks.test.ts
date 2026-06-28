@@ -1,3 +1,4 @@
+import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -370,4 +371,42 @@ describe("BackgroundTaskExecutionService", () => {
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
   });
+
+  // Regression: the generated launch script must produce a VALID, correct
+  // state.json even when the command contains single quotes and newlines.
+  // Two historical bugs lived here — a transposed shellQuote escaping
+  // (`"'"'"'` instead of `'"'"'`) that corrupted the JSON, and a `printf | sed`
+  // pid substitution that left pid as the literal string "$$". This executes
+  // the real script (awaiting exit, so there is no race) and checks the result.
+  const toolingAvailable =
+    spawnSync("bash", ["-c", "true"]).status === 0 && spawnSync("python3", ["-c", "pass"]).status === 0;
+  it.skipIf(!toolingAvailable)(
+    "generates a launch script that writes valid state for quote/newline commands",
+    async () => {
+      const rootDir = await makeTempDir();
+      const trickyCommand = "printf 'line-1\nline-2\n'";
+      let launchScriptPath = "";
+      const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"), (command) => {
+        launchScriptPath = command;
+        return { pid: 1, unref() {} };
+      });
+      const task = await store.start({ title: "Tricky", command: trickyCommand, cwd: rootDir, kind: "task" });
+
+      const exitCode = await new Promise<number>((resolve, reject) => {
+        const child = spawn("bash", [launchScriptPath], { cwd: rootDir, stdio: "ignore" });
+        child.on("error", reject);
+        child.on("exit", (code) => resolve(code ?? -1));
+      });
+      expect(exitCode).toBe(0);
+
+      const stateRaw = await fs.readFile(path.join(rootDir, task.execution.stateFile), "utf8");
+      const state = JSON.parse(stateRaw) as { pid: unknown; status: string; command: string; exitCode?: number };
+      expect(typeof state.pid).toBe("number");
+      expect(state.pid).toBeGreaterThan(0);
+      expect(state.status).toBe("completed");
+      expect(state.exitCode).toBe(0);
+      // The command must survive the round-trip through shell + JSON verbatim.
+      expect(state.command).toBe(trickyCommand);
+    },
+  );
 });

@@ -6,6 +6,63 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-06-28 (run 9) — Fix two real launch-script bugs; make background-task tests hermetic (suite 171/174 → 175/175)
+
+**Audited:** Project health. The suite that prior runs reported as 174/174 was
+failing **3 tests** in this run's container (operator-runtime, app, server) —
+all crashing on a `JSON SyntaxError` while reading background-task `state.json`.
+Root cause: the background tasks **launch script** (`renderLaunchScript` in
+`src/harness/background-tasks.ts`) is spawned for real during those tests, and it
+generated **corrupt state files**. Two genuine production bugs, both surfaced
+only when a spawned process actually runs (env-dependent — explains why earlier
+containers got lucky):
+
+1. **Transposed `shellQuote` escaping.** `background-tasks.ts`'s `shellQuote`
+   used the replacement `"'"'"'` instead of the POSIX-correct `'"'"'`
+   (close-quote / quoted-quote / reopen). Any command containing a single quote
+   — e.g. the test's `printf 'line-1\nline-2\n'` — produced invalid JSON when the
+   script wrote the running-state file. (The sibling `shellQuote` in
+   `training/runner.ts` already had the correct form — confirmed by diff.)
+2. **Broken `sed` pid substitution.** The initial running-state was written via
+   `printf '%s' '<json>' | sed "s/\"\$\$\"/$$/g"`. The JS→shell quoting closed
+   the `sed` double-quote early, so the program became `s/<pid>/<pid>/g` and the
+   placeholder `"$$"` was **never** replaced — `pid` persisted as the literal
+   string `"$$"`, corrupting downstream recovery (`isProcessRunning("$$")`).
+
+**Changed (additive, focused):**
+- `src/harness/background-tasks.ts`:
+  - Corrected `shellQuote` to `'"'"'` (+ explanatory comment).
+  - Replaced the fragile `printf | sed` initial-state write with a `python3`
+    heredoc (`renderRunningStateWriterPython`) that injects `pid` (`$$`) and
+    `started_at` via **argv** — consistent with the existing completion/failure
+    writers. No more JSON-in-shell munging.
+- `src/harness/background-tasks.test.ts`: **new regression test** that renders
+  *and executes* the real launch script for a single-quote+newline command, then
+  asserts `state.json` is valid JSON with a numeric `pid`, `status:"completed"`,
+  `exitCode:0`, and the command preserved verbatim. Guarded with `it.skipIf` when
+  `bash`/`python3` are unavailable. It awaits process exit, so there is no race.
+- **Test hermeticity:** plumbed the existing `backgroundTaskSpawnProcess` /
+  `backgroundTaskIsProcessRunning` injection seam through `OperatorCliApp`
+  (`OperatorCliAppOptions`), and made the three racy integration tests inject a
+  deterministic no-op spawn so they no longer launch real OS processes whose
+  async state writes raced with their assertions (operator-runtime.test.ts,
+  app.test.ts ×2, server.test.ts ×3 via `replace_all`). The background/monitor
+  app test now seeds its expected output and treats the fake pid as alive.
+
+**Test results:** full suite **175/175** (was 171 passing / 3 failing at run
+start; +1 new regression test), stable across two consecutive runs. Build ✅.
+`typecheck:src` ✅ (exit 0). The full `tsc` (incl. tests) debt is unchanged from
+run 8 (~125, all in test files).
+
+**New idea:** add a tiny **engine pre-flight health gate** — before picking work,
+each run should `npm test` once and, if the *baseline* (pre-change) suite is
+red, treat "diagnose & fix the regression" as the run's highest-value task
+(exactly what happened here). Pair it with the queued self-check telemetry file
+so a sudden pass-count drop between runs is recorded and visible, distinguishing
+"a past run pushed broken code" from "an env-dependent latent bug just surfaced."
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

@@ -70,6 +70,25 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Generalization eval harness: measure replay fidelity on held-out but
       related synthetic trajectories.
 
+## Reliability (correctness bugs found in-flight)
+- [x] **Launch-script state corruption** (run 9). Fixed a transposed POSIX
+      single-quote escaping in `background-tasks.ts` `shellQuote` (`"'"'"'` →
+      `'"'"'`) that produced invalid `state.json` for any command containing a
+      single quote, and a broken `printf|sed` pid substitution that left `pid` as
+      the literal string `"$$"`. Initial running-state now written via a `python3`
+      argv heredoc (no JSON-in-shell). Added an execute-the-script regression test.
+- [x] **Hermetic background-task tests** (run 9). Plumbed the
+      `backgroundTaskSpawnProcess` seam through `OperatorCliApp`; the three
+      integration tests inject a no-op spawn so they never launch real OS
+      processes that race their assertions.
+- [ ] Apply the same `python3`-argv state-write pattern to
+      `training/runner.ts`'s launch script (it shares the `printf|sed` shape; its
+      `shellQuote` is already correct, but the sed-substitution fragility is the
+      same latent class of bug). Lower priority — not currently executed in tests.
+- [ ] Engine pre-flight health gate: run `npm test` at the *start* of each cycle;
+      if the baseline suite is red, make "diagnose & fix the regression" the run's
+      top task before any new feature work.
+
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in
