@@ -15,6 +15,18 @@ async function makeTempDir(): Promise<string> {
   return dir;
 }
 
+// Hermetic background-task spawn: returns a fake pid without launching a real
+// shell. The launch script otherwise writes the state file via `printf | sed`,
+// which races (and corrupts) any state the test writes manually, making these
+// tests flaky/non-deterministic in CI/cloud. Tests that drive recovery/sync
+// set state explicitly via executionService.writeState, so the real spawn is
+// incidental and harmful here.
+let mockBackgroundPid = 40000;
+function noopBackgroundSpawn(): { pid: number; unref(): void } {
+  mockBackgroundPid += 1;
+  return { pid: mockBackgroundPid, unref() {} };
+}
+
 function buildHookCaptureCommand(outputFile: string): string {
   const script = [
     "import fs from 'node:fs';",
@@ -531,6 +543,7 @@ describe("StandaloneOperatorRuntime", () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
       backgroundTaskIsProcessRunning: () => false,
+      backgroundTaskSpawnProcess: noopBackgroundSpawn,
     });
     const session = await runtime.startSession({ title: "Tasks", agentId: "main" });
 

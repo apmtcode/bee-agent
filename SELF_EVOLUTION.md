@@ -6,6 +6,54 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-06-28 (run 9) — 🔴→🟢 Restore green baseline: hermetic background-task spawn + atomic state writes
+
+**Audited:** Started by running the suite (procedure step 5) before touching
+anything — found the baseline **RED**: 3 tests failing (`operator-runtime`,
+`control-plane/server`, `cli/app`), despite a clean working tree and prior runs
+reporting 174/174. Root-caused all three to the **same** defect: tests that set
+up background-task state manually via `executionService.writeState` still let
+`startBackgroundTask` spawn the **real** launch shell. That script writes its
+state file non-atomically (`printf '%s' … | sed … > state`), so its write raced
+(and tore) the JSON the test wrote — surfacing as
+`SyntaxError: Expected ',' or '}' … position 311` on read, or a process that
+exited instantly (`printf ok`) being detected as `missing-process`. Green in
+earlier cloud runs was **timing luck**, not correctness.
+
+**Changed (additive, two layers):**
+1. **Test hermeticity** — injected a deterministic no-op `backgroundTaskSpawnProcess`
+   (returns a fake pid, never launches a shell) into the three failing tests,
+   mirroring the existing `backgroundTaskIsProcessRunning` / `configHome`
+   isolation seams:
+   - `operator-runtime.test.ts`, `control-plane/server.test.ts` (3 runtime
+     constructions) — added a local `noopBackgroundSpawn` helper.
+   - `cli/app.ts`: threaded new optional `backgroundTaskSpawnProcess` /
+     `backgroundTaskIsProcessRunning` through `OperatorCliAppOptions` into the
+     internally-constructed runtime (production leaves them undefined → unchanged
+     behaviour). Used them in the two affected `app.test.ts` cases; converted the
+     `background and monitor` task branch to write its own output/state (the same
+     pattern its monitor branch already used) instead of relying on a real
+     `printf ok`.
+2. **Production reliability** — made the launch-script state writes **atomic**
+   (temp file + `mv` / `os.replace`) in **both** `src/harness/background-tasks.ts`
+   and `src/training/runner.ts`, so a concurrent reader can never observe a
+   torn/partial JSON state file. This removes the corruption class at its source,
+   not just in tests.
+
+**Test results:** `npm run build` ✅. `npm test` ✅ **174/174**, stable across
+**3 consecutive full runs** (was 171/174 flaky). `typecheck:src` ✅ (exit 0,
+source still clean). Full `tsc` **125** — unchanged, no regression.
+
+**New idea:** Add a tiny **launch-script hermeticity guard** — a shared test
+helper `hermeticBackgroundSpawn()` exported from a `test-support` module (so the
+three copies of `noopBackgroundSpawn` collapse to one), plus a lint/test that
+fails if any `*.test.ts` constructs a runtime that exercises background tasks
+*without* injecting a spawn seam. That turns "test accidentally spawns a real
+shell" from a rediscovered-each-run flake into a caught-at-authoring regression —
+the same ratchet philosophy as the per-module typecheck idea.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
