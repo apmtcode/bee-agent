@@ -62,13 +62,36 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      for a real on-device small model. **DONE run 9** —
+      `src/training/movement-model.ts`: `MovementModelBackend`/`MovementModel`
+      interfaces + `NgramMovementBackend` (order-k Markov, stupid-backoff,
+      JSON-serializable), registry `createMovementBackend`.
+- [x] Synthetic event-stream generator to validate capture→dataset→replay
+      round-trips without real OS input. **DONE run 9** — test helper builds
+      `ReplayManifest`s from `(tool, summary)` move lists; round-trip covered.
+- [x] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories. **DONE run 9** —
+      `evaluateNextActionAccuracy(model, sequences)`; test proves perfect
+      next-action accuracy on a drag performed at unseen coordinates.
+- [ ] Movement-model `score(sequence)` (sequence log-likelihood) so the eval
+      layer can rank candidate generalizations and flag low-confidence movements
+      for human review before real-machine execution.
+- [ ] Wire the movement model into the training runner/execution service: after
+      a reviewed export, train an `ngram` model on the exported replays and
+      persist its snapshot as an artifact, so the local pipeline produces an
+      inference-ready model even before MLX/axolotl are available.
+
+## Reliability
+- [ ] **Fix the flaky background-task state read** (surfaced run 9). The full
+      suite intermittently fails (3↔4 tests, run-to-run) because
+      `FileBackgroundTaskStore` reads the state file with `readJsonFile` while
+      another writer is mid-write, parsing a torn/partial JSON
+      (`SyntaxError … background-tasks.ts:234`). Fix options: have the writer use
+      the existing `writeJsonAtomic` (write-tmp + rename so readers never see a
+      partial file), and/or make `readJsonFile` retry once on parse error. This
+      is the main thing blocking a clean `npm test` green gate.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

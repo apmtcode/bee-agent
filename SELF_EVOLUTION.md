@@ -6,6 +6,60 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-06-28 (run 9) — Movement-model backend: on-device learning that repeats *and* generalizes movements
+
+**Audited:** Standing objective #2 (local-movement learning) end-to-end. The
+capture→schema→dataset→replay pieces exist (`src/capture/*`, `replay.ts`), and
+`src/training/runner.ts` emits MLX/axolotl *shell plans* — but there was **no
+in-process, cloud-testable model** that actually learns from movement data and
+performs inference. So objective #2(c)/#2(d) ("post-train a local model … to
+repeat the recorded movements" and "generalize to new but related movements")
+had zero executable, validated code — only external-tool launch scripts.
+
+**Changed (additive):** new `src/training/movement-model.ts` — the pluggable
+model seam the ROADMAP queued, with a deterministic default backend:
+- **Dataset shaping** `buildMovementDataset(replays)`: turns `ReplayManifest`
+  action events into one timestamp-ordered `MovementSequence` per trajectory.
+- **Tokenization** `templatizeSummary` / `actionToMovementToken`: collapses
+  numeric runs (coordinates, indices, deltas) to `#`, so "click at (12, 40)" and
+  "click at (880, 5)" become the *same* movement class — the basis for
+  generalization.
+- **`MovementModelBackend` interface** (`train`/`restore`) + **`MovementModel`**
+  (`predictNext`/`generate`/`toJSON`). Backend is registry-pluggable
+  (`createMovementBackend`) with a documented seam for a real on-device small
+  model.
+- **`NgramMovementBackend`**: dependency-free order-k Markov model with
+  stupid-backoff. *Repeat*: greedy `generate` from a recorded seed reproduces the
+  recorded sequence. *Generalize*: templating + backoff predict correct next
+  actions on held-out trajectories at unseen coordinates. Deterministic
+  (count-based, sorted tie-breaks) → green in CI; JSON-serializable for
+  persistence alongside training artifacts.
+- **Generalization eval harness** `evaluateNextActionAccuracy(model, sequences)`
+  — next-action accuracy on held-out sequences (also a queued ROADMAP item).
+- Barrel exports added to `src/index.ts`.
+- **Synthetic event-stream generator** in the test (builds replays from
+  `(tool, summary)` move lists with no real OS input) — validates the
+  dataset→train→predict→generalize round-trip.
+
+**Test results:** new `movement-model.test.ts` ✅ **11/11**. `typecheck:src` ✅
+(source stays clean). Build ✅ (5 files). Full suite **182/185** — the **3
+failures are pre-existing and flaky**, *not* from this change: confirmed by
+running the clean baseline twice (it flips 4↔3 failures run-to-run). Root cause
+is a concurrent read/write race in the background-task state file
+(`readJsonFile` parses a half-written file → `SyntaxError` at
+`background-tasks.ts:234`). My module is fully green in isolation. Per the pinned
+feature-branch requirement, pushed to `claude/peaceful-dirac-6nxelk` (not main).
+
+**New idea:** the flaky failure is a genuine reliability bug worth fixing next —
+`readJsonFile` should tolerate a torn read (retry-on-parse-error, or have the
+background-task writer use the existing `writeJsonAtomic` rename so readers never
+see a partial file). Logged to ROADMAP. Bigger movement-subsystem idea: add a
+`MovementModel.score(sequence)` (sequence log-likelihood) so the replay/eval
+layer can *rank* candidate generalizations and flag low-confidence movements for
+human review before they're executed on a real machine.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
