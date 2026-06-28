@@ -6,6 +6,19 @@ unchecked items are queued. Keep this richer than you found it each run.
 ## Foundations / DX
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
+- [x] **Atomic launch-script state writes + hermetic background-task tests**
+      (2026-06-28, run 9). Launch scripts (`background-tasks.ts`,
+      `training/runner.ts`) now publish state via temp-file + `mv`/`Path.replace`
+      instead of a torn `> file` redirect (fixes a real torn-read crash). Threaded
+      `backgroundTaskSpawnProcess`/`backgroundTaskIsProcessRunning` through
+      `OperatorCliApp`; injected no-op spawns into the 3 environment-flaky tests.
+      Suite: 174/174 stable over 5 runs.
+- [ ] **Flake gate** in the engine pre-push self-check: run the suite 2–3× and
+      fail if pass-counts differ, so nondeterminism is caught before a run logs a
+      false "green".
+- [ ] Audit remaining real-`spawn`/real-`process.kill` test usages for the same
+      non-hermeticity (e.g. `background-tasks.test.ts` L50 still launches a real
+      script); add a shared `makeDeterministicRuntime()` test helper.
 - [x] Make config loading hermetic in tests via an injectable `configHome`
       (2026-06-22).
 - [ ] **Pay down typecheck debt** (surfaced by the `typecheck` script). Full

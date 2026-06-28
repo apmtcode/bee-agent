@@ -6,6 +6,62 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-06-28 (run 9) — 🐛 Atomic launch-script state writes + hermetic background-task tests (flaky suite → 174/174 stable)
+
+**Audited:** The full suite at HEAD. Run 8 logged **174/174**, but this run found
+**3 failing tests** that varied run-to-run (3–4 failing in aggregate) — a
+regression introduced by the cloud environment, not by code:
+- `operator-runtime.test.ts` › background tasks: `SyntaxError: Expected ',' or
+  '}' ... at position 311 (line 1 column 312)` from `readJsonFile`.
+- `app.test.ts` › session-lifecycle: `control=degraded:... background task
+  missing-process` where `control=active` expected.
+- `app.test.ts` › background/monitor commands: `Background task … is not running`
+  where `Stopped monitor …` expected.
+- `server.test.ts` › orchestration methods: circuit-breaker failure count 3/3
+  instead of 2/2.
+
+**Root cause (two intertwined):**
+1. **Non-atomic state write (real product bug).** The background-task and
+   training launch scripts wrote their JSON state via `printf … | sed … >
+   stateFile` — a truncate-then-write redirect. A concurrent `readState`
+   (reconcile/recover paths call it constantly) can observe a **torn/partial**
+   single-line file → the `position 311` parse crash. Affects real local runs,
+   not just tests.
+2. **Non-hermetic tests.** Several tests started *real* detached launch scripts
+   (`sleep 5`, `printf …`) and relied on real `process.kill(-pid, 0)`
+   process-group liveness, which behaves differently in the cloud sandbox
+   (live detached groups probe as dead → spurious `missing-process`). The
+   detached scripts also wrote state asynchronously, racing the tests' explicit
+   `writeState()` calls.
+
+**Changed (additive, reversible):**
+- **`src/harness/background-tasks.ts` + `src/training/runner.ts`:** both launch
+  scripts now publish state **atomically** — write to `$state_tmp` then `mv`
+  into place; the Python completion writer writes a temp then `Path.replace`.
+  Mirrors the existing `writeJsonAtomic` discipline used everywhere else.
+- **`src/cli/app.ts`:** threaded `backgroundTaskSpawnProcess` /
+  `backgroundTaskIsProcessRunning` through `OperatorCliAppOptions` into the
+  runtime (the runtime already accepted them) so CLI-level tests can be
+  deterministic. Production default unchanged (real detached spawn).
+- **Tests made hermetic** by injecting a no-op spawn + an explicit liveness
+  predicate (no real OS processes): `operator-runtime.test.ts`,
+  `server.test.ts` (3 runtimes), and the two `app.test.ts` cases. The
+  background-task command test writes its expected stdout explicitly (the no-op
+  spawn runs no command). Updated `runner.test.ts`'s launch-script assertion to
+  expect the atomic `mv "$state_tmp" '<stateFile>'` publish.
+
+**Test results:** **174/174**, stable across **5 consecutive full runs** (was
+3–4 flaky). `typecheck:src` ✅ clean. `npm run build` ✅. Full `tsc` unchanged at
+**125** (all in test files) — no regression.
+
+**New idea:** add a **flake gate** to the engine's pre-push self-check — run the
+suite 2–3× and fail if pass-counts differ, so nondeterminism is caught before a
+run logs a false "green". Companion cleanup: audit the remaining real-`spawn` /
+real-`process.kill` usages in tests (background-tasks.test.ts still launches a
+real script at L50) for the same non-hermeticity, and consider a shared
+`makeDeterministicRuntime()` test helper so future background-task tests are
+hermetic by default.
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
