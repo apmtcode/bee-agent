@@ -45,6 +45,24 @@ unchecked items are queued. Keep this richer than you found it each run.
       have the engine run it as a per-run pre-push self-check.
 - [ ] Add a minimal CI workflow mirroring `verify` for human-opened PRs.
 
+## Reliability / correctness
+- [x] **Fix broken `shellQuote` in `background-tasks.ts`** (2026-06-29, run 9) —
+      escaped `'` as `"'"'"'` (stray leading `"`) instead of `'"'"'`, corrupting
+      the JSON state payload and mis-running any command with a single quote.
+- [x] **Atomic launch-script state writes** (2026-06-29, run 9) — bash `mv -f`
+      from a temp file + Python `os.replace`, in both `background-tasks.ts` and
+      `training/runner.ts`, so concurrent readers never see partial JSON.
+- [x] **Deterministic background-task tests** (2026-06-29, run 9) — added a
+      spawn/liveness injection seam on `OperatorCliApp` and stopped three suites
+      from launching real OS processes that raced their assertions.
+- [ ] **De-duplicate `shellQuote` + the launch-script renderer into `src/shared/`**
+      (HIGH — this divergence *caused* the run-9 bug). One shared, fuzz-tested
+      `shellQuote` (strings with `'`, `"`, newlines, `$`, backticks) and one
+      shared atomic-state-writer renderer used by both `background-tasks.ts` and
+      `training/runner.ts`.
+- [ ] Shared `fakeBackgroundProcess` test helper + a guard/lint so unit tests
+      never default to the real `spawn` (prevents reintroducing spawn-races).
+
 ## Capability parity (audit reference agents → port gaps)
 - [ ] Build a "capability inventory" generator: enumerate bee-agent's exported
       RPC/tool surface (`src/index.ts`) and diff it against `openclaw`,

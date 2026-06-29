@@ -6,6 +6,59 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-06-29 (run 9) — Reliability: fix shell-quote JSON corruption + atomic state writes; suite green again
+
+**Audited:** The build/test gate itself. Contrary to the log's repeated "174/174"
+claim, in this cloud environment the suite was **NOT green** — 3–4 tests failed,
+and the count *varied between runs* (4→3→1), the signature of a concurrency bug
+rather than a logic error. Traced the failures in `operator-runtime.test.ts`,
+`server.test.ts`, and `app.test.ts` to two distinct root causes.
+
+**Root cause 1 — broken `shellQuote` (real production bug).** Captured the
+failing state file: its `command` field had stray `"`/`'` and raw newlines,
+breaking `JSON.parse`. `shellQuote` in `src/harness/background-tasks.ts` escaped
+each `'` as `"'"'"'` (6 chars, **stray leading `"`**) instead of the POSIX-correct
+`'"'"'` (5 chars). For any command containing a single quote (e.g. the test's
+`printf 'line-1\nline-2\n'`) this injected spurious quotes into the shell-quoted
+JSON state payload — corrupting it *and* mis-executing the command. `runner.ts`
+already had the correct form, so this was copy-paste divergence. One-line fix +
+comment; confirmed with a buggy-vs-fixed repro (BROKEN → PARSED OK).
+
+**Root cause 2 — non-atomic state writes + real-spawn races (reliability).**
+The launch-script state writers (`background-tasks.ts` *and* `training/runner.ts`)
+truncated-and-wrote state via `printf … > path` and Python `write_text` — both
+non-atomic, so a concurrent `readState` could observe a half-written file. Made
+both writers atomic: bash now writes a `$state_tmp` then `mv -f`, Python writes a
+sibling temp then `os.replace`. Separately, the three integration tests launched
+**real OS processes** whose async state writes raced the assertions; added a
+determinism seam (`backgroundTaskSpawnProcess` / `backgroundTaskIsProcessRunning`
+options on `OperatorCliApp`, threaded to the runtime — production default
+unchanged) and injected no-op spawns. The CLI "background and monitor task
+commands" test additionally relied on a fast `printf ok` being *both* finished
+(for output) *and* still alive (for stop); made its task half drive output/state
+explicitly, mirroring the monitor half already in that test.
+
+**Changed:** `src/harness/background-tasks.ts` (shellQuote + atomic writes),
+`src/training/runner.ts` (atomic writes), `src/cli/app.ts` (spawn/liveness
+injectors). Tests: regression assertions that launch scripts use atomic writes
++ a new end-to-end test executing a real launch script with a quote/newline
+command and asserting valid JSON state; deterministic spawns in the three flaky
+suites.
+
+**Test results:** full suite **174 → 176 passing**, stable across 6+ repeated
+runs (was nondeterministic 1–4 failures). `npm run build` ✅. `npm run
+typecheck:src` ✅. Full `tsc --noEmit` **125** (unchanged — no new type debt).
+
+**New idea (queued):** the bug was pure copy-paste divergence between two
+`shellQuote` (and two near-identical launch-script renderers). **Extract a single
+shared `shellQuote` + atomic-state-writer renderer into `src/shared/`** so the
+copies can't drift again, and add a property/fuzz test over strings containing
+`'`, `"`, newlines, `$`, and backticks to guarantee round-trip JSON safety. Also:
+a "no real spawn in unit tests" guard (shared `fakeBackgroundProcess` helper) so
+spawn-races can't be reintroduced.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

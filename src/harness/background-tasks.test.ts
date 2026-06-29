@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -369,5 +370,44 @@ describe("BackgroundTaskExecutionService", () => {
     await expect(fs.readFile(path.join(rootDir, task.execution.launchScript), "utf8")).resolves.toContain("bash -lc");
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
+  });
+
+  it("writes the state file atomically so concurrent readers never see partial JSON", async () => {
+    const rootDir = await makeTempDir();
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"), () => ({ pid: 1111, unref() {} }));
+    const task = await store.start({
+      title: "Atomic state",
+      command: "printf 'done'",
+      cwd: rootDir,
+    });
+
+    const script = await fs.readFile(path.join(rootDir, task.execution.launchScript), "utf8");
+    // Initial running-state write must go through a temp file + rename, never a
+    // direct truncating redirect onto the live state path.
+    expect(script).toContain("state_tmp=");
+    expect(script).toMatch(/mv -f "\$state_tmp"/);
+    expect(script).not.toMatch(/sed "[^"]*" > '[^']*state\.json'/);
+    // The completion/failure writers must replace atomically via os.replace.
+    expect(script).toContain("os.replace(tmp_path, state_path)");
+    expect(script).not.toContain("state_path.write_text(");
+  });
+
+  it("renders a launch script that writes valid JSON state for a command with quotes and newlines", async () => {
+    const rootDir = await makeTempDir();
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"), () => ({ pid: 1, unref() {} }));
+    // A single-quote- and newline-bearing command previously corrupted the
+    // shell-quoted JSON state payload (broken shellQuote escaping).
+    const command = "printf 'line-1\nline-2\n'";
+    const task = await store.start({ title: "Quoted", command, cwd: rootDir, kind: "task" });
+
+    const scriptPath = path.join(rootDir, task.execution.launchScript);
+    execFileSync("bash", [scriptPath], { cwd: rootDir });
+
+    const statePath = path.join(rootDir, task.execution.stateFile);
+    const raw = await fs.readFile(statePath, "utf8");
+    const state = JSON.parse(raw) as BackgroundTaskExecutionState & { command: string };
+    expect(state.taskId).toBe(task.id);
+    expect(state.status).toBe("completed");
+    expect(state.command).toBe(command);
   });
 });
