@@ -45,6 +45,20 @@ unchecked items are queued. Keep this richer than you found it each run.
       have the engine run it as a per-run pre-push self-check.
 - [ ] Add a minimal CI workflow mirroring `verify` for human-opened PRs.
 
+## Reliability
+- [x] **De-flake the test suite + fix corrupt-JSON crash** (2026-06-29, run 9).
+      The background-task launch script wrote its initial state via
+      `printf | sed` placeholder substitution → invalid JSON when the command
+      held quotes (a real `recover`/`sync` crash); writes were also non-atomic;
+      and tests raced real detached subprocesses. Fixed: base64+Python initial
+      write, atomic `os.replace` state writes, and an injectable/inert spawner
+      (`inertBackgroundSpawn` + `OPERATOR_INERT_BACKGROUND_SPAWN`,
+      `OperatorCliApp.backgroundTaskSpawnProcess`). Suite went from 3 flaky
+      tests to 15/15 green full runs.
+- [ ] **Flake sentinel in the pre-push self-check.** Run `npm test` 3× (or with
+      `--sequence.shuffle`) and block the push to `main` if any run fails, so
+      nondeterministic regressions are caught before landing, not a run later.
+
 ## Capability parity (audit reference agents → port gaps)
 - [ ] Build a "capability inventory" generator: enumerate bee-agent's exported
       RPC/tool surface (`src/index.ts`) and diff it against `openclaw`,

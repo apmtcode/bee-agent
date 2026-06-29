@@ -6,6 +6,57 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-06-29 (run 9) — Reliability: fix corrupt-JSON crash + de-flake the background-task suite
+
+**Audited:** Project health. The suite was **no longer green** — 2–3 tests failed
+*nondeterministically* per run (`operator-runtime.test.ts`,
+`server.test.ts`, `cli/app.test.ts`), so the engine's own verification gate was
+unreliable. Reproduced and traced three distinct, compounding root causes around
+`FileBackgroundTaskStore` launching **real detached OS subprocesses** in tests.
+
+**Bug 1 (real product bug, not just a test bug) — invalid JSON state file.**
+`renderLaunchScript` wrote the initial `running` state with
+`printf '%s' <json> | sed "s/__OPENCLAW_STARTED_AT__/…/; s/\"$$\"/…/"`. Whenever
+`task.command` contained quotes/newlines (e.g. the test's
+`printf 'line-1\nline-2\n'`), the shell/sed escaping mangled the JSON, so a
+concurrent `recover`/`sync` read hit `JSON.parse(...)` → **crash**
+(`SyntaxError: Expected ',' or '}'`). Confirmed by dumping the on-disk file.
+**Fix:** the launch script now writes the initial state with **Python from a
+base64-encoded payload** (base64 has no shell/sed-special chars), setting
+`pid`/`startedAt` from argv. No string substitution, no escaping hazard.
+
+**Bug 2 — non-atomic writes.** All three Python writers used
+`state_path.write_text(...)` (truncate-then-write), so a concurrent reader could
+see a half-written file. **Fix:** `renderAtomicStateWrite()` writes a sibling
+`.<pid>.tmp` and `os.replace()`s it over the target (atomic on POSIX/Windows).
+Now `recover`/`sync` always read either the old or new document in full. This is
+genuine **production** hardening, not only a test fix.
+
+**Bug 3 — tests raced their own subprocesses.** The flaky tests drive task state
+directly via `writeState`, but also launched a *real* launch script that
+asynchronously rewrote the same files (and skewed aggregated remote-control
+health to `degraded:background task failed`), and whose live writes raced
+`afterEach` cleanup (`ENOTEMPTY`). **Fix (no production behaviour change):**
+- Exported `inertBackgroundSpawn` + a documented `OPERATOR_INERT_BACKGROUND_SPAWN`
+  dry-run hook in `BackgroundTaskExecutionService`'s default spawner.
+- Added an opt-in `backgroundTaskSpawnProcess` to `OperatorCliAppOptions`
+  (threaded to the runtime) so CLI-level tests can inject it too.
+- Injected `inertBackgroundSpawn` into the 4 racing test runtimes only; tests
+  that genuinely exercise a real launch (e.g. app.test "background and monitor
+  task commands") keep the real spawner.
+
+**Test results:** suite **174/174**; **15/15 consecutive full `npm test` runs
+green** (was 3 tests flaky, ~40–60% fail rate under parallel load).
+`typecheck:src` ✅ clean, `build` ✅, full `tsc` unchanged at **125** (no new
+test-type debt). Changes are additive/reversible.
+
+**New idea:** add a tiny **flake sentinel** to the engine's pre-push self-check —
+run `npm test` 3× (or `vitest --retry=0 --sequence.shuffle`) and refuse to push
+to `main` if any run fails, so nondeterministic regressions like this are caught
+*before* they land instead of being rediscovered a run later. Logged to ROADMAP.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

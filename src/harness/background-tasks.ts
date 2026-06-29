@@ -108,6 +108,34 @@ export type SpawnBackgroundProcess = (
 
 export type IsProcessRunning = (pid: number) => boolean;
 
+/**
+ * A {@link SpawnBackgroundProcess} that does not start any OS process. It
+ * returns a stable, almost-certainly-unused pid so the task is still marked
+ * "running", but nothing executes and no files are written asynchronously.
+ *
+ * Use this in tests (and dry-run/inspection flows) that drive the task
+ * lifecycle by writing state directly: a real detached launch script races the
+ * test's own `writeState`/teardown, producing flaky JSON-parse and ENOTEMPTY
+ * failures under parallel load. Injecting this removes the race entirely.
+ */
+export const inertBackgroundSpawn: SpawnBackgroundProcess = () => ({
+  pid: 2_147_483_646,
+  unref() {},
+});
+
+/**
+ * Resolves the default spawner. When `OPERATOR_INERT_BACKGROUND_SPAWN=1` is set
+ * (used by the test environment, and available as a dry-run flag), no real OS
+ * process is launched. This keeps the suite deterministic — a real detached
+ * launch script otherwise races tests that drive task state directly.
+ */
+function resolveDefaultSpawnProcess(): SpawnBackgroundProcess {
+  if (process.env.OPERATOR_INERT_BACKGROUND_SPAWN === "1") {
+    return inertBackgroundSpawn;
+  }
+  return (command, args, options) => spawn(command, args, options);
+}
+
 export type BackgroundTaskRecoveryReason =
   | "unchanged"
   | "state-running"
@@ -155,7 +183,7 @@ function defaultIsProcessRunning(pid: number): boolean {
 export class BackgroundTaskExecutionService {
   constructor(
     private readonly rootDir: string,
-    private readonly spawnProcess: SpawnBackgroundProcess = (command, args, options) => spawn(command, args, options),
+    private readonly spawnProcess: SpawnBackgroundProcess = resolveDefaultSpawnProcess(),
     private readonly isProcessRunningImpl: IsProcessRunning = defaultIsProcessRunning,
   ) {}
 
@@ -734,27 +762,32 @@ function renderLaunchScript(task: BackgroundTaskRecord): string {
   const quotedOutputFile = shellQuote(task.execution.outputFile);
   const quotedCwd = shellQuote(task.cwd);
   const quotedCommand = shellQuote(task.command);
-  const quotedStatePayload = shellQuote(
+  // The initial "running" state is written by Python from a base64-encoded
+  // payload. base64 contains no shell- or sed-special characters, so a command
+  // string with quotes/newlines/`$` cannot corrupt the emitted JSON the way the
+  // previous `printf | sed` substitution did (it produced invalid JSON whenever
+  // the command contained quotes, racing readState into a JSON.parse crash).
+  const statePayloadBase64 = Buffer.from(
     JSON.stringify({
       version: 1,
       taskId: task.id,
       kind: task.kind,
       status: "running",
-      pid: "$$",
-      startedAt: "__OPENCLAW_STARTED_AT__",
-      updatedAt: "__OPENCLAW_STARTED_AT__",
       outputFile: task.execution.outputFile,
       cwd: task.cwd,
       command: task.command,
     }),
-  );
+    "utf8",
+  ).toString("base64");
 
   return [
     "#!/usr/bin/env bash",
     "set -euo pipefail",
     `mkdir -p $(dirname ${quotedStatePath}) $(dirname ${quotedOutputFile})`,
     "started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-    `printf '%s' ${quotedStatePayload} | sed "s/__OPENCLAW_STARTED_AT__/$started_at/g; s/\"\$\$\"/$$/g" > ${quotedStatePath}`,
+    `python3 - ${quotedStatePath} $$ "$started_at" ${statePayloadBase64} <<'PY'`,
+    ...renderInitialStateWriterPython(),
+    "PY",
     `printf '%s\n' "starting ${task.kind} ${task.id}" >> ${quotedOutputFile}`,
     `if cd ${quotedCwd} && bash -lc ${quotedCommand} >> ${quotedOutputFile} 2>&1; then`,
     "  completed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
@@ -773,6 +806,36 @@ function renderLaunchScript(task: BackgroundTaskRecord): string {
   ].join("\n");
 }
 
+function renderInitialStateWriterPython(): string[] {
+  return [
+    "import base64",
+    "import json",
+    "import pathlib",
+    "import sys",
+    "state_path = pathlib.Path(sys.argv[1])",
+    "pid = int(sys.argv[2])",
+    "started_at = sys.argv[3]",
+    "state = json.loads(base64.b64decode(sys.argv[4]).decode('utf-8'))",
+    "state['pid'] = pid",
+    "state['startedAt'] = started_at",
+    "state['updatedAt'] = started_at",
+    ...renderAtomicStateWrite(),
+  ];
+}
+
+// Atomic write: render to a sibling temp file and os.replace() it over the
+// target. os.replace is atomic on POSIX/Windows, so a concurrent reader
+// (recover/sync) sees either the old or the new file in full — never a
+// truncated, mid-write document that would crash JSON.parse.
+function renderAtomicStateWrite(): string[] {
+  return [
+    "import os",
+    "tmp_path = state_path.with_name(state_path.name + '.' + str(os.getpid()) + '.tmp')",
+    "tmp_path.write_text(json.dumps(state, indent=2) + '\\n')",
+    "os.replace(tmp_path, state_path)",
+  ];
+}
+
 function renderStateWriterPython(status: BackgroundTaskExecutionState["status"]): string[] {
   return [
     "import json",
@@ -789,7 +852,7 @@ function renderStateWriterPython(status: BackgroundTaskExecutionState["status"])
     "state['completedAt'] = timestamp",
     "state['exitCode'] = exit_code",
     `state['error'] = None if '${status}' == 'completed' else f'background task exited non-zero ({exit_code})'`,
-    "state_path.write_text(json.dumps(state, indent=2) + '\\n')",
+    ...renderAtomicStateWrite(),
   ];
 }
 
