@@ -15,6 +15,13 @@ async function makeTempDir(): Promise<string> {
   return dir;
 }
 
+// A spawn that launches no real process, so tests that drive background-task
+// state by manually writing state/output files stay deterministic — a real
+// detached launch script would otherwise race those writes under load.
+function noopBackgroundSpawn(): { pid: number; unref(): void } {
+  return { pid: 4321, unref() {} };
+}
+
 function buildHookCaptureCommand(outputFile: string): string {
   const script = [
     "import fs from 'node:fs';",
@@ -531,6 +538,7 @@ describe("StandaloneOperatorRuntime", () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
       backgroundTaskIsProcessRunning: () => false,
+      backgroundTaskSpawnProcess: noopBackgroundSpawn,
     });
     const session = await runtime.startSession({ title: "Tasks", agentId: "main" });
 

@@ -6,6 +6,57 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-06-29 (run 9) — 🐞 Fixed flaky test suite: two real background-task corruption bugs
+
+**Audited:** Suite health. The full suite was **flaky** — re-running `npm test`
+gave 3–4 failures that varied across runs (operator-runtime, server, app),
+despite prior runs logging 174/174. Flaky tests silently break the engine's own
+pre-push gate (step 5: "do NOT push if tests fail"), so this was the
+highest-value target.
+
+**Root causes found (two genuine production bugs, not test bugs):**
+1. **`shellQuote` corrupted any single-quote-containing value** (e.g. a task
+   command like `printf 'line-1\nline-2\n'`). It replaced `'` with `"'"'"'`
+   (6 chars, starting with a double quote) instead of the canonical POSIX
+   `'\''`, leaving a stray `"` and mangling the rendered launch script. Proven
+   with a `printf '%s' <quoted>` round-trip: buggy output `a"'b` for input
+   `a'b`; fixed output `a'b`.
+2. **The launch script built the state JSON via `sed`** placeholder
+   substitution (`s/"$$"/$$/g` etc.) and wrote it **non-atomically**
+   (`> file`). Combined with bug 1 this produced *unparseable* `state.json`
+   (`SyntaxError: Expected ',' or '}'` in `readJsonFile`), and even when valid,
+   the truncate-in-place write raced the manager's atomic reads → torn reads.
+
+**Changed (`src/harness/background-tasks.ts`, additive/reversible):**
+- Fixed `shellQuote` to emit `'\''`.
+- Replaced the `printf | sed > file` initial-state writer with a `python3`
+  writer (`renderInitialStateWriterPython`) that fills in `startedAt`/`pid`
+  from a clean JSON payload and writes **atomically** (`os.replace`). Python
+  handles arbitrary command strings (quotes, `$`, newlines) correctly.
+- Made the terminal completed/failed `python` writer atomic too (`os.replace`).
+- **Test hermeticity:** the three suite tests that *simulate* background tasks
+  by manually writing state/output now inject a no-op
+  `backgroundTaskSpawnProcess` (the runtime already supported it), so a real
+  detached launch script no longer races their manual writes under parallel
+  load. These tests already set `backgroundTaskIsProcessRunning: () => false`,
+  so this matches their intent.
+- **New regression test** (`background-tasks.test.ts`): actually executes the
+  launch script with a command containing quotes, `$`, and a newline, polls the
+  state file, and asserts it always parses and round-trips the command verbatim.
+
+**Test results:** suite went from **flaky (170–174/174)** to **stable 175/175**
+across **5 consecutive full runs** (+1 new regression test). `npm run build` ✅,
+`npm run typecheck:src` ✅ (still source-clean).
+
+**New idea:** add a tiny `flake-guard` to the engine's pre-push self-check — run
+`npm test` **twice** (or `vitest --retry=0 --sequence.shuffle`) and only treat
+green as green if *both* pass. A single green run hid this race for ~7 runs; a
+double-run gate would have caught it immediately. Longer term, a deterministic
+clock/`spawn` seam injected suite-wide would make the whole background-task
+subsystem reproducible.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

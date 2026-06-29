@@ -18,6 +18,13 @@ async function makeTempDir(): Promise<string> {
   return dir;
 }
 
+// A spawn that launches no real process, so tests that drive background-task
+// state by manually writing state/output files stay deterministic — a real
+// detached launch script would otherwise race those writes under load.
+function noopBackgroundSpawn(): { pid: number; unref(): void } {
+  return { pid: 4321, unref() {} };
+}
+
 afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })));
 });
@@ -84,6 +91,7 @@ describe("OperatorControlPlaneServer", () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir,
       backgroundTaskIsProcessRunning: () => false,
+      backgroundTaskSpawnProcess: noopBackgroundSpawn,
       delivery: new OperatorDeliveryService(rootDir, {
         sendBrowserPush: async () => {},
       }),
@@ -953,6 +961,7 @@ describe("OperatorControlPlaneServer", () => {
     const driftingRuntime = new StandaloneOperatorRuntime({
       rootDir: driftingRootDir,
       backgroundTaskIsProcessRunning: () => false,
+      backgroundTaskSpawnProcess: noopBackgroundSpawn,
     });
     const driftingServer = new OperatorControlPlaneServer({ runtime: driftingRuntime });
     const driftingBootstrap = await driftingServer.handle({
@@ -1019,6 +1028,7 @@ describe("OperatorControlPlaneServer", () => {
     const breakerRuntime = new StandaloneOperatorRuntime({
       rootDir: breakerRootDir,
       backgroundTaskIsProcessRunning: () => false,
+      backgroundTaskSpawnProcess: noopBackgroundSpawn,
     });
     const breakerServer = new OperatorControlPlaneServer({ runtime: breakerRuntime });
     const breakerOne = await breakerServer.handle({

@@ -4,6 +4,14 @@ Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
 ## Foundations / DX
+- [x] **Fix flaky test suite** (2026-06-29, run 9) — two real background-task
+      bugs: `shellQuote` mis-escaped single quotes (`"'"'"'` → `'\''`), and the
+      launch script wrote `state.json` via non-atomic `sed` substitution. Now
+      python + atomic `os.replace`; simulating tests inject a no-op spawn; added
+      a launch-script regression test. Suite: flaky 170–174 → stable 175/175.
+- [ ] **Flake-guard in the pre-push self-check**: run `npm test` twice (or with
+      `--sequence.shuffle`) and require both green — a single run hid the run-9
+      race for ~7 cycles.
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`

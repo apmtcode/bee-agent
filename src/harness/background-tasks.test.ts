@@ -370,4 +370,41 @@ describe("BackgroundTaskExecutionService", () => {
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
   });
+
+  it("launch script writes valid JSON state even when the command contains quotes, $ and newlines", async () => {
+    // Regression guard: the launch script used to build the state file by
+    // sed-substituting placeholders into a JSON string, which corrupted the file
+    // whenever a field (e.g. the command) contained quotes, `$`, or newlines.
+    // It now fills in the payload via python and writes atomically, so the
+    // managing process can always parse the state file.
+    const rootDir = await makeTempDir();
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"));
+    // Double quotes, a literal `$`, and an actual newline — the field shapes
+    // that the old sed-based state writer corrupted.
+    const command = "printf '%s' 'has \"quotes\" and $dollar and\na newline'";
+    const task = await store.start({ title: "Tricky command", command, cwd: rootDir, kind: "task" });
+    const statePath = path.join(rootDir, task.execution.stateFile);
+
+    let state: BackgroundTaskExecutionState | undefined;
+    for (let attempt = 0; attempt < 80; attempt += 1) {
+      try {
+        // A torn or sed-mangled write would make this JSON.parse throw — that
+        // throw is exactly the regression this test guards against.
+        const parsed = JSON.parse(await fs.readFile(statePath, "utf8")) as BackgroundTaskExecutionState;
+        if (parsed.status === "completed" || parsed.status === "failed") {
+          state = parsed;
+          break;
+        }
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+          throw error;
+        }
+      }
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+
+    expect(state).toBeDefined();
+    expect(state?.status).toBe("completed");
+    expect(state?.command).toBe(command);
+  }, 10000);
 });
