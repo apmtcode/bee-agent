@@ -801,7 +801,18 @@ describe("OperatorCliApp", () => {
 
   it("supports session lifecycle, transcript, approvals, pairing, config, and prompt commands", async () => {
     const rootDir = await makeTempDir();
-    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    const app = new OperatorCliApp({
+      rootDir,
+      cwd: rootDir,
+      currentDate: "2026-05-25",
+      // Inert spawner so no real OS process races the execution state file
+      // (torn-JSON reads previously flipped control health non-deterministically).
+      // The liveness probe is pid-aware: the deliberately-drifted task below
+      // writes pid 999999 and must read as missing-process; every healthy task
+      // keeps the inert spawner's pid (4321) and stays running.
+      backgroundTaskSpawnProcess: () => ({ pid: 4321, unref() {} }),
+      backgroundTaskIsProcessRunning: (pid) => pid !== 999999,
+    });
     const firstSession = await app.runtime.startSession({ title: "first", cwd: rootDir, agentId: "operator-cli" });
     const secondSession = await app.runtime.startSession({ title: "second", cwd: rootDir, agentId: "operator-cli" });
 
@@ -1063,7 +1074,16 @@ describe("OperatorCliApp", () => {
 
   it("supports background and monitor task commands plus cron commands", async () => {
     const rootDir = await makeTempDir();
-    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    const app = new OperatorCliApp({
+      rootDir,
+      cwd: rootDir,
+      currentDate: "2026-05-25",
+      // Inert spawner + live liveness probe: keep background/monitor tasks
+      // "running" deterministically without launching real OS processes that
+      // would race the execution state file (torn-JSON reads).
+      backgroundTaskSpawnProcess: () => ({ pid: 4321, unref() {} }),
+      backgroundTaskIsProcessRunning: () => true,
+    });
     const session = await app.runtime.startSession({ title: "CLI ops", cwd: rootDir, agentId: "operator-cli" });
 
     const startOutput = await app.dispatchSlashCommand(
