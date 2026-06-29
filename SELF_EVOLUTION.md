@@ -6,6 +6,57 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-06-29 (run 9) — Fixed a real shell-quoting bug + made the suite green & deterministic
+
+**Audited:** The verification gate itself. `npm test` was **failing**: 4 tests
+across 3 files (`operator-runtime`, `server`, `app`), and the failures were
+*flaky* (4/5 vs 1/5 run-to-run). A broken/flaky suite silently disables step 5's
+"don't push if tests fail" gate for every future run, so this was the
+highest-value thing to fix before adding any capability.
+
+**Root cause #1 — a genuine production bug in `src/harness/background-tasks.ts`.**
+`shellQuote` escaped a literal `'` as `"'"'"'` (six chars) instead of the correct
+POSIX `'"'"'` (five chars) — a stray leading `"`. Verified in bash:
+`shellQuote("it's") → 'it"'"'"'s'` evals to `it"'s` (extra `"`). Every background
+command containing a single quote (e.g. the very common `printf 'x'`,
+`bash -lc '...'`) was being **corrupted at launch time** and in the persisted
+`state.json`, which then failed `JSON.parse` during recovery
+(`SyntaxError: Expected ',' or '}'`). Fixed the escape; added a guard test that
+renders + actually executes the launch script for a command laced with single +
+double quotes, an embedded newline, and `$`, and asserts the resulting state file
+parses and round-trips the command verbatim.
+
+**Root cause #2 — fragile state serialization.** The launch script built its
+initial `running` state via `printf '%s' <json-template> | sed`, interpolating the
+raw command into a JSON string. Replaced it with a Python `json.dumps` writer that
+reads the dynamic fields (command, cwd, ids) from the **environment** (safely
+shell-quoted assignments) — the completion path already used Python+argv, so this
+just makes the initial write equally robust. No more template surgery on
+attacker-/user-controlled strings.
+
+**Root cause #3 — tests spawned real detached OS processes.** Three runtimes in
+the suite (`operator-runtime`, `server` breaker/drift, `app`) ran *real*
+`child_process.spawn`, whose async writes raced the tests' own `writeState`/teardown
+(intermittent `ENOTEMPTY`, miscounted breaker failures, `control=active→degraded`).
+The spawner seam already existed on `StandaloneOperatorRuntime`
+(`backgroundTaskSpawnProcess`); the tests just never used it. Injected fake
+spawners, and **added the same seam to `OperatorCliApp`** (`OperatorCliAppOptions.
+backgroundTaskSpawnProcess` / `backgroundTaskIsProcessRunning`, forwarded to the
+runtime) so app-level tests — and real callers who want to control spawning — can
+inject one.
+
+**Test results:** `npm test` now **175/175 passing, green 6×/6 consecutive runs**
+(was 4 flaky failures). `npm run build` ✅. `typecheck:src` ✅ exit 0. Full `tsc`
+unchanged at **125** (all test-file, pre-existing). +1 new test (174→175).
+
+**New idea (logged to ROADMAP):** A **flake sentinel** — have the engine run the
+suite N× (e.g. 3×) as part of its pre-push self-check, not just once, so
+nondeterministic failures like these are caught the same run they're introduced
+instead of surfacing an hour later as a red gate. Cheap insurance: the whole suite
+runs in <5s.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

@@ -734,27 +734,25 @@ function renderLaunchScript(task: BackgroundTaskRecord): string {
   const quotedOutputFile = shellQuote(task.execution.outputFile);
   const quotedCwd = shellQuote(task.cwd);
   const quotedCommand = shellQuote(task.command);
-  const quotedStatePayload = shellQuote(
-    JSON.stringify({
-      version: 1,
-      taskId: task.id,
-      kind: task.kind,
-      status: "running",
-      pid: "$$",
-      startedAt: "__OPENCLAW_STARTED_AT__",
-      updatedAt: "__OPENCLAW_STARTED_AT__",
-      outputFile: task.execution.outputFile,
-      cwd: task.cwd,
-      command: task.command,
-    }),
-  );
 
+  // Dynamic, attacker-/user-controlled strings (the command, cwd, ids) are
+  // passed to Python through the environment and serialized with json.dumps
+  // rather than interpolated into a JSON template via printf|sed. The old
+  // template approach corrupted state.json whenever the command contained
+  // quotes, newlines, or `$`, leaving an unparseable file that broke recovery.
   return [
     "#!/usr/bin/env bash",
     "set -euo pipefail",
     `mkdir -p $(dirname ${quotedStatePath}) $(dirname ${quotedOutputFile})`,
     "started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-    `printf '%s' ${quotedStatePayload} | sed "s/__OPENCLAW_STARTED_AT__/$started_at/g; s/\"\$\$\"/$$/g" > ${quotedStatePath}`,
+    `export OPENCLAW_TASK_ID=${shellQuote(task.id)}`,
+    `export OPENCLAW_TASK_KIND=${shellQuote(task.kind)}`,
+    `export OPENCLAW_OUTPUT_FILE=${shellQuote(task.execution.outputFile)}`,
+    `export OPENCLAW_TASK_CWD=${quotedCwd}`,
+    `export OPENCLAW_COMMAND=${quotedCommand}`,
+    `python3 - ${quotedStatePath} $$ "$started_at" <<'PY'`,
+    ...renderRunningStateWriterPython(),
+    "PY",
     `printf '%s\n' "starting ${task.kind} ${task.id}" >> ${quotedOutputFile}`,
     `if cd ${quotedCwd} && bash -lc ${quotedCommand} >> ${quotedOutputFile} 2>&1; then`,
     "  completed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
@@ -771,6 +769,31 @@ function renderLaunchScript(task: BackgroundTaskRecord): string {
     "fi",
     "",
   ].join("\n");
+}
+
+function renderRunningStateWriterPython(): string[] {
+  return [
+    "import json",
+    "import os",
+    "import pathlib",
+    "import sys",
+    "state_path = pathlib.Path(sys.argv[1])",
+    "pid = int(sys.argv[2])",
+    "timestamp = sys.argv[3]",
+    "state = {",
+    "    'version': 1,",
+    "    'taskId': os.environ['OPENCLAW_TASK_ID'],",
+    "    'kind': os.environ['OPENCLAW_TASK_KIND'],",
+    "    'status': 'running',",
+    "    'pid': pid,",
+    "    'startedAt': timestamp,",
+    "    'updatedAt': timestamp,",
+    "    'outputFile': os.environ['OPENCLAW_OUTPUT_FILE'],",
+    "    'cwd': os.environ['OPENCLAW_TASK_CWD'],",
+    "    'command': os.environ['OPENCLAW_COMMAND'],",
+    "}",
+    "state_path.write_text(json.dumps(state, indent=2) + '\\n')",
+  ];
 }
 
 function renderStateWriterPython(status: BackgroundTaskExecutionState["status"]): string[] {
@@ -794,5 +817,10 @@ function renderStateWriterPython(status: BackgroundTaskExecutionState["status"])
 }
 
 function shellQuote(value: string): string {
-  return `'${value.replaceAll(`'`, `"'"'"'`)}'`;
+  // POSIX single-quote escaping: a literal ' is written by closing the quote,
+  // emitting a backslash-free '"'"' sequence, and reopening. The previous
+  // replacement had a stray leading double-quote ("'"'"' — six chars) which
+  // injected a spurious " into every single-quoted command, corrupting both the
+  // launched command and the persisted state file.
+  return `'${value.replaceAll(`'`, `'"'"'`)}'`;
 }

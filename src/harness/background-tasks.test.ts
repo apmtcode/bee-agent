@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -369,5 +370,33 @@ describe("BackgroundTaskExecutionService", () => {
     await expect(fs.readFile(path.join(rootDir, task.execution.launchScript), "utf8")).resolves.toContain("bash -lc");
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
+  });
+
+  it("writes a parseable running state for commands with quotes, newlines, and $", async () => {
+    const rootDir = await makeTempDir();
+    // A command laced with the characters that broke the old printf|sed JSON
+    // template: single + double quotes, an embedded newline, and a $ sigil.
+    const command = `printf '%s' "it's a \\"test\\"\nwith $HOME"`;
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"), () => ({
+      pid: 2222,
+      unref() {},
+    }));
+    const task = await store.start({ title: "Tricky", command, cwd: rootDir, kind: "task" });
+    const service = new BackgroundTaskExecutionService(rootDir);
+
+    // Run the generated launch script to completion and assert the state file
+    // it produced is valid JSON that round-trips the original command verbatim.
+    const launchScriptPath = path.join(rootDir, task.execution.launchScript);
+    await new Promise<void>((resolve, reject) => {
+      const child = spawn("bash", [launchScriptPath], { cwd: rootDir, stdio: "ignore" });
+      child.on("error", reject);
+      child.on("exit", () => resolve());
+    });
+
+    const state = await service.readState(task);
+    expect(state).toBeDefined();
+    expect(state?.command).toBe(command);
+    expect(state?.taskId).toBe(task.id);
+    expect(state?.status).toBe("completed");
   });
 });

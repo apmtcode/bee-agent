@@ -530,6 +530,11 @@ describe("StandaloneOperatorRuntime", () => {
   it("starts, syncs, recovers, lists, and cancels background tasks", async () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
+      // Inject a fake spawner so the test never launches real detached OS
+      // processes. Real spawns wrote state/output files asynchronously into the
+      // temp dirs, racing this test's own writeState/writeOutput calls (and the
+      // runner's teardown) — the source of intermittent ENOTEMPTY/parse errors.
+      backgroundTaskSpawnProcess: () => ({ pid: 4321, unref() {} }),
       backgroundTaskIsProcessRunning: () => false,
     });
     const session = await runtime.startSession({ title: "Tasks", agentId: "main" });

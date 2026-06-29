@@ -4,6 +4,15 @@ Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
 ## Foundations / DX
+- [x] **Restore a green, deterministic test suite** (2026-06-29, run 9). Fixed a
+      real `shellQuote` POSIX-escape bug (stray `"` corrupting every
+      single-quoted background command + its `state.json`), hardened the launch
+      script's initial state write (Python `json.dumps` via env vars instead of
+      `printf|sed`), and stopped three tests from spawning real OS processes by
+      injecting the existing `backgroundTaskSpawnProcess` seam (also added that
+      seam to `OperatorCliApp`). 175/175 green 6×.
+- [ ] **Flake sentinel:** have the engine run the suite N× (≥3) in its pre-push
+      self-check so nondeterministic failures are caught the run they appear.
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`
