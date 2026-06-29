@@ -6,6 +6,58 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-06-29 (run 9) — 🐛 Fixed flaky suite: corrupt background-task state + spawn races
+
+**Audited:** The build/test gate itself. `npm test` was **non-deterministically
+failing** — the failure count varied run-to-run (2, 3, then 4 failing of 174),
+across `operator-runtime.test.ts`, `server.test.ts`, and `app.test.ts`. The prior
+run logged 174/174, so this was a real, newly-surfacing reliability regression
+that silently undermines step 5's verification gate.
+
+**Root causes (two, compounding):**
+1. **Corrupt state JSON (`src/harness/background-tasks.ts`).** The background-task
+   launch script builds the initial `state.json` in shell. Two bugs corrupted it
+   whenever a command contained single quotes or newlines (e.g. the test's
+   `printf 'line-1\nline-2\n'`):
+   - `shellQuote` used the wrong single-quote escape — `"'"'"'` (starts with `"`,
+     doesn't close the surrounding quote) instead of the correct POSIX `'"'"'`.
+     The *training* runner's `shellQuote` already had the correct form; this one
+     was a typo. Result: unparseable JSON → `SyntaxError` in `readJsonFile` →
+     recovery rejected.
+   - The initial state was written via `printf … | sed "s/\"\$\$\"/$$/g"`, but
+     bash expands `$$` inside the double-quoted sed pattern too, so the pid
+     placeholder was never replaced (left as the literal string `"$$"`).
+   **Fix:** corrected `shellQuote`; replaced the brittle `sed` with a `python3`
+   heredoc (`renderInitialStateWriterPython`) that loads the JSON and sets a real
+   integer `pid` + timestamps — mirroring the existing completed/failed writers.
+2. **Detached-spawn races (test hermeticity).** Tests start background tasks and
+   then drive execution state directly via `writeState`, but the default spawn
+   launched a *real detached* `bash` that wrote the same `state.json`
+   concurrently — a race that clobbered (or was clobbered by) the test's state.
+   **Fix:** added an inert dry-run spawn mode gated on
+   `OPENCLAW_BACKGROUND_SPAWN=inert` (`defaultSpawnBackgroundProcess`): no real
+   process, a synthetic pid tracked as "alive" until `stop()` clears it (so a
+   freshly-launched task deterministically reads as running). A new
+   `vitest.setup.ts` enables it suite-wide. Production (flag unset) is unchanged.
+
+**New test:** `src/harness/background-tasks.launch.test.ts` — executes the *real*
+rendered launch script with bash for a quote+newline command and asserts the
+resulting `state.json` is valid JSON, status `completed`, integer `pid`, and the
+command round-trips exactly. Verified it **fails** against the old buggy
+`shellQuote` (has teeth).
+
+**Test results:** **175/175 passing, deterministic across 5 consecutive full
+runs** (was 170–172/174, flaky). Build ✅. `typecheck:src` ✅ (exit 0). Full
+`typecheck` unchanged at **125** (all in pre-existing test files; new test file
+is clean).
+
+**New idea:** add a tiny **CI/engine flake-guard** — run `vitest run --retry=0`
+twice (or `--repeat`) in the pre-push self-check and fail if results differ
+between passes, so non-determinism is caught the run it's introduced rather than
+silently logged as green. Pairs well with the queued `verify` script.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

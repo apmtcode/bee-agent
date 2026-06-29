@@ -6,6 +6,17 @@ unchecked items are queued. Keep this richer than you found it each run.
 ## Foundations / DX
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
+- [x] **De-flake the test suite** (2026-06-29, run 9). Fixed two compounding
+      causes of non-deterministic failures: (a) corrupt background-task
+      `state.json` from a `shellQuote` typo + a `sed`-based pid substitution
+      (`src/harness/background-tasks.ts`), and (b) detached real-`spawn` races vs.
+      tests that drive state directly — added an inert spawn mode
+      (`OPENCLAW_BACKGROUND_SPAWN=inert`) enabled via `vitest.setup.ts`. Suite is
+      now 175/175 deterministic across repeated runs. Regression test:
+      `background-tasks.launch.test.ts`.
+- [ ] **Flake-guard in the pre-push self-check**: run the suite twice (or
+      `vitest --repeat`) and fail if pass-sets differ, so non-determinism is
+      caught the run it lands, not after it silently corrupts the green gate.
 - [x] Make config loading hermetic in tests via an injectable `configHome`
       (2026-06-22).
 - [ ] **Pay down typecheck debt** (surfaced by the `typecheck` script). Full

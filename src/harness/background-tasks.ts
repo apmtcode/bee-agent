@@ -133,7 +133,43 @@ function nowIso(): string {
   return new Date().toISOString();
 }
 
+let inertSpawnCounter = 0;
+const INERT_PID_BASE = -1_000_000;
+const inertAlivePids = new Set<number>();
+
+function isInertSpawnEnabled(): boolean {
+  return process.env.OPENCLAW_BACKGROUND_SPAWN === "inert";
+}
+
+/**
+ * Default spawn for background tasks.
+ *
+ * When `OPENCLAW_BACKGROUND_SPAWN=inert` is set, no real OS process is created:
+ * a handle with a synthetic pid is returned instead, and that pid is tracked as
+ * "alive" so the task reads as running until it is explicitly stopped. This is a
+ * deliberate dry-run mode for sandboxed/CI environments (and the test suite)
+ * where launching detached child processes is undesirable or would race with
+ * code that drives task state directly. Production runs leave the flag unset and
+ * get a real detached `spawn`.
+ */
+function defaultSpawnBackgroundProcess(
+  command: string,
+  args: string[],
+  options: { cwd: string; env: NodeJS.ProcessEnv; stdio: "ignore"; detached: true },
+): { pid?: number; unref(): void } {
+  if (isInertSpawnEnabled()) {
+    inertSpawnCounter += 1;
+    const pid = INERT_PID_BASE - inertSpawnCounter;
+    inertAlivePids.add(pid);
+    return { pid, unref() {} };
+  }
+  return spawn(command, args, options);
+}
+
 function defaultIsProcessRunning(pid: number): boolean {
+  if (isInertSpawnEnabled() && inertAlivePids.has(pid)) {
+    return true;
+  }
   if (!Number.isFinite(pid) || pid <= 0) {
     return false;
   }
@@ -155,7 +191,7 @@ function defaultIsProcessRunning(pid: number): boolean {
 export class BackgroundTaskExecutionService {
   constructor(
     private readonly rootDir: string,
-    private readonly spawnProcess: SpawnBackgroundProcess = (command, args, options) => spawn(command, args, options),
+    private readonly spawnProcess: SpawnBackgroundProcess = defaultSpawnBackgroundProcess,
     private readonly isProcessRunningImpl: IsProcessRunning = defaultIsProcessRunning,
   ) {}
 
@@ -198,11 +234,14 @@ export class BackgroundTaskExecutionService {
       throw new Error(`Background task ${task.id} is not running`);
     }
     const signal = params.signal ?? "SIGTERM";
-    try {
-      process.kill(process.platform === "win32" ? pid : -pid, signal);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ESRCH") {
-        throw error;
+    // Synthetic (inert) process: nothing to signal; just mark it stopped.
+    if (!inertAlivePids.delete(pid)) {
+      try {
+        process.kill(process.platform === "win32" ? pid : -pid, signal);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ESRCH") {
+          throw error;
+        }
       }
     }
     const timestamp = nowIso();
@@ -754,7 +793,10 @@ function renderLaunchScript(task: BackgroundTaskRecord): string {
     "set -euo pipefail",
     `mkdir -p $(dirname ${quotedStatePath}) $(dirname ${quotedOutputFile})`,
     "started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-    `printf '%s' ${quotedStatePayload} | sed "s/__OPENCLAW_STARTED_AT__/$started_at/g; s/\"\$\$\"/$$/g" > ${quotedStatePath}`,
+    `printf '%s' ${quotedStatePayload} > ${quotedStatePath}`,
+    `python3 - ${quotedStatePath} $$ "$started_at" <<'PY'`,
+    ...renderInitialStateWriterPython(),
+    "PY",
     `printf '%s\n' "starting ${task.kind} ${task.id}" >> ${quotedOutputFile}`,
     `if cd ${quotedCwd} && bash -lc ${quotedCommand} >> ${quotedOutputFile} 2>&1; then`,
     "  completed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
@@ -771,6 +813,22 @@ function renderLaunchScript(task: BackgroundTaskRecord): string {
     "fi",
     "",
   ].join("\n");
+}
+
+function renderInitialStateWriterPython(): string[] {
+  return [
+    "import json",
+    "import pathlib",
+    "import sys",
+    "state_path = pathlib.Path(sys.argv[1])",
+    "pid = int(sys.argv[2])",
+    "timestamp = sys.argv[3]",
+    "state = json.loads(state_path.read_text())",
+    "state['pid'] = pid",
+    "state['startedAt'] = timestamp",
+    "state['updatedAt'] = timestamp",
+    "state_path.write_text(json.dumps(state, indent=2) + '\\n')",
+  ];
 }
 
 function renderStateWriterPython(status: BackgroundTaskExecutionState["status"]): string[] {
@@ -794,5 +852,5 @@ function renderStateWriterPython(status: BackgroundTaskExecutionState["status"])
 }
 
 function shellQuote(value: string): string {
-  return `'${value.replaceAll(`'`, `"'"'"'`)}'`;
+  return `'${value.replaceAll(`'`, `'"'"'`)}'`;
 }
