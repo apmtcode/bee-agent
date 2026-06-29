@@ -423,6 +423,28 @@ export type {
   SftTrainingConfig,
 } from "./training/job-manifest.js";
 export {
+  NearestNeighborMovementBackend,
+  deriveMovementDataset,
+  deriveMovementExamples,
+  evaluateMovementModel,
+  jaccard,
+  replayTrajectory,
+  tokenizeContext,
+  trainMovementModel,
+} from "./training/movement-model.js";
+export type {
+  DeriveMovementExamplesOptions,
+  MovementAction,
+  MovementContext,
+  MovementEvaluation,
+  MovementModelBackend,
+  MovementPrediction,
+  MovementPredictionSource,
+  MovementReplayStep,
+  MovementTrainingExample,
+  TrainedMovementModel,
+} from "./training/movement-model.js";
+export {
   FileTrainingJobStore,
 } from "./training/job-store.js";
 export type {

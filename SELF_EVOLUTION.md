@@ -6,6 +6,65 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-06-29 (run 9) — 🎯 Movement-learning closes the loop: pluggable in-process model that repeats + generalizes recorded movements
+
+**Audited:** The local-movement learning subsystem (standing objective #2) end to
+end — `src/capture/` (trajectory schema, replay manifest) and `src/training/`
+(exporter → dataset, runner, execution-service, job-store). Found the pipeline
+went **capture → dataset → external launch script** (MLX/axolotl shelled out by
+`runner.ts`) but had **no in-process model at all**: nothing in the cloud/CI could
+actually *learn* to repeat a recorded movement (objective 2c) or *generalize* to a
+new-but-related one (objective 2d), and the model backend was hard-wired to two
+external Python runtimes with no pluggable seam or deterministic mock.
+
+**Changed (additive — one new module + tests):** `src/training/movement-model.ts`.
+- **Pluggable backend interface** `MovementModelBackend` + `TrainedMovementModel`
+  so a real on-device small model (e.g. an MLX-trained policy) can be swapped in
+  without touching call sites — the existing `runner.ts` external-launch path is
+  the production seam; this is the in-process seam.
+- **Default backend** `NearestNeighborMovementBackend`: a fully deterministic,
+  dependency-free instance-based learner. Tokenizes each decision context
+  (observations + prior actions) into a namespaced bag of features, scores
+  candidates by Jaccard similarity, and classifies its own output:
+  identical context → `recall` (exact replay, objective 2c); partial overlap →
+  `generalize` (nearest recorded movement, objective 2d); no overlap → `fallback`
+  (most-frequent recorded action); untrained → `none`. Deterministic tie-breaks
+  (frequency, then insertion order) so identical datasets yield identical models.
+- **Dataset derivation** `deriveMovementExamples`/`deriveMovementDataset`: walks a
+  trajectory in time order and emits one (context → next action) example per
+  recorded action, with configurable observation/action windows and an
+  `approvedOnly` filter that respects the review gate.
+- **Replay** `replayTrajectory` (repeat a recorded movement through the model) and
+  **generalization eval harness** `evaluateMovementModel` (exact + tool-only
+  accuracy, mean confidence, per-source breakdown on held-out examples).
+- Exported the full surface from `src/index.ts`.
+
+**Test results:** new `movement-model.test.ts` ✅ **12/12** — covers exact recall,
+generalization to paraphrased contexts, fallback, untrained, determinism, windows,
+approved-only filtering, and held-out eval. `typecheck:src` ✅ (exit 0). Build ✅.
+Full suite: my module is green; **186 tests, 12 new all pass.**
+
+**⚠️ Discovered (pre-existing, NOT introduced this run):** 3 tests are **flaky
+under the full parallel suite** but pass in isolation —
+`background-tasks`-recovery assertions in `operator-runtime.test.ts:605`,
+`server.test.ts:719`, `app.test.ts:906`. Root cause: `defaultIsProcessRunning`
+(`src/harness/background-tasks.ts:136`) calls `process.kill(-pid, 0)` against a
+**test-fabricated PID**; under parallel vitest workers that PID's process *group*
+sometimes really exists, so recovery returns `state-running` instead of
+`missing-process`. Verified present on a clean `git stash` of my changes (3 fail
+clean / 0 from me). Logged a fix to ROADMAP (inject a deterministic
+`isProcessRunning` into those tests / thread it through the runtime).
+
+**New idea:** add an **environment-model rollout** alongside replay — pair the
+movement policy with a tiny learned "what observation follows this action" model
+(same instance-based trick over (action → next observation) pairs) so the two can
+be chained into a *closed-loop simulated rollout* with no real OS. That turns the
+generalization eval from single-step accuracy into multi-step trajectory fidelity,
+which is the real measure of "can repeat the whole movement," and gives the future
+on-device model a cloud-runnable regression target.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

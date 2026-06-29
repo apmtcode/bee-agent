@@ -59,16 +59,39 @@ unchecked items are queued. Keep this richer than you found it each run.
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
 (exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
-      objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
-      deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+- [x] Inventory what `src/capture` + `src/training` already implement vs. the
+      objective's five pieces (run 9). Gap found: capture→dataset→external-launch
+      existed, but **no in-process model** (no learn/repeat/generalize) and no
+      pluggable backend seam. Closed by `src/training/movement-model.ts`.
+- [x] Pluggable local-model backend interface with a deterministic mock backend
+      (run 9). `MovementModelBackend`/`TrainedMovementModel` +
+      `NearestNeighborMovementBackend` (deterministic, dependency-free). Real
+      on-device model is a drop-in implementation; `runner.ts` remains the
+      external-runtime launch seam.
+- [x] Generalization eval harness (run 9). `evaluateMovementModel` scores
+      exact + tool-only accuracy, mean confidence, and per-source breakdown on
+      held-out examples; `replayTrajectory` repeats a recorded movement.
+- [ ] Closed-loop simulated rollout: pair the movement policy with a tiny
+      (action → next observation) environment model (same instance-based trick)
+      so trajectories can be rolled out multi-step with no real OS, upgrading the
+      eval from single-step accuracy to whole-movement fidelity.
+- [ ] Synthetic event-stream *generator* utility (procedural trajectory factory
+      with controllable paraphrase/noise) to mass-produce capture→dataset→replay
+      round-trip and generalization fixtures — currently hand-built in tests.
+- [ ] Wire the movement model into the control-plane RPC surface
+      (`trajectories.*`/`replays.*` families) so a local run can train + query it.
+
+## Reliability
+- [ ] **Fix flaky background-task recovery tests** (discovered run 9). 3 tests
+      pass in isolation but fail under the full parallel suite:
+      `operator-runtime.test.ts:605`, `server.test.ts:719`, `app.test.ts:906`.
+      Root cause: `defaultIsProcessRunning` (`background-tasks.ts:136`) does
+      `process.kill(-pid, 0)` against a test-fabricated PID, which under parallel
+      vitest workers collides with a real process group → recovery reports
+      `state-running` instead of `missing-process`. Fix: inject a deterministic
+      `isProcessRunning` into those tests (the store already accepts one via its
+      constructor; thread it through `StandaloneOperatorRuntime` for the
+      operator-runtime/server/app paths). Additive, unblocks a green full suite.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
