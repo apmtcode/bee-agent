@@ -1,7 +1,11 @@
+import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
+
+const execFileAsync = promisify(execFile);
 import {
   BackgroundTaskExecutionService,
   FileBackgroundTaskStore,
@@ -107,6 +111,50 @@ describe("FileBackgroundTaskStore", () => {
       status: "completed",
       execution: { exitCode: 0 },
     });
+  });
+
+  it("generates a launch script that writes valid state JSON for single-quoted commands", async () => {
+    const rootDir = await makeTempDir();
+    const filePath = path.join(rootDir, "background-tasks.json");
+    // Mock spawn so start() only renders the launch script without launching it;
+    // we then execute the rendered script with real bash to exercise the
+    // printf | sed state-writing path (POSIX single-quote escaping + the
+    // numeric-PID placeholder substitution).
+    const store = new FileBackgroundTaskStore(filePath, () => ({ pid: 4242, unref() {} }), () => true);
+
+    // Command embeds single quotes (regression: a broken shell escape mangled
+    // them and corrupted the state JSON) and snapshots the *running* state file
+    // (written before completion) so we can assert the PID was substituted to a
+    // JSON number rather than left as the literal string "$$".
+    const command = "printf 'has '\\''quotes'\\'' inside' && cp background-tasks/*/state.json snapshot.json";
+    const task = await store.start({
+      title: "Quoted command",
+      command,
+      cwd: rootDir,
+      kind: "task",
+    });
+
+    await execFileAsync("bash", [path.join(rootDir, task.execution.launchScript)], { cwd: rootDir });
+
+    // The running-state snapshot must be valid JSON with a numeric PID and the
+    // command preserved byte-for-byte.
+    const snapshot = JSON.parse(await fs.readFile(path.join(rootDir, "snapshot.json"), "utf8")) as {
+      pid: unknown;
+      status: string;
+      command: string;
+    };
+    expect(typeof snapshot.pid).toBe("number");
+    expect(snapshot.status).toBe("running");
+    expect(snapshot.command).toBe(command);
+
+    // After the command exits, the completion writer rewrites a valid terminal
+    // state with exitCode 0.
+    const finalState = JSON.parse(
+      await fs.readFile(path.join(rootDir, task.execution.stateFile), "utf8"),
+    ) as BackgroundTaskExecutionState;
+    expect(finalState.status).toBe("completed");
+    expect(finalState.exitCode).toBe(0);
+    expect(finalState.command).toBe(command);
   });
 
   it("cancels running tasks and records cancelled state", async () => {

@@ -6,6 +6,58 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-06-29 (run 9) — 🐞 Two latent shell bugs in background-task/training launch scripts (suite was red 171/174 → green 175/175)
+
+**Audited:** Started the run by actually running the suite (procedure step 5) and
+found **3 pre-existing failures** (171/174) that the run-8 log recorded as green —
+nondeterministic: they only surface on a machine where the detached launch
+process wins a race against the tests' own `writeState()` calls. All three threw
+`SyntaxError: ... JSON at position 311` from `readJsonFile`. Traced through the
+generated bash launch script (`renderLaunchScript` in
+`src/harness/background-tasks.ts`) by instrumenting `readJsonFile` and dumping the
+malformed state file.
+
+**Two genuine product bugs found & fixed (both reproduced in isolation in bash):**
+1. **`shellQuote` used the wrong POSIX single-quote escape.** It mapped `'` →
+   `"'"'"'` (starts with `"`); the correct sequence is `'"'"'` (starts with the
+   closing `'`). Any background-task **command or cwd containing a single quote**
+   (e.g. `printf 'line-1\nline-2\n'`) produced a corrupt, unparseable state JSON
+   file. Fixed to `'"'"'` (matching the already-correct copy in
+   `src/training/runner.ts`).
+2. **The PID placeholder was never substituted.** The payload carried
+   `pid: "$$"` and the writer ran `sed "s/\"\$\$\"/$$/g"` — but inside bash's
+   double quotes `$$` expands in *both* the pattern and the replacement, so the
+   pattern became `s/<pid>/<pid>/g` (a no-op) and `"pid"` stayed the literal
+   string `"$$"` instead of a JSON number. Replaced with a non-`$` placeholder
+   (`"__OPENCLAW_PID__"`) and `sed "...; s/\\"__OPENCLAW_PID__\\"/$$/g"` so only
+   the replacement expands → `"pid": 12345`. Applied the identical fix to
+   `src/training/runner.ts`, which had the same defect.
+
+**Tests:**
+- Fixed the 3 flaky tests' *root cause too*: the integration suites
+  (`operator-runtime.test.ts`, `control-plane/server.test.ts`) used the **real**
+  `spawn`, so a detached process raced their manual `writeState()` calls. Injected
+  the existing `backgroundTaskSpawnProcess` seam with a no-op
+  `() => ({ pid, unref })` (the pattern the passing unit tests already use) at all
+  4 runtime constructions — deterministic now (verified 3× each).
+- **New regression test** in `background-tasks.test.ts` that renders the launch
+  script and **executes it with real bash**, asserting the running-state snapshot
+  is valid JSON with a **numeric** pid and a single-quoted command preserved
+  byte-for-byte, plus a valid `completed` terminal state. Confirmed it FAILS when
+  either fix is reverted (`expected 'string' to be 'number'`).
+
+**Results:** `npm test` **175/175** (was 171/174), `npm run build` ✅,
+`npm run typecheck:src` ✅ (exit 0). Pure bug-fix + determinism diff.
+
+**New idea:** the launch-script generators in `background-tasks.ts` and
+`runner.ts` are near-duplicates (same `shellQuote`, same printf|sed state writer,
+same python completion writer) — and this run fixed the *same* bug in both. Factor
+the shared bits into one `src/harness/shell-script.ts` helper
+(`shellQuote`, `renderStateWriter`) with its own unit test, so a fix can't land in
+one copy and miss the other. Logged to ROADMAP.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

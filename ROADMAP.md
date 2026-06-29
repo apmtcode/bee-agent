@@ -70,6 +70,22 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Generalization eval harness: measure replay fidelity on held-out but
       related synthetic trajectories.
 
+## Reliability / correctness
+- [x] **Background-task / training launch-script shell bugs** (run 9, 2026-06-29):
+      `shellQuote` used a malformed POSIX single-quote escape (`"'"'"'` instead of
+      `'"'"'`) that corrupted state JSON for any command/cwd containing a single
+      quote; and the PID placeholder `pid:"$$"` was never substituted because
+      `sed "s/\"\$\$\"/$$/g"` expands `$$` in the pattern too. Fixed both in
+      `src/harness/background-tasks.ts` + `src/training/runner.ts`; added a bash
+      end-to-end regression test. Made the 3 affected integration tests
+      deterministic via the `backgroundTaskSpawnProcess` mock seam.
+- [ ] **Dedup the two launch-script generators.** `background-tasks.ts` and
+      `training/runner.ts` carry near-identical `shellQuote` + printf|sed state
+      writer + python completion writer; the run-9 bug existed in BOTH copies.
+      Extract a shared `src/harness/shell-script.ts` (`shellQuote`,
+      `renderRunningStateWriter`, `renderStateWriterPython`) with unit tests so a
+      fix can't miss a copy.
+
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in
