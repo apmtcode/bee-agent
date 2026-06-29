@@ -6,6 +6,63 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-06-29 (run 9) — 🐛 Fix two real launch-script bugs (corrupt `state.json`) + de-flake background-task integration tests
+
+**Audited:** The actual build/test baseline in *this* cloud environment — not the
+log's claim. `npm test` was **171/174 with 3 FAILING** (the run-8 "174/174"
+held only where the real launch process happened to be slow enough to mask the
+bugs). The 3 failures (`app.test.ts`, `server.test.ts`,
+`operator-runtime.test.ts`) all traced into the background-task launch script in
+`src/harness/background-tasks.ts`, surfacing as `SyntaxError: Expected ',' or '}'`
+when recovery read a task's `state.json`.
+
+**Two genuine production bugs found & fixed** (both in the launch script the
+store writes for every background task):
+1. **`shellQuote` corrupted any command containing single quotes.** It escaped an
+   embedded `'` as `"'"'"'` (a stray *leading* `"`); the correct POSIX escape is
+   `'"'"'`. The stray `"` was injected as a literal, so a command like
+   `printf 'line-1\nline-2\n'` produced *invalid JSON* in `state.json`
+   (`"command":"printf "'line-1…"'"`). Reproduced byte-for-byte, fixed, and noted
+   that `src/training/runner.ts` already had the correct form — this was a
+   one-off divergence.
+2. **`pid` was never the real PID — it stayed the literal string `"$$"`.** The
+   running-state writer did `printf '%s' <json-with-"$$"-placeholder> | sed
+   "…s/\"\$\$\"/$$/g"`. In a JS template literal `\"`→`"` and `\$`→`$`, so the
+   emitted bash lost its escaping: the inner quotes closed bash's `"…"` and `$$`
+   collapsed to a no-op `s/<pid>/<pid>/`. Replaced the fragile `printf | sed`
+   with a small `python3` writer (mirroring the already-robust terminal-state
+   writer) that sets `pid`/`startedAt` from argv — eliminating the whole class of
+   double-escaping bug. Payload `pid` is now a real `0` placeholder (matches the
+   `number` field type) instead of the type-violating `"$$"`.
+
+**De-flaked the 3 integration tests (root cause: real process spawning).** They
+constructed runtimes/app with the *default* `spawn`, so they launched real
+`tail -f`/`sleep 5`/`printf` processes — which hang (`tail -f` never exits) or
+race the tests' manual `writeState`. Injected the deterministic no-op spawn the
+unit tests already use (`() => ({ pid, unref })`). To thread this through the CLI,
+added `backgroundTaskSpawnProcess` / `backgroundTaskIsProcessRunning` to
+`OperatorCliAppOptions` (additive; production default unchanged) — a real DX/
+testability win. The watch test needs the task to stay "running", so it pairs the
+no-op spawn with `isProcessRunning: () => true` (the deterministic equivalent of
+the slow real launch process that was keeping it alive by luck before).
+
+**New regression test** (`background-tasks.test.ts`): actually *executes* the
+rendered launch script via `bash` and asserts `state.json` is valid JSON with the
+command preserved, `pid` numeric, and terminal status `completed`/exit 0 — the
+gap that let both bugs ship (every prior test mocked `spawn`, so the script never
+ran).
+
+**Test results:** `npm test` **171/174 → 175/175** (+1 new regression test).
+Build ✅. `typecheck:src` ✅ (source-clean milestone preserved, exit 0).
+
+**New idea:** the engine's per-run self-check log claimed green while the suite
+was red here — the gap is that no run actually *executed* the shell artifacts the
+code generates. Add a tiny "artifact execution" smoke layer: for every codegen
+path (launch script, training launch command, cron tick script) render it and run
+it once under `bash`/`python3` against a temp dir in CI, asserting the side
+effects parse. Codegen bugs that only bite at runtime (quoting, escaping, heredoc
+nesting) are exactly the ones unit tests with mocked spawn cannot catch.
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

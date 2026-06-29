@@ -1,7 +1,11 @@
+import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
+
+const execFileAsync = promisify(execFile);
 import {
   BackgroundTaskExecutionService,
   FileBackgroundTaskStore,
@@ -369,5 +373,31 @@ describe("BackgroundTaskExecutionService", () => {
     await expect(fs.readFile(path.join(rootDir, task.execution.launchScript), "utf8")).resolves.toContain("bash -lc");
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
+  });
+
+  it("renders a launch script that writes valid JSON state for quoted commands", async () => {
+    // Regression: shellQuote escaped embedded single quotes as "'"'"' (a stray
+    // leading double quote), so a command containing single quotes corrupted the
+    // state.json the launch script writes — yielding unparseable JSON on recovery.
+    const rootDir = await makeTempDir();
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"), () => ({ pid: 2222, unref() {} }));
+    const task = await store.start({
+      title: "Quoted command",
+      command: "printf 'line-1\nline-2\n'",
+      cwd: rootDir,
+    });
+
+    // Execute the rendered script exactly as the store would spawn it (cwd = rootDir).
+    const scriptPath = path.join(rootDir, task.execution.launchScript);
+    await execFileAsync("bash", [scriptPath], { cwd: rootDir });
+
+    const statePath = path.join(rootDir, task.execution.stateFile);
+    const parsed = JSON.parse(await fs.readFile(statePath, "utf8")) as BackgroundTaskExecutionState;
+    expect(parsed.taskId).toBe(task.id);
+    expect(parsed.command).toBe("printf 'line-1\nline-2\n'");
+    expect(typeof parsed.pid).toBe("number");
+    // The command ran to completion, so the python writer recorded the terminal state.
+    expect(parsed.status).toBe("completed");
+    expect(parsed.exitCode).toBe(0);
   });
 });

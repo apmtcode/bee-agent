@@ -70,6 +70,26 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Generalization eval harness: measure replay fidelity on held-out but
       related synthetic trajectories.
 
+## Reliability / correctness (real bugs)
+- [x] **Launch-script `state.json` corruption** (run 9). Fixed `shellQuote`'s
+      single-quote escape (`"'"'"'` → `'"'"'`) and replaced the fragile
+      `printf | sed` running-state writer with a `python3` writer so `pid` is the
+      real PID, not the literal string `"$$"`. Both bugs corrupted every
+      background task whose command contained quotes.
+- [x] **De-flake background-task integration tests** (run 9): inject a no-op
+      spawn (added `backgroundTaskSpawnProcess`/`backgroundTaskIsProcessRunning`
+      to `OperatorCliAppOptions`) so tests never launch real `tail -f`/`sleep`
+      processes. 171/174 → 175/175.
+- [ ] **Artifact-execution smoke layer** (NEW, run 9): for every codegen path
+      (background launch script, training launch command, cron tick script),
+      render and actually run it once under `bash`/`python3` in a temp dir and
+      assert the side effects parse. Mocked-`spawn` unit tests cannot catch
+      quoting/escaping/heredoc bugs that only bite at real runtime — this is how
+      both run-9 bugs slipped through.
+- [ ] Audit the *other* `shellQuote`/command-codegen sites in `src/` (e.g.
+      `src/training/runner.ts`, any cron tick script) for the same double-escaping
+      and quoting hazards now that the pattern is understood.
+
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in
