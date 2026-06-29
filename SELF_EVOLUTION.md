@@ -6,6 +6,61 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-06-29 (run 9) — Movement-learning model: pluggable backend + deterministic Markov + synthetic generator + generalization eval
+
+**Audited:** Standing objective #2 (local-movement learning) against
+`src/capture` + `src/training`. Found the capture→schema→dataset→replay pieces
+exist, and `src/training` builds *external* on-device launch scripts
+(mlx/axolotl), but parts **(c) post-train a model to repeat movements** and
+**(d) generalize to related movements** had **no in-process, cloud-testable
+implementation** — the learning loop itself could not be validated without a
+real GPU/OS. That was the single biggest gap in the project's core objective.
+
+**Changed (all additive, new files):**
+- `src/training/movement-model.ts` — the movement-learning core:
+  - `MovementModelBackend` interface (pluggable seam; a real on-device small
+    model can implement the same surface and drop into the trainer unchanged).
+  - `MarkovMovementBackend` — a genuine **variable-order Markov model with
+    stupid-backoff**. Learns transition counts over *target-independent*
+    movement tokens (`device:tap`, `device:swipe:down`); fully deterministic
+    (ties broken by count then lexical order). Backoff to shorter contexts is
+    what yields generalization to unseen sequences.
+  - `MovementModelTrainer` — `train` / `generate` (greedy rollout = repeat or
+    generalize from a seed) / `evaluate` (next-token fidelity that *attributes*
+    each correct prediction to memorization vs generalization via its backoff).
+  - `tokenizeTrajectoryAction` + `buildMovementDataset` — turn real captured
+    `TrajectorySpan`s into a learnable dataset (production schema, not a fixture).
+- `src/training/synthetic-movements.ts` — deterministic synthetic capture
+  generator (mulberry32 PRNG + a small flow grammar: login/search/settings) so
+  the whole loop runs in the cloud with no real OS input.
+- Barrel exports added to `src/index.ts` (no collisions).
+- `src/training/movement-model.test.ts` — 13 tests: tokenization/ordering,
+  Markov counts + deterministic tie-break, **exact-context (memorization)**,
+  **backoff (generalization)**, unigram fallback, empty model, greedy replay
+  reproduction, and a full synthetic round-trip where a model trained on seed-1
+  flows scores **>0.6 next-token accuracy with proven generalized hits** on a
+  seed-999 held-out related set.
+
+**Test results:** `typecheck:src` ✅ (exit 0). Build ✅. New suite ✅ **13/13**.
+Full suite **183/187** — the **4 failures are PRE-EXISTING and unrelated**
+(confirmed by `git stash -u` → same 4 fail on the untouched tree; none import the
+new module). They are a JSON parse error in the background-task *state-file* path
+(`readJsonFile` → `BackgroundTaskExecutionService.readState`, "Expected ',' or
+'}' after property value … position 311") hit via `recoverBackgroundTasks`.
+Run 8 logged 174/174, so this regressed environmentally between runs — it points
+at a real atomicity/concurrency bug in `writeJsonAtomic`/`writeState` (likely a
+partial/torn write during recover), NOT a test bug. Left untouched to keep this
+diff focused; **flagged as the top priority for next run** (see ROADMAP).
+
+**New idea:** add a *behavioral-cloning fidelity* metric to the eval harness —
+beyond next-token accuracy, generate a full rollout from each held-out
+sequence's first step and score the longest-common-subsequence overlap against
+the ground-truth movement plan. That measures whether the model reproduces a
+*whole task* (the real objective), not just locally-correct next steps, and
+gives a single regression number to track as backends improve.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

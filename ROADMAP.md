@@ -4,6 +4,14 @@ Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
 ## Foundations / DX
+- [ ] **🔴 TOP PRIORITY (run 9 found): fix pre-existing background-task state
+      read failure.** 4 suite tests fail (operator-runtime, app ×2, server) with
+      a JSON parse error ("Expected ',' or '}' … position 311") in
+      `readJsonFile` ← `BackgroundTaskExecutionService.readState`, reached via
+      `recoverBackgroundTasks`. Present on the untouched tree (run 8 had 174/174,
+      so it regressed environmentally). Likely a torn/partial write in
+      `writeJsonAtomic`/`writeState` during recover — investigate atomicity and
+      add a regression test that reads state concurrently with a recover.
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`
@@ -62,13 +70,27 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
-      deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+- [x] Pluggable local-model backend interface for the training runner with a
+      deterministic backend (so cloud/CI tests pass) and a documented seam for a
+      real on-device small model — DONE run 9 (`MovementModelBackend` +
+      `MarkovMovementBackend` + `MovementModelTrainer` in
+      `src/training/movement-model.ts`).
+- [x] Synthetic event-stream generator to validate capture→dataset→replay
+      round-trips without real OS input — DONE run 9
+      (`src/training/synthetic-movements.ts`, deterministic mulberry32 PRNG).
+- [x] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories — DONE run 9 (`MovementModelTrainer.evaluate`
+      reports accuracy + memorization-vs-generalization attribution via backoff).
+- [ ] **Behavioral-cloning fidelity metric** (run 9 idea): extend the eval to
+      generate a *full rollout* from each held-out sequence's first step and
+      score LCS overlap vs the ground-truth plan — measures whole-task
+      reproduction, not just next-token accuracy. One regression number to track.
+- [ ] Wire the movement model into a real backend seam: a second
+      `MovementModelBackend` impl that loads/queries an on-device small model
+      (the documented seam now exists), guarded so cloud tests still use Markov.
+- [ ] Connect `buildMovementDataset` into the reviewed-export → training-job
+      pipeline so an exported manifest can be trained in-process (Markov) as a
+      fast pre-flight before the external mlx/axolotl launch.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
