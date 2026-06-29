@@ -400,6 +400,37 @@ export type {
   LocalTrainingRuntime,
   TrainingJobPlan,
 } from "./training/runner.js";
+export {
+  deserializeMovementPolicy,
+  movementTrajectoryFromReplay,
+  predictMovement,
+  replayMovement,
+  serializeMovementPolicy,
+  trainMovementPolicy,
+} from "./training/movement-policy.js";
+export type {
+  MovementAction,
+  MovementEvent,
+  MovementObservation,
+  MovementPolicy,
+  MovementPrediction,
+  MovementTrajectory,
+  PredictContext,
+  ReplayOptions,
+  TrainMovementPolicyOptions,
+} from "./training/movement-policy.js";
+export type {
+  TrainingBackend,
+  TrainingBackendKind,
+  TrainingBackendMetrics,
+  TrainingBackendRequest,
+  TrainingBackendResult,
+} from "./training/backend.js";
+export {
+  MockMovementTrainingBackend,
+  evaluateReplayFidelity,
+  movementDatasetFromExport,
+} from "./training/mock-backend.js";
 export type {
   ExportedMemoryReference,
   ExportedPromotedSkill,

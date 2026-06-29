@@ -6,6 +6,68 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-06-29 (run 9) — 🧠 Trainable local-movement model + pluggable backend; fixed background-task state JSON corruption
+
+**Audited:** Standing objective #2 (movement-learning subsystem). The capture →
+dataset → replay pieces existed in `src/capture`, and `src/training` could emit
+Apple-Silicon (mlx/axolotl) launch scripts — but there was **no model that
+actually learns from the recorded dataset**, nothing runnable/testable in the
+cloud, and the backend was hard-wired to `apple-silicon`. So pieces (c) *repeat
+recorded movements* and (d) *generalize to related movements* were unimplemented.
+
+**Changed (additive):**
+- **`src/training/movement-policy.ts`** — a deterministic, JSON-serializable
+  local movement model: order-k Markov over action tokens (START/END sentinels,
+  stupid-backoff interpolation) **plus** an observation→action cue table. APIs:
+  `trainMovementPolicy`, `predictMovement`, `replayMovement` (rolls out from a
+  seed observation, stops at the learned END marker), serialize/deserialize, and
+  `movementTrajectoryFromReplay` (adapts capture replay manifests). Repeats
+  recorded sequences exactly *and* generalizes: a never-seen-but-related
+  observation maps to the right action via shared source/word cues.
+- **`src/training/backend.ts`** — pluggable `TrainingBackend` interface
+  (`train(request) → result` with metrics incl. `replayFidelity`). The recorded
+  dataset is the common input; mlx/axolotl on-device runners remain the
+  external-process seam.
+- **`src/training/mock-backend.ts`** — `MockMovementTrainingBackend` (in-process,
+  no native deps/child procs): fits a movement policy, writes the serialized
+  model to the job artifact dir, reports replay fidelity. Cloud/CI-friendly, so
+  the full capture→train→infer loop is now exercised in tests.
+  `movementDatasetFromExport` normalizes a reviewed export's replays into the
+  training set.
+- Exported all of the above from `src/index.ts`.
+
+**Genuine latent bug fixed (`src/harness/background-tasks.ts`):** the
+background-task launch script built its initial `state.json` via
+`printf '%s' '<json>' | sed …`, embedding the task **command** through
+`shellQuote`. Commands containing quotes/newlines (e.g. `printf 'line-1\nline-2\n'`)
+were corrupted into **invalid JSON**, so `recoverBackgroundTask*` threw a
+`SyntaxError` on parse — breaking task recovery. Replaced the fragile shell
+construction with a Python `json.dumps` heredoc (mirroring the existing
+completed/failed writers), which is robust to any characters. This eliminated a
+deterministic suite failure (`operator-runtime` recovery) on the pristine tree.
+
+**Test results:** `typecheck:src` ✅ (exit 0). Build ✅. **+14 new tests** for the
+movement model/backend — all deterministically green across repeated runs.
+Full suite **174 → 188** tests. ⚠️ The suite is **flaky in this cloud env** due
+to *pre-existing* integration tests that spawn **real detached child processes**:
+(1) `server.test.ts` platform-breaker test is process/date-sensitive
+(`failureCount` 3 vs 2 — fails deterministically on the pristine tree, today
+2026-06-29), and (2) `operator-runtime.test.ts` recovery test has a cleanup race
+(`ENOTEMPTY` while the detached child still writes). Neither is caused by this
+run's changes; my fix *reduced* the deterministic failures. Pushed to the
+designated feature branch `claude/peaceful-dirac-tdo2ds`.
+
+**New idea:** make these integration tests hermetic by injecting a fake
+`spawnProcess` + `isProcessRunning` + clock (the seams already exist on
+`BackgroundTaskExecutionService`/`FileBackgroundTaskStore`) so they don't depend
+on real OS processes or wall-clock/date — converting today's flaky/date-sensitive
+tests into deterministic ones. Bigger movement-subsystem idea: a *generalization
+eval harness* that trains on one set of synthetic trajectories and measures
+replay fidelity on **held-out but related** ones (objective #2d), turning
+"generalizes" into a tracked metric rather than a single unit test.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

@@ -62,15 +62,43 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
+      for a real on-device small model. **DONE run 9** — `training/backend.ts`
+      (`TrainingBackend`), `training/mock-backend.ts`
+      (`MockMovementTrainingBackend`, in-process), mlx/axolotl runners remain the
+      external-process seam.
+- [x] Trainable movement model that **repeats** recorded movements and
+      **generalizes** to related ones (objective #2c/#2d). **DONE run 9** —
+      `training/movement-policy.ts`: order-k Markov + observation-cue model,
+      `replayMovement`/`predictMovement`, serialize/deserialize.
 - [ ] Synthetic event-stream generator to validate capture→dataset→replay
       round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+- [ ] Generalization eval harness: train on synthetic trajectories and measure
+      replay fidelity on **held-out but related** ones (objective #2d) — turn the
+      run-9 single generalization unit test into a tracked metric. The model
+      (`movement-policy.ts`) and `evaluateReplayFidelity` already provide the
+      primitives.
+
+## Test reliability (pre-existing flakes surfaced run 9)
+- [ ] **Make process-spawning integration tests hermetic.** `operator-runtime`
+      recovery and `server.test.ts` platform-breaker tests spawn **real detached
+      child processes** and check real PIDs/wall-clock, so they flake
+      (`ENOTEMPTY` cleanup race) and are date-sensitive (breaker `failureCount`
+      3 vs 2 on 2026-06-29). Inject the existing `spawnProcess` /
+      `isProcessRunning` seams + a clock so these run deterministically with no
+      real OS processes. Run 9 fixed the related state-JSON corruption bug; this
+      is the remaining flakiness.
 
 ## Innovation backlog
+- [x] Background-task state JSON robustness — DONE run 9. Initial `running` state
+      is now written via a Python `json.dumps` heredoc instead of
+      `printf | sed`, so commands with quotes/newlines can't corrupt the file
+      and break recovery.
+- [ ] Apply the run-9 state-JSON fix to `training/runner.ts` too — its
+      `renderLaunchScript` still builds the initial state via `printf | sed` and
+      embeds the command array through `shellQuote`, the same latent corruption
+      pattern (currently latent because training tests don't execute the script).
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in
       project health over time.
