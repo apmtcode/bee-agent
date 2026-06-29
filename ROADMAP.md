@@ -70,6 +70,22 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Generalization eval harness: measure replay fidelity on held-out but
       related synthetic trajectories.
 
+## Reliability / correctness
+- [x] **Launch-script quoting + pid bugs** (2026-06-29, run 9). Fixed
+      `shellQuote` (single-quote escape) and the running-state pid placeholder
+      substitution in `background-tasks.ts` + `training/runner.ts`; both were
+      runtime-only bugs invisible to typecheck/build. Suite restored to green
+      (175/175) and made deterministic (mocked spawn in the racy store tests).
+- [ ] **Launch-script golden + execution test** for `renderLaunchScript`:
+      snapshot the emitted bash and run it against adversarial commands
+      containing `'`, `"`, `$`, backticks, newlines, and `/`, asserting the
+      state file is valid JSON with expected fields. Closes the gap that let two
+      shell-quoting bugs ship undetected.
+- [ ] Audit remaining `*.test.ts` that construct a runtime with real
+      `backgroundTaskSpawnProcess` (no mock) — they leak `sleep` processes and
+      race the launch script. Standardize on a mocked spawn except where the
+      goal is specifically to exercise the real script.
+
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in

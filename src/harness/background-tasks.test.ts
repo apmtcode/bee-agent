@@ -370,4 +370,59 @@ describe("BackgroundTaskExecutionService", () => {
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
   });
+
+  it("runs the real launch script: numeric pid, valid JSON, quoted command preserved", async () => {
+    const rootDir = await makeTempDir();
+    const filePath = path.join(rootDir, "background-tasks.json");
+    // No spawn/isProcessRunning mocks: exercise the generated bash launch
+    // script for real. Regression guard for two bugs: (1) shellQuote must
+    // preserve a command containing single quotes, and (2) the running-state
+    // pid placeholder must be substituted to a numeric pid (the old
+    // `s/"$$"/$$/g` closed the shell quote and never matched the placeholder,
+    // leaving pid:"$$" and breaking reconcile/stop for still-running tasks).
+    const store = new FileBackgroundTaskStore(filePath);
+    const command = "sleep 0.5; printf 'quoted value with spaces'";
+    const task = await store.start({ title: "Real launch", command, cwd: rootDir, kind: "task" });
+    expect(typeof task.execution.processId).toBe("number");
+
+    const statePath = path.join(rootDir, task.execution.stateFile);
+    const readState = async (): Promise<BackgroundTaskExecutionState | undefined> => {
+      try {
+        const raw = await fs.readFile(statePath, "utf8");
+        return JSON.parse(raw) as BackgroundTaskExecutionState; // JSON.parse asserts valid JSON
+      } catch {
+        return undefined;
+      }
+    };
+    const waitFor = async (
+      predicate: (state: BackgroundTaskExecutionState) => boolean,
+      timeoutMs: number,
+    ): Promise<BackgroundTaskExecutionState> => {
+      const deadline = Date.now() + timeoutMs;
+      for (;;) {
+        const state = await readState();
+        if (state && predicate(state)) {
+          return state;
+        }
+        if (Date.now() > deadline) {
+          throw new Error(`timed out waiting for state; last=${JSON.stringify(state)}`);
+        }
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+    };
+
+    // While the command sleeps, the running state must carry a numeric pid and
+    // the original single-quoted command (not a corrupted "$$" / mangled quote).
+    const running = await waitFor((state) => state.status === "running", 4000);
+    expect(typeof running.pid).toBe("number");
+    expect(Number.isFinite(running.pid)).toBe(true);
+    expect(running.pid).toBeGreaterThan(0);
+    expect(running.command).toBe(command);
+
+    // It must then transition to a clean completed state via the python writer.
+    const completed = await waitFor((state) => state.status === "completed", 8000);
+    expect(completed.exitCode).toBe(0);
+    expect(typeof completed.pid).toBe("number");
+    expect(completed.command).toBe(command);
+  });
 });

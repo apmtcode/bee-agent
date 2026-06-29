@@ -6,6 +6,66 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-06-29 (run 9) — 🐛 Two real launch-script bugs fixed (shell quoting + pid substitution)
+
+**Audited:** The test suite itself — it was **no longer green** in this
+environment (3 failing: `operator-runtime`, `app`, `server` background-task /
+remote-control tests) despite run 8's "174/174". Root-caused two genuine
+**production** bugs in the generated bash launch scripts, plus the flaky tests
+that were masking them.
+
+**Bug 1 — `shellQuote` mangled any value containing a single quote**
+(`src/harness/background-tasks.ts`). The POSIX escape for a `'` inside a
+single-quoted string is `'"'"'` (5 chars). The code used `"'"'"'` (6 chars,
+leading `"`), so a background task whose `command` contained a `'` (e.g. the
+test's `printf 'line-1\nline-2\n'`) produced a **corrupt state file** — JSON
+that `readState` → `JSON.parse` threw on (`Expected ',' or '}' … position
+311`). Fixed to the correct escape. `training/runner.ts` already had it right.
+
+**Bug 2 — the running-state pid placeholder was never substituted** (both
+`background-tasks.ts` and `training/runner.ts`). The script did
+`sed "…; s/\"\$\$\"/$$/g"`; the rendered bash was `s/"$$"/$$/g`, whose
+unescaped `"` **closes the shell's double-quote**, so the search term became
+the *shell PID number* (never present in the JSON) instead of the literal
+`"$$"` placeholder. The running state therefore kept `pid:"$$"`. Impact:
+`reconcilePersistedState` calls `isProcessRunning(state.pid)` — with a string
+pid that's always false, so any genuinely-**running** task gets falsely
+reconciled to `failed` / `missing-process`, which then cascades into remote
+`diagnostics` → `control.state: "degraded"`. Fixed by switching to a
+quote/dollar-free token `"__OPENCLAW_PID__"` substituted via
+`s/\\"__OPENCLAW_PID__\\"/$$/g` (the `\"` stays escaped inside the bash
+double-quote, so sed matches the literal placeholder and writes a bare numeric
+pid). Verified the produced state JSON now parses with `typeof pid === number`.
+
+**Tests:**
+- The 3 failing tests used the **real** spawn (`backgroundTaskIsProcessRunning:
+  () => false`, no spawn mock) and then wrote their own state — so the async
+  launch script raced their assertions (and leaked orphan `sleep 5`
+  processes). Made them deterministic by mocking
+  `backgroundTaskSpawnProcess: () => ({ pid: 4242, unref(){} })` (the launch
+  script no longer runs in these store/runtime-orchestration tests). Confirmed
+  the previously-flaky cases pass across repeated runs.
+- Added a **real** end-to-end launch-script test
+  (`background-tasks.test.ts` › "runs the real launch script…") with no spawn
+  mocks: asserts a numeric running-state pid (Bug 2), a single-quote-containing
+  command preserved verbatim (Bug 1), valid JSON throughout, and a clean
+  `completed`/`exitCode:0` transition — locking in both fixes.
+
+**Test results:** `npm test` ✅ **175/175** (174 + the new real-launch test),
+green across 2 consecutive full runs. `npm run build` ✅. `npm run
+typecheck:src` ✅ (exit 0). Full `tsc` unchanged at **125** (all test-file
+debt; my new test adds 0 errors).
+
+**New idea:** the launch scripts are emitted as hand-escaped bash strings and
+have now produced **two** quoting bugs that only surface at runtime (never at
+typecheck/build). Add a tiny `renderLaunchScript` golden/round-trip unit test
+that (a) snapshots the emitted bash and (b) actually executes it against a
+table of adversarial inputs — commands containing `'`, `"`, `$`, backticks,
+newlines, and `/` — asserting the resulting state file is valid JSON with the
+expected fields. That converts "fragile shell-string emitter" from a
+rediscover-by-flake liability into a covered surface, and would have caught
+both bugs at authoring time.
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
