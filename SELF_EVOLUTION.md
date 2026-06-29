@@ -6,6 +6,71 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-06-29 (run 9) — Movement subsystem: pluggable model backend + in-process trainer + generalization eval
+
+**Audited:** Standing objective #2 (local-movement learning) and `src/training/`.
+The training side could only emit launch *artifacts* for real Apple-Silicon
+training (`LocalAppleSiliconTrainingRunner` → mlx/axolotl shell scripts); there
+was **no cloud-runnable train→infer path**, so objective #2(d) ("post-train a
+local model… make the backend pluggable") and the ROADMAP items "pluggable
+local-model backend interface with a deterministic mock backend" and
+"generalization eval harness" were entirely unbuilt. The whole
+capture→dataset→train→infer→replay loop could not be exercised in CI.
+
+**Changed (additive, two new modules + barrel exports):**
+- `src/training/movement-model.ts` — the pluggable seam:
+  - `MovementToken`/`MovementSequence`/`MovementDataset` schema (tool+summary
+    movements), `LocalMovementModelBackend` interface, `TrainedMovementModel`
+    (`predict` / `generate` / `snapshot`), and a `MovementModelBackendRegistry`
+    so the trainer is backend-agnostic — a real on-device small model drops in
+    behind the same interface.
+  - `NGramMovementBackend`: a deterministic order-N Markov model with
+    **stupid-backoff**. Repeats recorded movements exactly *and* generalizes —
+    shared sub-sequences across trajectories bridge novel prefixes, and backoff
+    lets an unseen high-order context fall back to lower-order evidence.
+  - Designed-in **end-of-sequence sentinel** learned during training (the
+    "movement" that follows the last real one), so free-running `generate`
+    terminates at recorded boundaries instead of running forever on the unigram
+    prior — caught by the exact-reproduction test and fixed properly rather than
+    by a heuristic cap.
+  - `buildMovementDataset(trajectories)` and `movementSequenceFromReplayEvents`
+    wire it to the existing capture data (`TrajectorySpan`, `ReplayManifest`).
+- `src/training/movement-eval.ts` — `evaluateMovementModel`: two fidelity
+  measures over held-out-but-related sequences — **next-token** (teacher-forced,
+  isolates learned transitions) and **rollout** (free-running, replay
+  faithfulness with compounding error). Per-sequence + aggregate report.
+- `src/index.ts` — exported both modules' public surface.
+
+**Test results:** 2 new test files, **14 new tests, all green** (exact replay,
+backoff generalization, deterministic tie-break, unigram fallback, EOS-bounded
+generation, snapshot round-trip, registry, dataset builders; eval perfect-recall,
+novel-recombination generalization, prompt-length skip, default prompt length).
+`typecheck:src` ✅ (exit 0). `npm run build` ✅ (546 kB). Full suite:
+**184 passing / 188** — see blocker below.
+
+**⚠️ Pre-existing blocker discovered (NOT introduced this run):** 4 tests fail on
+a **clean baseline** (verified via `git stash` — identical 4 failed/46 passed
+without this run's code): `operator-runtime.test.ts` (background-task recovery),
+`server.test.ts`, `app.test.ts`. Root cause is a `SyntaxError: Expected ',' or
+'}' after property value in JSON` at `readJsonFile` (`src/shared/fs.ts:17`) on
+the recovery path `recoverBackgroundTasks → reconcileTask → readState`
+(`background-tasks.ts:234/440/460`) — a malformed state file written somewhere in
+the recovery flow. Run 8 logged the suite green, so this regressed between run 8
+and now. **Did not chase it this run** (unrelated to the movement work; scope
+discipline) — pushed to the designated dev branch `claude/peaceful-dirac-a8loua`
+(not `main`) and queued the fix at the top of ROADMAP.
+
+**New idea:** add an **adapter from the n-gram backend to the launch-artifact
+runner** — `LocalAppleSiliconTrainingRunner` and `NGramMovementBackend` are two
+disjoint "training" worlds. A thin adapter that lets the in-process backend serve
+as the *eval/validation oracle* the launch script's `replayEvalFile` references
+would unify them: cloud CI validates replay fidelity with the mock backend
+against the exact dataset the real on-device job will train on, so a dataset
+regression is caught before the (expensive, un-cloud-runnable) real training
+ever starts.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

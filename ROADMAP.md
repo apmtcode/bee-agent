@@ -3,6 +3,19 @@
 Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
+## 🔴 Regressions to fix first
+- [ ] **Background-task recovery JSON parse crash** (found run 9, pre-existing
+      regression since run 8). 4 suite tests fail —
+      `operator-runtime.test.ts`/`server.test.ts`/`app.test.ts` — all from
+      `SyntaxError: Expected ',' or '}' after property value in JSON` at
+      `readJsonFile` (`src/shared/fs.ts:17`) on
+      `recoverBackgroundTasks → reconcileTask → readState`
+      (`src/harness/background-tasks.ts:234/440/460`). A malformed state file is
+      written in the recovery flow. Reproduce with
+      `npx vitest run src/orchestrator/operator-runtime.test.ts`; the failing
+      assertion is `operator-runtime.test.ts:605`. Fix before adding more
+      capability — a red baseline masks new regressions.
+
 ## Foundations / DX
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
@@ -62,13 +75,30 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
+      for a real on-device small model. — DONE run 9
+      (`src/training/movement-model.ts`): `LocalMovementModelBackend` +
+      `MovementModelBackendRegistry` + deterministic `NGramMovementBackend`
+      (order-N Markov, stupid-backoff, EOS-bounded generation).
 - [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      round-trips without real OS input. (Run 9 added the dataset/eval pieces;
+      still want a first-class generator that emits correlated mouse/keyboard/UI
+      streams with configurable noise + branching so the eval harness runs over
+      a parameterised corpus, not just hand-written fixtures.)
+- [x] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories. — DONE run 9
+      (`src/training/movement-eval.ts`): `evaluateMovementModel` with
+      teacher-forced next-token accuracy + free-running rollout fidelity.
+- [ ] **Adapter: in-process backend → launch-artifact runner.** Let
+      `NGramMovementBackend` serve as the validation oracle behind the launch
+      script's `replayEvalFile`, so cloud CI checks replay fidelity against the
+      exact dataset the real on-device (mlx/axolotl) job will train on — catching
+      dataset regressions before expensive real training starts. (Run 9 idea.)
+- [ ] **Persist/load trained movement models.** `snapshot()` exists; add a
+      `FileMovementModelStore` (write/read the `MovementModelSnapshot`) + a
+      `loadMovementModel(snapshot)` so a trained model survives process restarts
+      and can be diffed across training runs.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
