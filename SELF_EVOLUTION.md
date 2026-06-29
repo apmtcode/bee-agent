@@ -6,6 +6,62 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-06-29 (run 9) — 🧠 Pluggable movement-training backend + deterministic learner
+
+**Audited:** Standing objective #2(d) — "post-train a local model on the dataset
+to repeat recorded movements and generalize to new but related ones; make the
+backend pluggable." Inspected `src/training/runner.ts` (the only existing
+"trainer") and found it emits an **Apple-Silicon-only launch script** (MLX/
+Axolotl shell-out): there was no in-process backend abstraction, no model that
+actually learns from movement data, and nothing runnable in the cloud/CI. This
+is the single biggest movement-subsystem gap and the top queued item.
+
+**Changed (additive, two new modules + barrel exports):**
+- **`src/training/movement-backend.ts`** — the pluggable seam:
+  - `MovementStep`/`MovementSequence`/`MovementDataset` schema (action + the
+    preceding observation as `context`).
+  - `buildMovementDataset(ReplayManifest[])` and
+    `buildMovementDatasetFromTrajectories(TrajectorySpan[])` — group actions per
+    trajectory, ts-order, attach last-observation context. Deterministic output
+    (sequences sorted by id). Proven equivalent in a test.
+  - `MovementTrainingBackend` interface (`train` / `load`,
+    `capabilities: {onDevice, deterministic, generalizes}`),
+    `TrainedMovementModel` (`replay` / `predictNext` / `generate` / `serialize`),
+    `MovementPrediction` (with `source` + calibrated `confidence`),
+    `SerializedMovementModel`.
+  - `MovementBackendRegistry` — register/get/require/list, rejects dup + unknown.
+- **`src/training/mock-movement-backend.ts`** — `MockMovementBackend`
+  (`id="mock-deterministic"`): a real, dependency-free learner. Fits a
+  first-order **transition n-gram** over action summaries + a context/first-step
+  index; `predictNext` resolves transition → context → fallback; `generate`
+  **generalizes** to unseen-but-related goals via token-set (Jaccard) retrieval
+  of the nearest recorded sequence. Fully in-process & deterministic → exercises
+  the whole capture→dataset→train→infer loop with **no OS/native-model access**;
+  a real MLX backend implements the same interface.
+- Exported all of the above from `src/index.ts`.
+
+**Test results:** new `movement-backend.test.ts` — **12/12 ✅** (dataset build &
+equivalence, registry, exact replay, transition/context/fallback prediction,
+generalization to novel phrasing, `maxSteps`, serialize/load round-trip,
+cross-train determinism, empty-dataset safety). `npm run build` ✅.
+`npm run typecheck:src` ✅ (source stays clean). Full `npm test`: my files all
+green; the suite shows **3–4 pre-existing flaky failures** (count varies per run)
+in `operator-runtime`/`server`/`app` background-task **recovery** — verified to
+**fail identically on clean HEAD** (`git stash` + re-run) and **not import my
+code**. Root cause: `readJsonFile` in background-task recovery reads a state file
+**mid-write** → truncated-JSON `SyntaxError` (a race, logged to ROADMAP). Pushed
+to the feature branch per the run's Git Development Branch Requirements.
+
+**New idea:** with a `TrainedMovementModel` that both `replay`s and `generate`s,
+the queued **generalization eval harness** is now cheap: a synthetic generator
+emits N related trajectories, train on a split, and score held-out replay
+fidelity = step-overlap between `model.generate({context})` and the true
+sequence (plus next-step top-1 accuracy from `predictNext`). That turns
+"generalizes" from a capability claim into a tracked metric — and gives a real
+backend a regression gate to beat the mock baseline.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

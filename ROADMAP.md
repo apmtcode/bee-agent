@@ -62,13 +62,38 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
+      for a real on-device small model — DONE run 9.
+      `src/training/movement-backend.ts` defines `MovementTrainingBackend` /
+      `TrainedMovementModel` / `MovementDataset` + dataset builders + registry;
+      `mock-movement-backend.ts` is a deterministic transition+retrieval learner
+      that replays, predicts, and generalizes. The existing
+      `LocalAppleSiliconTrainingRunner` (MLX/Axolotl launch script) is the real
+      on-device counterpart to implement against this seam.
 - [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
+      round-trips without real OS input. (Partial: tests use ad-hoc synthetic
+      trajectories; promote to a reusable generator that emits
+      `DeviceCaptureInput` streams with parametric noise/variation.)
 - [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      related synthetic trajectories. Now cheap given run 9's model — score
+      step-overlap of `model.generate({context})` vs. the true sequence + top-1
+      `predictNext` accuracy on a train/test split; use it as the gate a real
+      backend must beat the mock baseline on.
+- [ ] Implement a real on-device backend behind `MovementTrainingBackend`
+      (small open model, e.g. via MLX) reusing `LocalAppleSiliconTrainingRunner`
+      for the launch path; keep `MockMovementBackend` as the CI default.
+
+## Known defects (found, not yet fixed)
+- [ ] **Flaky background-task recovery (pre-existing).** `npm test` intermittently
+      fails 3–4 tests in `operator-runtime`/`server`/`app` with a truncated-JSON
+      `SyntaxError` from `readJsonFile` (`src/shared/fs.ts:17`) during
+      `FileBackgroundTaskStore.reconcileTask` → `readState`. Root cause: a state
+      file is read **while it is being written** (no atomic read/temp-swap on the
+      state-write path, or recovery races the writer). Confirmed on clean HEAD
+      (run 9), independent of any run-9 change. Fix: write state via
+      temp-file + atomic rename (the repo already has `writeJsonAtomic`) and/or
+      have `readState` tolerate/retry a partial read.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
