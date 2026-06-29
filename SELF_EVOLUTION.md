@@ -6,6 +6,65 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-06-29 (run 9) — 🐛 Real bug: POSIX single-quote escaping corrupted background-task state JSON
+
+**Audited:** Ran the full suite *in this cloud sandbox* and found the baseline
+was **not** the logged 174/174 — it was **171/174**, with 3 background-task
+tests failing on a hard `SyntaxError: Expected ',' or '}' … at position 311`
+when `readState()` parsed a launch-script-written `state.json`. Traced the parse
+failure to its source rather than dismissing it as flake.
+
+**Root cause (deterministic bug in `src/harness/background-tasks.ts`):**
+`shellQuote()` used the **wrong** POSIX single-quote escape — it replaced each
+`'` with `"'"'"'` (6 chars, starts with `"`) instead of the correct `'"'"'`
+(5 chars, starts with `'`). For any task whose command contains a single quote
+(e.g. the test's `printf 'line-1\nline-2\n'`), the embedded state payload was
+mangled — captured raw output showed `"command":"printf "'line-1\nline-2\n"'"`,
+i.e. invalid JSON. The detached launch script then wrote a `state.json` that
+`readState()` could not parse. Notably the sibling `shellQuote()` in
+`src/training/runner.ts` already used the **correct** form, confirming the typo.
+
+**Changed (additive/surgical):**
+- Fixed `shellQuote()` in `background-tasks.ts` to the correct `'"'"'` escape.
+- **Atomic state writes** (torn-read hardening) in both `background-tasks.ts` and
+  `training/runner.ts`: the `sed` pipeline now writes to `"$__state_tmp"` then
+  `mv -f` into place, and the Python completion-writer writes to
+  `state_path.<pid>.tmp` then `tmp_path.replace(state_path)` — mirroring the
+  TS-side `writeJsonAtomic` (temp + rename) so a concurrent reader never sees a
+  half-written multi-line `indent=2` dump.
+- New **hermetic regression test** (`background-tasks.test.ts`): decodes the
+  launch script's single-quoted payload exactly as the shell would and asserts
+  it round-trips to valid JSON with the original (quote-containing) command and
+  the `mv -f` atomic-write seam present. Updated the `runner.test.ts` assertion
+  to match the atomic-write redirect.
+
+**Test results:** Build ✅. `typecheck:src` ✅ (still clean). The deterministic
+`position 311` JSON `SyntaxError` is **eliminated** (proven by capturing the raw
+state file before/after). New test ✅; `runner.test.ts` ✅. Full suite
+**171/175** here — the **4 remaining failures are pre-existing non-hermetic
+tests** (`operator-runtime` "starts, syncs, recovers…", `server` "handles
+session… orchestration", `app` two background/monitor/platform tests) that
+spawn **real detached processes** and probe **real PIDs** via
+`process.kill(-pid, 0)`. They *flicker* (app.test alternates 1↔2 failures across
+identical reruns), confirming environmental nondeterminism in this loaded
+container — not a regression. Pushed to the designated feature branch
+`claude/peaceful-dirac-pl92aw` (per the standing Git requirements), not `main`.
+
+**Blocker recorded:** those 4 tests are non-hermetic. The runtime *already*
+exposes the seam to fix this — `StandaloneOperatorRuntime` accepts
+`backgroundTaskSpawnProcess` / `backgroundTaskIsProcessRunning`, and
+`FileBackgroundTaskStore` takes an injectable spawner + liveness checker (the
+hermetic `FileBackgroundTaskStore` tests already use it). Next run: thread a
+deterministic fake spawner + controlled liveness map into the 4 failing
+integration tests so they stop depending on the ambient process table.
+
+**New idea:** add a tiny **`scripts/lint-shell-quote.ts`** (run in `verify`) that
+greps the source for the malformed `"'"'"'` POSIX-escape literal and any
+non-atomic `state_path.write_text(`/`> '${…stateFile}'` shell redirect, so this
+exact class of bug (wrong quote escape, non-atomic shell state write) is caught
+at authoring time across the launch-script renderers instead of surfacing as a
+runtime JSON parse error.
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

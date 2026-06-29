@@ -45,6 +45,27 @@ unchecked items are queued. Keep this richer than you found it each run.
       have the engine run it as a per-run pre-push self-check.
 - [ ] Add a minimal CI workflow mirroring `verify` for human-opened PRs.
 
+## Reliability / correctness
+- [x] **Fix POSIX single-quote escaping in `background-tasks.ts` `shellQuote()`**
+      (2026-06-29, run 9) — was `"'"'"'`, corrupting the launch-script state JSON
+      for any command containing `'`; caused a `readState()` JSON `SyntaxError`.
+      Added atomic shell/python state writes (temp + `mv`/`replace`) in
+      background-tasks + training/runner, plus a hermetic regression test.
+- [ ] **Make the 4 non-hermetic background-task integration tests deterministic.**
+      `operator-runtime` "starts, syncs, recovers…", `server` "handles session…
+      orchestration", and the two `app` background/monitor/platform tests spawn
+      **real detached processes** and probe **real PIDs** (`process.kill(-pid,0)`),
+      so they flake in loaded environments (here: 171/175, flickering). The seam
+      already exists — `StandaloneOperatorRuntime` accepts
+      `backgroundTaskSpawnProcess`/`backgroundTaskIsProcessRunning`,
+      `FileBackgroundTaskStore` takes an injectable spawner + liveness checker.
+      Thread a deterministic fake spawner + controlled liveness map into these 4
+      tests (the hermetic `FileBackgroundTaskStore` tests already do this).
+- [ ] **`scripts/lint-shell-quote.ts`** (wire into `verify`): grep source for the
+      malformed `"'"'"'` POSIX escape and non-atomic shell state writes
+      (`state_path.write_text(`, `> '${…stateFile}'`) across the launch-script
+      renderers, so this bug class is caught at authoring time.
+
 ## Capability parity (audit reference agents → port gaps)
 - [ ] Build a "capability inventory" generator: enumerate bee-agent's exported
       RPC/tool surface (`src/index.ts`) and diff it against `openclaw`,

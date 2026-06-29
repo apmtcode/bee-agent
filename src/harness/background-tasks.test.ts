@@ -370,4 +370,44 @@ describe("BackgroundTaskExecutionService", () => {
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
   });
+
+  it("emits a launch-script state payload that stays valid JSON when the command contains single quotes", async () => {
+    // Regression: a buggy POSIX single-quote escape ("'"'"' instead of '"'"')
+    // corrupted the embedded state JSON for any command containing a single
+    // quote, so the detached launch script wrote a malformed state.json that
+    // readState() could not parse. Decode the payload exactly as the shell
+    // would and assert it round-trips.
+    const rootDir = await makeTempDir();
+    const command = "printf 'line-1\nline-2\n' && echo \"it's done\"";
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"), () => ({ pid: 2222, unref() {} }));
+    const task = await store.start({ title: "Quoted command", command, cwd: rootDir, kind: "task" });
+
+    const script = await fs.readFile(path.join(rootDir, task.execution.launchScript), "utf8");
+    const decoded = decodeSingleQuotedPayload(script);
+    const state = JSON.parse(decoded) as { command: string; pid: string; taskId: string };
+    expect(state.command).toBe(command);
+    expect(state.taskId).toBe(task.id);
+    expect(state.pid).toBe("$$"); // substituted to the real pid by sed at runtime
+    // The atomic-write seam must be present so a concurrent reader never sees a torn file.
+    expect(script).toContain(`mv -f "$__state_tmp" '${task.execution.stateFile}'`);
+  });
 });
+
+// Reverses the shell single-quoting applied by background-tasks' shellQuote()
+// to the `printf '%s' <payload> | sed ...` line, recovering the raw JSON the
+// detached process would emit (before the runtime sed substitutions).
+function decodeSingleQuotedPayload(script: string): string {
+  const marker = "printf '%s' ";
+  const start = script.indexOf(marker);
+  if (start < 0) throw new Error("payload marker not found in launch script");
+  const rest = script.slice(start + marker.length);
+  const end = rest.indexOf(" | sed ");
+  if (end < 0) throw new Error("sed pipe not found in launch script");
+  const token = rest.slice(0, end); // e.g. 'a'"'"'b'
+  // A POSIX single-quoted token: outer '...' segments with '"'"' encoding the
+  // literal single quotes between them. Reverse exactly that encoding.
+  if (!token.startsWith("'") || !token.endsWith("'")) {
+    throw new Error("payload token is not single-quoted");
+  }
+  return token.slice(1, -1).replaceAll(`'"'"'`, `'`);
+}
