@@ -6,6 +6,65 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-06-29 (run 9) — 🐛 Fixed launch-script state corruption + made the suite hermetic (3 failing → 0)
+
+**Audited:** The actual build/test gate. A fresh `npm install` + `npm test` on
+HEAD revealed the suite was **red and flaky** — 3–4 failures whose count varied
+run-to-run (`operator-runtime`, `server`, `app`). The prior run logged "174/174",
+so this was a latent reliability regression that the engine's own gate had been
+missing. Two real production bugs plus a pervasive test-hermeticity hole.
+
+**Root causes found (two genuine bugs in the background-task launch script,
+`src/harness/background-tasks.ts`):**
+1. **Broken single-quote shell escaping.** `shellQuote` used the replacement
+   `"'"'"'` where the correct POSIX idiom is `'"'"'` (close-quote, double-quoted
+   quote, reopen) — the characters were transposed. Any task `command` containing
+   a single quote (e.g. the test's `printf 'line-1\nline-2\n'`) produced **invalid
+   JSON** in the generated state file. The script's Python completion-writer then
+   crashed on `json.loads`, leaving the task wedged in `running` with corrupt
+   state — the exact `SyntaxError: ... position 311` the tests hit. (The correct
+   form was already present in `src/training/runner.ts`.)
+2. **PID substitution never fired.** The state payload used `pid: "$$"` and a
+   `sed "s/\"$$\"/$$/g"` pass to swap in the numeric PID — but the embedded `"$$"`
+   inside the double-quoted `sed` argument closed the quoting early, so `$$`
+   expanded before `sed` ever saw the pattern and the literal string `"$$"`
+   survived. Replaced with a quote-safe `__OPENCLAW_PID__` placeholder + a
+   `pid=$$` shell var and `sed "s/\"__OPENCLAW_PID__\"/$pid/g"`. The **same latent
+   bug existed in `src/training/runner.ts`** (its launch script is never executed
+   in tests, so it was uncaught) — fixed there too for when users run local
+   training.
+
+**Test hermeticity (the flakiness):** three runtimes in `operator-runtime.test`
+and `server.test` started real `sleep 5` / `printf` background tasks via the
+**default real `spawn`**, then asserted on derived state. The detached launch
+script writes its state file asynchronously, racing the explicit `writeState()`
+choreography the tests rely on — so whether a remote read as `active`,
+`degraded`, or `mixed` depended on wall-clock timing. Injected the already-
+existing `backgroundTaskSpawnProcess` seam (the same pattern `background-tasks.test`
+uses) with a deterministic fake `{ pid, unref }` in all four affected runtimes, so
+task state is driven purely by the records/explicit writes. No production code
+needed for this part — the seam was already there, just unused by these tests.
+
+**New regression test** (`background-tasks.test.ts`): actually *executes* a
+generated launch script in `bash` for a command containing single quotes and
+asserts the resulting `state.json` (a) parses as valid JSON, (b) preserves the
+command verbatim, (c) ends `completed` with a **numeric** pid. Verified it has
+teeth — reintroducing the old `shellQuote` makes it fail with the identical
+`JSONDecodeError ... char 311`. This is the first test to exercise the real
+launch script end-to-end (prior tests only mocked spawn and inspected text).
+
+**Test results:** suite **3–4 flaky failures → 175/175 passing, deterministic
+across 5 consecutive full runs** (+1 new regression test). `npm run build` ✅.
+`npm run typecheck:src` ✅ (still source-clean).
+
+**New idea:** the engine's per-run gate should run `npm test` **twice** (or with
+`--retry=0` and compare) and treat any *non-deterministic* result as a failure,
+not just a non-zero exit — a single green run hid this flakiness for an entire
+cycle. Cheap, and it converts "flaky" from an invisible slow-bleed into a caught
+regression. Logged to ROADMAP.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

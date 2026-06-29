@@ -3,6 +3,19 @@
 Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
+## Reliability
+- [x] **Fix launch-script state corruption + suite flakiness** (run 9). Two real
+      bugs in `src/harness/background-tasks.ts`: transposed `shellQuote` escape
+      (`"'"'"'` → `'"'"'`) corrupted state JSON for commands with single quotes;
+      broken `sed` PID substitution left pid as the literal string `"$$"`. Same
+      PID bug fixed in `src/training/runner.ts`. Added an end-to-end regression
+      test that runs a generated launch script in bash. Made 4 test runtimes
+      hermetic via the `backgroundTaskSpawnProcess` seam. Suite: 3–4 flaky
+      failures → 175/175 deterministic (5× runs).
+- [ ] **Flake-aware gate:** run `npm test` twice (or compare two runs) in the
+      engine's per-run self-check and treat a *non-deterministic* result as a
+      failure. A single green run hid the run-9 flakiness for a whole cycle.
+
 ## Foundations / DX
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
