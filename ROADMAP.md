@@ -4,6 +4,14 @@ Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
 ## Foundations / DX
+- [x] **Atomic background-task state writes + de-flaked test suite**
+      (2026-06-29, run 9). Fixed a real reliability bug: the launch script wrote
+      the execution state file non-atomically (`> state.json` redirect + Python
+      `write_text`), so concurrent readers saw partial JSON and crashed. Now uses
+      temp-file + `mv` / `os.replace()`. Plumbed the spawn/liveness injection
+      seam through `OperatorCliApp` and gave the racy background-task tests
+      deterministic fakes. Suite went from flaky (170–172/174) to **175/175
+      stable across 10 runs**.
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`
@@ -71,6 +79,13 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
       related synthetic trajectories.
 
 ## Innovation backlog
+- [ ] **Flaky-test guard in the pre-push self-check**: run `vitest run` 2–3×
+      and fail the push if pass/fail counts differ between runs. A single green
+      run hid a real concurrency bug for a whole cycle (run 9); non-determinism
+      is itself a regression worth catching automatically.
+- [ ] **Shared test spawn helper** `tests/support/background-spawn.ts` exporting
+      `noopBackgroundSpawn` (and a sync variant) so the three test files stop
+      duplicating the deterministic background-task fake (run 9 inlined it).
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in
       project health over time.

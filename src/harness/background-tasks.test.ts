@@ -370,4 +370,26 @@ describe("BackgroundTaskExecutionService", () => {
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
   });
+
+  it("writes state atomically in the launch script (temp file + rename)", async () => {
+    const rootDir = await makeTempDir();
+    const store = new FileBackgroundTaskStore(
+      path.join(rootDir, "background-tasks.json"),
+      () => ({ pid: 1111, unref() {} }),
+    );
+    const task = await store.start({ title: "Atomic state", command: "printf 'done'", cwd: rootDir });
+    const script = await fs.readFile(path.join(rootDir, task.execution.launchScript), "utf8");
+
+    // Initial "running" state must be staged in a temp file and renamed, never
+    // truncate-written directly onto the live state path.
+    expect(script).toContain('state_tmp=');
+    expect(script).toContain('mv "$state_tmp"');
+    const stateFile = task.execution.stateFile;
+    expect(script).not.toContain(`> ${stateFile}\n`);
+    expect(script).not.toMatch(new RegExp(`>\\s*'?${stateFile.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}'?\\s`));
+
+    // Completion / failure state (written by the embedded Python) must also be
+    // atomic via os.replace().
+    expect(script).toContain("os.replace(tmp_path, state_path)");
+  });
 });

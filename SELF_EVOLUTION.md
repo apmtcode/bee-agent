@@ -6,6 +6,62 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-06-29 (run 9) — Fix non-atomic background-task state writes (real bug) + de-flake the suite
+
+**Audited:** Project health first. The baseline `npm test` was **flaky** — three
+to four failures rotating across `app.test.ts`, `server.test.ts`, and
+`operator-runtime.test.ts` between runs (a regression from run 8's clean
+174/174). Tracing the failures surfaced a genuine production reliability bug, not
+just test noise.
+
+**Root cause (production bug) in `src/harness/background-tasks.ts`:** the launch
+script wrote the execution **state file non-atomically** — a bare `> state.json`
+shell redirect (which truncates before writing) for the initial `running` state,
+and Python `state_path.write_text(...)` for the terminal `completed`/`failed`
+state. A concurrent reader (`readState` via recovery / control-state
+diagnostics) could observe a half-written file → intermittent
+`SyntaxError: Expected ',' or '}'` JSON parse crash. The runtime's own
+`writeState` already used temp-file + rename (`writeJsonAtomic`); the launch
+script did not.
+
+**Changed (additive):**
+- **Atomic launch-script writes.** Initial state now renders to `"$state_tmp"`
+  and `mv`s into place (atomic same-fs rename); the Python terminal-state writer
+  now writes a temp file and `os.replace()`s it. Verified end-to-end by executing
+  a generated launch script: valid JSON, `$$`→pid substituted, `exitCode` set,
+  output captured, **no temp leftovers**.
+- **Test determinism via the existing spawn seam.** The flaky tests injected
+  `backgroundTaskIsProcessRunning` but still spawned **real detached
+  subprocesses**, so state-file write/completion timing raced the assertions.
+  Plumbed the already-existing `backgroundTaskSpawnProcess` /
+  `backgroundTaskIsProcessRunning` runtime options through `OperatorCliApp`
+  (`src/cli/app.ts`, additive, production default unchanged) and injected
+  deterministic fakes:
+  - server.test.ts main/drift/breaker runtimes + operator-runtime.test.ts +
+    app.test.ts session-lifecycle test → **no-op spawn** (these tests were
+    *designed* for a non-writing spawn — e.g. they assert `background.tasks.state`
+    is `NOT_FOUND` and drive state via explicit `writeState`).
+  - app.test.ts background/monitor test → no-op spawn + explicit
+    `writeOutput`/`writeState` for the task (mirroring its own monitor section),
+    so the task is deterministically active-with-output.
+- **New regression test** (`background-tasks.test.ts`): asserts the generated
+  launch script stages state via temp-file + rename and `os.replace()`, never a
+  bare truncating redirect onto the live path.
+
+**Test results:** suite is now **deterministic** — **175/175 passed across 10
+consecutive runs** (was flaky 170–172/174). `typecheck:src` ✅ clean. Build ✅.
+Full `tsc` still **125** (test-only, unchanged — no regression).
+
+**New idea:** add a tiny **flaky-test guard** to the engine's pre-push
+self-check — run `vitest run` 3× (or `--retry=0` with a repeat) and fail the push
+if results differ between runs. Non-determinism in the suite is itself a
+regression we should catch automatically, since a single green run hid this bug
+for a whole cycle. Longer term: a shared `tests/support/background-spawn.ts`
+helper exporting `noopBackgroundSpawn` so the three test files stop duplicating
+the fake.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
