@@ -265,6 +265,21 @@ export {
   ReplayRuntimeService,
 } from "./capture/replay-service.js";
 export {
+  MarkovMovementBackend,
+  MOVEMENT_START_TOKEN,
+  MOVEMENT_END_TOKEN,
+  actionToToken,
+  buildMovementDataset,
+  type MovementModelBackend,
+  type MovementToken,
+  type MovementSequence,
+  type MovementDataset,
+  type TrainedMovementModel,
+  type MovementPrediction,
+  type MovementBackendTrainOptions,
+  type MovementGenerateOptions,
+} from "./training/backend.js";
+export {
   CAPTURE_TIER_VALUES,
   DEFAULT_SENSITIVE_APP_DENYLIST,
   buildTrajectorySpan,

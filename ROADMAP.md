@@ -62,15 +62,30 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
+      for a real on-device small model. **DONE run 9** — `src/training/backend.ts`:
+      `MovementModelBackend` interface + `MarkovMovementBackend` (n-gram +
+      stupid-backoff, deterministic), `buildMovementDataset`/`actionToToken` from
+      `ReplayManifest` action events. 7 tests; exported from the barrel.
 - [ ] Synthetic event-stream generator to validate capture→dataset→replay
       round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+- [ ] **Generalization eval harness** (next; builds on run 9's backend): train on
+      N trajectories, hold out a related one, score predicted-vs-actual
+      next-movement accuracy and the `matchedOrder` distribution (how much
+      generalization was needed). Turns obj. 2d into a tracked metric and gives
+      the real on-device backend a regression gate to beat.
+- [ ] Wire `MarkovMovementBackend` into the training `execution-service`/`runner`
+      as the default in-process backend when no on-device runtime is configured,
+      so train→infer runs end-to-end (export → dataset → train → replay) without
+      Apple-Silicon hardware.
 
 ## Innovation backlog
+- [ ] **Flaky-test guard** in the per-run self-check (motivated by run 9): run the
+      suite twice and diff the pass sets, so an environment-induced regression
+      (e.g. real-`spawn` state-file races) surfaces as flakiness instead of a hard
+      red that blocks the push. Pairs with: prefer injectable spawners in all
+      tests that start background tasks.
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in
       project health over time.

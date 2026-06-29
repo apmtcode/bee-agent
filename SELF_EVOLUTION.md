@@ -6,6 +6,64 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-06-29 (run 9) — Restore green gate (test hermeticity) + pluggable movement-model backend
+
+**Audited:** The full suite was **red on arrival** — 4 deterministic failures
+(`operator-runtime.test.ts`, `app.test.ts` ×2, `server.test.ts`) that run 8 had
+left green (174/174). Root cause traced to a single mechanism: those tests start
+background tasks through the **real** `child_process.spawn`, so the bash launch
+script writes the execution **state file** concurrently with the test's own
+`writeState()` — in this container the timing surfaces **torn-JSON reads**
+(`SyntaxError: Expected ',' or '}' … position 311`) and a missing/early-exited
+process, which non-deterministically flip control health to `degraded`. Not a
+product bug; an un-injected spawner in tests. The runtime already exposed
+`backgroundTaskSpawnProcess` / `backgroundTaskIsProcessRunning` seams — but
+`OperatorCliApp` did not forward them, so app tests had no way to inject a fake.
+
+**Changed:**
+1. **Green-gate restoration (reliability/DX).**
+   - `src/cli/app.ts` (source): added `backgroundTaskSpawnProcess` /
+     `backgroundTaskIsProcessRunning` to `OperatorCliAppOptions` and forwarded
+     them to the constructed `StandaloneOperatorRuntime` (additive, optional —
+     production still uses real `spawn`).
+   - Tests: injected an **inert spawner** (`() => ({ pid: 4321, unref() {} })`)
+     at every runtime/app construction that starts background tasks
+     (operator-runtime, server ×3 runtimes, app ×2). For the session-lifecycle
+     app test the liveness probe is **pid-aware** (`pid !== 999999`) so the
+     deliberately-drifted task still reads as `missing-process` while healthy
+     tasks stay `running`. No real OS process is launched → no concurrent state
+     writer → no torn reads. Verified deterministic across repeated runs.
+2. **Movement-subsystem capability — pluggable local-model backend (obj. 2c+2d).**
+   New `src/training/backend.ts`:
+   - `MovementModelBackend` interface (`train` / `predictNext` / `generate`) —
+     the seam a real on-device small model (mlx/axolotl) plugs into; callers
+     depend only on the interface.
+   - `MarkovMovementBackend` — deterministic, dependency-free n-gram backend with
+     **stupid-backoff**, so the train→infer loop runs identically in cloud/CI and
+     on device. Verbatim replay of recorded sequences **and** generalization to
+     unseen-but-related prefixes (backoff to the longest known suffix →
+     `matchedOrder` reports how much generalization occurred).
+   - `buildMovementDataset()` / `actionToToken()` convert reviewed
+     `ReplayManifest` action events into per-trajectory token sequences; summary
+     slugging collapses superficially different phrasings of the same gesture so
+     the model generalizes across recordings.
+   - Exported from `src/index.ts`; 7 new tests in `backend.test.ts`.
+
+**Test results:** suite **174→181** (7 new), **all green and deterministic**
+across repeated runs. `npm run typecheck:src` ✅ (source stays clean). Build ✅.
+
+**New idea:** build a **generalization eval harness** on top of this backend —
+train on N trajectories, hold out a related one, and score replay fidelity
+(predicted-vs-actual next-movement accuracy, plus the distribution of
+`matchedOrder` as a "how much did it have to generalize" metric). That turns
+objective 2d from "it can generalize" into a tracked number the engine can watch
+improve run over run, and gives the eventual real on-device backend a regression
+gate it must beat. Second idea: a **flaky-test guard** in the engine's per-run
+self-check — run the suite twice and diff pass sets — so an environment-induced
+regression like today's is caught as flakiness rather than a hard red.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
