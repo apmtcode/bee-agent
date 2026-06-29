@@ -4,6 +4,23 @@ Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
 ## Foundations / DX
+- [x] **Green baseline restored (2026-06-29, run 9).** Fixed a real
+      launch-script bug (`background-tasks.ts` `shellQuote` mis-escaped single
+      quotes → corrupted background-task `state.json` → recovery crash) and made
+      the background-task tests deterministic by injecting the existing
+      `backgroundTaskSpawnProcess` seam (no live subprocess), plus a regression
+      test that executes the real launch script. `npm test` 3-failing → 175/175,
+      stable across 6 runs.
+- [ ] **Replace launch-script printf+sed initial-state write with a Python
+      `json.dumps` writer** (`background-tasks.ts` + mirror in
+      `training/runner.ts`). The current `sed "s/\"\$\$\"/$$/g"` never replaces
+      the PID placeholder (bash expands `$$` before sed runs), so the initial
+      running state persists `pid:"$$"` (a string) until the completion writer
+      overwrites it — wrong for recovery of a still-running task. Reuse the
+      existing Python state-writer for one guaranteed-valid-JSON code path.
+- [ ] **CI/self-check should run the suite ≥3×** (or with retries surfaced) so
+      real-execution races like the ones fixed in run 9 are caught as flakes,
+      not as a one-off green.
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`

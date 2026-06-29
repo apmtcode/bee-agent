@@ -370,4 +370,40 @@ describe("BackgroundTaskExecutionService", () => {
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
   });
+
+  it("persists valid JSON launch state when the command contains single quotes and newlines", async () => {
+    // Regression: the launch script embeds a JSON state payload that is shell-quoted
+    // before being written. A buggy single-quote escape (`"'"'"'` instead of the
+    // POSIX `'"'"'`) corrupted the payload for any command containing a single
+    // quote, so the persisted state.json was invalid JSON and crashed recovery.
+    const rootDir = await makeTempDir();
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"));
+    const command = "printf 'line-1\nline-2\n'";
+    const task = await store.start({ title: "quoted command", command, cwd: rootDir });
+
+    const statePath = path.join(rootDir, task.execution.stateFile);
+    let parsed: BackgroundTaskExecutionState | undefined;
+    for (let attempt = 0; attempt < 200; attempt += 1) {
+      let raw = "";
+      try {
+        raw = await fs.readFile(statePath, "utf8");
+      } catch {
+        // launch script has not written the state file yet
+      }
+      if (raw.trim().endsWith("}")) {
+        // The whole point of the fix: this must parse rather than throw.
+        parsed = JSON.parse(raw) as BackgroundTaskExecutionState;
+        if (parsed.status !== "running") {
+          break;
+        }
+      }
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+
+    if (!parsed) {
+      throw new Error("launch script never persisted a state file");
+    }
+    expect(parsed.command).toBe(command);
+    expect(parsed.taskId).toBe(task.id);
+  });
 });

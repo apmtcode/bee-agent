@@ -9,6 +9,17 @@ import type { ReviewedExportManifest } from "../training/export-manifest.js";
 
 const tempDirs: string[] = [];
 
+// Deterministic background-task spawn: returns a fake child without actually
+// executing the launch script. Real execution (e.g. a `tail -f` task) keeps a
+// live subprocess that writes state.json asynchronously, racing the test's
+// manual writeState/recover calls — non-deterministic and environment-dependent.
+let fakeSpawnPid = 100000;
+function makeFakeSpawn(): NonNullable<
+  ConstructorParameters<typeof StandaloneOperatorRuntime>[0]["backgroundTaskSpawnProcess"]
+> {
+  return () => ({ pid: ++fakeSpawnPid, unref() {} });
+}
+
 async function makeTempDir(): Promise<string> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "operator-runtime-"));
   tempDirs.push(dir);
@@ -531,6 +542,7 @@ describe("StandaloneOperatorRuntime", () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
       backgroundTaskIsProcessRunning: () => false,
+      backgroundTaskSpawnProcess: makeFakeSpawn(),
     });
     const session = await runtime.startSession({ title: "Tasks", agentId: "main" });
 

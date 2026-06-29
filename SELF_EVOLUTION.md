@@ -6,6 +6,66 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-06-29 (run 9) — 🐞 Real bug: launch-script `shellQuote` corrupted background-task state JSON
+
+**Audited:** The build/test baseline itself. On a clean checkout in this
+environment, `npm test` was **3 failing / 171 passing** (not the 174/174 prior
+runs recorded) — and the failures were a *real product bug*, not flakes.
+
+**Root cause (genuine bug, fixed):** `src/harness/background-tasks.ts`
+`shellQuote()` escaped a single quote as `"'"'"'` (a stray leading `"`) instead
+of the POSIX `'"'"'`. The background-task launch script embeds a JSON state
+payload (`version/taskId/command/cwd/…`) and writes it via `printf '%s' '<json>'`.
+For **any task whose command or cwd contained a single quote** (e.g. the test's
+`printf 'line-1\nline-2\n'`), the mis-escape corrupted the persisted
+`state.json` into **invalid JSON**, which then threw `SyntaxError: Expected ','
+or '}'` inside `readJsonFile` and crashed crash-recovery
+(`reconcileTask`/`recoverBySession`). `src/training/runner.ts` already used the
+*correct* escape — confirming this was a one-off typo, not a pattern. One-char
+class fix; added an explanatory comment.
+
+**Why the tests were red here but "green" before:** the 3 failing tests
+actually **spawn real `bash`+`python3` launch scripts** (today's date showed up
+in the captured `state.json`). Prior environments evidently didn't execute them
+(or timed differently), masking both the JSON-corruption bug and a set of
+**real-execution races** — e.g. a long-running `tail -f`/`sleep` task whose
+async state write competed with the test's manual `writeState`, and a
+`printf ok` task that completed before `watch-active` could observe it as
+"active".
+
+**Changed (additive, test-determinism via the existing seam):**
+- **Product fix:** corrected `shellQuote` in `background-tasks.ts`.
+- **Product seam (additive):** `OperatorCliApp` now accepts
+  `backgroundTaskSpawnProcess` / `backgroundTaskIsProcessRunning` and threads
+  them to its runtime (mirrors the `configHome` test-seam precedent; production
+  default unchanged — real `spawn`).
+- **Deterministic tests:** injected a fake spawn (`{ pid, unref() }`, no live
+  subprocess) into the background-task tests in `operator-runtime.test.ts`,
+  `server.test.ts` (main + drifting + breaker runtimes), and the
+  `app.test.ts` session-lifecycle + background/monitor tests, seeding output and
+  running state by hand where the assertions need them. Removes the real-OS
+  dependency that made these tests environment- and load-sensitive.
+- **Regression test:** new `background-tasks.test.ts` case that runs the *real*
+  launch script with a single-quote+newline command and asserts the persisted
+  state stays valid JSON. Verified it **fails** (SyntaxError, pos 310) when the
+  bug is reintroduced and passes with the fix.
+
+**Test results:** `npm test` **3 failing → 175/175 passing** (174 + new
+regression test), **stable across 6 consecutive full runs** (was flaky 1-in-3
+before). `npm run build` ✅. `npm run typecheck:src` ✅ (source still clean).
+Full `tsc` total **125 → 125** (no test-debt regression from the new code).
+
+**New idea:** the launch script still relies on a fragile `printf … | sed
+"s/\"\$\$\"/$$/g"` to stamp the real PID into the initial running state — but
+that `$$` expands in bash *before* sed sees it, so the placeholder is never
+replaced and the initial state keeps `pid:"$$"` (a string) until the Python
+completion writer overwrites it. Harmless today but wrong for recovery of a
+still-running task. Replace the printf+sed initial-state write with the same
+Python `json.dumps` helper already used for the completed/failed transitions —
+one writer, guaranteed-valid JSON, real PID from the start. (Logged to ROADMAP.)
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
