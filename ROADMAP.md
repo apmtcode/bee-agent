@@ -59,18 +59,46 @@ unchecked items are queued. Keep this richer than you found it each run.
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
 (exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
-      objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Inventory what `src/capture` + `src/training` already implement vs. the
+      objective's five pieces (run 9). Gap found: capture→schema→dataset→replay
+      exists; the train/infer half was a cloud dead-end (only an mlx/axolotl shell
+      launch plan, no in-process model). Addressed below.
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      for a real on-device small model — DONE run 9 (`src/training/movement-model.ts`:
+      `MovementModelBackend` + `MarkovMovementBackend` reference + serialize/restore).
+- [x] Synthetic event-stream generator to validate capture→dataset→replay
+      round-trips without real OS input — DONE run 9 (`generateSyntheticMovementDataset`,
+      seedable mulberry32).
+- [~] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories. Started run 9 (`evaluateNextActionAccuracy`,
+      next-action argmax on held-out sequences). Next: closed-loop replay-fidelity
+      gate (generate rollouts → rebuild ReplayManifest → diff vs recorded).
+- [ ] Wire the movement-model backend into the training pipeline: have
+      `LocalTrainingExecutionService` (or the runner) train a `MarkovMovementBackend`
+      over the reviewed export's `replays` as a cloud-runnable smoke step before
+      emitting the on-device launch plan, and persist the snapshot.
+
+## Stop-the-bleed (pre-existing test regressions, found run 9)
+- [ ] **3 deterministic test failures on the clean tree** (predate run 9; verified
+      by stashing run-9 changes). Root cause for the loudest one:
+      `operator-runtime.test.ts` "starts, syncs, recovers..." → `recoverBackgroundTasks`
+      → `FileBackgroundTaskStore.reconcileTask` → `readJsonFile` throws
+      `SyntaxError: Expected ',' or '}' after property value in JSON at position 311`
+      reading a background-task **state file**. The two mega-tests
+      `server.test.ts` and `app.test.ts` ("handles session, transcript, ..." /
+      "supports session lifecycle, ...") also fail. Earlier logs reported 174/174,
+      so this regressed at some point between run 8 and run 9 without being caught
+      — strong argument for the `verify` pre-push gate below. Investigate the
+      state-file writer/`writeJsonAtomic` vs `readJsonFile` and the two
+      mega-tests; restore green before adding more test surface.
 
 ## Innovation backlog
+- [ ] **Closed-loop replay-fidelity gate** for the movement subsystem: train a
+      backend, `generate()` rollouts from recorded seeds, rebuild a
+      `ReplayManifest`, and diff against the recorded one — a single asserted
+      fidelity number that becomes the acceptance metric for a real on-device
+      backend (added run 9).
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in
       project health over time.

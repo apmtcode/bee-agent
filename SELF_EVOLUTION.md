@@ -6,6 +6,66 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-06-29 (run 9) — Movement-model backend: pluggable local model + deterministic Markov reference (objective #2c/#2d)
+
+**Audited:** The local-movement learning subsystem (`src/capture/` + `src/training/`)
+against standing objective #2. Found the capture→schema→dataset→replay half is
+real, but the **train/infer half was a dead end in the cloud**: the only "model"
+code is `LocalAppleSiliconTrainingRunner`, which emits an mlx/axolotl *shell
+launch plan* that can only execute on the user's Apple-Silicon machine. There
+was **no in-process model abstraction**, so objective #2(c) ("post-train a model
+to repeat recorded movements") and #2(d) ("generalize to new but related
+movements") had nothing testable behind them, and ROADMAP's "pluggable
+local-model backend with a deterministic mock" was unstarted.
+
+**Changed (additive — new module `src/training/movement-model.ts`):**
+- `MovementModelBackend` interface (`train(dataset, config) → TrainedMovementModel`)
+  — the pluggable seam a real on-device small-model backend implements without
+  touching call sites. `TrainedMovementModel` exposes `predictNext` / `generate`
+  / `serialize`.
+- `MarkovMovementBackend` — the deterministic reference backend: a variable-order
+  n-gram with stupid-backoff. **No randomness, no I/O**, so train+infer are pure
+  functions of the dataset and assertable in CI. Backoff is the generalization
+  mechanism: an unseen prefix is still predictable when its *suffix* was observed
+  (objective #2d), verified by a dedicated test.
+- Movement schema + canonical tokenizer (`MovementEvent`/`MovementSequence`/
+  `MovementDataset`, `tokenizeMovement`), dataset builders from recorded
+  trajectories (`buildMovementDataset`, prefers reviewed/redacted actions so only
+  consented movements train) and from replay manifests
+  (`buildMovementDatasetFromReplays`).
+- `generateSyntheticMovementDataset({seed,...})` — seedable (mulberry32, not
+  `Math.random`) synthetic movement-stream generator with motif structure, so the
+  capture→dataset→train→replay round-trip validates with **no real OS input**.
+- `evaluateNextActionAccuracy(model, sequences)` — the generalization eval
+  harness (next-action argmax accuracy on held-out sequences).
+- `restoreMovementModel(snapshot)` + `serialize()` round-trip so a trained model
+  is shippable/persistable. Exported the whole surface from `src/index.ts`.
+
+**Test results:** new `movement-model.test.ts` **12/12** (memorization, lexical
+tie-break determinism, suffix-backoff generalization, serialize/restore identity,
+both dataset builders, reproducible synthetic gen, held-out accuracy >0.5,
+train-set fidelity >0.8). `npm run build` ✅. `npm run typecheck:src` ✅ (source
+stays green). 
+
+**⚠️ Pre-existing unrelated failures (NOT caused by this run):** the full suite
+shows **3 failing tests** — `operator-runtime.test.ts` (background-task recovery
+hits a `SyntaxError: ... after property value in JSON` reading a state file via
+`readJsonFile`/`reconcileTask`), plus the `server.test.ts` and `app.test.ts`
+mega-tests. **Verified pre-existing**: `git stash`-ing this run's changes and
+running those three files on the clean tree reproduces all 3 failures. They are
+deterministic (fail in isolation, not flaky), in modules this run did not touch.
+Logged to ROADMAP as a stop-the-bleed item. This run's diff is additive and
+green on its own gates; pushed to the feature branch with the regression
+documented rather than silently shipped to main.
+
+**New idea:** add a **closed-loop replay-fidelity gate** — feed a trained
+movement model its own dataset's seeds, `generate()` rollouts, rebuild a
+`ReplayManifest` from them, and diff against the recorded manifest. That turns
+"did the model learn to repeat the movement?" into a single asserted number and
+becomes the acceptance metric for swapping in a real on-device backend.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
