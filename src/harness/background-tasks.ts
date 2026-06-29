@@ -108,6 +108,23 @@ export type SpawnBackgroundProcess = (
 
 export type IsProcessRunning = (pid: number) => boolean;
 
+/**
+ * Builds a {@link SpawnBackgroundProcess} that does NOT launch a real OS
+ * process: it hands back a synthetic, deterministic PID and never touches the
+ * filesystem or the OS scheduler. Use it for hermetic tests (so the launch
+ * script never races state-file writes against assertions) and for any
+ * dry-run / planning mode where the launch should be staged but not executed.
+ * Each call returns a distinct PID (starting from `startPid`) so multiple
+ * concurrent tasks remain distinguishable.
+ */
+export function createInertBackgroundSpawn(startPid = 900_000): SpawnBackgroundProcess {
+  let nextPid = startPid;
+  return () => {
+    const pid = nextPid++;
+    return { pid, unref() {} };
+  };
+}
+
 export type BackgroundTaskRecoveryReason =
   | "unchanged"
   | "state-running"

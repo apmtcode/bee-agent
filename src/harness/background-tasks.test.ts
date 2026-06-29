@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   BackgroundTaskExecutionService,
   FileBackgroundTaskStore,
+  createInertBackgroundSpawn,
   type BackgroundTaskExecutionState,
 } from "./background-tasks.js";
 
@@ -369,5 +370,42 @@ describe("BackgroundTaskExecutionService", () => {
     await expect(fs.readFile(path.join(rootDir, task.execution.launchScript), "utf8")).resolves.toContain("bash -lc");
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
+  });
+});
+
+describe("createInertBackgroundSpawn", () => {
+  it("hands back distinct synthetic PIDs without launching a process", () => {
+    const spawn = createInertBackgroundSpawn(900_000);
+    const first = spawn("ignored", [], { cwd: ".", env: {}, stdio: "ignore", detached: true });
+    const second = spawn("ignored", [], { cwd: ".", env: {}, stdio: "ignore", detached: true });
+
+    expect(first.pid).toBe(900_000);
+    expect(second.pid).toBe(900_001);
+    expect(typeof first.unref).toBe("function");
+    // unref must be a harmless no-op (never throws, returns nothing).
+    expect(first.unref()).toBeUndefined();
+  });
+
+  it("respects a custom starting PID", () => {
+    const spawn = createInertBackgroundSpawn(42);
+    expect(spawn("x", [], { cwd: ".", env: {}, stdio: "ignore", detached: true }).pid).toBe(42);
+  });
+
+  it("starts a task hermetically — no real process writes a state file", async () => {
+    const rootDir = await makeTempDir();
+    const store = new FileBackgroundTaskStore(
+      path.join(rootDir, "background-tasks.json"),
+      createInertBackgroundSpawn(),
+      () => false,
+    );
+    const task = await store.start({ title: "smoke", command: "printf ok", cwd: rootDir });
+
+    expect(task.status).toBe("running");
+    expect(task.execution.processId).toBe(900_000);
+    // The inert spawn never runs the launch script, so no execution state or
+    // output exists until the caller writes it explicitly. This is exactly the
+    // property that makes the suite deterministic under load.
+    await expect(store.getExecutionState(task.id)).resolves.toBeUndefined();
+    await expect(store.getOutput(task.id)).resolves.toBeUndefined();
   });
 });

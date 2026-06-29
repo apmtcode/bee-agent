@@ -70,6 +70,20 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Generalization eval harness: measure replay fidelity on held-out but
       related synthetic trajectories.
 
+## Test reliability / hermeticity
+- [x] **Hermetic background-task spawning** (2026-06-29, run 9). Tests injected a
+      mock `backgroundTaskIsProcessRunning` but not `spawnProcess`, so they
+      launched real OS processes that raced their state/output writes → 4
+      date/load-dependent failures. Added `createInertBackgroundSpawn()` (no real
+      process, synthetic PIDs), threaded `backgroundTaskSpawnProcess` +
+      `backgroundTaskIsProcessRunning` seams onto `OperatorCliAppOptions`, and
+      made the 4 affected tests hermetic. Suite green ×2 consecutive runs.
+- [ ] **Anti-flake guard:** a lint/test that flags any test constructing a
+      runtime/app with `backgroundTaskIsProcessRunning` but no
+      `backgroundTaskSpawnProcess` (the exact non-hermetic combo fixed in run 9).
+- [ ] Have the engine's pre-push self-check run the full suite **twice** (or with
+      `--sequence.shuffle`) to catch load/order-dependent flakes before pushing.
+
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in

@@ -6,6 +6,69 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-06-29 (run 9) — Hermetic background-task spawning: fixed 4 non-deterministic test failures + `createInertBackgroundSpawn`
+
+**Audited:** The green gate itself. On a fresh checkout of HEAD the suite was
+**RED** — `npx vitest run` reported **3 failed / 171 passed** (and a 4th,
+load-dependent failure surfaced once the first three were fixed). The previous
+run logged "174/174", so these were latent **non-hermetic / time-dependent**
+failures that only bite on certain wall-clock dates and machine speeds:
+- `operator-runtime.test.ts` "starts, syncs, recovers… background tasks":
+  `SyntaxError … in JSON at position 311` from `readState` — the test's
+  `writeState` raced the **real** bash launch script's `sed`-templated state
+  write.
+- `server.test.ts` "handles session…": `control.state` `degraded`/`mixed`
+  instead of `active` — a started background task's real process had already
+  exited (or not yet written), so `deriveRemoteDiagnostics` flagged
+  "background task missing-process".
+- `app.test.ts` "supports session lifecycle…": platform `control=mixed` vs
+  `active`, same root cause across 3 remotes.
+- `app.test.ts` "supports background and monitor task commands": `watch-active`
+  found no active task because the real `printf ok` process completed and
+  `background-sync` reconciled the record to terminal before the assertion.
+
+**Root cause (one):** these tests already inject a mock
+`backgroundTaskIsProcessRunning` (clear hermetic intent) but **forgot to mock
+`spawnProcess`**, so `FileBackgroundTaskStore.start()` launched real OS
+processes whose launch-script state/output writes raced the assertions. The
+design clearly expects no real process — e.g. `server.test.ts:1459` asserts
+`background.tasks.state` is `NOT_FOUND` immediately after start (only true when
+nothing wrote a state file).
+
+**Changed (additive):**
+- `src/harness/background-tasks.ts`: new exported
+  `createInertBackgroundSpawn(startPid = 900_000)` — a `SpawnBackgroundProcess`
+  that returns distinct synthetic PIDs and **never** launches a process or
+  touches the FS. Reusable for hermetic tests *and* any future dry-run/planning
+  mode that stages a launch without executing it.
+- `src/cli/app.ts`: threaded two optional, default-off seams onto
+  `OperatorCliAppOptions` — `backgroundTaskSpawnProcess` and
+  `backgroundTaskIsProcessRunning` — into the runtime it constructs (mirrors the
+  earlier `configHome` hermeticity seam). Production behaviour unchanged.
+- Tests: injected `createInertBackgroundSpawn()` into the 4 affected
+  runtime/app constructions (operator-runtime, server ×3 nested runtimes,
+  app ×2). The background-task half of the CLI-ops test was brought to the same
+  hermetic pattern its monitor half already used (explicit `writeOutput`/
+  `writeState`), with `isProcessRunning: () => true` so the task stays active
+  for `watch`/`stop`.
+- `src/harness/background-tasks.test.ts`: +3 tests covering the helper (distinct
+  PIDs, custom start PID, hermetic `start()` writes no state/output file).
+
+**Test results:** suite **3 failed/171 → 177 passed/177** (was 174; +3 new),
+**green across two consecutive full runs** (the load-dependent flake no longer
+reproduces). `npm run build` ✅. `npm run typecheck:src` ✅ (source stays
+clean). Pushed to `main` (green gate satisfied).
+
+**New idea:** add a tiny **anti-flake guard** — a lint/test that scans test
+files for a `StandaloneOperatorRuntime`/`OperatorCliApp` constructed with
+`backgroundTaskIsProcessRunning` but *without* `backgroundTaskSpawnProcess`, and
+fails (these are exactly the non-hermetic combos that just bit us). Longer term,
+have the engine's per-run pre-push self-check run the full suite **twice** (or
+with `--sequence.shuffle`) so load/order-dependent flakes are caught before a
+push rather than on the next checkout.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
