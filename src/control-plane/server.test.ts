@@ -8,6 +8,7 @@ import { OperatorCronService } from "./cron-service.js";
 import { OperatorDeliveryService } from "./delivery.js";
 import { buildRuntimeEventFilter, subscribeRuntimeEvents } from "./subscriptions.js";
 import { StandaloneOperatorRuntime } from "../orchestrator/operator-runtime.js";
+import { createInertBackgroundSpawn } from "../harness/background-tasks-testing.js";
 import type { ReviewedExportManifest } from "../training/export-manifest.js";
 
 const tempDirs: string[] = [];
@@ -84,6 +85,7 @@ describe("OperatorControlPlaneServer", () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir,
       backgroundTaskIsProcessRunning: () => false,
+      backgroundTaskSpawnProcess: createInertBackgroundSpawn(),
       delivery: new OperatorDeliveryService(rootDir, {
         sendBrowserPush: async () => {},
       }),
@@ -953,6 +955,7 @@ describe("OperatorControlPlaneServer", () => {
     const driftingRuntime = new StandaloneOperatorRuntime({
       rootDir: driftingRootDir,
       backgroundTaskIsProcessRunning: () => false,
+      backgroundTaskSpawnProcess: createInertBackgroundSpawn(),
     });
     const driftingServer = new OperatorControlPlaneServer({ runtime: driftingRuntime });
     const driftingBootstrap = await driftingServer.handle({
@@ -1019,6 +1022,7 @@ describe("OperatorControlPlaneServer", () => {
     const breakerRuntime = new StandaloneOperatorRuntime({
       rootDir: breakerRootDir,
       backgroundTaskIsProcessRunning: () => false,
+      backgroundTaskSpawnProcess: createInertBackgroundSpawn(),
     });
     const breakerServer = new OperatorControlPlaneServer({ runtime: breakerRuntime });
     const breakerOne = await breakerServer.handle({

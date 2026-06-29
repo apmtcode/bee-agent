@@ -4,6 +4,18 @@ Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
 ## Foundations / DX
+- [x] **Fix background-task launch-script defects** (2026-06-29, run 9) — the
+      running-state writer used `printf | sed "s/\"$$\"/$$/g"` which never matched
+      (`$` is a sed anchor), persisting `"pid":"$$"` so live tasks were flagged
+      `missing-process`; and the `> file` redirect exposed partial JSON to
+      readers. Replaced both running + completion writers with atomic python
+      writers (`tmp` + `os.replace`, real numeric pid). Made the affected
+      explicit-state tests hermetic via `createInertBackgroundSpawn()`.
+- [ ] **Remove the `python3` dependency from the background-task launcher.** The
+      launch script shells out to `python3` for all three state writes (initial
+      running + completion + failure). On a host without python3, tasks can't
+      record state. Either probe for python3 at startup (clear error / node
+      fallback) or replace the heredocs with a small bundled node state-writer.
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`

@@ -6,6 +6,61 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-06-29 (run 9) — 🐛 Fix background-task launch-script bug (3 failing tests → green) + hermetic spawn
+
+**Audited:** Ran the full suite on this environment and found the baseline was
+**NOT green** — 3 tests failed (`operator-runtime`, `server`, `app`), despite run
+8 logging 174/174. Root-caused two distinct, real defects in the background-task
+launch script (`src/harness/background-tasks.ts`):
+
+1. **Broken pid substitution (production bug).** The launch script seeded the
+   initial *running* state via `printf '<json>' | sed "s/\"\$\$\"/$$/g" > state`.
+   In sed `$` is an end-of-line anchor, so the pattern `"$$"` **never matched** —
+   the running state was persisted with `"pid":"$$"` (a literal string) instead
+   of the numeric pid. `defaultIsProcessRunning("$$")` then fails
+   `Number.isFinite` and returns **false**, so *every* live background task was
+   falsely flagged `missing-process`. That degraded control-plane health
+   (`control=degraded … background task missing-process`) — the cause of the
+   `app.test.ts` and `server.test.ts` (breaker) failures.
+2. **Non-atomic running-state write (race).** The same `> state` redirect
+   truncates-then-writes, exposing a *partially-written* single-line JSON to
+   concurrent readers → `SyntaxError: Expected ',' or '}' …` during
+   `recoverBackgroundTasks` (the `operator-runtime.test.ts` crash).
+
+**Changed:**
+- **`src/harness/background-tasks.ts`** — replaced the `printf | sed` running-state
+  write with a python writer (`renderRunningStateWriterPython`) that loads the
+  escaped JSON payload, sets the **real numeric pid** (`$$`) + timestamps, and
+  writes **atomically** via `tmp` + `os.replace`. Also made the existing
+  completion/failure writer (`renderStateWriterPython`) atomic the same way. Both
+  now match `writeJsonAtomic`'s rename semantics, eliminating partial reads.
+- **Test hermeticity (run-1 precedent).** Added
+  `src/harness/background-tasks-testing.ts` →
+  `createInertBackgroundSpawn()`: an inert spawn that returns a stable fake pid
+  and launches **no** real OS subprocess (so no state file is written behind the
+  test's back). Injected it via the existing `backgroundTaskSpawnProcess` seam
+  into the runtimes that drive explicit execution-state scenarios (the
+  operator-runtime recover/cancel test; server.test's main, drifting, and
+  breaker runtimes). Those tests already write every state via `writeState`, so
+  removing the racing real subprocess makes them deterministic — no production
+  behaviour relies on the inert spawn.
+
+**Test results:** the 3 affected files now pass **6/6** consecutive runs; full
+suite **174/174** green twice; `npm run build` ✅; `npm run typecheck:src` ✅
+(exit 0); full `tsc` debt unchanged at **125** (all test files). The pid fix is a
+genuine latent production bug that would mis-report task health on a real machine,
+not just a test artifact.
+
+**New idea:** the launch script still shells out to `python3` for all three state
+writes. That's an undeclared runtime dependency — on a host without `python3`,
+background tasks would fail to record state at all. Worth either (a) a startup
+capability probe that surfaces a clear error / falls back to a node-based state
+writer, or (b) replacing the python heredocs with a tiny bundled node helper
+script invoked by the launcher, removing the python dependency entirely. Logged
+to ROADMAP.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
