@@ -59,16 +59,31 @@ unchecked items are queued. Keep this richer than you found it each run.
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
 (exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
-      objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
-      deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+- [x] Inventory what `src/capture` + `src/training` already implement vs. the
+      objective's five pieces (run 9): capture/schema/dataset/replay existed;
+      the **train/infer loop's inference half was missing** — the runner only
+      emitted on-device *plans*, nothing learned/predicted in-cloud.
+- [x] Pluggable local-model backend interface (run 9) — `MovementModelBackend`
+      + deterministic `NGramMovementBackend` (cloud/CI) in
+      `src/training/movement-model.ts`; documented seam for a real on-device
+      small model. 15/15 tests.
+- [x] Generalization eval harness (run 9) — `MovementModel.evaluate` reports
+      held-out top-1 next-tool accuracy + mean back-off order; stupid-back-off is
+      the generalization mechanism. Demonstrated ≥0.75 accuracy on an app the
+      model never trained on.
+- [ ] Synthetic movement-stream generator (grammar-based) to mass-produce
+      labeled trajectories for a reproducible cross-run generalization benchmark
+      feeding `MovementModel.evaluate`.
+- [ ] `GgufMovementBackend`: load a real `model.gguf` produced by
+      `LocalAppleSiliconTrainingRunner` behind the `MovementModelBackend` seam,
+      so the cloud n-gram and the on-device model are interchangeable and
+      A/B-comparable on the same `evaluate()` harness.
+- [ ] **Fix launch-script JSON bug** (`src/training/runner.ts`
+      `renderLaunchScript`): the `sed` `$$`/timestamp substitution writes
+      malformed JSON, so `readJsonFile` throws `SyntaxError ... position 311` in
+      3 background-task tests (operator-runtime/server/app). Write state from
+      Python (as the completion path already does) or quote safely. Restores the
+      full-suite green gate.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

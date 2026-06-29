@@ -6,6 +6,72 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-06-29 (run 9) — 🧠 In-cloud movement model: learn → predict → generalize → rollout (objective #2 c+d)
+
+**Audited:** The local-movement learning subsystem (`src/capture` + `src/training`)
+against objective #2's five pieces (capture → schema → dataset → replay →
+train/infer). Found the **train/infer loop's inference half was entirely
+missing**: `LocalAppleSiliconTrainingRunner` only emits *plans / launch scripts*
+for real on-device runtimes (mlx / axolotl) — bee-agent had no code that could
+actually learn from recorded movements, predict the next one, or generalize. So
+the pipeline could never be validated end-to-end in the cloud (objective #2
+explicitly requires synthetic/simulated validation here, since we have no real
+machine).
+
+**Changed (additive) — new `src/training/movement-model.ts`:**
+- **Pluggable backend seam** `MovementModelBackend<TState>` (train / predict /
+  serialize / deserialize) so the deterministic cloud/CI model can be swapped for
+  a real on-device small model later without touching call sites (roadmap item).
+- **`NGramMovementBackend`** — deterministic n-gram over movement-tool tokens
+  with *stupid back-off*. It records transition frequencies at every context
+  length `order..0` and, when an exact context was never observed, falls back to
+  a shorter but related context. That back-off **is** the generalization
+  mechanism — it lets the model perform *new but related* movements, not only
+  exact replays. Picks a representative (most-frequent) summary per tool so
+  predictions are replayable. Predicts an `END` sentinel as a null step so
+  rollouts can stop naturally.
+- **`MovementModel`** orchestrator: train, `predictNext`, `generate` (greedy
+  rollout from a seed — "repeat the recorded movements"), `evaluate` (held-out
+  top-1 next-tool accuracy + mean back-off order as an honest generalization
+  signal), and `save`/`load` (atomic JSON round-trip, backend-checked).
+- **Adapters** `sequenceFromTrajectory` / `sequencesFromTrajectories` /
+  `sequenceFromReplayManifest` — build training sequences straight from the
+  existing `TrajectorySpan` and `ReplayManifest` formats, so the model consumes
+  the real recorded dataset, not a bespoke shape.
+- Exported the surface from `src/index.ts`.
+
+**Test results:** new `src/training/movement-model.test.ts` — **15/15 pass**
+(learns transitions; representative-summary selection; back-off generalization on
+unseen prefixes; rollout reproduces a recorded workflow and stops naturally;
+maxSteps cap; held-out accuracy ≥0.75 on an app never trained on; save/load
+predictions identical; backend-mismatch rejection; trajectory/replay adapters).
+`npm run typecheck:src` ✅ (source stays green). `npm run build` ✅.
+
+**⚠️ Pre-existing failures (NOT caused by this run, NOT mine):** the full suite
+shows **3 failing tests in files this run never touched** —
+`operator-runtime.test.ts`, `server.test.ts`, `app.test.ts`. Root cause is a
+deterministic `SyntaxError: Expected ',' or '}' ... position 311` from
+`readJsonFile` reading a background-task **state file written by the bash launch
+script** (`renderLaunchScript`'s `sed`/`$$` substitution) — i.e. container-shell
+behavior, unrelated to the movement model. They reproduce identically on the
+clean tree (186 passed / 3 failed with or without my diff). My change is purely
+additive (new module + barrel exports) and cannot affect those subsystems.
+Because the gate isn't fully green, this run pushes to the designated feature
+branch `claude/peaceful-dirac-38x8tn` (per the branch requirements) rather than
+main, and logs the blocker here.
+
+**New idea:** add a `MovementModelBackend` *adapter that wraps a real trained
+artifact* — once `LocalAppleSiliconTrainingRunner` produces a `model.gguf`, a
+`GgufMovementBackend` could load it for on-device inference behind the same seam,
+so the cloud n-gram and the real model are interchangeable and A/B-comparable on
+the same `evaluate()` harness. Also: a **synthetic movement-stream generator**
+(grammar-based) to mass-produce labeled trajectories for the eval harness, giving
+a reproducible generalization benchmark across runs. And fix the launch-script
+JSON bug above (quote `$$`/timestamp safely, or write state from Python not sed)
+to restore the full-suite green gate.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
