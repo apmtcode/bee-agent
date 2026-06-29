@@ -528,8 +528,13 @@ describe("StandaloneOperatorRuntime", () => {
   });
 
   it("starts, syncs, recovers, lists, and cancels background tasks", async () => {
+    // Inject a no-op spawn so the test never launches a real OS process. A real
+    // launch script would write its own state file asynchronously and race with
+    // the explicit writeState() calls below, making the test non-deterministic.
+    let nextFakePid = 4321;
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
+      backgroundTaskSpawnProcess: () => ({ pid: nextFakePid++, unref: () => {} }),
       backgroundTaskIsProcessRunning: () => false,
     });
     const session = await runtime.startSession({ title: "Tasks", agentId: "main" });

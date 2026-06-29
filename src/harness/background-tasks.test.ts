@@ -1,7 +1,11 @@
+import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
+
+const execFileAsync = promisify(execFile);
 import {
   BackgroundTaskExecutionService,
   FileBackgroundTaskStore,
@@ -369,5 +373,40 @@ describe("BackgroundTaskExecutionService", () => {
     await expect(fs.readFile(path.join(rootDir, task.execution.launchScript), "utf8")).resolves.toContain("bash -lc");
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
+  });
+
+  it("renders a launch script that produces a valid-JSON state file with a numeric pid for single-quoted commands", async () => {
+    const rootDir = await makeTempDir();
+    // A no-op spawner so start() only writes the launch artifacts; we execute the
+    // script ourselves and await completion so the assertions are deterministic.
+    const store = new FileBackgroundTaskStore(
+      path.join(rootDir, "background-tasks.json"),
+      () => ({ pid: 1234, unref() {} }),
+    );
+    // Command contains single quotes and embedded newlines — the exact shape that
+    // previously corrupted the JSON payload (broken shellQuote escape) and left
+    // pid as the literal string "$$" (broken sed substitution).
+    const task = await store.start({
+      title: "Quoted command",
+      command: "printf 'line-1\nline-2\n'",
+      cwd: rootDir,
+      kind: "task",
+    });
+
+    const scriptPath = path.join(rootDir, task.execution.launchScript);
+    await execFileAsync("bash", [scriptPath], { cwd: rootDir });
+
+    const raw = await fs.readFile(path.join(rootDir, task.execution.stateFile), "utf8");
+    // Regression: must parse — a mis-escaped single quote used to corrupt this file.
+    const state = JSON.parse(raw) as BackgroundTaskExecutionState;
+    expect(state.status).toBe("completed");
+    expect(state.exitCode).toBe(0);
+    // Regression: sed must replace the "$$" placeholder with the real numeric pid.
+    expect(typeof state.pid).toBe("number");
+    expect(Number.isInteger(state.pid)).toBe(true);
+
+    const output = await fs.readFile(path.join(rootDir, task.execution.outputFile), "utf8");
+    expect(output).toContain("line-1");
+    expect(output).toContain("line-2");
   });
 });

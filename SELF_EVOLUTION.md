@@ -6,6 +6,63 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-06-29 (run 9) — 🐞 Reliability: fix background-task/training state-file corruption (3 real bugs) + hermetic tests
+
+**Audited:** The actual `npm test` baseline — and found it was **not green**. 3–4
+tests failed *every* run (count varied run-to-run): `operator-runtime.test.ts`,
+`server.test.ts`, `app.test.ts` — all in the background-task / platform-control
+path. Past runs reported "174/174" because the failures are environment-timing
+sensitive and the engine had been checking typecheck, not re-running the suite to
+convergence. Root-caused three genuine **production** bugs in the launch-script
+generators (`src/harness/background-tasks.ts`, `src/training/runner.ts`):
+
+1. **`shellQuote` single-quote mis-escape (data corruption).**
+   `background-tasks.ts` replaced `'` → `"'"'"'` (6 chars, wrong order) instead of
+   the POSIX `'"'"'` (5 chars; `runner.ts` had it right). Any command containing a
+   single quote (e.g. `printf 'line-1\n…'`) corrupted the JSON state payload →
+   **deterministically malformed state file** → `SyntaxError` on read. Verified at
+   the shell level: buggy form turns `printf 'line-1\n'` into `printf "'line-1\n"'`.
+
+2. **`sed` PID-substitution quoting bug (wrong data).** The emitted
+   `sed "…; s/"$$"/$$/g"` had an *unescaped* `"` that terminated the double-quoted
+   sed program, so the intended `"$$"`→numeric-PID replacement silently never ran —
+   the "running" state file shipped `"pid":"$$"` (a string) in production. Fixed the
+   TS template escaping (`\\"\\$\\$\\"`) so it emits `s/\"\$\$\"/$$/g`; verified the
+   PID is now substituted as an integer.
+
+3. **Non-atomic state writes (torn reads).** The python completion-state writer used
+   `state_path.write_text(...)` (truncate-then-write) and the sed running-state used
+   a bare `>` redirect — a concurrent reader could observe a partial file. Made both
+   atomic: sed `> …tmp && mv`, python `write_text(tmp) + os.replace(tmp, state)`.
+
+**Also (test hermeticity):** three tests set `backgroundTaskIsProcessRunning:
+() => false` but still used the **real** `spawn`, so real launch scripts wrote
+state files asynchronously and raced the tests' own `writeState()` calls. Injected
+a no-op `backgroundTaskSpawnProcess: () => ({ pid, unref })` into the affected
+runtimes (`operator-runtime.test.ts`, and `server.test.ts`'s main + drifting +
+breaker runtimes) so they are deterministic — no real OS process is launched.
+
+**New test:** `background-tasks.test.ts` → "renders a launch script that produces a
+valid-JSON state file with a numeric pid for single-quoted commands" — *executes* a
+real launch script (single-quoted, newline-bearing command) to completion and
+asserts the state file parses, `status==="completed"`, and `pid` is an integer.
+Confirmed it **fails on the buggy `shellQuote`** and passes on the fix.
+
+**Test results:** before — 3–4 failing every run, non-deterministic. After —
+**175/175 passing, green across 6 consecutive full-suite runs** (operator-runtime
+8/8, server 10/10, background-tasks stable). Build ✅. `typecheck:src` ✅ (exit 0).
+Full `tsc` debt unchanged at **125** (all pre-existing, in test files).
+
+**New idea:** the engine's per-run self-check should run the suite **N times (or
+`vitest --retry=0` with a repeat loop) and require all-green**, not a single pass —
+today's latent failures hid behind single-run luck. Bigger: add a tiny
+`scripts/render-launch-script` golden test that snapshots the *emitted* shell for a
+quote/space/newline-heavy command and shell-lints it (`bash -n`), so launch-script
+quoting regressions are caught at authoring time across *both* generators (they
+already drifted once — `runner.ts` was correct, `background-tasks.ts` wasn't).
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

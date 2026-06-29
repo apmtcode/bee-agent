@@ -38,8 +38,20 @@ unchecked items are queued. Keep this richer than you found it each run.
     `skills.executable.*`, `push.subscriptions.*`, `trajectories.*`, `replays.*`,
     `cron.runs`/misc — plus a few genuine test-only typings. Map the rest, then
     fix residual test-only typings.
+- [x] **Make the test suite actually green** (2026-06-29, run 9). The suite had
+      3–4 *real* failures every run (background-task/platform-control path), hidden
+      because the engine checked typecheck not a re-run-to-convergence suite. Fixed
+      three production bugs in the launch-script generators (`shellQuote`
+      single-quote mis-escape → corrupt JSON; `sed` `"$$"` quoting bug → string pid;
+      non-atomic state writes → torn reads) and made three tests hermetic via an
+      injected no-op spawn. Now **175/175, green ×6 consecutive runs**.
 - [ ] Add a `verify` npm script (`typecheck && build && test`) and have the
-      engine run it as a pre-push self-check each cycle.
+      engine run it as a pre-push self-check each cycle. **Run the suite N times /
+      require all-green** — single-pass hid run-9's latent failures.
+- [ ] Launch-script golden+lint test: snapshot the *emitted* shell for a
+      quote/space/newline-heavy command and `bash -n` it, across **both**
+      generators (`background-tasks.ts` + `training/runner.ts` already drifted —
+      one had the correct single-quote escape, the other didn't).
 - [x] Interim **source-only typecheck gate** — DONE run 7. `tsconfig.src.json`
       (excludes `**/*.test.ts`) + `typecheck:src` script; passes (exit 0). Next:
       have the engine run it as a per-run pre-push self-check.
