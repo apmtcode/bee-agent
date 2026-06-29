@@ -6,6 +6,53 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-06-29 (run 9) — 🛠️ Reliability: atomic background-task state writes + deterministic test spawning (flaky suite → green)
+
+**Audited:** The actual `npm test` result on a clean tree — found the suite was
+**flaky**, not 174/174 as prior logs implied. Repeated runs failed a varying
+1–3 tests (operator-runtime background-tasks, server.test remote control,
+app.test platform list). Root-caused two distinct bugs:
+
+**Bug 1 — real production reliability defect in `src/harness/background-tasks.ts`.**
+The background-task **launch script wrote `state.json` non-atomically**, two ways:
+- the initial "running" state via `printf '%s' <payload> | sed "…s/\"\$\$\"/$$/g" > stateFile` — and the `sed` had **broken bash double-quote escaping** (`"$$"` closes the surrounding `"…"`), so for commands containing single quotes/newlines (e.g. `printf 'line-1\nline-2\n'`) the emitted JSON was *corrupt* (`"pid":"$$"` unreplaced, command quotes mangled) → `readState` threw `SyntaxError: Expected ',' or '}'`.
+- both the initial write (`> file`) and the Python completion writer (`write_text`) truncate-then-write **in place**, so any concurrent reader (`reconcileTask`/`sync` in production, or the test) could read a half-written file → torn JSON.
+
+**Fix (additive):** replaced the fragile `printf|sed` initial write with the
+*same* atomic Python writer used for completion — base state passed as one
+shell-quoted JSON argv and parsed by `json.loads` (no in-shell substitution),
+dynamic fields (pid via `$$`, timestamps) passed as argv. Both Python writers
+now write to `state.json.tmp` and `Path.replace()` (atomic rename) into place.
+This eliminates both the malformed-JSON bug and the torn-read race for **all**
+readers, not just tests. New helper `renderInitialStateWriterPython()`.
+
+**Bug 2 — non-deterministic tests spawning real processes.** `server.test.ts`
+(first `it`, plus drifting/breaker runtimes) and `operator-runtime.test.ts`
+(background-task `it`) constructed runtimes that **really spawned** `sleep 5` /
+`tail -f` / `printf`, then asserted on state. Two failure modes: (a) a
+fast-exiting process left `state.status:"running"` with a dead pid →
+`deriveRemoteDiagnostics` reported `missing-process` → remote control flipped
+`active`↔`degraded`/`mixed` (server.test:719, app.test platform list); (b)
+real-spawn resource contention under parallel suite load. **Fix:** inject a
+`backgroundTaskSpawnProcess` stub (`{pid:4242, unref(){}}`) — already an
+injectable seam (`StandaloneOperatorRuntime` option, used by
+`background-tasks.test.ts`) — so no launch script runs, no async state file is
+written, and tests drive state explicitly via `writeState`/`writeOutput`. Also
+stops `sleep`/`tail -f` process leakage.
+
+**Test results:** `npm test` **174/174, 8 consecutive runs, zero flakes** (was
+1–3 random failures per run). `typecheck:src` ✅ exit 0. Full `tsc` **125**
+(unchanged — all test-file debt). Build ✅. Diff: +55/−6 across 3 files.
+
+**New idea:** add a tiny `scripts/` "torn-write linter" — grep the codebase for
+state/JSON writes that use `>`/`write_text`/`writeFile` without a temp+rename
+companion, so the next non-atomic persistence path is caught at authoring time.
+Bigger: a `verify:flake` mode that runs the suite N× (e.g. 5) in the per-run
+self-check, so flakiness is treated as a failing gate rather than discovered by
+luck (this run only found it because I ran the suite repeatedly).
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

@@ -15,6 +15,16 @@ async function makeTempDir(): Promise<string> {
   return dir;
 }
 
+// Deterministic stand-in for the real child-process launcher. It never spawns a
+// process, so no launch script runs and no execution-state file is written
+// asynchronously — tests drive state explicitly via writeState/writeOutput. This
+// removes the race where a fast-exiting real process makes a "running" task look
+// like a missing-process, and stops `sleep`/`tail -f` processes from leaking.
+const stubSpawnBackgroundProcess = (_command: string, _args: string[], _options: { cwd: string }) => ({
+  pid: 4242,
+  unref() {},
+});
+
 function buildHookCaptureCommand(outputFile: string): string {
   const script = [
     "import fs from 'node:fs';",
@@ -531,6 +541,7 @@ describe("StandaloneOperatorRuntime", () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
       backgroundTaskIsProcessRunning: () => false,
+      backgroundTaskSpawnProcess: stubSpawnBackgroundProcess,
     });
     const session = await runtime.startSession({ title: "Tasks", agentId: "main" });
 

@@ -4,6 +4,21 @@ Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
 ## Foundations / DX
+- [x] **Reliability: atomic background-task state writes** (2026-06-29, run 9) —
+      the launch script wrote `state.json` non-atomically and with a broken
+      `sed` quote-escape that corrupted JSON for quote/newline-bearing commands.
+      Replaced with the atomic temp+`Path.replace()` Python writer for both
+      initial and terminal state. Fixes torn reads for all readers, not just tests.
+- [x] **Deterministic test spawning** (2026-06-29, run 9) — `server.test.ts` and
+      `operator-runtime.test.ts` spawned real `sleep`/`tail -f`/`printf`,
+      causing active↔degraded control-state flakiness and process leaks. Injected
+      a `backgroundTaskSpawnProcess` stub. Suite now 174/174 across 8 runs.
+- [ ] **`verify:flake` self-check** — run the suite N× (e.g. 5) in the engine's
+      per-run pre-push gate so flakiness fails the gate instead of being found by
+      luck. (Run 9 only caught the flake by running the suite repeatedly.)
+- [ ] **Torn-write linter** — grep for state/JSON writes using
+      `>`/`write_text`/`writeFile` without a temp+rename companion, to catch the
+      next non-atomic persistence path at authoring time.
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`
