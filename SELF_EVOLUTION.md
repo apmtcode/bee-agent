@@ -6,6 +6,58 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-06-30 (run 9) — 🐞 Background-task launch script: 3 real reliability bugs fixed; suite restored to green (174/174, stable ×6)
+
+**Audited:** The actual build/test baseline in this cloud environment. Found the
+suite was **not** green here — 3–4 tests failed *flakily* every run (prior runs
+reported 174/174 from a faster machine). Root-caused three genuine production
+bugs in `src/harness/background-tasks.ts`'s detached launch script, all
+masked-by-timing rather than test-only:
+
+1. **Broken `shellQuote` single-quote escaping (data corruption).** The helper
+   escaped `'` as `"'"'"'` (leading `"`) instead of the POSIX-correct `'"'"'`.
+   Every embedded single quote rendered as the two chars `"'`, so **any** command
+   or JSON payload containing a `'` (e.g. `printf 'line-1\nline-2\n'`) produced a
+   corrupted state file → `JSON.parse` `SyntaxError` at read time, *and* corrupted
+   the `bash -lc <command>` the task actually runs. Fixed the escape + documented
+   the invariant.
+2. **Broken pid substitution (all long-running tasks looked dead).** The state
+   payload used `pid:"$$"` and a `sed "…s/\"\$\$\"/$$/g"` whose unescaped `"`
+   closed the shell's double-quote, collapsing the command to `s/<pid>/<pid>/g`
+   — it never substituted the literal `"$$"`. Running tasks kept a non-numeric
+   `"pid":"$$"`, so `isProcessRunning` saw `NaN` → every still-running task was
+   reconciled to `missing-process`/`failed` (instant tasks only survived because
+   the Python writer later overwrites pid). Switched to a quote-free
+   `__OPENCLAW_PID__` placeholder with correct escaping; verified the emitted
+   state now carries a numeric pid and `sleep 5` is correctly seen as *running*.
+3. **Non-atomic state writes (torn reads).** Both the initial `printf|sed >file`
+   and the Python completion writer wrote the state file in place, so a concurrent
+   `readState` could observe a partial file. Made both atomic (write temp →
+   `mv`/`os.replace`).
+
+**Hermeticity follow-up:** the reconcile/recovery tests that mock
+`isProcessRunning: () => false` were *also* racing the real detached process —
+diagnostics flip between `active` and `degraded:missing-process` purely on whether
+the launch script's `state.json` landed before the assertion. Added
+`src/harness/background-tasks.test-support.ts#createInertBackgroundSpawn` (fake
+pid, no real process, writes no state) and wired it into the 4 mocked runtimes
+(operator-runtime.test ×1, server.test ×3). Now the only execution state is what
+the test writes explicitly — fully deterministic. (Not bundled: not imported by
+`index.ts`/`entry.ts`.)
+
+**Test results:** `npm run build` ✅. `npm test` ✅ **174/174, stable across 6
+consecutive runs** (was 3–4 flaky failures at run start). `typecheck:src` ✅ (exit
+0). Full `tsc` unchanged at **125** (pre-existing test-file debt).
+
+**New idea:** add a tiny `renderLaunchScript` unit test that asserts the *emitted
+bash* round-trips a command containing single quotes, double quotes, and newlines
+through to a valid, numeric-pid state file — a regression guard so shell-escaping
+bugs like #1/#2 are caught at the unit level instead of surfacing as flaky
+integration races. Bigger: a `shellQuote` property test (fuzz arbitrary strings →
+`bash -c 'printf %s'` → expect identity) to lock the escaping invariant forever.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

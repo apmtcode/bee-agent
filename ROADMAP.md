@@ -4,6 +4,20 @@ Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
 ## Foundations / DX
+- [x] **Background-task launch-script reliability** (2026-06-30, run 9) — fixed
+      3 real production bugs in `src/harness/background-tasks.ts`: malformed
+      `shellQuote` single-quote escaping (`"'"'"'`→`'"'"'`) that corrupted any
+      command/payload with a `'`; broken pid `sed` substitution that left running
+      tasks with a non-numeric `"pid":"$$"` so they all reconciled to
+      `missing-process`; and non-atomic state writes (torn reads → `JSON.parse`
+      crashes). Restored the suite to a stable 174/174 in cloud CI.
+- [x] Test hermeticity for background tasks (2026-06-30, run 9) — added
+      `createInertBackgroundSpawn` test-support so mocked-`isProcessRunning`
+      reconcile tests no longer race a real detached process.
+- [ ] **`renderLaunchScript` regression unit test** — assert the emitted bash
+      round-trips a command with single/double quotes + newlines into a valid,
+      numeric-pid state file. Add a `shellQuote` property/fuzz test (arbitrary
+      string → `bash -c 'printf %s'` → identity) to lock the escaping invariant.
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`
