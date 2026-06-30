@@ -370,4 +370,40 @@ describe("BackgroundTaskExecutionService", () => {
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
   });
+
+  it("writes a valid JSON state file with a numeric pid for commands containing single quotes", async () => {
+    // Regression: the launch script used to build the running-state file with a
+    // `printf <shell-quoted-json> | sed "s/\"$$\"/$$/g"` pipeline. A shifted
+    // single-quote escape in shellQuote() plus an unescaped inner quote in the
+    // sed program corrupted any command containing a single quote and left the
+    // pid as the literal string "$$" — so the task was forever reported as a
+    // dead ("missing-process") process. The launch script now fills the state
+    // via python3, the same writer used on completion.
+    const rootDir = await makeTempDir();
+    // Use the real spawn so the rendered launch script actually executes.
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"));
+    const command = "printf 'it'\\''s done'";
+    const task = await store.start({ title: "Quoted command", command, cwd: rootDir });
+
+    const stateFile = path.join(rootDir, task.execution.stateFile);
+    let state: BackgroundTaskExecutionState | undefined;
+    for (let attempt = 0; attempt < 60; attempt += 1) {
+      try {
+        const raw = await fs.readFile(stateFile, "utf8");
+        state = JSON.parse(raw) as BackgroundTaskExecutionState;
+        if (state.status === "completed") {
+          break;
+        }
+      } catch {
+        // file not written yet, or mid-write — retry
+      }
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+
+    expect(state).toBeDefined();
+    expect(state?.status).toBe("completed");
+    expect(typeof state?.pid).toBe("number");
+    expect(state?.command).toBe(command);
+    expect(state?.exitCode).toBe(0);
+  });
 });

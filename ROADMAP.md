@@ -4,6 +4,13 @@ Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
 ## Foundations / DX
+- [x] **Fix background-task launch JSON corruption + de-flake suite** (run 9,
+      2026-06-30). Two real bugs in `src/harness/background-tasks.ts`: a shifted
+      single-quote escape in `shellQuote` (mangled any value with a `'`) and a
+      broken `printf|sed` state writer (left `pid` as the string `"$$"` → tasks
+      falsely `missing-process`/`degraded`). Replaced `printf|sed` with a
+      `python3` writer; stubbed `spawnProcess` in the racy background-task tests;
+      added a regression test. 175/175 green, stable.
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`
@@ -80,6 +87,15 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Barrel-collision lint: scan `src/index.ts` re-exports for names exported
       from more than one module and flag them, so duplicate-identifier debt is
       caught at authoring time instead of accumulating silently.
+- [ ] **Launch-script self-validation** (run-9 idea): before running the user
+      command, have the launch script re-parse the running-state JSON it just
+      wrote (`python3 -c "json.loads(...)"`) and abort if unparseable — so a
+      future quoting bug fails loudly at task start instead of silently
+      mislabelling a live task as dead.
+- [ ] **No-real-spawn test guard** (run-9 idea): a tiny lint/test that flags any
+      `StandaloneOperatorRuntime` / `FileBackgroundTaskStore` constructed in a
+      `*.test.ts` without a stubbed `spawnProcess`, so no future test
+      reintroduces a real detached-process race against hand-written state.
 - [ ] Per-module typecheck ratchet: record each module's current `tsc` error
       count to a baseline file and fail if a module regresses above it. Lets the
       engine pay debt down module-by-module without one green-gate blocking

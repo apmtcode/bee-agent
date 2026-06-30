@@ -6,6 +6,62 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-06-30 (run 9) — Fix two real background-task launch bugs (corrupt state pids) + de-flake the suite
+
+**Audited:** The build/test baseline — and found a genuine **regression**: 3 tests
+failing (171/174). Root-caused two distinct, latent **production** bugs in the
+background-task launch path (`src/harness/background-tasks.ts`), both around how
+the detached launch script writes its execution-state JSON.
+
+**Bug 1 — `shellQuote` shifted single-quote escape.** It replaced each `'` with
+`"'"'"'` (6 chars, starts with `"`) instead of the POSIX idiom `'\''` /
+`'"'"'` (starts with `'`). Any value containing a single quote — `printf '...'`,
+`git commit -m '...'`, a path like `it's` — was mangled into invalid JSON.
+Verified empirically: the buggy quote produced `{"command":"printf "'line-1...`
+(quotes shifted); the fix produces byte-identical output to the input.
+
+**Bug 2 — `printf <json> | sed "s/\"$$\"/$$/g"` initial-state write.** The
+rendered sed program had an *unescaped* inner `"` (the source `\"` renders to a
+bare `"` on disk), which closed bash's double-quote so the `$$` in the **pattern**
+expanded to the shell PID instead of staying the literal `"$$"`. Net result: the
+substitution never matched and the state file's `pid` stayed the **string**
+`"$$"`, so `isProcessRunning("$$")` was always false → every task was reported as
+a dead `missing-process` → remotes went `degraded`. Confirmed by inspecting a
+real `sleep 5` task's state (`"pid":"$$"`, `ISPROCESSRUNNING($$)=false`).
+
+**Fix (additive):** corrected `shellQuote`, and **replaced the whole
+`printf|sed` pipeline with a `python3` writer** (`renderInitialStateWriterPython`)
+— the same robust `json.dumps` writer already used on completion. The running
+pid and timestamps are now filled by python, not shell placeholders. After the
+fix the same task writes `"pid": 7397` and `ISPROCESSRUNNING(7397)=true`.
+
+**De-flaked the suite (test hermeticity).** The three failing integration tests
+spawn *real* detached launch processes that asynchronously write the same state
+files the tests drive by hand — a race that flipped with environment timing.
+Stubbed `backgroundTaskSpawnProcess` in the operator-runtime test and all three
+background-task server tests (they already stub `isProcessRunning`), so the
+launch script never runs. `app.test` deliberately keeps the real spawn — it
+asserts real process semantics (a live `sleep` vs a dead pid 999999), which the
+launch fix now makes deterministic.
+
+**Added** a regression test (`background-tasks.test.ts`) that runs the *real*
+launch script with a single-quote command and asserts the state file is valid
+JSON with a **numeric** pid and the command preserved — it fails on either old bug.
+
+**Test results:** 171/174 failing → **175/175 passing**, stable across 5 full-suite
+runs + 8 isolated runs of the previously-flaky test. `typecheck:src` ✅ (exit 0).
+Build ✅. Full `tsc` unchanged at **125** (no test-debt regression).
+
+**New idea:** add a tiny **launch-script self-validation** step — before running
+the user command, the script `python3 -c "json.loads(open(state).read())"` and
+aborts if the running-state it just wrote isn't parseable. Defense-in-depth so a
+future quoting bug fails loudly at task start instead of silently mislabelling a
+live task as dead. Pair with a test-only lint that flags any
+`StandaloneOperatorRuntime`/`FileBackgroundTaskStore` constructed in a `*.test.ts`
+without a stubbed `spawnProcess`, so no future test reintroduces a real-process race.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
