@@ -62,13 +62,33 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      for a real on-device small model — DONE run 9. `src/training/movement-model.ts`:
+      `LocalMovementModelBackend`/`MovementModelHandle` interfaces +
+      `MarkovMovementBackend` (in-process, deterministic, serializable). Trains,
+      predicts, generates, generalizes — all cloud-testable.
+- [x] Generalization eval harness — DONE run 9. `evaluateMovementModel` scores
+      next-movement top-1/top-K accuracy on held-out related sequences; test
+      proves context model beats a unigram baseline.
+- [ ] `OnDeviceMovementBackend`: conform `LocalMovementModelBackend` to the
+      existing `LocalAppleSiliconTrainingRunner` shell plan (train) + a loaded
+      mlx/gguf model (infer), and add a backend **registry** so the training job
+      manifest can name its backend (`markov-local` | `mlx-on-device`).
+- [ ] Synthetic movement-stream generator: parametric trajectories
+      (app × gesture-grammar) to validate capture→dataset→replay round-trips
+      without real OS input AND to sweep held-out difficulty in the eval.
+
+## Reliability
+- [ ] **Make the training/background-task state-writer hermetic.** The launch
+      script (`runner.ts` `renderStateWriterPython`) and background-task
+      execution write run state via spawned `bash`+`python3`+`sed`+`date`. In
+      restricted sandboxes this emits **malformed JSON** → `readJsonFile`
+      `SyntaxError`, failing 3 subprocess tests (operator-runtime, app ×2,
+      server) on this cloud env (confirmed pre-existing on clean HEAD run 9).
+      Replace the shell/python JSON emission with an in-process Node writer (or a
+      tiny embedded writer that doesn't depend on host `python3`/`sed`) so the
+      state file is always valid JSON regardless of OS.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

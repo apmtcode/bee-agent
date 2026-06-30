@@ -6,6 +6,73 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-06-30 (run 9) — 🧠 Pluggable local-model backend: in-process movement training + inference + generalization eval
+
+**Audited:** The local-movement learning subsystem (`src/training/runner.ts`,
+`execution-service.ts`) against standing objective #2(d) — "post-train a local
+model on the dataset to repeat the recorded movements, and generalize to perform
+new but related movements." Finding: the runner only emits **Apple-Silicon shell
+plans** (mlx/axolotl `python3` commands + a generated launch script). That seam
+is right for production on-device training, but it means **nothing could train or
+run inference in the cloud/CI** — the end-to-end pipeline
+(capture → dataset → train → infer) had no runnable, testable backend. This was
+the roadmap's top movement item ("pluggable local-model backend with a
+deterministic mock") and the generalization-eval item.
+
+**Changed (additive — two new files, barrel exports only):**
+- **`src/training/movement-model.ts`** — a backend-agnostic seam plus a real
+  in-process reference backend:
+  - `tokenizeMovement(event)` → canonical, order-stable movement tokens
+    (`tool:gesture:direction:slug`, casing/punctuation-normalized so
+    "tapped Login!" == "Tapped login").
+  - `extractMovementSequences(trajectories)` /
+    `extractMovementSequencesFromReplays(manifests)` — build per-trajectory
+    movement sequences from the existing `TrajectorySpan` / `ReplayManifest`
+    schemas (validates the dataset format against real types).
+  - `LocalMovementModelBackend` interface (`id`, `train`, `load`) +
+    `MovementModelHandle` (`predictNext`, `generate`, `serialize`) — the
+    documented pluggable seam for a future on-device small model.
+  - `MarkovMovementBackend` — a **deterministic** variable-order Markov model
+    with interpolated backoff. It *memorizes* recorded movement runs (high-order
+    context replays them exactly) and *generalizes* to related-but-unseen
+    prefixes via shorter shared context. JSON-serializable, byte-stable
+    round-trip, BOS/EOS sentinels so `generate()` knows when to stop. No OS
+    input, no Python, no `Math.random`/`Date`.
+  - `evaluateMovementModel(model, heldOut, k)` — generalization harness:
+    next-movement top-1/top-K accuracy over held-out (but related) sequences.
+- **`src/training/movement-model.test.ts`** — 10 tests: tokenization stability,
+  sequence extraction/ordering, memorize-and-replay, generalization to an unseen
+  prefix, normalized deterministic predictions, serialize/reload identity, EOS
+  stop, and an eval proving the context model **beats a unigram baseline** on
+  held-out movements (1.0 vs 0.83 top-1).
+- Exported the new surface from `src/index.ts`.
+
+**Test results:** new suite ✅ **10/10**. Source typecheck (`typecheck:src`) ✅
+exit 0. Build ✅ (tsdown, 5 files, 543 kB). Full suite **181/184**.
+
+**⚠️ 3 pre-existing failures (NOT from this change):**
+`operator-runtime.test.ts`, `app.test.ts` (×2), `server.test.ts` (×1) — all in
+the **background-task/cron/monitor subprocess path**. Root cause: the spawned
+bash+`python3` state-writer (`runner.ts` `renderStateWriterPython` /
+`background-tasks` execution) emits **malformed JSON** in this cloud sandbox, so
+`readJsonFile` throws `SyntaxError: Expected ',' or '}'`. Verified identical on a
+clean `git stash` of HEAD (3 failed both with and without my diff), so this is an
+**environment/sandbox artifact of detached subprocess + shell `date`/`sed`/python
+behavior**, not a regression. Logged to ROADMAP as a real fix to make the
+state-writer hermetic (in-process JSON instead of shell+python).
+
+**New idea (next):** add an `OnDeviceMovementBackend` adapter that conforms to
+`LocalMovementModelBackend` but delegates `train` to the existing
+`LocalAppleSiliconTrainingRunner` shell plan and `load`/`predictNext` to a
+loaded mlx/gguf model — unifying the cloud-testable Markov backend and the
+real on-device path behind one interface, with a backend *registry* so the
+training job manifest can name its backend (`markov-local` | `mlx-on-device`).
+Bigger: a **synthetic movement-stream generator** that emits parametric
+trajectories (app × gesture-grammar) so the generalization eval can sweep
+held-out difficulty and chart fidelity vs. context order.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
