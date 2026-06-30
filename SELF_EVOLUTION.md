@@ -6,6 +6,63 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-06-30 (run 9) — In-process pluggable movement-model backend (objective #2 c/d)
+
+**Audited:** The local-movement learning subsystem (`src/capture` + `src/training`).
+Found the pipeline covers capture → schema (`trajectory.ts`) → dataset
+(`exporter.ts`) → replay (`replay.ts`) → an **external** training runner
+(`runner.ts` emits an MLX/axolotl launch *script* that runs outside this
+process). The decisive gap: there was **no in-process model** that actually
+*trains and predicts movements*, so objective #2 parts (c) "post-train a local
+model to repeat recorded movements" and (d) "generalize to new but related
+movements" could not be exercised at all in the cloud/CI.
+
+**Changed (additive):** new `src/training/movement-model.ts` — a pluggable
+`MovementModelBackend` seam with a deterministic mock implementation:
+- **Backend interface** (`MovementModelBackend` / `MovementModel`) so a real
+  on-device small model can drop in later; the mock is always available for CI.
+- **`DeterministicMovementBackend`** — a back-off n-gram Markov model over
+  movement tokens. Pure argmax with a lexicographic tie-break ⇒ identical
+  dataset always yields identical model + rollouts (no `Math.random`/`Date`).
+  - **Repeats** recorded movements: `generate([])` reproduces the dominant
+    recorded sequence (START-padding + END termination learned).
+  - **Generalizes**: a novel prefix backs off to a shorter observed context and
+    still predicts the recorded continuation (`contextOrder` reports the level).
+  - JSON `toJSON()`/`load()` round-trip so trained policies are replayable.
+- **Tokenization helpers**: `canonicalMovementToken`,
+  `trajectoryToMovementSequence`, `replayManifestToMovementSequences`,
+  `buildMovementDataset` — bridge the existing trajectory/replay schema to the
+  model.
+- **`evaluateMovementModel`** — generalization eval harness (top-1 accuracy +
+  perplexity over held-out sequences; counts END so "knowing when to stop"
+  scores).
+- **`generateSyntheticMovementSequences`** — deterministic seeded (LCG) synthetic
+  movement-stream generator with a branching workflow grammar, to validate
+  pipelines without real OS input.
+- Barrel-exported all of the above from `src/index.ts`.
+
+**Test results:** new `movement-model.test.ts` ✅ **18/18** (repeat, predict,
+branch-frequency, determinism, back-off generalization, JSON round-trip,
+untrained-safety, eval accuracy/perplexity, synthetic determinism). Source-only
+typecheck `tsconfig.src.json` ✅ exit 0. Build ✅ (5 files, 546 kB).
+
+**⚠️ Pre-existing red suite (NOT caused by this run):** full `npm test` shows
+**3 failing tests that already fail on the prior commit `3c7b7236`** (verified by
+`git stash -u` + re-run): `operator-runtime.test.ts` (background-task recovery),
+`server.test.ts` and `app.test.ts` (large kitchen-sink expectation mismatches).
+Root cause of the operator-runtime one is concrete and small: `readJsonFile`
+(`src/shared/fs.ts`) does a bare `JSON.parse` and **throws** on the
+deliberately-corrupt state fixture the recovery test writes — but
+`BackgroundTaskExecutionService.readState` is meant to *tolerate* a partial/
+corrupt state file (crash mid-write) and treat it as recoverable. A prior run
+pushed this red; this run's change is strictly additive + green and does not
+touch those paths. Logged as the **top priority** for run 10 in ROADMAP.
+
+**New idea:** an **inference-replay bridge** — feed `model.generate()` output
+back through the existing `replay-service` so a trained movement model can drive
+the replay engine directly (closing the loop from "learned policy" to "executed
+movements"), with a fidelity metric comparing generated vs. recorded timelines.
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

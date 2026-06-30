@@ -45,6 +45,19 @@ unchecked items are queued. Keep this richer than you found it each run.
       have the engine run it as a per-run pre-push self-check.
 - [ ] Add a minimal CI workflow mirroring `verify` for human-opened PRs.
 
+## 🔴 Pre-existing red suite (TOP PRIORITY — surfaced run 9)
+Full `npm test` has **3 failures already present on commit `3c7b7236`** (a prior
+run pushed them; verified independent of run 9's additive change):
+- [ ] `operator-runtime.test.ts` — background-task recovery. **Concrete fix:**
+      `readState`/`readJsonFile` must tolerate a corrupt/partial state file
+      (return `undefined` on `JSON.parse` failure, like ENOENT) so a crash
+      mid-write is recoverable instead of throwing `SyntaxError`. Scope the
+      tolerance to state reads (don't silently swallow corruption everywhere).
+- [ ] `server.test.ts` — kitchen-sink "handles session…orchestration" expectation
+      mismatch (`result` shape diverged from the test's expected object).
+- [ ] `app.test.ts` — kitchen-sink "session lifecycle…prompt commands" mismatch.
+      Likely the same root cause as the server one (app drives the server).
+
 ## Capability parity (audit reference agents → port gaps)
 - [ ] Build a "capability inventory" generator: enumerate bee-agent's exported
       RPC/tool surface (`src/index.ts`) and diff it against `openclaw`,
@@ -59,16 +72,28 @@ unchecked items are queued. Keep this richer than you found it each run.
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
 (exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
-      objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Inventory what `src/capture` + `src/training` already implement vs. the
+      objective's five pieces (run 9): capture/schema/dataset/replay all exist;
+      the missing piece was **in-process train→infer** (runner only emits an
+      external MLX/axolotl script).
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      for a real on-device small model — DONE run 9 (`movement-model.ts`:
+      `MovementModelBackend` + `DeterministicMovementBackend` back-off n-gram).
+- [x] Synthetic event-stream generator to validate capture→dataset→replay
+      round-trips without real OS input — DONE run 9
+      (`generateSyntheticMovementSequences`, deterministic LCG + workflow grammar).
+- [x] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories — DONE run 9 (`evaluateMovementModel`:
+      top-1 accuracy + perplexity, END-aware).
+- [ ] **Inference-replay bridge** (new, run 9): feed `model.generate()` output
+      back through `replay-service` so a trained policy can drive the replay
+      engine directly; add a fidelity metric (generated vs. recorded timeline).
+- [ ] Wire the real on-device backend: have `runner.ts`/`execution-service`
+      select between the external MLX/axolotl script and an in-process backend
+      implementing `MovementModelBackend`, chosen by the job manifest.
+- [ ] Richer movement tokenization: parameterized tokens (e.g. coordinates,
+      key chords) so generalization can interpolate, not just back off.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
