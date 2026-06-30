@@ -59,16 +59,42 @@ unchecked items are queued. Keep this richer than you found it each run.
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
 (exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
+- [x] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
-      deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
+      — done run 9: capture/schema/dataset/replay were scaffolded; the
+      **train→infer** piece was missing (runner only emitted external launch
+      scripts). That gap is what run 9 filled.
+- [x] **Pluggable local-model backend interface** for the movement subsystem
+      with a deterministic mock backend (so cloud/CI tests pass) and a documented
+      seam for a real on-device small model — DONE run 9
+      (`src/training/movement-model.ts`: `MovementModelBackend` +
+      `MarkovMovementBackend` back-off Markov mock; train → replay-exact (c) →
+      recombine/generalize (d); serialize round-trip; dataset extraction from
+      trajectories & replay manifests).
 - [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      round-trips without real OS input. (Run 9 added `extractMovementDataset` /
+      `movementSequenceFromReplay`; still want a **probabilistic-grammar
+      generator** — states → weighted gestures → train/held-out splits — to drive
+      the eval harness at scale.)
+- [~] Generalization eval harness — STARTED run 9: `evaluateReplayFidelity` +
+      `evaluateNextTokenAccuracy` (teacher-forced top-1 over held-out sequences).
+      Next: feed it synthetic splits and report **replay-fidelity & next-token
+      accuracy vs. Markov order** as tracked curves.
+- [ ] Wire the movement model into the runner/exporter: have the reviewed export
+      ship a `MovementDataset` and let `runner.ts` train the mock backend in-proc
+      as a dry-run fidelity check before emitting the on-device MLX launch script.
+
+## Test health (pre-existing flakes — fix in isolation)
+- [ ] **Background-task spawn race** (3 failing tests as of run 9:
+      `operator-runtime`, `control-plane/server`, `cli/app`). These call
+      `startBackgroundTask`, which spawns a **real detached process**; only
+      `backgroundTaskIsProcessRunning` is mocked, not the spawner. The live
+      process rewrites the task state file while the test reads it →
+      `readJsonFile` parses a half-written file → `SyntaxError ... position 311`,
+      plus `control=degraded` / result-shape mismatches. **Fix:** inject a
+      deterministic mock spawner into these three tests (mirror the existing
+      `isProcessRunning` injection) so no real process is ever launched.
+      Additive, test-only, unblocks the "push to main when green" path.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

@@ -6,6 +6,68 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-06-30 (run 9) — Movement learning: pluggable model backend + deterministic mock (train → replay → generalize)
+
+**Audited:** Standing objective #2 (local-movement learning) end-to-end. The
+capture side (recorder, device/os/browser adapters, trajectory schema, consent,
+replay manifest) and the dataset/export side were already scaffolded, and
+`src/training/runner.ts` emits MLX/axolotl **launch scripts** — but there was **no
+actual model** that learns a movement policy and can *repeat* (objective c) or
+*generalize* (objective d) recorded movements, and **nothing testable in the
+cloud** (the runner only shells out to external trainers that can't run in CI).
+This is the roadmap's top movement gap ("pluggable local-model backend with a
+deterministic mock backend").
+
+**Changed (new, additive):** `src/training/movement-model.ts` (+ test).
+- **Pluggable backend seam:** `MovementModelBackend` interface (`train(dataset)
+  → TrainedMovementModel`) and a `TrainedMovementModel` interface
+  (`predictNext` / `generate` / `serialize`). A real on-device small model can
+  implement these later; nothing else changes.
+- **Deterministic reference backend:** `MarkovMovementBackend` — a variable-order
+  (1–8) **back-off Markov policy**. No `Date.now`/random, so cloud CI is
+  reproducible. BOS/EOS boundary markers (C0-control-prefixed, collision-proof)
+  let it model sequence start/termination. `generate()` is greedy argmax →
+  **(c) replays a recorded sequence exactly**; shared sub-paths across sequences
+  **recombine into new related sequences → (d) generalization**. Ranked
+  `predictNext()` (count desc, token asc tiebreak) with renormalized
+  probabilities over real tokens.
+- **Dataset bridge:** `extractMovementSequence`/`extractMovementDataset` (from
+  `TrajectorySpan[]`, actions time-ordered), `movementSequenceFromReplay` (from a
+  `ReplayManifest` action timeline), and a reversible `movementActionToken` /
+  `decodeMovementToken` codec.
+- **Eval harness:** `evaluateReplayFidelity` (roll-out vs recorded, fidelity ∈
+  [0,1]) and `evaluateNextTokenAccuracy` (teacher-forced top-1 over held-out
+  sequences, with miss locations) — the start of the roadmap's generalization
+  eval harness.
+- `serialize()`/`loadMovementModel()` round-trip so a trained policy persists.
+- Exported the full surface from `src/index.ts`.
+
+**Test results:** new `movement-model.test.ts` **11/11** (replay-exact,
+deterministic ranking, generalization-by-recombination, EOS-termination, clean
+vocab, serialize round-trip, order-clamp/back-off, eval harness). Full suite
+**171 → 182 passing**; `typecheck:src` ✅ CLEAN (my file passes strict tsc);
+build ✅.
+
+**⚠️ Pre-existing failures (NOT mine, unchanged at 3):** `operator-runtime`,
+`control-plane/server`, and `cli/app` each have one failing test, all rooted in
+the **same** flake: those tests call `startBackgroundTask` which spawns a **real
+detached process** (only `backgroundTaskIsProcessRunning` is mocked, not the
+spawner). The spawned process asynchronously rewrites the task state file while
+the test reads it → `readJsonFile` hits a half-written file → `SyntaxError:
+Expected ',' or '}' ... position 311`, plus downstream `control=degraded` /
+result-shape mismatches. Timing/environment dependent (the box that logged
+"174/174" a week ago won the race). Fix is to inject a deterministic mock
+spawner (matching the `isProcessRunning` injection already there) so these tests
+never touch real processes — queued in ROADMAP as a dedicated, isolated fix.
+
+**New idea:** a **synthetic movement-stream generator** driven by a tiny
+probabilistic grammar (states → weighted gestures) to mass-produce labelled
+train/held-out splits, so the eval harness can report replay-fidelity *and*
+generalization curves vs. Markov order — turning "does it generalize?" into a
+tracked metric instead of a single assertion. Logged to ROADMAP.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
