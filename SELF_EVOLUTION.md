@@ -6,6 +6,67 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-06-30 (run 9) — In-process movement model: pluggable backend + mock + synthetic generator + eval harness
+
+**Audited:** Standing objective #2 (the local-movement learning subsystem) end
+to end. The capture side (`src/capture/`) and the *export/launch* side
+(`src/training/`) were both scaffolded, but the **model itself was missing**:
+`runner.ts` only emits shell commands that drive an external Apple-Silicon
+trainer (MLX/axolotl). There was no in-process model the agent could train on
+recorded movements and then query to (c) repeat or (d) generalize them — parts
+(c) and (d) of the objective were entirely unimplemented, and they're the only
+pieces fully testable in the cloud (no GPU, no real OS).
+
+**Changed (additive):** new `src/training/movement-model.ts` (+ test), exported
+via the barrel. Delivers three queued ROADMAP items at once:
+- **Pluggable backend seam** — `MovementModelBackend` interface +
+  `TrainedMovementModel` (predictNext / generate / serialize). A real on-device
+  small model can implement the same interface and drop in.
+- **Deterministic mock backend** — `MarkovMovementBackend`: an order-k Markov
+  model with **stupid-backoff** down to a k=0 unigram marginal. It genuinely
+  learns sequential structure, replays recorded demos exactly via `generate()`,
+  *knows when to stop* (end-of-sequence boundary), and **generalizes** to
+  unseen-but-related contexts via backoff. No randomness, no deps → identical
+  input always yields an identical model; `serialize()`/`restoreMovementModel()`
+  round-trip it.
+- **Synthetic event-stream generator** — `generateSyntheticMovementExamples()`
+  (seeded LCG, no `Math.random`/`Date.now`) produces reproducible skill
+  demonstrations with coordinate jitter + noise actions, to exercise
+  capture→dataset→train→infer without real OS input.
+- **Generalization eval harness** — `evaluateMovementModel()` teacher-forced
+  next-token top-1/top-k accuracy on held-out demos (incl. the stop decision).
+- Dataset glue: `buildMovementDatasetFromTrajectories()` /
+  `trajectoryActionsToMovementTokens()` bridge existing `TrajectorySpan`s into
+  the model. Two built-in tokenizers: exact (tool+summary) for replay, tool-only
+  for cross-label generalization.
+
+**Test results:** new suite **12/12 green**. The eval test trains on 120
+synthetic demos and scores **>0.7 top-1 / >0.98 top-3** on 30 held-out demos
+with fresh coordinates — measured generalization, not just replay. `npm run
+build` ✅. `npm run typecheck:src` ✅ (exit 0, source stays clean). Full
+`vitest run` = **182 passed**, plus **4 PRE-EXISTING failures** (see blocker).
+
+**⚠️ Blocker discovered (pre-existing, NOT from this run):** 4 tests fail on a
+clean HEAD too (verified via `git stash`): `operator-runtime.test.ts`,
+`app.test.ts` (×2), `server.test.ts`. Root cause is a JSON parse error in
+`BackgroundTaskExecutionService.readState` — a background-task **state file is
+written/read as malformed JSON** (`SyntaxError: Expected ',' or '}' ... position
+311`), surfacing through `recoverBackgroundTasks`. This regressed since run 8's
+174/174 and is unrelated to the movement model. Logged to ROADMAP as the next
+run's highest-priority fix; left untouched here to keep this diff focused.
+Pushing to the designated feature branch (movement-model work is fully green in
+isolation).
+
+**New idea:** add a **closed-loop replay-fidelity gate** — wire
+`evaluateMovementModel` into the training `runner`/`execution-service` so that
+after a (mock or real) training run, the model is scored against a held-out
+trajectory slice and the job is marked `degraded` if top-k accuracy drops below
+a configurable floor. That turns "did training help?" into an automated,
+trackable metric and gives the RL reward path (`replay-manifest`) a concrete
+in-repo signal instead of an external stub.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

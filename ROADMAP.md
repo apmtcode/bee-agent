@@ -58,17 +58,43 @@ unchecked items are queued. Keep this richer than you found it each run.
 ## Local-movement learning subsystem
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
-(exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
-      objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
-      deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+(exporter, job store/manifest, runner, execution service, **movement-model**).
+Next increments:
+- [x] Inventory what `src/capture` + `src/training` already implement vs. the
+      objective's five pieces (run 9): capture ✅, schema ✅ (`trajectory.ts`),
+      dataset ✅ (`exporter.ts` + new `buildMovementDatasetFromTrajectories`),
+      replay ✅ (`replay.ts` manifest + `generate()`), train/infer ✅ (run 9).
+- [x] Pluggable local-model backend interface for the training runner with a
+      deterministic mock backend (run 9) — `MovementModelBackend` +
+      `MarkovMovementBackend` (order-k Markov, stupid-backoff) in
+      `src/training/movement-model.ts`. Documented seam for a real on-device
+      small model. `serialize()`/`restoreMovementModel()` persist a trained model.
+- [x] Synthetic event-stream generator (run 9) —
+      `generateSyntheticMovementExamples()` (seeded LCG, reproducible).
+- [x] Generalization eval harness (run 9) — `evaluateMovementModel()`
+      (teacher-forced top-1/top-k next-token accuracy on held-out demos).
+- [ ] **Closed-loop replay-fidelity gate** (NEW, run 9 idea): score a trained
+      model via `evaluateMovementModel` against a held-out trajectory slice
+      inside `execution-service`/`runner` and mark the job `degraded` below a
+      configurable top-k floor — an automated "did training help?" metric and a
+      concrete in-repo RL reward signal.
+- [ ] Wire the movement model into a control-plane RPC (`movements.train` /
+      `movements.predict`) so the agent can invoke train/infer at runtime, not
+      just via the library API.
+- [ ] Real on-device backend behind the seam (e.g. a tiny char/token LM via the
+      MLX launch path) — feed `runner.ts` plans from a dataset built by
+      `buildMovementDatasetFromTrajectories`.
+
+## Known regressions (fix next)
+- [ ] **🔴 HIGHEST PRIORITY — background-task state file JSON corruption.** 4
+      tests fail on a clean HEAD (regressed since run 8's 174/174):
+      `operator-runtime.test.ts` (background tasks), `app.test.ts` (×2),
+      `server.test.ts`. Root cause: `BackgroundTaskExecutionService.readState`
+      hits `SyntaxError: Expected ',' or '}' after property value in JSON at
+      position 311` — a state file is being written/read as malformed JSON,
+      surfacing via `recoverBackgroundTasks`. Trace `writeState`/`writeJsonAtomic`
+      (`src/harness/background-tasks.ts`, `src/shared/fs.ts`) for a non-atomic or
+      partial write. Until fixed, the full `npm test` gate is red even on `main`.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
