@@ -8,6 +8,23 @@ unchecked items are queued. Keep this richer than you found it each run.
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`
       (2026-06-22).
+- [x] **Fix `shellQuote` POSIX-escape bug** (run 9, 2026-06-30) — wrong escape
+      `"'"'"'` corrupted the background-task launch script's JSON state payload
+      for any command containing a single quote, crashing recovery. One-char
+      fix + a regression test that runs the real bash launch script.
+- [x] **De-race the 3 real-spawn integration tests** (run 9) — injected
+      deterministic spawn/liveness stubs (seam threaded through
+      `OperatorCliAppOptions`). Suite went from 171–172 (flaky) to a stable
+      175/175.
+- [ ] **Replace `printf | sed` JSON assembly in `renderLaunchScript` with a
+      `python3 -c` writer** (run 9 idea). The initial running-state payload is
+      built by shell string surgery + a `s/"$$"/pid/` placeholder hack — the
+      exact fragility that produced run 9's bug. python3 is already required for
+      the completion writer; pass payload/pid/timestamp as argv and `json.dump`
+      to remove all shell escaping of JSON.
+- [ ] Add a `verify` npm script (`typecheck:src && build && test`) and have the
+      engine run it as a mechanical pre-push gate (this run's starting suite was
+      red and only caught by manual inspection).
 - [ ] **Pay down typecheck debt** (surfaced by the `typecheck` script). Full
       `tsc --noEmit` count was **397** on 2026-06-22; now **125**. 🎯 ALL source
       (`src/**` non-test) files typecheck clean since run 7; remaining 125 errors

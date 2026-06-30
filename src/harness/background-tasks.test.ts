@@ -1,7 +1,11 @@
+import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
+
+const execFileAsync = promisify(execFile);
 import {
   BackgroundTaskExecutionService,
   FileBackgroundTaskStore,
@@ -369,5 +373,33 @@ describe("BackgroundTaskExecutionService", () => {
     await expect(fs.readFile(path.join(rootDir, task.execution.launchScript), "utf8")).resolves.toContain("bash -lc");
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
+  });
+
+  it("writes a valid-JSON running state when the command contains single quotes", async () => {
+    // Regression: shellQuote previously rotated the POSIX quote escape to `"'`,
+    // corrupting the launch script's state payload for any command with a
+    // single quote (and newlines), so the running state.json failed to parse.
+    const rootDir = await makeTempDir();
+    // Stub spawn so start() only writes the launch artifacts; we run the
+    // script ourselves to observe the real bash/printf-rendered state file.
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"), () => ({
+      pid: 4242,
+      unref() {},
+    }));
+    const task = await store.start({
+      title: "Echo lines",
+      command: "printf 'line-1\nline-2\n'",
+      cwd: rootDir,
+    });
+
+    const scriptPath = path.join(rootDir, task.execution.launchScript);
+    await execFileAsync("bash", [scriptPath], { cwd: rootDir });
+
+    const raw = await fs.readFile(path.join(rootDir, task.execution.stateFile), "utf8");
+    const parsed = JSON.parse(raw) as BackgroundTaskExecutionState;
+    expect(parsed.command).toBe("printf 'line-1\nline-2\n'");
+    expect(parsed.taskId).toBe(task.id);
+    expect(typeof parsed.pid).toBe("number");
+    expect(parsed.status).toBe("completed");
   });
 });

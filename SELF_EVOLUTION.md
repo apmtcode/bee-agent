@@ -6,6 +6,60 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-06-30 (run 9) — 🐞 Fix shell-quoting bug corrupting background-task state; de-race 3 integration tests (suite 171→175 green)
+
+**Audited:** Test health on a fresh clone. `npm test` was **not** green here —
+3–4 tests failed nondeterministically (`operator-runtime`, `cli/app`,
+`control-plane/server`). Run 8 logged "174/174", but that was a different host;
+in this environment the suite was red on `HEAD`. Root-caused before touching
+anything.
+
+**Real bug found & fixed (`src/harness/background-tasks.ts`):**
+`shellQuote()` built the POSIX single-quote escape as `"'"'"'` (starts with
+`"`) instead of the correct `'"'"'` (close-quote / `"'"` / reopen). The wrong
+rotation turns every `'` in a command into `"'`, so the launch script's
+`printf '%s' <payload> | sed …` emitted **invalid JSON** for any task whose
+command contains a single quote (e.g. `printf 'line-1\nline-2\n'`). The running
+`state.json` then failed `JSON.parse` in `readState`, crashing recovery
+(`recoverBackgroundTasks`). Confirmed by capturing the raw corrupt file
+(`"command":"printf "'line-1\nline-2\n"'"`), isolating it to `printf` (not
+`sed`), and verifying the one-char fix round-trips. Added a regression test that
+**runs the real bash launch script** and asserts the state file is valid JSON
+(`background-tasks.test.ts`).
+
+**Flaky integration tests de-raced (additive):** The three big tests spawned the
+**real detached bash** launch script and depended on its async state/output
+writes landing in a particular order relative to manually-driven `writeState`
+calls — they only ever passed by winning that race. Made them deterministic by
+injecting spawn/liveness stubs (the same pattern `background-tasks.test.ts`
+already uses):
+- Threaded `backgroundTaskSpawnProcess` / `backgroundTaskIsProcessRunning`
+  through `OperatorCliAppOptions` → `StandaloneOperatorRuntime` (real
+  testability seam, not test-only glue).
+- `operator-runtime`, `server` (main + drifting + breaker runtimes), and the
+  `app` "session lifecycle" test now use a no-op spawn (no state file →
+  freshly-started tasks read "active"; sync/recover probes report dead → tasks
+  fail deterministically, matching every assertion).
+- The `app` "background and monitor" test keeps a live-process stub and writes
+  the `"ok"` output explicitly so view/watch assertions don't depend on a real
+  detached `printf`.
+
+**Test results:** full suite **175/175**, green on **3 consecutive runs** (was
+171–172 with 3–4 nondeterministic failures). `typecheck:src` CLEAN, `build` ✅,
+full `tsc` debt unchanged at **125** (all test-only). Net new: +1 regression
+test.
+
+**New idea (queued):** the launch-script JSON payload is assembled by hand-rolled
+`printf | sed` string surgery — fragile (this bug, plus the `s/"$$"/pid/`
+placeholder dance). Replace it with a single `python3 -c` (already a dependency
+for the completion writer) that takes the payload + pid + timestamp as argv and
+`json.dump`s them, eliminating all shell-quoting/escaping of the JSON entirely.
+Also: add a `verify` script (`typecheck:src && build && test`) and have the
+engine run it as the pre-push gate so a red suite like this run's starting state
+is caught mechanically, not by manual inspection.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

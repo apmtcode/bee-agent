@@ -1,0 +1,1 @@
+{"version":1,"taskId":"9dd5518b-ff78-4601-984d-8e7d5802d5b0","kind":"task","status":"running","pid":"$$","startedAt":"2026-06-30T19:11:58Z","updatedAt":"2026-06-30T19:11:58Z","outputFile":"background-tasks/9dd5518b-ff78-4601-984d-8e7d5802d5b0/output.log","cwd":"/tmp/background-task-B2BXXx","command":"printf 'line-1\nline-2\n'"}
