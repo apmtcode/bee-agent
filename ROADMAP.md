@@ -59,16 +59,40 @@ unchecked items are queued. Keep this richer than you found it each run.
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
 (exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
-      objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Inventory what `src/capture` + `src/training` already implement vs. the
+      objective's five pieces — DONE run 9. Capture→schema→dataset→replay existed;
+      **train/infer was entirely missing** (runner only rendered MLX/Axolotl
+      launch plans, no model abstraction). Gap closed by `movement-model.ts`.
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      for a real on-device small model — DONE run 9. `MovementModelBackend` +
+      registry; deterministic `MarkovMovementBackend` (n-gram + backoff).
+- [x] Synthetic event-stream generator to validate capture→dataset→replay
+      round-trips without real OS input — DONE run 9 (`synthesizeMovementSequences`,
+      seeded LCG).
+- [x] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories — DONE run 9 (`evaluateMovementModel`:
+      next-token accuracy + exact-replay rate).
+- [ ] **Online movement-model serve loop**: persist a `MovementModelSnapshot` and
+      expose `movements.predictNext` / `movements.rollout` control-plane RPCs so a
+      live session can query the local model mid-task. Gate auto-action on the
+      prediction's `probability` (high-confidence only; otherwise ask the user).
+- [ ] Wire the Markov backend into `LocalAppleSiliconTrainingRunner` as the
+      in-cloud "dry-run / eval" trainer, and register the MLX/Axolotl backends as
+      native stubs that throw outside on-device runtimes — so the runner has a
+      working default everywhere.
+
+## Known bugs (pre-existing — fix next)
+- [ ] **Background-task state JSON parse failure** (surfaced run 9). The full
+      `vitest` suite reports 3 failures on a clean HEAD (171/174):
+      `operator-runtime.test.ts` ("starts, syncs, recovers… background tasks"),
+      `server.test.ts`, `app.test.ts`. Root cause: `readJsonFile`
+      (`src/shared/fs.ts:17`) throws `SyntaxError: Expected ',' or '}' … at
+      position 311` from `BackgroundTaskExecutionService.readState` during
+      `recoverBackgroundTasks` — a malformed state fixture/serialization, not a
+      flake (reproduces in isolation). Prior runs logged 174/174, so this
+      regressed in the checked-in tree before run 9. Fix the fixture/writer, then
+      restore the green full-suite gate.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

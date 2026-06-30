@@ -6,6 +6,73 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-06-30 (run 9) — Movement-learning model layer: pluggable backend + deterministic Markov trainer + generalization eval (objective #2c/#2d)
+
+**Audited:** Standing objective #2 (local-movement learning subsystem). Inventoried
+`src/capture/*` (recorder, device/os/browser adapters, consent, trajectory schema,
+trajectory store) and `src/training/*` (exporter → reviewed dataset, job-store,
+job-manifest, runner, execution-service). **Gap found:** the whole pipeline stops
+at *building launch plans* — `runner.ts` only renders `python3 -m mlx_lm.lora …` /
+`axolotl.cli.train …` commands for the user's Mac. There was **no model
+abstraction and no inference engine at all** — nothing the cloud engine can train,
+query, and verify, so objective #2(c) "post-train a model to repeat the recorded
+movements" and #2(d) "generalize to new but related movements" were entirely
+unimplemented and untestable.
+
+**Changed (additive):**
+- **New `src/training/movement-model.ts`** — a fully in-process, deterministic
+  movement model (no clock, no RNG, no native deps → identical in cloud & on-device):
+  - **Token schema** (`normalizeMovementToken`, `MovementToken/Sequence/Dataset`)
+    and dataset builders from both trajectories (`movementSequenceFromTrajectory`,
+    `buildMovementDatasetFromTrajectories`) and exported replay timelines
+    (`movementSequenceFromReplayEvents`).
+  - **`MovementModelBackend` interface** + a **registry**
+    (`getMovementModelBackend`/`registerMovementModelBackend`/`listMovementModelBackends`)
+    so native on-device trainers (MLX/ONNX/llama.cpp) register against the same
+    seam later; a backend may register as a stub that throws in the cloud.
+  - **`MarkovMovementBackend`** — variable-order n-gram with backoff and
+    deterministic lexical tie-break. High-order match **repeats recorded
+    movements exactly** (2c); backoff to shorter contexts **generalizes** to
+    related held-out movements (2d). Greedy `rollout()` stops at an END sentinel
+    or `maxSteps`.
+  - **`evaluateMovementModel`** generalization eval harness: teacher-forced
+    next-token accuracy + exact greedy-replay rate on held-out sequences.
+  - **`synthesizeMovementSequences`** — seeded-LCG synthetic event-stream
+    generator (deterministic) so the train→infer→generalize loop is validated
+    without any real OS input.
+- Exported all of the above from the `src/index.ts` barrel.
+- **New `src/training/movement-model.test.ts`** — 14 tests: tokenization/ordering,
+  exact-replay (2c), backoff generalization on a disjoint synthetic split (2d,
+  next-token acc > 0.5), determinism of the trained snapshot, rollout
+  termination, registry/pluggability, and synthetic reproducibility.
+
+**Test results:** `npm run typecheck:src` ✅ CLEAN. `npm run build` ✅. New module
+**14/14** ✅. Full suite: **185 passed**, 3 failed.
+
+**⚠️ Pre-existing failures (NOT caused by this run — verified):** on a clean
+checked-in HEAD (my files removed + index.ts stashed) the full suite already
+reports **3 failed | 171 passed**. The three are background-task/orchestration
+tests — `operator-runtime.test.ts` ("starts, syncs, recovers… background tasks"),
+`server.test.ts`, `app.test.ts`. Root cause is a **malformed-JSON background-task
+state fixture**: `readJsonFile` (`src/shared/fs.ts:17`) throws `SyntaxError:
+Expected ',' or '}' … at position 311` from
+`BackgroundTaskExecutionService.readState` during `recoverBackgroundTasks`. It
+reproduces in isolation, so it is a real fixture/parse bug, not flake. Prior runs
+logged "174/174"; this regressed in the checked-in tree before run 9. Filed in
+ROADMAP as the next bug to fix. My change is purely additive and introduces zero
+new failures, so I pushed it to the designated feature branch
+`claude/peaceful-dirac-e92etn`.
+
+**New idea (logged to ROADMAP):** an **online movement-model serve loop** —
+persist a trained `MovementModelSnapshot` to disk and expose a control-plane RPC
+(`movements.predictNext` / `movements.rollout`) so a live session can ask the
+local model "what's the next movement?" mid-task, closing the capture→train→**act**
+loop. Pair it with a confidence gate (use the prediction's `probability`) so the
+agent only auto-acts on high-confidence, well-generalized movements and otherwise
+asks the user.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
