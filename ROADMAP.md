@@ -39,7 +39,16 @@ unchecked items are queued. Keep this richer than you found it each run.
     `cron.runs`/misc — plus a few genuine test-only typings. Map the rest, then
     fix residual test-only typings.
 - [ ] Add a `verify` npm script (`typecheck && build && test`) and have the
-      engine run it as a pre-push self-check each cycle.
+      engine run it as a pre-push self-check each cycle. **Run 9 raised the
+      priority:** run 8 logged "174/174 ✅" but the suite was actually *flaky* on
+      a fresh checkout (real-subprocess background-task tests). The pre-push
+      self-check MUST run the full runtime suite, not just typecheck.
+- [x] **Deterministic background-task test surface** (2026-06-30, run 9). New
+      `src/harness/background-task-testing.ts` (`InMemoryBackgroundProcesses`)
+      + `OperatorCliApp` now exposes the `backgroundTask{SpawnProcess,
+      IsProcessRunning}` seams. Removed real-subprocess spawning from the test
+      suite; 4 flaky tests now deterministic. Guardrail #3 (simulated impl for
+      OS-touching features) satisfied for the background-task subsystem.
 - [x] Interim **source-only typecheck gate** — DONE run 7. `tsconfig.src.json`
       (excludes `**/*.test.ts`) + `typecheck:src` script; passes (exit 0). Next:
       have the engine run it as a per-run pre-push self-check.
@@ -71,9 +80,19 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
       related synthetic trajectories.
 
 ## Innovation backlog
+- [ ] **Health-baseline gate (raised by run 9):** each run writes build/test
+      pass-counts + per-file flake observations to an append-only
+      `metrics.jsonl`; a run that sees a lower pass count, a build break, or any
+      newly-nondeterministic file vs. the last baseline treats it as a
+      regression to fix *before* feature work. Run 8 logged a green suite that
+      was actually flaky on a fresh checkout — this closes that blind spot.
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in
       project health over time.
+- [ ] Apply the `InMemoryBackgroundProcesses` pattern to the training runner:
+      a deterministic in-memory "training process" double so the runner's
+      launch/state lifecycle can be exercised without a real Apple-Silicon
+      toolchain (parallels the pluggable-local-model-backend item above).
 - [ ] Coordination guard between the parallel cloud + local self-evolve runs
       (e.g. a lightweight lock/heartbeat file) to avoid duplicated work and
       merge churn.

@@ -6,6 +6,59 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-06-30 (run 9) — Fixed flaky background-task tests: real subprocess spawning → deterministic in-memory double
+
+**Audited:** The actual `npm test` result on a clean install — **not** green as
+run 8 recorded. 3–4 tests failed *nondeterministically* across runs
+(`Test Files 3 failed` then `2 failed`; failing set varied). This silently
+breaks the engine's core "test before push" gate — the prior several runs
+typechecked but never re-verified the runtime suite, so the regression went
+unnoticed. Flaky failures clustered in four background-task tests:
+`operator-runtime.test.ts` (recover/list/cancel), `server.test.ts`
+(orchestration methods), and two `app.test.ts` cases (session-lifecycle
+remote/platform `control=active`; background+monitor commands).
+
+**Root cause:** `BackgroundTaskExecutionService.launch()` spawns a **real
+detached subprocess** that runs a bash launch script which *asynchronously*
+writes the task's state file. In the cloud test env that races the test's own
+`writeState()` calls, and `defaultIsProcessRunning` probes **real PIDs** —  so
+whether a fast command (`printf ok`, `tail -f missing`) was still alive at
+check time was a coin flip. The injection seams already existed
+(`backgroundTaskSpawnProcess` / `backgroundTaskIsProcessRunning` on the
+runtime), but the failing tests didn't use them, and `OperatorCliApp` didn't
+even expose them.
+
+**Changed (additive, production behaviour unchanged):**
+- **New reusable test double** `src/harness/background-task-testing.ts` —
+  `InMemoryBackgroundProcesses`: `spawnProcess` hands out live fake PIDs and
+  runs *nothing* (no real process, no state-file race); `isProcessRunning`
+  consults an in-memory table; `kill()/killAll()` simulate exits. Fake PIDs
+  start at `2_000_000_000` (well past Linux `pid_max`), so the production
+  `stop()` path — which calls `process.kill(-pid, signal)` directly — reliably
+  gets `ESRCH` and never signals a real process group. (+ 4 unit tests.)
+- **`src/cli/app.ts`:** exposed `backgroundTaskSpawnProcess` /
+  `backgroundTaskIsProcessRunning` on `OperatorCliAppOptions` and threaded them
+  into the runtime it constructs (omitted-when-undefined, so prod default is
+  the real spawn). The app could not previously be tested without a real OS
+  process surface.
+- **Tests:** injected the double into the 4 flaky constructions (+ 2 sibling
+  `server.test.ts` runtimes for robustness). The background+monitor test now
+  writes the task's `"ok"` output explicitly (the simulated process runs
+  nothing), mirroring how the monitor half already seeds its own output/state.
+
+**Test results:** affected files run **deterministically** (3×50 passing, no
+variance). Full suite **174 → 178/178** (+4 new double tests), 42 files. Build
+✅. `typecheck:src` ✅ (clean). The "test before push" gate is trustworthy
+again.
+
+**New idea:** the engine clearly needs a *recorded health baseline* — run 8
+logged "Tests ✅ 174/174" but the suite was actually flaky on a fresh checkout.
+Add a tiny `verify` script (`typecheck:src && build && test`) AND have each run
+write build/test pass-counts + per-file flake observations to an append-only
+`metrics.jsonl`; a run that sees a *lower* pass count or any nondeterministic
+file than the last recorded baseline must treat it as a regression to fix
+*before* new feature work. This closes the loop that let run 8's flake hide.
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
