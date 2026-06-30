@@ -6,6 +6,77 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-06-30 (run 9) — 🐛 Real bug: shell-quoting corrupts background/training state JSON; + de-flaked 2 tests
+
+**Audited:** Ran the suite fresh and found the baseline was **red** — 3 tests
+failing (`operator-runtime`, `control-plane/server`, `cli/app`), where run 8
+recorded 174/174. The failures were time/scheduling-dependent, not a code
+regression from a specific run. Traced the operator-runtime failure to a JSON
+`SyntaxError` parsing a background-task `state.json`, dumped the raw file, and
+found the launch script had written **invalid JSON**.
+
+**Root-cause (genuine production bug), `src/harness/background-tasks.ts`:** the
+background-task launch script serializes the initial running-state via
+`printf '%s' <payload> | sed …` where `<payload>` is a JSON blob passed through a
+local `shellQuote()`. That `shellQuote` used the escape sequence `"'"'"'` for an
+embedded single quote — which is **wrong**: it injects a spurious double quote
+(`abc'def` → shell yields `abc"'def`). Any task whose `command` contained a
+single quote (e.g. `printf 'line-1\n'`) therefore produced a corrupt `state.json`
+that fails `JSON.parse`, breaking recovery/reconcile. The spawned process writes
+this file asynchronously, racing the tests' own `writeState`, so it surfaced
+intermittently. A **second** copy of `shellQuote` in `src/training/runner.ts`
+used the *correct* form (`'"'"'`) — the two had silently diverged.
+
+**Changed (additive):**
+- New `src/shared/shell.ts` → `shellSingleQuote()` with the canonical POSIX
+  `'\''` escaping, documented, plus `src/shared/shell.test.ts` (11 cases that
+  round-trip values — including JSON payloads with quotes, `$`, backticks,
+  backslashes — through a **real** `bash` and assert byte-exact recovery).
+- Both launch-script renderers now import the shared helper; the two local
+  `shellQuote` copies are deleted, killing the divergence foot-gun.
+- `src/cli/app.ts`: added optional `backgroundTaskSpawnProcess` /
+  `backgroundTaskIsProcessRunning` to `OperatorCliAppOptions`, threaded into the
+  runtime — a test seam (and real injection point) that previously didn't exist
+  on the CLI app.
+- De-flaked 2 tests by removing their dependence on real OS process timing:
+  `operator-runtime.test.ts` (no-op spawn — it already writes all state
+  manually); `app.test.ts` session-lifecycle (`isProcessRunning: pid !== 999999`
+  so live tasks stay active while the 999999 sentinel still drives the degraded
+  path) and background/monitor (no-op spawn + explicit `writeOutput`, mirroring
+  what the monitor case already did).
+
+**Test results:** `typecheck:src` ✅ (exit 0). Build ✅. Full suite **184/185**,
+stable across 6 consecutive runs — improved from a flaky **3 failing** baseline
+to **1**. The shared shell test passes 11/11.
+
+**Known blocker (pre-existing, documented for next run):** the single remaining
+failure is the large integration test `server.test.ts > "handles session,
+transcript, approval, trajectory, memory, and orchestration methods"`. It fails
+**5/5 at the pristine baseline** (verified via `git stash`), so it is *not* a
+regression from this run. It spawns real `sleep 5` / `printf` processes across
+three runtimes and is racy throughout (baseline fails at varying lines 646/719/
+1076). The crux is the breaker section (~L1046–1145): it expects a `control:
+"mixed"` window where tasks 2 & 3 are still healthy while task 1 is
+`missing-process`, but with `isProcessRunning: () => false` any started task
+reconciles to failed once its (real or stub) pid is probed — so the "mixed"
+state only appears in a narrow timing window. Robust fix = give all three
+runtimes a no-op spawn and make each section write the exact states it asserts
+(so the breaker progression is driven by explicit `writeState`, not process
+scheduling). Bounded but touches many assertions — do it as a dedicated run.
+
+**New idea:** add a tiny **lint that bans hand-rolled shell quoting** — grep
+`src/**` for `replaceAll(\`'\`, …)` / inline `'…'` quoting of interpolated
+values and require `shellSingleQuote()` instead. This class of bug (a launch
+script that emits malformed JSON only for certain command contents) is invisible
+to the type checker and only shows up as a flaky downstream parse error; a
+one-line guard makes it un-reintroducible. Bigger idea: a **launch-script
+contract test** that, for a fuzzed set of nasty commands (quotes, `$()`,
+newlines, unicode), actually executes the rendered bash in a tmpdir and asserts
+the resulting `state.json` parses and round-trips — covering both the
+background-task and training renderers from the outside.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

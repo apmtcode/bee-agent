@@ -10,6 +10,7 @@ import { subscribeRuntimeEvents } from "../control-plane/subscriptions.js";
 import { OperatorControlPlaneServer } from "../control-plane/server.js";
 import type { DeliveryTarget } from "../control-plane/delivery.js";
 import { StandaloneOperatorRuntime } from "../orchestrator/operator-runtime.js";
+import type { IsProcessRunning, SpawnBackgroundProcess } from "../harness/background-tasks.js";
 import type { TranscriptRecord } from "../harness/transcript-store.js";
 import {
   OperatorCliConfigLoader,
@@ -121,6 +122,14 @@ export type OperatorCliAppOptions = {
   stdin?: NodeJS.ReadableStream;
   stdout?: NodeJS.WritableStream;
   stderr?: NodeJS.WritableStream;
+  /**
+   * Override how background-task processes are spawned / probed. Production
+   * leaves these unset (real `spawn` / `process.kill`); tests inject
+   * deterministic stubs so a task's recorded execution state is governed
+   * entirely by the test rather than by a real OS process racing it.
+   */
+  backgroundTaskSpawnProcess?: SpawnBackgroundProcess;
+  backgroundTaskIsProcessRunning?: IsProcessRunning;
 };
 
 type OperatorCliWorktreeSession = {
@@ -147,7 +156,11 @@ export class OperatorCliApp {
   readonly teams: FileOperatorCliTeamStore;
 
   constructor(private readonly options: OperatorCliAppOptions) {
-    this.runtime = new StandaloneOperatorRuntime({ rootDir: options.rootDir });
+    this.runtime = new StandaloneOperatorRuntime({
+      rootDir: options.rootDir,
+      backgroundTaskSpawnProcess: options.backgroundTaskSpawnProcess,
+      backgroundTaskIsProcessRunning: options.backgroundTaskIsProcessRunning,
+    });
     this.server = new OperatorControlPlaneServer({ runtime: this.runtime });
     this.teams = new FileOperatorCliTeamStore(options.rootDir);
     this.cwd = options.cwd ?? process.cwd();

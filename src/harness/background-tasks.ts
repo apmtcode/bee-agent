@@ -3,6 +3,7 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { ensureParentDir, readJsonFile, writeJsonAtomic } from "../shared/fs.js";
+import { shellSingleQuote } from "../shared/shell.js";
 
 export type BackgroundTaskKind = "task" | "monitor";
 export type BackgroundTaskStatus = "planned" | "running" | "completed" | "failed" | "cancelled";
@@ -730,11 +731,11 @@ function applyExecutionState(task: BackgroundTaskRecord, state: BackgroundTaskEx
 }
 
 function renderLaunchScript(task: BackgroundTaskRecord): string {
-  const quotedStatePath = shellQuote(task.execution.stateFile);
-  const quotedOutputFile = shellQuote(task.execution.outputFile);
-  const quotedCwd = shellQuote(task.cwd);
-  const quotedCommand = shellQuote(task.command);
-  const quotedStatePayload = shellQuote(
+  const quotedStatePath = shellSingleQuote(task.execution.stateFile);
+  const quotedOutputFile = shellSingleQuote(task.execution.outputFile);
+  const quotedCwd = shellSingleQuote(task.cwd);
+  const quotedCommand = shellSingleQuote(task.command);
+  const quotedStatePayload = shellSingleQuote(
     JSON.stringify({
       version: 1,
       taskId: task.id,
@@ -791,8 +792,4 @@ function renderStateWriterPython(status: BackgroundTaskExecutionState["status"])
     `state['error'] = None if '${status}' == 'completed' else f'background task exited non-zero ({exit_code})'`,
     "state_path.write_text(json.dumps(state, indent=2) + '\\n')",
   ];
-}
-
-function shellQuote(value: string): string {
-  return `'${value.replaceAll(`'`, `"'"'"'`)}'`;
 }

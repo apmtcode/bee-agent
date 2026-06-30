@@ -3,7 +3,32 @@
 Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
+## 🔴 Top blocker (suite is 1 test from green)
+- [ ] **Stabilize `server.test.ts > "handles session, transcript, approval,
+      trajectory, memory, and orchestration methods"`** — the only failing test
+      (184/185). Pre-existing & racy (fails 5/5 at pristine baseline; varying
+      lines 646/719/1076). It spawns real `sleep 5`/`printf` across three
+      runtimes. Fix: give the main, drifting, and breaker runtimes a no-op
+      `backgroundTaskSpawnProcess` and drive every asserted state via explicit
+      `writeState`, so the breaker `control:"mixed"→degraded` progression no
+      longer depends on process scheduling. The injection seam already exists on
+      the runtime; the work is per-section state bookkeeping (esp. the breaker
+      block ~L1046–1145 — see run 9 log for the exact "mixed" mechanism). Bounded
+      but touches many assertions → dedicated run.
+
 ## Foundations / DX
+- [x] **Fix shell-quoting bug corrupting launch-script JSON** (2026-06-30,
+      run 9) — `background-tasks.ts` `shellQuote` used a wrong escape that broke
+      `state.json` for commands containing single quotes; consolidated both
+      copies into tested `src/shared/shell.ts` `shellSingleQuote()`.
+- [ ] **Lint banning hand-rolled shell quoting** — flag inline `'…'`/`replaceAll`
+      quoting of interpolated values in `src/**`; require `shellSingleQuote()`.
+      Stops this class of "malformed JSON only for certain command contents" bug
+      from re-entering (invisible to tsc, shows up only as flaky parse errors).
+- [ ] **Launch-script contract test** — fuzz nasty commands (quotes, `$()`,
+      newlines, unicode), actually execute the rendered bash in a tmpdir, and
+      assert the emitted `state.json` parses + round-trips. Covers both the
+      background-task and training launch-script renderers end-to-end.
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`

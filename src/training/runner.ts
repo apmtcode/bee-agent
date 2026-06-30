@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { ensureParentDir, readJsonFile, writeJsonAtomic } from "../shared/fs.js";
+import { shellSingleQuote } from "../shared/shell.js";
 import type { TrainingExecutionState } from "./execution-service.js";
 import type {
   LocalTrainingExecution,
@@ -162,11 +163,11 @@ export class LocalAppleSiliconTrainingRunner {
 }
 
 function renderLaunchScript(execution: LocalTrainingExecution, plan: TrainingJobPlan): string {
-  const quotedStatePath = shellQuote(execution.stateFile);
-  const quotedLogFile = shellQuote(execution.logFile);
-  const quotedWorkingDirectory = shellQuote(execution.workingDirectory);
-  const quotedCommand = `${shellQuote(plan.command[0] ?? "")}${plan.command.slice(1).map((arg) => ` ${shellQuote(arg)}`).join("")}`;
-  const quotedStatePayload = shellQuote(
+  const quotedStatePath = shellSingleQuote(execution.stateFile);
+  const quotedLogFile = shellSingleQuote(execution.logFile);
+  const quotedWorkingDirectory = shellSingleQuote(execution.workingDirectory);
+  const quotedCommand = `${shellSingleQuote(plan.command[0] ?? "")}${plan.command.slice(1).map((arg) => ` ${shellSingleQuote(arg)}`).join("")}`;
+  const quotedStatePayload = shellSingleQuote(
     JSON.stringify({
       version: 1,
       jobId: plan.jobId,
@@ -183,7 +184,7 @@ function renderLaunchScript(execution: LocalTrainingExecution, plan: TrainingJob
   return [
     "#!/usr/bin/env bash",
     "set -euo pipefail",
-    `mkdir -p ${shellQuote(execution.artifactDir)} $(dirname ${quotedLogFile}) $(dirname ${quotedStatePath})`,
+    `mkdir -p ${shellSingleQuote(execution.artifactDir)} $(dirname ${quotedLogFile}) $(dirname ${quotedStatePath})`,
     "started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
     `printf '%s' ${quotedStatePayload} | sed "s/__OPENCLAW_STARTED_AT__/$started_at/g; s/\"\$\$\"/$$/g" > ${quotedStatePath}`,
     `printf '%s\n' "starting ${plan.mode} training for ${plan.jobId}" >> ${quotedLogFile}`,
@@ -222,8 +223,4 @@ function renderStateWriterPython(status: TrainingExecutionState["status"]): stri
     `state['error'] = None if '${status}' == 'completed' else 'training process exited non-zero'`,
     "state_path.write_text(json.dumps(state, indent=2) + '\\n')",
   ];
-}
-
-function shellQuote(value: string): string {
-  return `'${value.replaceAll(`'`, `'"'"'`)}'`;
 }
