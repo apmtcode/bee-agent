@@ -370,4 +370,39 @@ describe("BackgroundTaskExecutionService", () => {
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
   });
+
+  it("executes the generated launch script with a numeric pid and reaches terminal state", async () => {
+    // Unlike the other tests this drives the REAL launch script (no mocked
+    // spawn), so it exercises the shell that records execution state. It guards
+    // two regressions: (1) the initial "running" state must carry the numeric
+    // shell PID, not the literal "$$"/placeholder string — otherwise process
+    // liveness detection treats every task as missing-process; (2) the script
+    // must write state.json atomically so a concurrent reader never parses a
+    // half-written file.
+    const rootDir = await makeTempDir();
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"));
+    const task = await store.start({
+      sessionId: "sess-exec",
+      title: "Emit output",
+      command: "printf 'hello\\n'",
+      cwd: rootDir,
+      kind: "task",
+    });
+
+    // Wait for the detached script to finish and record a terminal state.
+    let state: BackgroundTaskExecutionState | undefined;
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      state = await store.executionService.readState(task);
+      if (state && state.status !== "running") {
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+
+    expect(state).toBeDefined();
+    expect(typeof state?.pid).toBe("number");
+    expect(Number.isFinite(state?.pid)).toBe(true);
+    expect(state?.status).toBe("completed");
+    expect(state?.exitCode).toBe(0);
+  });
 });

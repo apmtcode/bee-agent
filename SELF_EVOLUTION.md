@@ -6,6 +6,68 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-06-30 (run 9) — 🐛 Background-task launch script: 3 real concurrency/quoting bugs fixed; suite deterministic
+
+**Audited:** The build/test gate itself. On a fresh cloud checkout `npm test`
+reported **3 failing tests** (server.test, app.test, operator-runtime.test) —
+all previously claimed green. Rather than build atop a red baseline, I traced
+the failures. All three shared one symptom (background-task control reported
+`degraded`/`missing-process`, plus intermittent `SyntaxError … JSON at position
+311`) but turned out to be **three distinct latent bugs** in the shell launch
+script that records background-task execution state — bugs that the existing
+tests never exercised because they all **mocked `spawn`**, so no real launch
+script ran. The cloud env (real `bash`/`sed`/`python3`, different process
+timing) surfaced them.
+
+**Root causes & fixes (all additive, behaviour-correcting):**
+1. **PID placeholder never substituted** (`src/harness/background-tasks.ts`,
+   `src/training/runner.ts`). The sed program was a single double-quoted bash
+   argument `"… s/\"$$\"/$$/g"`; the inner `"` chars *terminated* the quote, so
+   the pattern collapsed to `s/<pid>/<pid>/g` (a no-op) and `state.json` kept
+   `"pid":"$$"` — the literal string. `Number.isFinite("$$")` is false →
+   **every task judged `missing-process` → control `degraded`.** Rewrote the sed
+   program as single-quoted literals concatenated with `"$started_at"`/`"$$"`
+   expansions, and switched the placeholder to `"__OPENCLAW_PID__"` so the
+   quoted token is matched and replaced with the bare numeric PID.
+2. **Malformed POSIX single-quote escape** (`background-tasks.ts` `shellQuote`).
+   It replaced `'` with `"'"'"'` (6 chars, leading `"`) instead of the correct
+   `'"'"'` (5 chars). Any command/path containing a single quote (e.g.
+   `printf 'line-1\n'`) produced broken shell quoting → **corrupt `state.json`**
+   → the `position 311` JSON parse error during reconcile. `runner.ts` already
+   had the correct form; aligned `background-tasks.ts` to it.
+3. **Non-atomic state writes.** The script wrote `state.json` via `sed > file`
+   and python `write_text` (both truncate-in-place), racing concurrent reconcile
+   reads. Made both writers atomic: write to `state.json.tmp` then `mv` /
+   `os.replace`, matching the TS-side `writeJsonAtomic`.
+
+**Tests:**
+- New regression test in `background-tasks.test.ts` that drives the **real**
+  launch script (no mocked spawn) and asserts a numeric pid + clean `completed`
+  terminal state — the test that would have caught bug #1/#2.
+- Updated `runner.test.ts` assertion for the atomic `mv` (redirect target moved
+  to `.tmp`).
+- The four runtime constructors in operator-runtime/server tests that drive
+  reconcile with `isProcessRunning: () => false` now inject a **no-op
+  `backgroundTaskSpawnProcess`** (the option already existed) so the test fully
+  controls `state.json` instead of racing a real detached launch script.
+
+**Test results:** `npm run build` ✅. `npm test` ✅ **175/175** — deterministic
+across 4 full-suite runs + 3 isolated runs of the formerly-flaky files (was
+**3 failed | 171 passed** at the start of this run). `npm run typecheck:src` ✅
+(exit 0). Net: the engine's own verification gate is **green and reproducible**
+again, which it was not at the start of the run.
+
+**New idea:** Add a tiny `verify:exec` smoke test (or fold into the existing one)
+that runs the generated launch scripts for a matrix of adversarial commands —
+ones containing `'`, `"`, `\`, `$`, spaces, and newlines — and asserts each
+`state.json` round-trips to valid JSON with the original command string intact.
+Shell quoting/escaping bugs like #1 and #2 are invisible to string-match tests
+and only appear when the script actually executes; a property-style exec matrix
+would catch the whole class. Longer term, generate the state-recording shell
+out of a single audited `shellQuote`/`atomicWrite` helper shared by both
+`background-tasks.ts` and `training/runner.ts` so a fix in one can't drift from
+the other (they had already diverged on `shellQuote`).
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

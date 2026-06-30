@@ -4,6 +4,23 @@ Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
 ## Foundations / DX
+- [x] **Make the build/test gate green & deterministic in the cloud env**
+      (2026-06-30, run 9). Fixed 3 latent background-task launch-script bugs the
+      mocked-spawn tests never exercised: unsubstituted PID placeholder (broken
+      sed quote-nesting → every task `missing-process`), malformed `shellQuote`
+      single-quote escape (`"'"'"'` → `'"'"'`, corrupted `state.json` for
+      commands with quotes), and non-atomic state writes (race → partial-read
+      JSON errors). Suite **3 failed → 175/175**, stable across runs.
+- [ ] **Exec-matrix smoke test for generated shell** (run 9 idea): run the
+      background-task / training launch scripts for adversarial commands
+      (`'`, `"`, `\`, `$`, spaces, newlines) and assert each `state.json`
+      round-trips to valid JSON with the command intact. Catches shell
+      quoting/escaping bugs that string-match tests can't see.
+- [ ] **Unify the state-recording shell helpers**: `background-tasks.ts` and
+      `training/runner.ts` carry near-identical `shellQuote` + launch-script +
+      python-state-writer logic and had already *diverged* on `shellQuote`
+      (one correct, one buggy). Extract a single audited helper so a fix can't
+      drift between them.
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`
