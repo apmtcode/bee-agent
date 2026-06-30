@@ -6,6 +6,59 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-06-30 (run 9) — Movement-policy model layer: pluggable backend + generalization eval (objective #2 c+d)
+
+**Audited:** The local-movement learning subsystem (`src/capture` + `src/training`)
+against objective #2's five pieces. Pieces (a)–(c-export) existed: capture
+adapters, event schema (`TrajectorySpan`/`ReplayTimelineEvent`), dataset/replay,
+and a `runner.ts` that emits **mlx/axolotl shell plans** for on-device training.
+**Gap:** nothing actually *learns from the dataset and predicts/repeats
+movements* in a way that runs in the cloud — the train→infer loop (pieces c+d)
+was un-exercisable in CI, and the roadmap's "pluggable local-model backend +
+deterministic mock" and "generalization eval harness" were both unimplemented.
+
+**Changed (additive, new files only):**
+- `src/training/movement-policy.ts` — the model layer. `MovementPolicyBackend`
+  interface (pluggable; a real on-device model drops in behind it) + a
+  dependency-free **`NgramMovementPolicyBackend`**: a variable-order n-gram with
+  longest-suffix **backoff**. It memorizes recorded sequences (repeats them
+  exactly via `generate()`, stopping at a learned end sentinel) and generalizes
+  to unseen contexts by backing off to shorter observed suffixes. Deterministic,
+  serializable (`serialize()`/`load()` round-trip), no external runtime — the
+  canonical CI stand-in for mlx/axolotl. Plus tokenizer + extractors from
+  `TrajectorySpan` and `ReplayManifest` action events.
+- `src/training/movement-policy-eval.ts` — **generalization eval harness**
+  (`evaluateMovementPolicy`): top-1 / top-k next-movement accuracy, exact-replay
+  rate, a **generalizationRate** (share of correct hits that came from backed-off
+  contexts), and mean matched order — measured on *held-out* trajectories. Plus a
+  **seeded, deterministic synthetic movement generator**
+  (`generateSyntheticMovementExamples`, mulberry32 — no `Math.random`) so the
+  capture→dataset→train→infer loop is validated without real OS input.
+- Exported the surface from `src/index.ts`.
+
+**Test results:** +2 test files, **+18 tests, all passing** (round-trip repeat,
+backoff generalization, top-k ranking, global fallback, serialize/load equality,
+extractors; eval perfect-replay, disjoint-split generalization >0.6 top-1,
+synthetic determinism). `npm run typecheck:src` ✅ (exit 0). `npm run build` ✅.
+
+**⚠️ Pre-existing blocker (NOT introduced this run):** 3 tests now fail on the
+branch baseline *without* my changes (verified by stashing): `operator-runtime`,
+`server`, `app` background-task cases. Root cause: `renderLaunchScript` in
+`src/harness/background-tasks.ts` writes the initial `running` state file via
+`printf | sed "...s/\"\$\$\"/$$/g"` — fragile shell JSON munging that emits
+malformed JSON in this container's shell, so `readState`/recovery throws
+`SyntaxError` (the *completion* path already uses a robust `python3` json writer).
+Left untouched to keep this run's diff focused; filed as the top ROADMAP item.
+
+**New idea:** give `LocalAppleSiliconTrainingRunner` an offline **"dry-run
+fidelity gate"** — before emitting an mlx/axolotl plan, train the n-gram backend
+on the reviewed export and assert `evaluateMovementPolicy(...).exactReplayRate`
+clears a threshold. A dataset the trivial local model can't even replay is almost
+certainly mislabeled/too sparse to spend real GPU minutes on — cheap pre-flight
+that catches bad exports before on-device training.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

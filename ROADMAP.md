@@ -4,6 +4,16 @@ Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
 ## Foundations / DX
+- [ ] **🔴 TOP PRIORITY — fix pre-existing background-task test breakage (run 9).**
+      3 baseline tests fail (`operator-runtime`, `server`, `app` background-task
+      cases) independent of any recent feature work. Root cause:
+      `renderLaunchScript` in `src/harness/background-tasks.ts` writes the initial
+      `running` state file via `printf | sed "s/\"\$\$\"/$$/g"` — fragile shell
+      JSON munging that emits malformed JSON in this environment's shell, so
+      `readState`/recovery throws `SyntaxError`. Fix: write the initial state with
+      the same robust `python3` json writer the *completion* path already uses
+      (`renderStateWriterPython`), instead of `printf | sed`. The same fragile
+      pattern exists in `src/training/runner.ts` — fix both. Focused, additive.
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`
@@ -59,16 +69,26 @@ unchecked items are queued. Keep this richer than you found it each run.
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
 (exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
-      objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Inventory what `src/capture` + `src/training` already implement vs. the
+      objective's five pieces (run 9): capture adapters ✅, schema ✅, dataset/
+      replay ✅, on-device *plan* emit (mlx/axolotl) ✅ — the gap was a
+      cloud-runnable train→infer loop, now filled.
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      for a real on-device small model — DONE run 9 (`MovementPolicyBackend` +
+      `NgramMovementPolicyBackend` in `src/training/movement-policy.ts`).
+- [x] Synthetic event-stream generator to validate capture→dataset→replay
+      round-trips without real OS input — DONE run 9
+      (`generateSyntheticMovementExamples`, seeded mulberry32).
+- [x] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories — DONE run 9 (`evaluateMovementPolicy`).
+- [ ] Wire the n-gram backend into `LocalAppleSiliconTrainingRunner` as an
+      offline **dry-run fidelity gate**: train on the reviewed export and assert
+      `evaluateMovementPolicy(...).exactReplayRate` clears a threshold before
+      emitting an mlx/axolotl plan (catches mislabeled/too-sparse exports before
+      spending real GPU minutes).
+- [ ] Add a real on-device backend (e.g. small MLX/llama model) behind
+      `MovementPolicyBackend`, guarded so cloud tests keep using the n-gram mock.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
