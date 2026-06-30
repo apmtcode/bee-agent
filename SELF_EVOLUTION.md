@@ -6,6 +6,63 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-06-30 (run 9) — 🐞 Fix `shellQuote` POSIX-escaping bug; restore green suite (4 failing → 176/176)
+
+**Audited:** The actual `npm test` baseline (not just typecheck). The suite was
+**red on checkout** — 4 deterministic failures across `background-tasks` /
+`operator-runtime` / `cli/app` / `control-plane/server`, all crashing in
+`recoverBackgroundTasks` with `SyntaxError: …JSON at position 311`.
+
+**Root cause (real bug, fixed):** `renderLaunchScript` builds a bash launcher
+that writes the task's initial `state.json` from a JSON payload. `shellQuote`
+escaped embedded single quotes as `"'"'"'` — **one character off** from the
+correct POSIX form `'"'"'`. The stray leading `"` was injected into the payload
+before every `'`, so any background command containing a single quote (e.g.
+`printf 'line-1\nline-2\n'`) produced **malformed JSON** in `state.json`.
+Recovery then threw on parse and aborted the whole session sweep. This is also a
+latent shell-escaping hazard for arbitrary user commands, not just a test issue.
+
+**Changed:**
+- **`src/harness/background-tasks.ts`**
+  - `shellQuote`: `"'"'"'` → `'"'"'` (correct single-quote escaping), with a
+    comment explaining the POSIX trick and the bug it fixes.
+  - `readState`: now tolerant of a corrupt/partially-written `state.json` — a
+    `SyntaxError` degrades to "missing state" (so reconciliation marks the task
+    failed) instead of throwing and aborting recovery of *every* task in the
+    session.
+- **`src/cli/app.ts`**: added `backgroundTaskSpawnProcess` /
+  `backgroundTaskIsProcessRunning` to `OperatorCliAppOptions` and forwarded them
+  to the runtime — a clean seam so tests don't depend on real OS subprocess
+  timing (the engine itself runs in the cloud with no real machine).
+- **Tests made hermetic** (the remaining failures were pre-existing CI-fragility
+  from real detached subprocesses whose liveness is unpredictable in the cloud):
+  - `background-tasks.test.ts`: new tests — the launch script writes *valid* JSON
+    for a single-quoted command (executed for real via bash), and a corrupt
+    `state.json` is treated as missing state instead of throwing.
+  - `operator-runtime.test.ts`: inject a no-op spawn so explicit `writeState`
+    calls aren't clobbered by a racing detached process.
+  - `cli/app.test.ts`: a sync-launch spawn (runs the script to completion, then
+    pins state to running) + a tracked-pid liveness model so "active task with
+    output" and "stale pid → failed" are both deterministic.
+  - `control-plane/server.test.ts`: a **command-aware** spawn — long-running
+    commands (`sleep`, `tail -f`, `watch`) report alive, one-shot commands report
+    dead — plus no-op spawns for the breaker/drifting runtimes so the circuit
+    breaker trips progressively (mixed → degraded) instead of racing.
+
+**Test results:** `npm test` **176/176 passed** (was 4 failing), deterministic
+across 3 consecutive runs. `typecheck:src` clean. Build ✅.
+
+**New idea:** add a tiny **shell-escaping fuzz test** that feeds adversarial
+command strings (single/double quotes, `$()`, backticks, newlines, `;`, `&&`,
+glob chars) through `renderLaunchScript`, executes the script in a sandbox temp
+dir, and asserts (a) `state.json` always parses and (b) the recorded `command`
+round-trips byte-for-byte. This would have caught the `shellQuote` bug
+immediately and guards the whole launcher against future quoting regressions.
+Bonus: factor `shellQuote` into `src/shared/` and reuse it anywhere bee-agent
+interpolates untrusted strings into a shell.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

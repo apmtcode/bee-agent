@@ -4,6 +4,15 @@ Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
 ## Foundations / DX
+- [x] **Restore a green test suite** (2026-06-30, run 9). Was 4 failing on
+      checkout; now **176/176**, deterministic. Fixed the real `shellQuote`
+      POSIX-escaping bug + made subprocess-dependent tests hermetic via an
+      injectable background-task spawn. See SELF_EVOLUTION run 9.
+- [ ] **Shell-escaping fuzz test** for `renderLaunchScript`/`shellQuote`: feed
+      adversarial command strings (quotes, `$()`, backticks, newlines, `;`,
+      `&&`, globs), execute the generated script, assert `state.json` always
+      parses and the recorded command round-trips. Also factor `shellQuote` into
+      `src/shared/` for reuse anywhere untrusted strings hit a shell.
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`

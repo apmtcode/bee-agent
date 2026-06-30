@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -21,6 +22,39 @@ async function makeTempDir(): Promise<string> {
 afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })));
 });
+
+type RuntimeOptions = ConstructorParameters<typeof StandaloneOperatorRuntime>[0];
+
+/**
+ * Deterministic background-task wiring. The spawn never launches a real
+ * detached process (so background state files exist only when the test writes
+ * them), and liveness is derived from the *kind* of command: long-running
+ * commands (`sleep`, `tail -f`, `watch`) are reported alive while one-shot
+ * commands (`printf`, …) are reported dead. This mirrors the intent of the
+ * test's fixtures without depending on the host's real subprocess lifecycle,
+ * which is unreliable in CI.
+ */
+function makeCommandAwareSpawn(): {
+  spawnProcess: NonNullable<RuntimeOptions["backgroundTaskSpawnProcess"]>;
+  isProcessRunning: NonNullable<RuntimeOptions["backgroundTaskIsProcessRunning"]>;
+} {
+  const livePids = new Set<number>();
+  let pid = 700000;
+  const longRunning = /\b(?:sleep|watch)\b|\btail\s+-f\b/;
+  const spawnProcess = ((launchScriptPath: string) => {
+    pid += 1;
+    const assigned = pid;
+    try {
+      if (longRunning.test(readFileSync(launchScriptPath, "utf8"))) {
+        livePids.add(assigned);
+      }
+    } catch {
+      // No launch script to inspect — treat as a short-lived (dead) process.
+    }
+    return { pid: assigned, unref() {} };
+  }) as never;
+  return { spawnProcess, isProcessRunning: (candidate: number) => livePids.has(candidate) };
+}
 
 const exportManifest: ReviewedExportManifest = {
   version: 1,
@@ -81,9 +115,11 @@ const exportManifest: ReviewedExportManifest = {
 describe("OperatorControlPlaneServer", () => {
   it("handles session, transcript, approval, trajectory, memory, and orchestration methods", async () => {
     const rootDir = await makeTempDir();
+    const tracked = makeCommandAwareSpawn();
     const runtime = new StandaloneOperatorRuntime({
       rootDir,
-      backgroundTaskIsProcessRunning: () => false,
+      backgroundTaskSpawnProcess: tracked.spawnProcess,
+      backgroundTaskIsProcessRunning: tracked.isProcessRunning,
       delivery: new OperatorDeliveryService(rootDir, {
         sendBrowserPush: async () => {},
       }),
@@ -952,6 +988,10 @@ describe("OperatorControlPlaneServer", () => {
     const driftingRootDir = await makeTempDir();
     const driftingRuntime = new StandaloneOperatorRuntime({
       rootDir: driftingRootDir,
+      // No real launch script: background state exists only via the explicit
+      // writeState calls below, and every pid is treated as dead so the test
+      // drives drift/failure deterministically.
+      backgroundTaskSpawnProcess: makeCommandAwareSpawn().spawnProcess,
       backgroundTaskIsProcessRunning: () => false,
     });
     const driftingServer = new OperatorControlPlaneServer({ runtime: driftingRuntime });
@@ -1018,6 +1058,10 @@ describe("OperatorControlPlaneServer", () => {
     const breakerRootDir = await makeTempDir();
     const breakerRuntime = new StandaloneOperatorRuntime({
       rootDir: breakerRootDir,
+      // No real launch script: tasks only carry the running states the test
+      // writes by hand, so the breaker trips progressively (mixed → degraded)
+      // instead of all three racing to a failed state via real subprocesses.
+      backgroundTaskSpawnProcess: makeCommandAwareSpawn().spawnProcess,
       backgroundTaskIsProcessRunning: () => false,
     });
     const breakerServer = new OperatorControlPlaneServer({ runtime: breakerRuntime });

@@ -1,3 +1,4 @@
+import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -369,5 +370,38 @@ describe("BackgroundTaskExecutionService", () => {
     await expect(fs.readFile(path.join(rootDir, task.execution.launchScript), "utf8")).resolves.toContain("bash -lc");
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
+  });
+
+  it("renders a launch script that writes valid JSON state for commands with single quotes", async () => {
+    const rootDir = await makeTempDir();
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"), () => ({ pid: 2222, unref() {} }));
+    // A command containing single quotes previously corrupted the state JSON
+    // because shellQuote injected a spurious double quote into the payload.
+    const task = await store.start({
+      title: "Echo with quotes",
+      command: "printf '%s' \"it's a 'quoted' value\"",
+      cwd: rootDir,
+    });
+
+    const scriptPath = path.join(rootDir, task.execution.launchScript);
+    await new Promise<void>((resolve, reject) => {
+      execFile("bash", [scriptPath], { cwd: rootDir }, (error) => (error ? reject(error) : resolve()));
+    });
+
+    const statePath = path.join(rootDir, task.execution.stateFile);
+    const raw = await fs.readFile(statePath, "utf8");
+    const parsed = JSON.parse(raw) as BackgroundTaskExecutionState;
+    expect(parsed.command).toBe(task.command);
+    expect(typeof parsed.pid).toBe("number");
+  });
+
+  it("treats a corrupt state file as missing state instead of throwing", async () => {
+    const rootDir = await makeTempDir();
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"), () => ({ pid: 3333, unref() {} }));
+    const task = await store.start({ title: "Corrupt", command: "printf 'ok'", cwd: rootDir });
+
+    await fs.writeFile(path.join(rootDir, task.execution.stateFile), "{ not: valid json", "utf8");
+    const service = new BackgroundTaskExecutionService(rootDir, () => ({ pid: 3333, unref() {} }));
+    await expect(service.readState(task)).resolves.toBeUndefined();
   });
 });

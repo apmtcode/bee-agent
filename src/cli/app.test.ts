@@ -1,14 +1,77 @@
-import { execFile } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
+import { readFileSync, writeFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
-import { OperatorCliApp, parseSlashCommand } from "./app.js";
+import { OperatorCliApp, type OperatorCliAppOptions, parseSlashCommand } from "./app.js";
 
 const tempDirs: string[] = [];
 const execFileAsync = promisify(execFile);
+
+/**
+ * Background-task spawn override that runs the generated launch script
+ * synchronously (blocking until it exits) instead of as a detached process.
+ * This keeps the real launch behaviour — output and state files are written by
+ * the actual script — while removing the nondeterministic timing of a detached
+ * child, so assertions about output/state never race the cloud scheduler.
+ */
+function makeSyncLaunchSpawn(options: { keepRunning?: boolean } = {}): NonNullable<
+  OperatorCliAppOptions["backgroundTaskSpawnProcess"]
+> {
+  let pid = 900000;
+  return ((command: string, _args: readonly string[], spawnOptions: { cwd?: string; env?: NodeJS.ProcessEnv }) => {
+    pid += 1;
+    const assignedPid = pid;
+    try {
+      execFileSync(command, [], { cwd: spawnOptions?.cwd, env: spawnOptions?.env, timeout: 10_000, stdio: "ignore" });
+    } catch {
+      // Non-zero exit / missing interpreter: the launch script records a
+      // failed state itself; recovery handles it deterministically.
+    }
+    if (options.keepRunning) {
+      // The script ran to completion (so output is captured), but the test
+      // wants the task to still look active. Pin its state back to "running"
+      // with our stable pid; pair with backgroundTaskIsProcessRunning: () => true.
+      const statePath = path.join(path.dirname(command), "state.json");
+      try {
+        const state = JSON.parse(readFileSync(statePath, "utf8")) as Record<string, unknown>;
+        state.status = "running";
+        state.pid = assignedPid;
+        delete state.completedAt;
+        delete state.exitCode;
+        delete state.error;
+        delete state.signal;
+        writeFileSync(statePath, `${JSON.stringify(state, null, 2)}\n`);
+      } catch {
+        // No state file (unexpected) — nothing to pin.
+      }
+    }
+    return { pid: assignedPid, unref() {} };
+  }) as never;
+}
+
+/**
+ * A no-op background spawn paired with a liveness check that only reports the
+ * pids it actually handed out as alive. Tasks the test starts therefore stay
+ * deterministically "running", while synthetic/dead pids the test injects by
+ * hand (e.g. a stale `pid: 999999`) are correctly seen as gone.
+ */
+function makeTrackedSpawn(): {
+  spawnProcess: NonNullable<OperatorCliAppOptions["backgroundTaskSpawnProcess"]>;
+  isProcessRunning: NonNullable<OperatorCliAppOptions["backgroundTaskIsProcessRunning"]>;
+} {
+  const livePids = new Set<number>();
+  let pid = 500000;
+  const spawnProcess = (() => {
+    pid += 1;
+    livePids.add(pid);
+    return { pid, unref() {} };
+  }) as never;
+  return { spawnProcess, isProcessRunning: (candidate: number) => livePids.has(candidate) };
+}
 
 async function makeTempDir(): Promise<string> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "operator-cli-app-"));
@@ -801,7 +864,22 @@ describe("OperatorCliApp", () => {
 
   it("supports session lifecycle, transcript, approvals, pairing, config, and prompt commands", async () => {
     const rootDir = await makeTempDir();
-    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    const app = new OperatorCliApp({
+      rootDir,
+      cwd: rootDir,
+      currentDate: "2026-05-25",
+      // Keep background tasks deterministically "running": don't launch real
+      // detached processes (whose liveness is unpredictable in CI), and report
+      // only the pids we actually spawned as alive so the test's synthetic
+      // dead pid (999999) is still correctly seen as a failed task.
+      ...(() => {
+        const tracked = makeTrackedSpawn();
+        return {
+          backgroundTaskSpawnProcess: tracked.spawnProcess,
+          backgroundTaskIsProcessRunning: tracked.isProcessRunning,
+        };
+      })(),
+    });
     const firstSession = await app.runtime.startSession({ title: "first", cwd: rootDir, agentId: "operator-cli" });
     const secondSession = await app.runtime.startSession({ title: "second", cwd: rootDir, agentId: "operator-cli" });
 
@@ -1063,7 +1141,13 @@ describe("OperatorCliApp", () => {
 
   it("supports background and monitor task commands plus cron commands", async () => {
     const rootDir = await makeTempDir();
-    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    const app = new OperatorCliApp({
+      rootDir,
+      cwd: rootDir,
+      currentDate: "2026-05-25",
+      backgroundTaskSpawnProcess: makeSyncLaunchSpawn({ keepRunning: true }),
+      backgroundTaskIsProcessRunning: () => true,
+    });
     const session = await app.runtime.startSession({ title: "CLI ops", cwd: rootDir, agentId: "operator-cli" });
 
     const startOutput = await app.dispatchSlashCommand(
