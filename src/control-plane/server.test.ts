@@ -1019,6 +1019,12 @@ describe("OperatorControlPlaneServer", () => {
     const breakerRuntime = new StandaloneOperatorRuntime({
       rootDir: breakerRootDir,
       backgroundTaskIsProcessRunning: () => false,
+      // Stub the spawn so no real launch script runs. The breaker progression
+      // below (1 failure -> mixed, 2 -> degraded, 3 -> paused) requires tasks
+      // two/three to have NO execution state until they are manually written; a
+      // real launch script would race to write their "running" state early and
+      // flip the first aggregate to "paused" under load.
+      backgroundTaskSpawnProcess: () => ({ pid: 4242, unref() {} }),
     });
     const breakerServer = new OperatorControlPlaneServer({ runtime: breakerRuntime });
     const breakerOne = await breakerServer.handle({

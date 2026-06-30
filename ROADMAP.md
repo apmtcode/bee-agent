@@ -3,6 +3,16 @@
 Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
+## Recently completed (run 9)
+- [x] **Fixed a real JSON-corruption bug** in `background-tasks.ts`: the
+      launch-script running-state writer used `printf | sed` that left
+      `"pid":"$$"` unsubstituted (`$` is a sed anchor) and mangled quotes in
+      `command`, producing unparseable state JSON that crashed task recovery.
+      Replaced with a `python3`/`json.dumps` writer.
+- [x] **Stabilized the flaky `server.test.ts` breaker test** by injecting a no-op
+      `backgroundTaskSpawnProcess` so its manual `writeState` calls are the sole
+      source of truth (no real launch-script race). Full suite now 190/190 green.
+
 ## Foundations / DX
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
@@ -62,13 +72,25 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      for a real on-device small model. **DONE run 9** —
+      `src/training/movement-model.ts`: `MovementModelBackend` seam +
+      `NgramMovementBackend` (order-k Markov, Katz backoff, deterministic).
+- [x] Synthetic event-stream generator to validate capture→dataset→replay
+      round-trips without real OS input. **DONE run 9** —
+      `generateSyntheticMovementSequences` (deterministic, related-variant
+      injection).
+- [x] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories. **DONE run 9** — `evaluateMovementFidelity`
+      (next-step accuracy + full-sequence reproduction + avg backoff order).
+- [ ] Wire the in-process model into a `MovementPolicy` inference service that
+      streams the backed-off next-movement prediction (with confidence = backoff
+      order) for the replay engine to consume — the live 2(e) inference half.
+- [ ] `MovementModelBackend` → JSONL dataset adapter so the in-process n-gram
+      model and the on-device mlx/axolotl runner share one dataset contract; use
+      the fast in-process model as a pre-flight "smoke backend" that validates a
+      dataset before the heavyweight local job spawns.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

@@ -6,6 +6,80 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-06-30 (run 9) — In-process movement model (objective 2d/2e) + real JSON-corruption bugfix
+
+**Audited:** Standing objective #2 (local-movement learning). The training
+subsystem (`src/training/`) only *shells out* to external Python (mlx/axolotl)
+via `LocalAppleSiliconTrainingRunner` — that path cannot run or be tested in the
+cloud, leaving objective **2(d)** "post-train a local model that repeats recorded
+movements" and **2(e)** "generalize to new but related movements" unimplemented
+and unverifiable here. The capture schema (`TrajectoryAction` + gesture metadata)
+already exists; the *learning* half did not.
+
+**Changed (additive):**
+1. **New `src/training/movement-model.ts`** — a small, fully in-process,
+   deterministic movement model that is trainable and runnable anywhere (no GPU,
+   no OS access):
+   - `MovementStep`/`MovementToken` schema + `tokenizeStep`/`parseToken`
+     (round-trippable) and `stepFromAction`/`sequenceFromSpan` to distill
+     recorded trajectory actions into ordered movement-token sequences.
+   - `MovementModelBackend` — the **pluggable seam** (documented for a real
+     on-device small neural policy later).
+   - `NgramMovementBackend` — the reference/default backend: an order-k Markov
+     model with START/END sentinels and **Katz-style backoff**. Backoff is what
+     delivers 2(e): a novel-but-related context that was never seen at full order
+     still yields a plausible next movement from a shorter learned context (and
+     ultimately the unigram prior). Deterministic argmax (ties broken lexically),
+     so tests are stable. `serialize()`/`restore()` round-trip.
+   - `evaluateMovementFidelity` — the generalization/replay eval harness
+     (next-step top-1 accuracy + full-sequence reproduction + average backoff
+     order used as a memorization-vs-generalization proxy).
+   - `generateSyntheticMovementSequences` — deterministic synthetic event-stream
+     generator with related-variant injection, validating the
+     capture→dataset→train→replay round-trip with **no real OS input**.
+   - Exported all of the above from `src/index.ts`.
+2. **Real bug fixed in `src/harness/background-tasks.ts`** (discovered while
+   getting the suite green): the launch-script's *running*-state writer built its
+   state JSON with `printf '…' | sed "…s/\"\$\$\"/$$/g"`. Two defects: (a) `$` is
+   a regex anchor in sed, so `"pid":"$$"` was **never substituted** (stayed the
+   literal string `"$$"`); (b) any `command` containing quotes/newlines was
+   spliced in unescaped, producing **unparseable JSON** — `readJsonFile` then
+   threw `SyntaxError` and crashed task recovery. Replaced the fragile printf|sed
+   with a `python3`/`json.dumps` writer (mirroring the existing completed/failed
+   writers) that injects the real pid + timestamps. Captured the actual corrupt
+   file to confirm the root cause before fixing.
+
+3. **Flaky `server.test.ts` breaker test made deterministic.** Once the JSON
+   crash was fixed, the orchestration test reached a previously-unevaluated
+   assertion (L1073) that flaked under full-suite concurrency: a **real-subprocess
+   race**. The `breakerRuntime` (L1019) forced `isProcessRunning: () => false`
+   and manually wrote each task's state, but **omitted a spawn stub** — so a real
+   launch script raced to write "running" state for tasks two/three. The breaker
+   progression it asserts (1 missing-process failure → `mixed`, 2 → `degraded`,
+   3 → `paused`) only holds if two/three have *no* execution state until manually
+   written; under load the launch script wrote their state early and flipped the
+   first aggregate to `paused`. Fixed by injecting a no-op
+   `backgroundTaskSpawnProcess: () => ({ pid: 4242, unref() {} })` — matching the
+   test's clear intent (it already stubs `isProcessRunning` and writes every
+   state). Now deterministic and order-independent.
+
+**Test results:** `typecheck:src` ✅ CLEAN. Build ✅. New movement-model suite ✅
+**16/16**. Full suite: clean HEAD was **3 failed / 187** (the bg-task JSON crash
+took down `operator-runtime`, `server`, and `app` tests). After this run the
+**entire suite is green — 190/190**, stable across 3 consecutive full runs.
+Pushed to the designated branch `claude/peaceful-dirac-myklib`.
+
+**New idea:** add a `MovementModelBackend` adapter that *emits a training
+dataset* in the JSONL format the existing `LocalTrainingExporter`/runner expects,
+so the in-process n-gram model and the on-device mlx/axolotl path share one
+dataset contract — the cloud-testable model becomes a fast "smoke backend" that
+validates a dataset before the heavyweight local job ever spawns. Second idea:
+a tiny `MovementPolicy` service that, given a live partial context, streams the
+backed-off next-movement prediction with a confidence (the backoff order) — the
+inference half of 2(e) that the replay engine can consume.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
