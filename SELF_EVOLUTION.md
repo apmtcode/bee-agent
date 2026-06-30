@@ -6,6 +6,64 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-06-30 (run 9) — 🐛 Fix two real background-task launch-script bugs + make 3 racy tests hermetic
+
+**Audited:** Ran the suite first (per the procedure's verification gate) and found
+**3 deterministically failing tests** on the committed run-8 state
+(`operator-runtime`, `server`, `app`) — the prior log claimed 174/174, so these
+were an environment-/timing-exposed regression, not anything this branch
+introduced. Root-caused by instrumenting `readJsonFile` and reproducing the
+generated launch shell script in isolation.
+
+**Two genuine production bugs found in `src/harness/background-tasks.ts`
+`renderLaunchScript`** (the script a real background task runs):
+1. **`shellQuote` used the wrong POSIX single-quote escape.** It replaced `'`
+   with `"'"'"'` (6 chars, wrong rotation) instead of `'"'"'` (the correct
+   `'\''` form). Any quoted path/command/JSON payload containing a single quote
+   got an **unbalanced double quote injected**, so the launch `state.json` became
+   invalid JSON (`JSON.parse` threw mid-recovery). `src/training/runner.ts` had
+   the *correct* version — confirming this was a copy typo.
+2. **The `sed` pid substitution was broken by JS-template escaping.** The line
+   emitted `sed "…; s/"$$"/$$/g"` — the unescaped `"` closed bash's double-quote,
+   so the `"$$"` sentinel was never matched and the pid stayed the literal string
+   `"$$"`. Replaced the fragile `printf | sed` sentinel dance entirely with a
+   `python3` initial-state writer (python3 is already a hard dependency for the
+   completion writer), passing the now-safely-quoted JSON payload + `$$` +
+   `started_at` as argv. Removes the sed line; adds `renderInitialStateWriterPython`.
+
+**Test hermeticity (the actual cause of the 3 failures):** the failing tests
+spawned **real detached processes** whose async state-file writes raced the
+tests' explicit `writeState` calls (and whose liveness depended on wall-clock
+timing). Fixed by injecting the established stub pattern
+(`backgroundTaskSpawnProcess: () => ({ pid: 4242, unref(){} })`, already used in
+`background-tasks.test.ts`) into every runtime that starts background tasks:
+`operator-runtime.test.ts`, four runtimes in `server.test.ts`, and the big
+`app.test.ts` lifecycle test (with `isProcessRunning: (pid) => pid === 4242` so
+the stub pid reads alive and the test's forced-degradation pid `999999` reads
+dead). Threaded `backgroundTaskSpawnProcess`/`backgroundTaskIsProcessRunning`
+through `OperatorCliApp` (additive optional options) since it builds its runtime
+internally.
+
+**New regression test** (`background-tasks.test.ts`): runs the **real** launch
+script (no stub) with `printf 'a\nb\n' && echo "done"` (single quotes + double
+quotes + newlines) and asserts the resulting `state.json` is valid, `status`
+completed, `exitCode` 0, `pid` numeric, and the command round-trips exactly.
+Verified it **fails against the buggy `shellQuote`** and passes with the fix.
+
+**Test results:** **3 failing → 0**; full suite **175/175** (was 174 + 1 new
+regression test). `typecheck:src` ✅ (exit 0). Full `tsc` debt unchanged at
+**125** (no new debt). Build ✅.
+
+**New idea:** add a tiny lint/test that flags any `printf … | sed "s/…\$\$…/"`
+or hand-rolled shell-quoting outside the single shared `shellQuote` helper —
+both bugs here were shell-string construction that bypassed/duplicated the safe
+primitive. Longer term, centralize *all* shell quoting in one audited module and
+forbid inline quoting in `renderLaunchScript`-style code via a unit test that
+greps the source. Also: a `verify` script (`typecheck:src && build && test`) run
+as the engine's pre-push gate would have surfaced these 3 failures immediately.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

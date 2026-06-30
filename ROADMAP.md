@@ -4,6 +4,14 @@ Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
 ## Foundations / DX
+- [x] **Background-task launch-script correctness + test hermeticity** (run 9,
+      2026-06-30). Fixed two real bugs in `renderLaunchScript`: a wrong POSIX
+      single-quote escape in `shellQuote` (corrupted launch `state.json` for any
+      command/path with a single quote) and a broken `sed` pid substitution
+      (replaced with a `python3` initial-state writer). Made the 3 tests that
+      spawned real detached processes hermetic via the `backgroundTaskSpawnProcess`
+      stub (threaded through `OperatorCliApp`), and added a real-launch-script
+      regression test. Suite 174→175, all green.
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`
@@ -39,7 +47,14 @@ unchecked items are queued. Keep this richer than you found it each run.
     `cron.runs`/misc — plus a few genuine test-only typings. Map the rest, then
     fix residual test-only typings.
 - [ ] Add a `verify` npm script (`typecheck && build && test`) and have the
-      engine run it as a pre-push self-check each cycle.
+      engine run it as a pre-push self-check each cycle. **Run 9 reinforced this:**
+      3 tests were silently failing on the committed state; a pre-push `verify`
+      gate would have caught them the run they appeared.
+- [ ] **Shell-quoting safety lint/test:** flag any hand-rolled shell quoting or
+      `printf … | sed "s/…"` substitution outside the shared `shellQuote` helper
+      (run 9 fixed two such bugs — a duplicated/wrong `shellQuote` and a broken
+      `sed`). Centralize all shell-string construction in one audited module and
+      add a source-grep unit test forbidding inline quoting in launch-script code.
 - [x] Interim **source-only typecheck gate** — DONE run 7. `tsconfig.src.json`
       (excludes `**/*.test.ts`) + `typecheck:src` script; passes (exit 0). Next:
       have the engine run it as a per-run pre-push self-check.

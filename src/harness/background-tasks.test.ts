@@ -370,4 +370,35 @@ describe("BackgroundTaskExecutionService", () => {
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
   });
+
+  // Regression: the real launch script must produce a VALID state.json even when
+  // the command contains single quotes, double quotes, and newlines. A broken
+  // POSIX single-quote escape (`shellQuote`) once corrupted the embedded JSON
+  // payload, and a broken `sed` substitution once left the pid placeholder as the
+  // literal string "$$" — both surfaced only with a real (non-mocked) spawn.
+  it("runs a real launch script and persists valid state for a quote/newline command", async () => {
+    const rootDir = await makeTempDir();
+    // Default (real) spawn — no stub: this actually executes the launch script.
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"));
+    const command = "printf 'a\nb\n' && echo \"done\"";
+    const task = await store.start({ title: "Quoted command", command, cwd: rootDir, kind: "task" });
+
+    // Poll until the detached process finishes (state leaves "running").
+    let state: BackgroundTaskExecutionState | undefined;
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      state = await store.executionService.readState(task);
+      if (state && state.status !== "running") {
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+
+    expect(state).toBeDefined();
+    expect(state?.status).toBe("completed");
+    expect(state?.exitCode).toBe(0);
+    expect(typeof state?.pid).toBe("number");
+    expect(state?.pid).not.toBeNaN();
+    // The command round-trips exactly through the shell-quoted JSON payload.
+    expect(state?.command).toBe(command);
+  });
 });
