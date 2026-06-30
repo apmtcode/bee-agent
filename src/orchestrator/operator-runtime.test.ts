@@ -531,6 +531,11 @@ describe("StandaloneOperatorRuntime", () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
       backgroundTaskIsProcessRunning: () => false,
+      // Fake spawn so the manually-written task states below are authoritative.
+      // A real launch script writes state asynchronously and races those
+      // writeState() calls, intermittently reverting a completed task back to
+      // "running". The real script is covered by harness/background-tasks.test.ts.
+      backgroundTaskSpawnProcess: () => ({ pid: 4242, unref() {} }),
     });
     const session = await runtime.startSession({ title: "Tasks", agentId: "main" });
 

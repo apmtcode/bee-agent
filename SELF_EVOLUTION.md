@@ -6,6 +6,62 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-06-30 (run 9) — 🐛 Fixed two latent shell-escaping bugs in background-task / training launch scripts; made the suite deterministic (3 red → 175 green)
+
+**Audited:** The actual `npm test` state in the cloud environment — the prior log
+claimed 174/174, but the suite was failing **3 tests** here
+(`operator-runtime.test.ts`, `app.test.ts`, `server.test.ts`), all touching the
+background-task launch-script path. Traced the failures to their root causes.
+
+**Two real production bugs found and fixed** in the bash launch-script
+generators (`renderLaunchScript`) used by both `src/harness/background-tasks.ts`
+and `src/training/runner.ts`:
+
+1. **`shellQuote` corrupted any value containing a single quote.** It replaced
+   `'` with `"'"'"'` (6 chars) instead of the POSIX-correct `'"'"'`. The stray
+   `"` it injected mangled the generated state JSON (and the launched command
+   itself) for any command/cwd with a single quote — e.g. a task running
+   `printf 'x'` produced an unparseable `state.json`. The training runner already
+   had the correct form; `background-tasks.ts` did not. Verified the round-trip
+   through real `bash` for both forms before/after.
+2. **The `pid` placeholder was never substituted.** The sed step
+   `s/\"\$\$\"/$$/g` was written inside a **JS template literal**, which silently
+   ate the backslashes, so the generated bash became `s/"$$"/$$/g`. The unescaped
+   inner `"` closed bash's double-quoted string, collapsing the search pattern to
+   the bare PID — so `"pid":"$$"` was left as a string in every state file, which
+   then read back as a dead process (`isProcessRunning("$$")` → false) and
+   spuriously flagged tasks as `missing-process`. Fixed by doubling the
+   backslashes (`s/\\"\\$\\$\\"/$$/g`) in both files so bash receives `\"\$\$\"`.
+
+**Reliability fix (test determinism):** the three integration tests spawned
+*real* processes (`sleep 5`, `printf …`) and then asserted on background-task
+state that the async launch script writes on its own schedule — a genuine race
+(it passed only when the script happened to lose the race). Made them hermetic
+by injecting a fake `backgroundTaskSpawnProcess` (the same pattern the
+`background-tasks.test.ts` unit tests already use), so the tests' explicit
+`writeState()` calls are authoritative. To enable that for the CLI test, added
+optional `backgroundTaskSpawnProcess` / `backgroundTaskIsProcessRunning`
+passthrough options to `OperatorCliAppOptions` (additive, improves testability).
+
+**New regression test** (`harness/background-tasks.test.ts`): generates a launch
+script for a single-quote-laden command, executes it through real `bash`, and
+asserts the resulting `state.json` is valid JSON with the command preserved, a
+numeric `pid`, and `status: completed`. This is now the *one* test that
+exercises real launch-script execution; the integration tests use fake spawns.
+Confirmed it fails with the old escaping and passes with the fix.
+
+**Test results:** full suite **175/175** green and **deterministic across 5
+consecutive runs** (was 3 failing + flaky). `typecheck:src` ✅ (exit 0). Build ✅.
+
+**New idea:** add a tiny `verify` npm script (`typecheck:src && build && test`)
+and run it as the engine's pre-push gate, *and* run the suite **twice** in the
+pre-push check — a single green run hid these races for weeks. Cheap flake
+insurance. Longer term: a shared, unit-tested `posixSingleQuote()` helper in
+`src/shared/` so the two `shellQuote` copies (and any future shell-emitting code)
+can't drift again — this run found them already drifted, one correct, one not.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

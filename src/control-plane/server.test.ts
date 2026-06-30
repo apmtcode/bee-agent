@@ -84,6 +84,12 @@ describe("OperatorControlPlaneServer", () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir,
       backgroundTaskIsProcessRunning: () => false,
+      // Use a fake spawn so started background tasks do not launch a real
+      // process (e.g. `sleep 5`) that asynchronously writes a state file. The
+      // remote-status assertions below depend on the just-started task having
+      // no on-disk state yet; a real spawn races that write and intermittently
+      // surfaces a spurious "missing-process" diagnostic.
+      backgroundTaskSpawnProcess: () => ({ pid: 4242, unref() {} }),
       delivery: new OperatorDeliveryService(rootDir, {
         sendBrowserPush: async () => {},
       }),
@@ -953,6 +959,9 @@ describe("OperatorControlPlaneServer", () => {
     const driftingRuntime = new StandaloneOperatorRuntime({
       rootDir: driftingRootDir,
       backgroundTaskIsProcessRunning: () => false,
+      // Fake spawn: keep background-task state under the test's explicit
+      // control instead of racing a real launch script's async state write.
+      backgroundTaskSpawnProcess: () => ({ pid: 4242, unref() {} }),
     });
     const driftingServer = new OperatorControlPlaneServer({ runtime: driftingRuntime });
     const driftingBootstrap = await driftingServer.handle({
@@ -1019,6 +1028,9 @@ describe("OperatorControlPlaneServer", () => {
     const breakerRuntime = new StandaloneOperatorRuntime({
       rootDir: breakerRootDir,
       backgroundTaskIsProcessRunning: () => false,
+      // Fake spawn: keep background-task state under the test's explicit
+      // control instead of racing a real launch script's async state write.
+      backgroundTaskSpawnProcess: () => ({ pid: 4242, unref() {} }),
     });
     const breakerServer = new OperatorControlPlaneServer({ runtime: breakerRuntime });
     const breakerOne = await breakerServer.handle({

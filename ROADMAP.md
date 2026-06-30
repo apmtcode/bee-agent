@@ -3,6 +3,23 @@
 Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
+## Reliability (run 9)
+- [x] **Fix shell-escaping bugs in launch-script generators** (2026-06-30):
+      `background-tasks.ts` `shellQuote` mis-escaped single quotes (`"'"'"'`
+      instead of `'"'"'`), corrupting state JSON; and the `pid` sed substitution
+      lost its backslashes to JS-template-literal parsing, leaving `"pid":"$$"`
+      unsubstituted. Both fixed in `background-tasks.ts` and `training/runner.ts`,
+      with a real-`bash` regression test.
+- [x] **Make the background-task integration tests deterministic** (2026-06-30):
+      inject a fake `backgroundTaskSpawnProcess` so real `sleep`/`printf`
+      processes no longer race the tests' explicit `writeState()`. Added
+      passthrough options to `OperatorCliAppOptions`.
+- [ ] Extract a shared, unit-tested `posixSingleQuote()` helper in `src/shared/`
+      and have both `shellQuote` copies use it, so the escaping can't drift again
+      (run 9 found the two copies already drifted — one correct, one buggy).
+- [ ] Run the test suite **twice** (or add `--retry`) in the pre-push gate; a
+      single green run masked these races for weeks.
+
 ## Foundations / DX
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.

@@ -1,7 +1,11 @@
+import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
+
+const execFileAsync = promisify(execFile);
 import {
   BackgroundTaskExecutionService,
   FileBackgroundTaskStore,
@@ -369,5 +373,32 @@ describe("BackgroundTaskExecutionService", () => {
     await expect(fs.readFile(path.join(rootDir, task.execution.launchScript), "utf8")).resolves.toContain("bash -lc");
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
+  });
+
+  it("emits a valid state file when the command or cwd contains single quotes", async () => {
+    const rootDir = await makeTempDir();
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"), () => ({ pid: 1111, unref() {} }));
+    // A command full of single quotes is the classic shell-escaping trap: the
+    // launch script wraps it in single quotes, so each embedded quote must be
+    // escaped POSIX-correctly or the generated state JSON becomes corrupt.
+    const task = await store.start({
+      title: "Quoted command",
+      command: "printf '%s\\n' 'it'\\''s a trap'",
+      cwd: rootDir,
+      kind: "task",
+    });
+
+    const scriptPath = path.join(rootDir, task.execution.launchScript);
+    await execFileAsync("bash", [scriptPath], { cwd: rootDir });
+
+    const statePath = path.join(rootDir, task.execution.stateFile);
+    const raw = await fs.readFile(statePath, "utf8");
+    const state = JSON.parse(raw) as BackgroundTaskExecutionState;
+    expect(state.command).toBe(task.command);
+    expect(state.status).toBe("completed");
+    expect(typeof state.pid).toBe("number");
+
+    const output = await fs.readFile(path.join(rootDir, task.execution.outputFile), "utf8");
+    expect(output).toContain("it's a trap");
   });
 });

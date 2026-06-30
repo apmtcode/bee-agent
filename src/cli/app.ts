@@ -121,6 +121,14 @@ export type OperatorCliAppOptions = {
   stdin?: NodeJS.ReadableStream;
   stdout?: NodeJS.WritableStream;
   stderr?: NodeJS.WritableStream;
+  /**
+   * Spawn function for background tasks. Defaults to the real process spawn.
+   * Tests can inject a fake so background tasks do not launch real processes
+   * (whose async state writes would race the test's assertions).
+   */
+  backgroundTaskSpawnProcess?: ConstructorParameters<typeof StandaloneOperatorRuntime>[0]["backgroundTaskSpawnProcess"];
+  /** Liveness check for background-task processes. Defaults to the real check. */
+  backgroundTaskIsProcessRunning?: ConstructorParameters<typeof StandaloneOperatorRuntime>[0]["backgroundTaskIsProcessRunning"];
 };
 
 type OperatorCliWorktreeSession = {
@@ -147,7 +155,11 @@ export class OperatorCliApp {
   readonly teams: FileOperatorCliTeamStore;
 
   constructor(private readonly options: OperatorCliAppOptions) {
-    this.runtime = new StandaloneOperatorRuntime({ rootDir: options.rootDir });
+    this.runtime = new StandaloneOperatorRuntime({
+      rootDir: options.rootDir,
+      ...(options.backgroundTaskSpawnProcess ? { backgroundTaskSpawnProcess: options.backgroundTaskSpawnProcess } : {}),
+      ...(options.backgroundTaskIsProcessRunning ? { backgroundTaskIsProcessRunning: options.backgroundTaskIsProcessRunning } : {}),
+    });
     this.server = new OperatorControlPlaneServer({ runtime: this.runtime });
     this.teams = new FileOperatorCliTeamStore(options.rootDir);
     this.cwd = options.cwd ?? process.cwd();
