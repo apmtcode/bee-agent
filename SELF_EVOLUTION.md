@@ -6,6 +6,77 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-06-30 (run 9) — 🧠 Pluggable in-process movement-model backend + generalization eval (objective #2 c/d)
+
+**Audited:** The local-movement learning subsystem (`src/capture/` + `src/training/`)
+against objective #2's five pieces. Found: capture→schema→dataset→replay are all
+present, but the **train/infer** piece (c/d) had a hole — `runner.ts` and
+`execution-service.ts` only *emit shell command plans* for external on-device
+runtimes (mlx/axolotl) that **cannot run in the cloud/CI**. There was no
+in-process model that actually learns from a dataset to *repeat* recorded
+movements or *generalize* to related ones, and no way to test that capability
+without real OS/training. This was the top movement item on the roadmap.
+
+**Changed (additive, new files only):**
+- `src/training/movement-model.ts` — a **pluggable** `MovementModelBackend`
+  interface + default `MarkovMovementBackend`: a variable-order Markov model with
+  stupid-backoff smoothing. Fully deterministic (no `Date`/`Math.random`), so it
+  runs in the cloud. A real on-device small model can implement the same
+  interface later (documented seam).
+  - **(c) repeat recorded movements:** `predictNext`/`generate` reproduce a seen
+    trajectory exactly (argmax with lexicographic tie-break for determinism).
+  - **(d) generalize to related movements:** when a long context is unseen, the
+    model backs off to the longest matching suffix it *has* seen (and finally to
+    the global prior), so novel-but-related sequences still get a plausible next
+    movement. `scoreNext` returns a back-off-discounted probability.
+  - **Tokenization** (`canonicalMovementToken`): prefers structured device-gesture
+    metadata (`gesture[:direction][>target]`, as recorded by
+    `DeviceCaptureAdapter`) over free-text summaries — these generalize better —
+    falling back to `tool:slug(summary)`. Plus dataset builders from trajectory
+    spans (`movementDatasetFromTrajectories`) and replay manifests
+    (`movementDatasetFromReplays`).
+  - **Generalization eval harness** (`evaluateMovementGeneralization` +
+    `splitMovementDataset`): teacher-forces over held-out samples and reports
+    accuracy, exact-context vs back-off correct counts, and mean probability
+    assigned to the *true* next movement — measuring both replay fidelity and
+    generalization.
+- `src/training/movement-model.test.ts` — 17 tests covering tokenization, dataset
+  builders, exact repeat, deterministic tie-breaks, back-off generalization,
+  empty-model/empty-holdout edge cases, snapshot serialization, and the eval
+  harness.
+- `src/index.ts` — barrel exports for the new public surface.
+
+**Test results:** `typecheck:src` ✅ (exit 0, source stays clean). Build ✅
+(tsdown, 5 files, 545 kB). New module **17/17** ✅.
+
+**⚠️ Blocker (pre-existing, NOT from this change):** the full suite shows **3
+failing tests** that also fail on a clean stash of this commit (verified) and are
+unrelated to the movement model — they are **host-environment-dependent
+integration tests**, not logic regressions:
+- `operator-runtime.test.ts` "background tasks": the launch script spawns
+  `bash`+`python3`+`date` to write a state JSON; on this container that file comes
+  back malformed (`SyntaxError ... JSON position 311`) — a host-tooling/shell
+  difference from the dev machine where run 8 was green.
+- `control-plane/server.test.ts` + `cli/app.test.ts` remote-status: rely on
+  `isProcessRunning(pid)` liveness of a fabricated PID and on the same spawned
+  state-writer, so the derived control state comes back `degraded`/`missing-process`
+  instead of `active`.
+These predate run 9 (the suite was green on 2026-06-23's host but not this
+cloud host). My change is pure/in-process/deterministic and fully green. Pushing
+the green additive work to the designated branch `claude/peaceful-dirac-8w9s1j`
+(per branch policy) and logging the blocker here + in ROADMAP.
+
+**New idea:** make the spawned-process integration tests **hermetic** by
+injecting a process-liveness predicate and a state-writer (mock in tests) instead
+of shelling out to bash/python/date — the same dependency-injection pattern run 1
+used for `configHome`. That would make the suite green on any host and remove the
+last env-dependence. A second idea: persist a trained `MovementModelSnapshot`
+alongside the training-job artifacts so a cloud "dry-run" can validate
+dataset→model→replay fidelity *before* the real on-device mlx/axolotl run is
+launched — turning the eval harness into a pre-flight gate.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
