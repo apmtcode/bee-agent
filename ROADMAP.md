@@ -62,13 +62,32 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
-      deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+- [x] Pluggable local-model backend interface with a deterministic reference
+      backend — DONE run 9. `src/movement/model.ts`: `MovementModelBackend` +
+      `SimilarityTransformBackend` (exact 2-point similarity transform → repeats
+      *and* generalizes recorded movements); documented seam for a real
+      on-device small model.
+- [x] Synthetic event-stream generator — DONE run 9. `src/movement/synthetic.ts`
+      (seeded LCG, line/arc drags) + `src/movement/dataset.ts` JSONL codec
+      validate capture→dataset→train→replay round-trips with no real OS input.
+- [x] Generalization eval harness — DONE run 9. `src/movement/eval.ts`
+      (`evaluateGeneralization`: endpoint error + arc-length path RMSE on
+      held-out targets; <1e-6 on line drags in tests).
+- [ ] **Fix pre-existing background-task launch-script JSON corruption** (run 9
+      blocker). `renderLaunchScript` writes single-line state JSON via
+      `printf|sed`; `readState`→`JSON.parse` throws `position 311` with the
+      real long temp paths (passes with short paths / regressed via container
+      env). Dump the actual `stateFile` bytes before the failing read, then make
+      the state write robust (write from Node via `writeJsonAtomic`, or a
+      here-doc, instead of `printf|sed`). Currently fails: `cli/app.test.ts` ×2,
+      `control-plane/server.test.ts` ×1, `orchestrator/operator-runtime.test.ts`
+      ×1.
+- [ ] Wire the movement subsystem into the capture→training flow: a converter
+      from `TrajectorySpan` gesture actions (with coordinate metadata) into
+      `MovementDemonstration`s, so real recordings feed `SimilarityTransformBackend`.
+- [ ] Online/continual generalization metric: re-run `evaluateGeneralization` on
+      a fixed held-out set as demonstrations accumulate, appending
+      `{n_demos, meanPathRmse}` to a JSONL learning-curve file.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

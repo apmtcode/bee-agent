@@ -6,6 +6,77 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-06-30 (run 9) — Local-movement learning subsystem: schema → synthetic → dataset → train/repeat/generalize → eval
+
+**Audited:** Standing objective #2 (local-movement learning) and the matching
+ROADMAP items. The existing `src/capture/` records high-level *gestures*
+(tap/swipe/type) and `src/training/` only **shells out** to external Python
+(mlx/axolotl) via generated launch scripts — there was **no in-process,
+testable model** that learns from recorded movements and can repeat/generalize
+them, which is the heart of pieces (c) "post-train a local model to repeat
+recorded movements" and (d) "generalize to new but related movements".
+
+**Changed (new, fully self-contained `src/movement/` module — additive):**
+- `events.ts` — precise low-level event schema (`MovementEvent`:
+  pointer-move/down/up, scroll, key-down/up, window-focus) with `Point`,
+  `MovementDemonstration` (events + a semantic start/end reference *frame*), and
+  `MovementDataset`, plus pure helpers (`pointerPath`, `isPositionedEvent`,
+  `datasetIntents`, builders that normalize event order).
+- `model.ts` — **pluggable** `MovementModelBackend` interface +
+  `TrainedMovementModel`, and a deterministic reference backend
+  `SimilarityTransformBackend`. It models a movement as a *shape in a reference
+  frame*; inference selects the nearest-frame demonstration for the requested
+  intent and re-targets it via an **exact 2-point similarity transform**
+  (translation + rotation + uniform scale, via complex division). Identity when
+  the requested frame == the demo frame → **repeats** the recording exactly;
+  otherwise a correctly rotated/scaled/translated path → **generalizes**. This
+  is the documented seam for a real on-device small model.
+- `synthetic.ts` — seeded (LCG, no `Math.random`) synthetic stream generator:
+  `generateDragDemonstration` (line/arc shapes) + `generateSyntheticDataset`,
+  so the whole pipeline validates in the cloud with no real OS input.
+- `dataset.ts` — JSONL dataset codec (`encode/decodeDatasetJsonl`): header line
+  + one demonstration per line; append-friendly, streamable, diffable.
+- `eval.ts` — **generalization eval harness**: arc-length `resamplePath`,
+  `pathRmse`, `evaluateGeneralization` reporting endpoint error + path RMSE on
+  held-out targets the model never trained on.
+- Barreled via `src/movement/index.ts` and re-exported from `src/index.ts`
+  (no name collisions — checked).
+
+**Tests (new, 26):** `events`, `model` (transform identity/rotation/scale/
+degenerate fallback; backend repeat-exact + generalize-to-unseen-endpoint +
+unknown-intent), `synthetic` (determinism, ordering, line-vs-arc), `dataset`
+(lossless round-trip, header/version validation), `eval` (resample, RMSE, and
+an end-to-end train→generalize→eval asserting <1e-6 endpoint+path error on
+held-out line drags).
+
+**Test results:** `typecheck:src` ✅ exit 0. Build ✅. **All 26 new movement
+tests pass; suite 171→197 passing.** No regressions introduced.
+
+**⚠️ Pre-existing blocker (NOT caused by this run; present on clean HEAD):**
+3 tests fail in this container — `cli/app.test.ts` (×2),
+`control-plane/server.test.ts` (×1), `orchestrator/operator-runtime.test.ts`
+(×1). Root cause: `renderLaunchScript` in `src/harness/background-tasks.ts`
+writes the running-state file as a **single-line** JSON payload substituted by
+shell `sed` (`"$$"`→PID, `__OPENCLAW_STARTED_AT__`→`date`). A later `readState`
+→ `JSON.parse` throws `SyntaxError ... position 311`. Run 8 reported 174/174, so
+this regressed via the **container's shell/date/sed/python3 environment**, not
+code. My isolated repro of the sed substitution with *short* paths produced
+**valid** JSON — so the corruption is triggered by the real test's long temp-dir
+paths or a missing `python3`. **Next run:** dump the actual `stateFile` bytes
+right before the failing `readState` (instrument `readJsonFile`/`reconcileTask`),
+then make the state write robust — prefer writing state from Node
+(`writeJsonAtomic`) or a here-doc instead of `printf|sed`, which is fragile to
+paths and locale. Because this is unrelated and pre-existing, run-9 work is
+pushed to the designated dev branch `claude/peaceful-dirac-1qdtr7`.
+
+**New idea:** add an **online/continual generalization metric** — after each new
+demonstration is added to the dataset, re-run `evaluateGeneralization` on a fixed
+held-out set and append `{n_demos, meanPathRmse}` to a small JSONL curve file, so
+the engine can *see* the model getting better as more movements are recorded
+(learning-curve telemetry for the movement subsystem).
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

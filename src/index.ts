@@ -431,3 +431,4 @@ export type {
   FailTrainingJobParams,
   TrainingJobStoreShape,
 } from "./training/job-store.js";
+export * from "./movement/index.js";
