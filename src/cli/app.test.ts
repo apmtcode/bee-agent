@@ -800,8 +800,13 @@ describe("OperatorCliApp", () => {
   });
 
   it("supports session lifecycle, transcript, approvals, pairing, config, and prompt commands", async () => {
+    // This test drives platform/remote control state via background-task records
+    // and asserts on derived health. Use a deterministic spawn stub so it never
+    // depends on real OS subprocess timing (which otherwise races the inventory
+    // health checks below and intermittently reports a remote as degraded).
+    const backgroundTaskSpawnProcess = () => ({ pid: 4242, unref() {} });
     const rootDir = await makeTempDir();
-    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25", backgroundTaskSpawnProcess });
     const firstSession = await app.runtime.startSession({ title: "first", cwd: rootDir, agentId: "operator-cli" });
     const secondSession = await app.runtime.startSession({ title: "second", cwd: rootDir, agentId: "operator-cli" });
 

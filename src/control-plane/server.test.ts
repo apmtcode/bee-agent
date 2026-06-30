@@ -83,6 +83,10 @@ describe("OperatorControlPlaneServer", () => {
     const rootDir = await makeTempDir();
     const runtime = new StandaloneOperatorRuntime({
       rootDir,
+      // Deterministic spawn stub: this test hand-writes background-task execution
+      // states to exercise sync/recovery, so the real launch script must not run
+      // and asynchronously clobber them (a race that flakes under suite load).
+      backgroundTaskSpawnProcess: () => ({ pid: 4242, unref() {} }),
       backgroundTaskIsProcessRunning: () => false,
       delivery: new OperatorDeliveryService(rootDir, {
         sendBrowserPush: async () => {},
@@ -1018,6 +1022,10 @@ describe("OperatorControlPlaneServer", () => {
     const breakerRootDir = await makeTempDir();
     const breakerRuntime = new StandaloneOperatorRuntime({
       rootDir: breakerRootDir,
+      // Hermetic spawn: avoid launching real OS subprocesses whose async state
+      // writes race the inventory assertions below (this test only exercises the
+      // breaker via explicitly-written task states).
+      backgroundTaskSpawnProcess: () => ({ pid: 4242, unref() {} }),
       backgroundTaskIsProcessRunning: () => false,
     });
     const breakerServer = new OperatorControlPlaneServer({ runtime: breakerRuntime });

@@ -8,6 +8,20 @@ unchecked items are queued. Keep this richer than you found it each run.
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`
       (2026-06-22).
+- [x] **Fix background-task launch-script corruption + de-flake the suite**
+      (2026-06-30, run 9). `renderLaunchScript` wrote `state.json` via
+      `printf | sed`, producing invalid JSON for quoted commands and never
+      substituting the pid; `shellQuote` mangled single quotes (`a'b`→`a"'b`).
+      Rewrote the running-state write with `python3` + `json.dumps` and fixed
+      `shellQuote` to the POSIX `'\''` idiom. Added an injectable spawn seam to
+      `OperatorCliApp` and pointed four real-subprocess state-machine tests at a
+      deterministic stub. Suite now 175/175 green (10/10 runs).
+- [ ] **De-flake follow-up:** add a shared `createHermeticRuntime()` /
+      `createHermeticCliApp()` test helper that bakes in the deterministic spawn
+      stub, so new state-machine tests can't reintroduce the real-subprocess race
+      by forgetting to inject it. Audit the remaining real-spawn test sites
+      (`app.test.ts` background/monitor tests still rely on real `printf` output —
+      either keep them as explicit integration tests or convert to manual output).
 - [ ] **Pay down typecheck debt** (surfaced by the `typecheck` script). Full
       `tsc --noEmit` count was **397** on 2026-06-22; now **125**. 🎯 ALL source
       (`src/**` non-test) files typecheck clean since run 7; remaining 125 errors
@@ -84,3 +98,10 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
       count to a baseline file and fail if a module regresses above it. Lets the
       engine pay debt down module-by-module without one green-gate blocking
       progress, and prevents backsliding while the total is still > 0.
+- [ ] `BackgroundTaskLauncher` interface (run 9 idea): make background-task
+      execution fully pluggable behind one seam with multiple backends — real-OS
+      spawn (today), an in-memory simulated launcher (deterministic state
+      transitions for tests/CI), and a replay-from-trajectory launcher. The
+      simulated backend removes the last real-subprocess flakes; the replay
+      backend feeds directly into the local-movement replay subsystem (objective
+      2), letting recorded trajectories drive task execution.

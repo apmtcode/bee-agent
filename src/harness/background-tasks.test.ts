@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -369,5 +370,38 @@ describe("BackgroundTaskExecutionService", () => {
     await expect(fs.readFile(path.join(rootDir, task.execution.launchScript), "utf8")).resolves.toContain("bash -lc");
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
+  });
+
+  // Regression: the launch script previously templated the initial running-state
+  // JSON via `printf | sed`, which produced invalid state.json for any command
+  // containing single quotes (and never substituted the `$$` pid placeholder).
+  // We render the real script, run it to completion deterministically, and assert
+  // the persisted state is valid JSON with an integer pid and an exact command
+  // round-trip.
+  it("writes valid JSON state when the command contains quotes", async () => {
+    const rootDir = await makeTempDir();
+    let scriptPath = "";
+    const store = new FileBackgroundTaskStore(
+      path.join(rootDir, "background-tasks.json"),
+      (command) => {
+        scriptPath = command;
+        return { pid: 1, unref() {} };
+      },
+      () => false,
+    );
+    const command = "echo 'single quoted' && printf '%s' ok";
+    const task = await store.start({ title: "Quoted command", command, cwd: rootDir, kind: "task" });
+
+    await new Promise<void>((resolve, reject) => {
+      const child = spawn(scriptPath, [], { cwd: rootDir });
+      child.on("error", reject);
+      child.on("exit", () => resolve());
+    });
+
+    const raw = await fs.readFile(path.join(rootDir, task.execution.stateFile), "utf8");
+    const parsed = JSON.parse(raw) as BackgroundTaskExecutionState;
+    expect(typeof parsed.pid).toBe("number");
+    expect(parsed.command).toBe(command);
+    expect(["running", "completed", "failed"]).toContain(parsed.status);
   });
 });

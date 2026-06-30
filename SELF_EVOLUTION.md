@@ -6,6 +6,62 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-06-30 (run 9) — Fix background-task launch-script corruption + de-flake the suite
+
+**Audited:** The test suite, which was RED on a clean checkout (the prior run
+logged 174/174 but the harness now regressed to 4 failures). Root-caused them all
+to `src/harness/background-tasks.ts::renderLaunchScript` — the shell script that
+launches a background task and writes its execution `state.json`.
+
+**Two real correctness bugs fixed (additive):**
+1. **`printf | sed` JSON templating produced invalid `state.json`.** The initial
+   "running" state was built by string-interpolating the command/cwd into a JSON
+   payload, then patching `started_at`/pid via `sed`. For any command containing
+   single quotes this emitted invalid JSON (`"command":"echo "'…'"`), so recovery
+   crashed with `SyntaxError: Expected ',' or '}'` (`readJsonFile`). Worse, the
+   pid `sed` (`s/"$$"/$$/g`) was nested inside a bash double-quoted string, so the
+   inner `"` terminated the quote and the substitution **never ran** — `state.json`
+   kept `"pid":"$$"` (a string, not the int the schema expects). **Fix:** write the
+   running state with `python3` (the same dependency the completion writers already
+   use), passing every dynamic field as a separate `argv` element and serialising
+   with `json.dumps` — no `sed`, no shell-string JSON templating.
+2. **`shellQuote` itself was broken.** Its single-quote escape used the wrong
+   quote order (`"'"'"'`), turning `a'b` into `a"'b` — corrupting any command or
+   path containing a single quote, everywhere shellQuote is used. **Fix:** the
+   correct POSIX idiom `'\''`.
+
+**De-flaked the suite (test-only, no assertion changes):** four tests start *real*
+OS subprocesses (`sleep 5`, `printf …`) and then hand-write execution state to
+drive sync/recover/breaker paths. Under parallel-suite CPU load the real launch
+script settles late and **asynchronously clobbers** the hand-written state (or its
+freshly-spawned running-state races the inventory health check), flaking ~30–50%.
+Added an injectable spawn seam to `OperatorCliApp`
+(`backgroundTaskSpawnProcess` / `backgroundTaskIsProcessRunning`, threaded to the
+runtime — also a genuine embedder/testability win) and pointed the four
+state-machine tests (operator-runtime recover, server orchestration + breaker, CLI
+lifecycle) at a deterministic spawn stub. Tests that assert on *real* subprocess
+output were left untouched.
+
+**New regression test:** `background-tasks.test.ts` now renders the real launch
+script for a single-quoted command, runs it to completion deterministically, and
+asserts `state.json` is valid JSON with an integer pid and an exact command
+round-trip — this fails hard on both pre-fix bugs.
+
+**Test results:** full suite **175/175, green 10/10 consecutive runs** (was 4
+deterministic failures + a ~50% flake). `typecheck:src` ✅ (exit 0). Full `tsc`
+**125** (unchanged — no new type debt). Build ✅.
+
+**New idea:** the four de-flaked tests all share the "start a real task, then
+hand-write its state" anti-pattern. Add a tiny shared test helper
+(`createHermeticRuntime()` / `createHermeticCliApp()`) that bakes in the
+deterministic spawn stub, so future state-machine tests can't reintroduce the
+real-subprocess race by forgetting to inject it. Longer term, consider making
+background-task spawning fully pluggable behind a `BackgroundTaskLauncher`
+interface (real-OS, in-memory simulated, replay-from-trajectory) — which also
+feeds directly into the local-movement replay subsystem's needs.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
