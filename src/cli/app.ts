@@ -9,7 +9,7 @@ import { promisify } from "node:util";
 import { subscribeRuntimeEvents } from "../control-plane/subscriptions.js";
 import { OperatorControlPlaneServer } from "../control-plane/server.js";
 import type { DeliveryTarget } from "../control-plane/delivery.js";
-import { StandaloneOperatorRuntime } from "../orchestrator/operator-runtime.js";
+import { StandaloneOperatorRuntime, type StandaloneOperatorOptions } from "../orchestrator/operator-runtime.js";
 import type { TranscriptRecord } from "../harness/transcript-store.js";
 import {
   OperatorCliConfigLoader,
@@ -121,6 +121,19 @@ export type OperatorCliAppOptions = {
   stdin?: NodeJS.ReadableStream;
   stdout?: NodeJS.WritableStream;
   stderr?: NodeJS.WritableStream;
+  /**
+   * Override how background tasks spawn their OS process. Tests inject a no-op
+   * spawn so fixtures don't launch real, self-terminating processes whose
+   * asynchronous state-file writes race the assertions. Production leaves this
+   * undefined to use the real `child_process.spawn`.
+   */
+  backgroundTaskSpawnProcess?: StandaloneOperatorOptions["backgroundTaskSpawnProcess"];
+  /**
+   * Override the liveness check for background-task PIDs. Tests inject a
+   * deterministic predicate so task health never depends on real OS process
+   * state. Production leaves this undefined to use the real `process.kill(pid, 0)`.
+   */
+  backgroundTaskIsProcessRunning?: StandaloneOperatorOptions["backgroundTaskIsProcessRunning"];
 };
 
 type OperatorCliWorktreeSession = {
@@ -147,7 +160,11 @@ export class OperatorCliApp {
   readonly teams: FileOperatorCliTeamStore;
 
   constructor(private readonly options: OperatorCliAppOptions) {
-    this.runtime = new StandaloneOperatorRuntime({ rootDir: options.rootDir });
+    this.runtime = new StandaloneOperatorRuntime({
+      rootDir: options.rootDir,
+      ...(options.backgroundTaskSpawnProcess ? { backgroundTaskSpawnProcess: options.backgroundTaskSpawnProcess } : {}),
+      ...(options.backgroundTaskIsProcessRunning ? { backgroundTaskIsProcessRunning: options.backgroundTaskIsProcessRunning } : {}),
+    });
     this.server = new OperatorControlPlaneServer({ runtime: this.runtime });
     this.teams = new FileOperatorCliTeamStore(options.rootDir);
     this.cwd = options.cwd ?? process.cwd();

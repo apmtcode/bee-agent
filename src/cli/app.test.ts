@@ -801,7 +801,17 @@ describe("OperatorCliApp", () => {
 
   it("supports session lifecycle, transcript, approvals, pairing, config, and prompt commands", async () => {
     const rootDir = await makeTempDir();
-    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    const app = new OperatorCliApp({
+      rootDir,
+      cwd: rootDir,
+      currentDate: "2026-05-25",
+      // Deterministic background-task fixtures: a no-op spawn means no real
+      // `sleep 5` whose launch script writes a "running" state file
+      // asynchronously (racing these assertions), and the liveness predicate
+      // treats only the deliberately-dead pid 999999 (written below) as gone.
+      backgroundTaskSpawnProcess: () => ({ pid: 4242, unref() {} }),
+      backgroundTaskIsProcessRunning: (pid: number) => pid !== 999999,
+    });
     const firstSession = await app.runtime.startSession({ title: "first", cwd: rootDir, agentId: "operator-cli" });
     const secondSession = await app.runtime.startSession({ title: "second", cwd: rootDir, agentId: "operator-cli" });
 
@@ -1063,7 +1073,17 @@ describe("OperatorCliApp", () => {
 
   it("supports background and monitor task commands plus cron commands", async () => {
     const rootDir = await makeTempDir();
-    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    const app = new OperatorCliApp({
+      rootDir,
+      cwd: rootDir,
+      currentDate: "2026-05-25",
+      // Deterministic fixtures: no-op spawn (no real `printf` whose detached
+      // launch script writes output/state asynchronously and races these
+      // assertions) and a liveness predicate that keeps tasks "running" so
+      // watch-active can resolve them. Output/state are driven explicitly below.
+      backgroundTaskSpawnProcess: () => ({ pid: 4242, unref() {} }),
+      backgroundTaskIsProcessRunning: () => true,
+    });
     const session = await app.runtime.startSession({ title: "CLI ops", cwd: rootDir, agentId: "operator-cli" });
 
     const startOutput = await app.dispatchSlashCommand(
@@ -1078,6 +1098,9 @@ describe("OperatorCliApp", () => {
     if (!task) {
       throw new Error("expected background task");
     }
+    // The no-op spawn never runs the real command, so seed the output the way a
+    // completed `printf ok` would have, leaving the record "running" for watch-active.
+    await app.runtime.backgroundTasks.executionService.writeOutput(task, "ok\n");
 
     const listOutput = await app.dispatchSlashCommand({ kind: "background-list" });
     expect(listOutput).toContain(task.id);
@@ -1097,7 +1120,14 @@ describe("OperatorCliApp", () => {
     const activeWatchOutput = await app.dispatchSlashCommand({ kind: "watch-active" }, session.id);
     expect(activeWatchOutput).toContain(`[task ${task.id}]`);
 
-    const stopOutput = await app.dispatchSlashCommand({ kind: "task-stop", taskId: task.id }, session.id);
+    const originalKillForTask = process.kill;
+    process.kill = (() => true) as typeof process.kill;
+    let stopOutput: string;
+    try {
+      stopOutput = await app.dispatchSlashCommand({ kind: "task-stop", taskId: task.id }, session.id);
+    } finally {
+      process.kill = originalKillForTask;
+    }
     expect(stopOutput).toContain(`Stopped task ${task.id}.`);
 
     const monitorStartOutput = await app.dispatchSlashCommand(
@@ -1139,7 +1169,14 @@ describe("OperatorCliApp", () => {
     expect(monitorViewOutput).toContain(monitor.id);
     expect(monitorViewOutput).toContain("monitor-ok");
 
-    const monitorStopOutput = await app.dispatchSlashCommand({ kind: "monitor-stop", taskId: monitor.id }, session.id);
+    const originalKillForMonitor = process.kill;
+    process.kill = (() => true) as typeof process.kill;
+    let monitorStopOutput: string;
+    try {
+      monitorStopOutput = await app.dispatchSlashCommand({ kind: "monitor-stop", taskId: monitor.id }, session.id);
+    } finally {
+      process.kill = originalKillForMonitor;
+    }
     expect(monitorStopOutput).toContain(`Stopped monitor ${monitor.id}.`);
 
     const cronCreate = await app.dispatchSlashCommand(

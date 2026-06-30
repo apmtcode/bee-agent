@@ -83,6 +83,11 @@ describe("OperatorControlPlaneServer", () => {
     const rootDir = await makeTempDir();
     const runtime = new StandaloneOperatorRuntime({
       rootDir,
+      // No-op spawn: fixtures must not launch real processes (e.g. `sleep 5`)
+      // whose detached launch script writes a "running" state file
+      // asynchronously, racing the assertions below. Without a state file,
+      // background-task liveness derives purely from the task record.
+      backgroundTaskSpawnProcess: () => ({ pid: 4242, unref() {} }),
       backgroundTaskIsProcessRunning: () => false,
       delivery: new OperatorDeliveryService(rootDir, {
         sendBrowserPush: async () => {},
@@ -952,6 +957,9 @@ describe("OperatorControlPlaneServer", () => {
     const driftingRootDir = await makeTempDir();
     const driftingRuntime = new StandaloneOperatorRuntime({
       rootDir: driftingRootDir,
+      // No-op spawn: the task's state is set explicitly via writeState below,
+      // so a real launch-script state write must not race it.
+      backgroundTaskSpawnProcess: () => ({ pid: 4242, unref() {} }),
       backgroundTaskIsProcessRunning: () => false,
     });
     const driftingServer = new OperatorControlPlaneServer({ runtime: driftingRuntime });
@@ -1018,6 +1026,10 @@ describe("OperatorControlPlaneServer", () => {
     const breakerRootDir = await makeTempDir();
     const breakerRuntime = new StandaloneOperatorRuntime({
       rootDir: breakerRootDir,
+      // No-op spawn so tasks have a state file only when this test writes one
+      // explicitly; otherwise a real `sleep 5` launch script writes "running"
+      // state asynchronously and every breaker task races to degraded at once.
+      backgroundTaskSpawnProcess: () => ({ pid: 4242, unref() {} }),
       backgroundTaskIsProcessRunning: () => false,
     });
     const breakerServer = new OperatorControlPlaneServer({ runtime: breakerRuntime });

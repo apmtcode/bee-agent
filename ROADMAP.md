@@ -38,6 +38,21 @@ unchecked items are queued. Keep this richer than you found it each run.
     `skills.executable.*`, `push.subscriptions.*`, `trajectories.*`, `replays.*`,
     `cron.runs`/misc — plus a few genuine test-only typings. Map the rest, then
     fix residual test-only typings.
+- [x] **Make the test suite deterministic** (run 9). The baseline was red/flaky
+      (1–4 failures/run) because fixtures spawned real OS processes (`sleep 5`,
+      `printf`, `tail -f`) whose async state-file writes raced assertions and
+      whose long-lived processes leaked across the suite; plus a 20 ms heartbeat
+      timeout that fired under load. Fixed via injected no-op spawn /
+      `isProcessRunning` (new `OperatorCliApp` options) and a widened heartbeat
+      timeout. Now 30+ consecutive green runs, 174/174.
+- [ ] **Flakiness gate (pre-push):** run `vitest run` N× (or `--repeat`) in the
+      engine's self-check so a nondeterministic suite is caught before it reaches
+      `main`. Pairs with the `verify` script below.
+- [ ] **Forbid real process spawns in unit tests:** a lint/test that flags
+      `startBackgroundTask` without an injected `spawnProcess`, so wall-clock
+      nondeterminism can't reappear. Add a shared
+      `deterministicBackgroundTaskOptions()` helper (no-op spawn + controlled
+      `isProcessRunning`) to DRY the pattern now duplicated across 4 test files.
 - [ ] Add a `verify` npm script (`typecheck && build && test`) and have the
       engine run it as a pre-push self-check each cycle.
 - [x] Interim **source-only typecheck gate** — DONE run 7. `tsconfig.src.json`

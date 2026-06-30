@@ -407,7 +407,10 @@ describe("OperatorGatewayTransportConnection", () => {
     const firstTransport = new InMemoryGatewayTransport();
     const firstConnection = new OperatorGatewayTransportConnection(server, firstTransport, {
       heartbeatIntervalMs: 5,
-      heartbeatTimeoutMs: 20,
+      // Generous timeout: a small interval makes the first ping appear quickly,
+      // but the post-pong status assertion below must not race a heartbeat
+      // timeout if the suite is under load and the event loop is delayed.
+      heartbeatTimeoutMs: 2000,
     });
 
     await firstConnection.receive({
@@ -450,7 +453,10 @@ describe("OperatorGatewayTransportConnection", () => {
     const secondTransport = new InMemoryGatewayTransport();
     const secondConnection = new OperatorGatewayTransportConnection(server, secondTransport, {
       heartbeatIntervalMs: 5,
-      heartbeatTimeoutMs: 20,
+      // Generous timeout: a small interval makes the first ping appear quickly,
+      // but the post-pong status assertion below must not race a heartbeat
+      // timeout if the suite is under load and the event loop is delayed.
+      heartbeatTimeoutMs: 2000,
     });
     await secondConnection.receive({
       type: "bootstrap",

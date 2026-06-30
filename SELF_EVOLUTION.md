@@ -6,6 +6,66 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-06-30 (run 9) — 🛠️ Test suite made deterministic: red/flaky baseline → 30+ green runs
+
+**Audited:** The engine's own verification gate. **The baseline was RED** — a full
+`npm test` failed with a *varying* count (1–4 failures across consecutive runs),
+which silently breaks step 5 of the procedure ("do not push if tests fail"): a
+nondeterministic gate can't be trusted to protect `main`.
+
+**Root cause (one family, several symptoms):** unit-test fixtures spawned **real
+OS processes** and then asserted against state those processes write
+*asynchronously*:
+- `OperatorControlPlaneServer`/`OperatorCliApp` tests started background tasks
+  with `command: "sleep 5"`. The detached launch script writes a `running`
+  execution-state file a few ms later. With `isProcessRunning: () => false`, any
+  status check *after* that write sees "background task missing-process" →
+  `control: "degraded"`. Early assertions passed only because they raced *ahead*
+  of the state-file write — a pure wall-clock race (also why `sleep 5` mattered:
+  past the 5 s mark the state flips to `completed` and the bug hides again).
+- The breaker test's stepwise `mixed → 2/2 → 3/3 paused` progression assumed
+  not-yet-written tasks had *no* state file; the real `sleep 5` scripts wrote
+  `running` for all three at once → "degraded" instead of "mixed".
+- `operator-runtime.test.ts` spawned real **`tail -f app.log`** monitors that
+  **never exit** — leaked, detached, across the *whole* suite, loading the
+  machine and flaking other timing-sensitive tests (cross-file pollution).
+- `gateway-transport.test.ts` reconnect test used `heartbeatTimeoutMs: 20`; under
+  suite load the post-pong `control: "active"` assertion raced a heartbeat
+  timeout → quarantined.
+
+**Changed (additive, reversible):**
+- **`src/cli/app.ts` (source):** added optional `backgroundTaskSpawnProcess` /
+  `backgroundTaskIsProcessRunning` to `OperatorCliAppOptions`, forwarded to the
+  runtime. Production behaviour unchanged (undefined → real `spawn` /
+  `process.kill`); tests can now inject deterministic fixtures. A genuine
+  testability/DX improvement, not just a test patch.
+- **`server.test.ts`:** no-op spawn (`() => ({ pid: 4242, unref(){} })`) for the
+  main, drifting, and breaker runtimes — state is driven purely by the explicit
+  `writeState` calls the tests already make.
+- **`app.test.ts`:** deterministic fixtures for both heavy tests — no-op spawn,
+  controlled `isProcessRunning`, explicit `writeOutput`, and a `process.kill`
+  override around the two stop calls (the existing pattern from
+  `operator-runtime.test.ts`).
+- **`operator-runtime.test.ts`:** no-op spawn for the background-tasks test —
+  eliminates the leaked `tail -f` processes.
+- **`gateway-transport.test.ts`:** widened the reconnect test's
+  `heartbeatTimeoutMs` 20 → 2000 (kept the small interval so the first ping still
+  appears quickly; left the deliberate 5 ms-timeout test untouched).
+
+**Test results:** was flaky (1–4 failures/run); now **30+ consecutive clean
+full-suite runs**, **174/174**. Build ✅. `typecheck:src` ✅ (exit 0). Full
+`tsc` total **125 → 125** (no regression; all remaining errors still test-only).
+
+**New idea:** (1) a **flakiness gate** the engine runs pre-push — `vitest run`
+repeated N× (or `--repeat`) — so a nondeterministic suite is caught *before* it
+poisons `main`. (2) A **lint/guard forbidding real process spawns in unit
+tests** (require an injected `spawnProcess`), so this whole class of wall-clock
+nondeterminism cannot reappear. (3) A shared
+`deterministicBackgroundTaskOptions()` test helper to DRY the no-op-spawn pattern
+now duplicated across four files.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

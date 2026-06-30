@@ -530,6 +530,11 @@ describe("StandaloneOperatorRuntime", () => {
   it("starts, syncs, recovers, lists, and cancels background tasks", async () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
+      // No-op spawn: this test drives execution state via writeState, so real
+      // processes must not run. Critically, the `tail -f` fixtures below would
+      // otherwise spawn detached processes that never exit and leak across the
+      // whole suite, loading the machine and flaking other timing-sensitive tests.
+      backgroundTaskSpawnProcess: () => ({ pid: 4242, unref() {} }),
       backgroundTaskIsProcessRunning: () => false,
     });
     const session = await runtime.startSession({ title: "Tasks", agentId: "main" });
