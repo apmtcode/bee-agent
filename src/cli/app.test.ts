@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
+import { mkdirSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
@@ -1063,7 +1064,43 @@ describe("OperatorCliApp", () => {
 
   it("supports background and monitor task commands plus cron commands", async () => {
     const rootDir = await makeTempDir();
-    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    // Hermetic background-task process model: rather than spawn a real OS
+    // subprocess (whose lifecycle/output timing varies by machine), simulate a
+    // long-lived task by seeding a "running" state plus output, and force the
+    // liveness probe to report alive. This keeps the task active for the
+    // watch/stop assertions deterministically.
+    const app = new OperatorCliApp({
+      rootDir,
+      cwd: rootDir,
+      currentDate: "2026-05-25",
+      backgroundTaskSpawnProcess: (_command, _args, _options, context) => {
+        const { task, stateFilePath, outputFilePath } = context;
+        mkdirSync(path.dirname(stateFilePath), { recursive: true });
+        mkdirSync(path.dirname(outputFilePath), { recursive: true });
+        writeFileSync(outputFilePath, `starting ${task.kind} ${task.id}\nok\n`);
+        writeFileSync(
+          stateFilePath,
+          `${JSON.stringify(
+            {
+              version: 1,
+              taskId: task.id,
+              kind: task.kind,
+              status: "running",
+              pid: 4242,
+              startedAt: "2026-05-25T00:00:00.000Z",
+              updatedAt: "2026-05-25T00:00:00.000Z",
+              outputFile: task.execution.outputFile,
+              cwd: task.cwd,
+              command: task.command,
+            },
+            null,
+            2,
+          )}\n`,
+        );
+        return { pid: 4242, unref() {} };
+      },
+      backgroundTaskIsProcessRunning: () => true,
+    });
     const session = await app.runtime.startSession({ title: "CLI ops", cwd: rootDir, agentId: "operator-cli" });
 
     const startOutput = await app.dispatchSlashCommand(

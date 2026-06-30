@@ -4,6 +4,22 @@ Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
 ## Foundations / DX
+- [x] **Reliability: fixed two latent launch-script bugs + made background-task
+      tests hermetic** (2026-06-30, run 9). `shellQuote` used the wrong
+      single-quote escape (`"'"'"'` vs `'\''`) and the running-state pid was
+      "substituted" with a sed pattern where `$` is an EOL anchor — both
+      produced invalid state JSON once a real subprocess ran, failing 3 tests on
+      a fresh container. Replaced the `printf|sed` writer with a `python3` one,
+      added a `SpawnBackgroundProcessContext` test seam, threaded spawn/liveness
+      injection through `OperatorCliApp`, and added a real-subprocess regression
+      test. Suite back to green (175/175).
+- [ ] Harden the last real-spawn-dependent test: `app.test.ts` "session
+      lifecycle" still launches real `sleep 5`/`printf drift` (passes only
+      because `sleep 5` outlives the test). Inject the same fake process model.
+- [ ] **Health-metrics append file**: each engine run records pass counts +
+      build/test durations to a small append-only file, so environment-dependent
+      regressions (like run 9's) are caught immediately, not on the next
+      container. (Supersedes/merges with the innovation-backlog telemetry item.)
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`

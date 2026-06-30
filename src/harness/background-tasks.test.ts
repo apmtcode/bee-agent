@@ -276,6 +276,45 @@ describe("FileBackgroundTaskStore", () => {
     });
   });
 
+  it("launches a real subprocess and writes valid state JSON for a command containing single quotes", async () => {
+    // Regression guard for two launch-script bugs:
+    //   1. shellQuote used the wrong single-quote escape (`"'"'"'` instead of
+    //      `'\''`), so any command containing a `'` corrupted the embedded JSON.
+    //   2. the running-state pid was substituted with `sed "s/\"\$\$\"/$$/g"`,
+    //      but `$` is a regex end-of-line anchor, so the pid was never replaced
+    //      and the state file was invalid JSON.
+    // Both made readState throw a SyntaxError once a real subprocess ran.
+    const rootDir = await makeTempDir();
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"));
+    const command = `printf "it's done"`;
+    const task = await store.start({ title: "Quote handling", command, cwd: rootDir, kind: "task" });
+    const statePath = path.join(rootDir, task.execution.stateFile);
+
+    let parsed: BackgroundTaskExecutionState | undefined;
+    for (let attempt = 0; attempt < 60; attempt += 1) {
+      let raw = "";
+      try {
+        raw = await fs.readFile(statePath, "utf8");
+      } catch {
+        raw = "";
+      }
+      if (raw.trim()) {
+        // JSON.parse throwing here is the corruption regression signal.
+        parsed = JSON.parse(raw) as BackgroundTaskExecutionState;
+        if (parsed.status === "completed") {
+          break;
+        }
+      }
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+
+    expect(parsed?.status).toBe("completed");
+    expect(typeof parsed?.pid).toBe("number");
+    expect(parsed?.pid).toBeGreaterThan(0);
+    expect(parsed?.command).toBe(command);
+    await expect(store.getOutput(task.id)).resolves.toContain("it's done");
+  });
+
   it("recovers tasks by session and supports reason filtering upstream", async () => {
     const rootDir = await makeTempDir();
     const filePath = path.join(rootDir, "background-tasks.json");

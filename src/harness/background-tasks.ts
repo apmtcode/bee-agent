@@ -95,6 +95,19 @@ export type BackgroundTaskExecutionState = {
   command: string;
 };
 
+/**
+ * Context describing the task being launched. The production spawn wrapper
+ * ignores it, but a test/mock spawn can use the resolved absolute paths to
+ * deterministically simulate the launch script (write a running state, emit
+ * output) without depending on a real OS process — see the background-task
+ * tests, which inject a fake spawn so the suite is hermetic.
+ */
+export type SpawnBackgroundProcessContext = {
+  task: BackgroundTaskRecord;
+  stateFilePath: string;
+  outputFilePath: string;
+};
+
 export type SpawnBackgroundProcess = (
   command: string,
   args: string[],
@@ -104,6 +117,7 @@ export type SpawnBackgroundProcess = (
     stdio: "ignore";
     detached: true;
   },
+  context: SpawnBackgroundProcessContext,
 ) => { pid?: number; unref(): void };
 
 export type IsProcessRunning = (pid: number) => boolean;
@@ -170,16 +184,25 @@ export class BackgroundTaskExecutionService {
 
   async launch(task: BackgroundTaskRecord): Promise<{ pid: number }> {
     const launchScriptPath = path.join(this.rootDir, task.execution.launchScript);
-    const child = this.spawnProcess(launchScriptPath, [], {
-      cwd: this.rootDir,
-      env: {
-        ...process.env,
-        OPENCLAW_BACKGROUND_TASK_ID: task.id,
-        OPENCLAW_BACKGROUND_TASK_KIND: task.kind,
+    const child = this.spawnProcess(
+      launchScriptPath,
+      [],
+      {
+        cwd: this.rootDir,
+        env: {
+          ...process.env,
+          OPENCLAW_BACKGROUND_TASK_ID: task.id,
+          OPENCLAW_BACKGROUND_TASK_KIND: task.kind,
+        },
+        stdio: "ignore",
+        detached: true,
       },
-      stdio: "ignore",
-      detached: true,
-    });
+      {
+        task,
+        stateFilePath: path.join(this.rootDir, task.execution.stateFile),
+        outputFilePath: path.join(this.rootDir, task.execution.outputFile),
+      },
+    );
     child.unref();
     if (typeof child.pid !== "number") {
       throw new Error(`Failed to launch background task ${task.id}`);
@@ -740,9 +763,9 @@ function renderLaunchScript(task: BackgroundTaskRecord): string {
       taskId: task.id,
       kind: task.kind,
       status: "running",
-      pid: "$$",
-      startedAt: "__OPENCLAW_STARTED_AT__",
-      updatedAt: "__OPENCLAW_STARTED_AT__",
+      pid: 0,
+      startedAt: "",
+      updatedAt: "",
       outputFile: task.execution.outputFile,
       cwd: task.cwd,
       command: task.command,
@@ -754,7 +777,10 @@ function renderLaunchScript(task: BackgroundTaskRecord): string {
     "set -euo pipefail",
     `mkdir -p $(dirname ${quotedStatePath}) $(dirname ${quotedOutputFile})`,
     "started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-    `printf '%s' ${quotedStatePayload} | sed "s/__OPENCLAW_STARTED_AT__/$started_at/g; s/\"\$\$\"/$$/g" > ${quotedStatePath}`,
+    `printf '%s' ${quotedStatePayload} > ${quotedStatePath}`,
+    `python3 - ${quotedStatePath} $$ "$started_at" <<'PY'`,
+    ...renderRunningStateWriterPython(),
+    "PY",
     `printf '%s\n' "starting ${task.kind} ${task.id}" >> ${quotedOutputFile}`,
     `if cd ${quotedCwd} && bash -lc ${quotedCommand} >> ${quotedOutputFile} 2>&1; then`,
     "  completed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
@@ -771,6 +797,23 @@ function renderLaunchScript(task: BackgroundTaskRecord): string {
     "fi",
     "",
   ].join("\n");
+}
+
+function renderRunningStateWriterPython(): string[] {
+  return [
+    "import json",
+    "import pathlib",
+    "import sys",
+    "state_path = pathlib.Path(sys.argv[1])",
+    "pid = int(sys.argv[2])",
+    "timestamp = sys.argv[3]",
+    "state = json.loads(state_path.read_text())",
+    "state['status'] = 'running'",
+    "state['pid'] = pid",
+    "state['startedAt'] = timestamp",
+    "state['updatedAt'] = timestamp",
+    "state_path.write_text(json.dumps(state, indent=2) + '\\n')",
+  ];
 }
 
 function renderStateWriterPython(status: BackgroundTaskExecutionState["status"]): string[] {
@@ -794,5 +837,10 @@ function renderStateWriterPython(status: BackgroundTaskExecutionState["status"])
 }
 
 function shellQuote(value: string): string {
-  return `'${value.replaceAll(`'`, `"'"'"'`)}'`;
+  // Wrap in single quotes and escape any embedded single quote using the
+  // POSIX idiom: close the quote, emit an escaped quote, reopen the quote
+  // (`'` -> `'\''`). The previous sequence (`"'"'"'`) started with a double
+  // quote, so it never closed the surrounding single quote and corrupted any
+  // value that contained a `'` (e.g. `printf 'a\nb'`).
+  return `'${value.replaceAll(`'`, `'\\''`)}'`;
 }

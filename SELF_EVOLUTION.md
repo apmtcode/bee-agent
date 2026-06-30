@@ -6,6 +6,65 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-06-30 (run 9) — 🐛 Fix two latent launch-script bugs; make background-task tests hermetic (suite green again)
+
+**Audited:** Repo health on a fresh cloud container. The baseline suite was
+**failing 3 tests** (the prior run's log claimed 174/174 — the difference is
+environment-dependent, see below). Traced all failures to the background-task
+launch pipeline (`src/harness/background-tasks.ts`).
+
+**Root cause — two real production bugs in the launch script**, both latent
+until a *real* subprocess actually runs (the original CI env apparently couldn't
+spawn/complete the detached script, so tasks stayed artificially "running" and
+the bugs were masked):
+1. **`shellQuote` used the wrong single-quote escape.** It emitted `"'"'"'`
+   (starting with a `"`) instead of the POSIX idiom `'\''`, so it never closed
+   the surrounding single quote. Any command containing a `'` (e.g.
+   `printf 'line-1\nline-2\n'`) corrupted the embedded state JSON →
+   `readState` threw `SyntaxError`.
+2. **The running-state `pid` was substituted with `sed "s/\"\$\$\"/$$/g"`.** In
+   a sed pattern `$` is an end-of-line anchor, so `"$$"` never matched and the
+   `pid` field stayed the literal string `"$$"` — invalid for the downstream
+   `int(pid)` and another source of corrupt JSON.
+
+**Changed (production, additive/reversible):**
+- Fixed `shellQuote` to the correct `'\''` escaping (one-line fix + comment).
+- Replaced the fragile `printf | sed` running-state writer with a `python3`
+  writer (`renderRunningStateWriterPython`), matching the existing
+  completed/failed writers (`python3` is already a hard dependency of the
+  script). The base payload is now valid JSON that python rewrites with the
+  real pid + timestamps.
+- Added a **test seam**: `SpawnBackgroundProcess` now receives a
+  `SpawnBackgroundProcessContext` (the task + resolved absolute state/output
+  paths) so a mock spawn can deterministically simulate the launch lifecycle.
+  Production's spawn wrapper ignores it.
+- Threaded `backgroundTaskSpawnProcess` / `backgroundTaskIsProcessRunning`
+  through `OperatorCliApp` (mirrors the existing `configHome` seam).
+
+**Changed (tests, hermetic):**
+- `operator-runtime.test.ts`, `server.test.ts` (the big RPC test + the drift &
+  circuit-breaker runtimes), and `app.test.ts` (background/monitor test) now
+  inject a fake spawn so **no real OS subprocess runs** — state/output are
+  driven explicitly, removing all dependence on host process lifecycle/timing.
+- Added a **real-subprocess regression test** in `background-tasks.test.ts`
+  that launches a command containing a single quote and asserts the on-disk
+  state is valid JSON with the pid substituted and the command preserved.
+  Verified it **fails** against the old `shellQuote` and **passes** with the fix.
+
+**Test results:** `npm test` **175/175** (was 171/174). `npm run typecheck:src`
+✅ exit 0. `npm run build` ✅.
+
+**New idea (logged to ROADMAP):** The remaining real-spawn reliance lives in
+`app.test.ts`'s "session lifecycle" test (`sleep 5` + `printf drift`), which
+still passes only because `sleep 5` outlives the test. Harden it with the same
+injected process model. Bigger idea: a tiny **`verify` npm script**
+(`typecheck:src && build && test`) plus a **health-metrics append file** the
+engine writes each run (pass counts + durations) so environment-dependent
+regressions like this one are detected immediately instead of on the next
+fresh container.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
