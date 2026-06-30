@@ -6,6 +6,69 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-06-30 (run 9) — 🎯 Movement-model inference: pluggable backend + repeat + generalize
+
+**Audited:** Standing objective #2 (local-movement learning) — the highest-value
+non-typecheck gap. `src/capture/` records movements as `TrajectorySpan.actions`
+(gesture metadata) and `src/training/runner.ts` prepares on-device MLX/axolotl
+*launch plans*, but there was **no inference half**: nothing that takes a learned
+model and predicts the next movement to *repeat* recorded behavior (objective
+2c) or *generalize* to new-but-related movements (objective 2d). The training
+backend was also not pluggable — it hard-codes MLX/axolotl command construction
+with no in-process, cloud-runnable reference implementation.
+
+**Changed (additive) — new `src/training/movement-model.ts`:**
+- `MovementEvent` / `MovementSequence` / `MovementDataset` — a normalized,
+  replayable movement schema, plus `extractMovementDataset(trajectories)` that
+  derives ordered sequences (with inter-event `dt`) from captured trajectory
+  actions.
+- `MovementModelBackend` — the **pluggable seam** a real on-device small model
+  implements (`train()` + `load()`), returning a `MovementModel`
+  (`predictNext()` + `serialize()`).
+- `NgramMovementBackend` — a **deterministic, dependency-free reference backend**
+  that runs entirely in-process (no OS, no native ML runtime), so the whole
+  pipeline is cloud/CI-testable. It learns suffix-keyed transition tables over
+  target-independent gesture tokens with stupid-backoff (longest matching suffix
+  → shorter → unconditional prior), and persists/reloads losslessly.
+- `replayMovements(model, …)` — autoregressive replay = objective 2c ("repeat the
+  recorded movements").
+- **Generalization (objective 2d):** when `predictNext` is given the new scene's
+  `availableTargets`, it remaps the learned gesture onto the closest related
+  target by word overlap (e.g. learned "type Subject" → performs "type Subject
+  line" in a scene that only offers "Subject line"), rewriting the summary and
+  flagging `rationale: "generalized"`.
+- Exported the surface from `src/index.ts`.
+
+**Test results:** new `movement-model.test.ts` — **9/9 passing** (extraction +
+dt, autoregressive repeat, exact-match predict, **generalization to a novel
+target**, prior backoff, serialize/load round-trip identity, foreign-model
+rejection, empty-dataset). Build ✅ (`tsdown`, 5 files). `typecheck:src` ✅
+(source stays 0-error). Full `npm test` **180 passing**.
+
+**⚠️ Pre-existing blocker (NOT introduced this run):** 3 tests fail in this cloud
+container — `operator-runtime.test.ts` (background-task recovery),
+`server.test.ts`, `app.test.ts`. Confirmed via `git stash` that they fail on the
+**clean** pre-change tree too (run 8 logged 174/174 on its dev machine). Root
+cause: the background-task **launch-script state writer** (shell + `sed` +
+`python3`, same pattern as `runner.ts:renderLaunchScript`) leaves a *malformed*
+state file in this container, so `readJsonFile` throws `SyntaxError: Expected ','
+or '}' … position 311`. Environment-sensitive (Node 22 / container `sed`/`python`
+differ from the original dev machine), not a regression from this diff. Logged to
+ROADMAP as a P0. Because my increment is green in isolation but the full suite is
+red for this unrelated reason, I push to the designated dev branch
+`claude/peaceful-dirac-r5mect` (a feature branch, not `main`) with this blocker
+recorded — per guardrails, never leave progress unpushed.
+
+**New idea:** add a **generalization eval harness** that holds out one synthetic
+trajectory family, trains on the rest, and scores replay/predict fidelity
+(token-level edit distance + target-remap accuracy) — turning "does it
+generalize?" into a tracked metric the engine can watch improve across backends.
+A second idea: a `MovementModel` adapter that emits `DeviceCaptureInput` gestures
+so predicted movements can be *fed back* through the capture recorder for
+closed-loop replay validation.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

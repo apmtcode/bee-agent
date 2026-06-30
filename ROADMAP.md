@@ -4,6 +4,17 @@ Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
 ## Foundations / DX
+- [ ] **P0 — Pre-existing test failures in the cloud container (run 9).** 3 tests
+      fail on the *clean* tree (`operator-runtime.test.ts` background-task
+      recovery, `server.test.ts`, `app.test.ts`). Root cause: the background-task
+      **launch-script state writer** (shell + `sed` + `python3`, the
+      `renderLaunchScript` pattern shared with `training/runner.ts`) writes a
+      *malformed* state file in this container, so `readJsonFile` throws
+      `SyntaxError … position 311`. Fix: make `startBackgroundTask`'s initial
+      state write deterministic (write valid JSON from Node via `writeJsonAtomic`
+      instead of `sed`-substituting a placeholder string), and/or inject a fake
+      `spawnProcess` in these tests so they don't depend on host `sed`/`python3`.
+      Restores `npm test` to fully green so future runs can push to `main`.
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`
@@ -62,13 +73,24 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
+      for a real on-device small model. — DONE run 9
+      (`src/training/movement-model.ts`): `MovementModelBackend` seam +
+      `NgramMovementBackend` (in-process, deterministic) + `MovementModel`
+      (`predictNext`/`serialize`/`load`). Covers objective 2c (`replayMovements`
+      = repeat) and 2d (target remap = generalize).
+- [~] Synthetic event-stream generator to validate capture→dataset→replay
+      round-trips without real OS input. — partial: `movement-model.test.ts` has a
+      `syntheticSpan(...)` generator proving extract→train→replay. Next: promote
+      it to a reusable exported generator (parameterized gesture grammars, noise,
+      branching) so multiple subsystems can share it.
 - [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      related synthetic trajectories (token-level edit distance + target-remap
+      accuracy). Now unblocked — `NgramMovementBackend` gives a baseline to score.
+- [ ] Closed-loop validation: a `MovementModel`→`DeviceCaptureInput` adapter so
+      predicted movements can be fed back through the capture recorder and
+      re-extracted, proving the schema round-trips end to end.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
