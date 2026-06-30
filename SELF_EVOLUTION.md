@@ -6,6 +6,60 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-06-30 (run 9) — 🐛 Critical bug: `shellQuote` corrupted every quoted background command; suite de-flaked (red → 175/175 stable)
+
+**Audited:** The actual `npm test` result on a fresh cloud container — it was
+**RED** (3 failing tests), despite runs 1–8 logging "174/174". The failures
+(`operator-runtime`, `server`, `app`) were intermittent (2–3 per run, varying),
+a classic race signature.
+
+**Root cause (genuine production bug, not a test bug):**
+`src/harness/background-tasks.ts` `shellQuote()` escaped an embedded single
+quote as `"'"'"'` (6 chars) instead of the correct POSIX `'"'"'` (5 chars) —
+the replacement began with a *double* quote, leaving an unbalanced quote. Every
+background-task command containing an apostrophe (e.g. `printf 'line-1\nline-2\n'`)
+was mangled: `it's` → `it"'s`. Consequences cascaded:
+- the `bash -lc <command>` execution ran a corrupted command (wrong output /
+  non-zero exit), and
+- the initial `state.json`, built by a `printf | sed` pipeline that spliced the
+  shell-quoted JSON payload, became **invalid JSON**, so the recovery reader
+  (`readJsonFile` → `JSON.parse`) threw. The detached process wrote this corrupt
+  file *asynchronously*, racing the test — hence "passes on a fast machine".
+
+**Changed (additive, source):**
+1. `shellQuote()` — corrected the escape sequence to `'"'"'`. One-line fix; root
+   cause of all three failures.
+2. `renderLaunchScript()` — replaced the brittle `printf | sed` initial-state
+   writer with a `python3` `json.dumps` writer that takes every dynamic field
+   (id, kind, command, cwd, paths) as positional **argv**, so shell quoting and
+   JSON encoding are fully separated and can never corrupt each other again. This
+   also fixes a latent bug where `s/"$$"/$$/g` never matched (sed `$` = EOL
+   anchor), leaving `pid` as the string `"$$"` instead of a number.
+3. `OperatorCliApp` — added an optional `backgroundTaskSpawnProcess` passthrough
+   to the runtime (mirrors the runtime's existing option) so tests can inject a
+   deterministic spawn.
+
+**Test hardening (determinism, not masking):** injected a no-op spawn
+(`() => ({ pid, unref(){} })`) into the four background-task integration tests
+(`operator-runtime`, `server` ×3 runtimes, `app`) so they no longer launch real
+detached processes that race assertions. The real execution path is now covered
+by a dedicated unit test that *renders and runs* the launch script for a command
+mixing single quotes, double quotes and a newline, then asserts `state.json` is
+valid JSON with the command preserved verbatim.
+
+**Test results:** suite **red → 175/175**, verified **stable across 8
+consecutive full runs** (previously 2–3 random failures/run). Build ✅.
+`typecheck:src` ✅ (exit 0). Full `tsc` unchanged at **125** (all pre-existing
+test-file debt; no new errors in touched files). +1 new regression test.
+
+**New idea:** the launch script silently depends on `python3` at runtime (now in
+two places). Add a one-time capability probe at task-start that records whether
+`python3`/`bash` are available and degrades gracefully (or surfaces a clear
+error) instead of a task dying mid-flight — and a pure-Node state-writer fallback
+so the background-task subsystem has no hard external-interpreter dependency.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

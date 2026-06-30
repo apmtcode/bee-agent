@@ -734,27 +734,32 @@ function renderLaunchScript(task: BackgroundTaskRecord): string {
   const quotedOutputFile = shellQuote(task.execution.outputFile);
   const quotedCwd = shellQuote(task.cwd);
   const quotedCommand = shellQuote(task.command);
-  const quotedStatePayload = shellQuote(
-    JSON.stringify({
-      version: 1,
-      taskId: task.id,
-      kind: task.kind,
-      status: "running",
-      pid: "$$",
-      startedAt: "__OPENCLAW_STARTED_AT__",
-      updatedAt: "__OPENCLAW_STARTED_AT__",
-      outputFile: task.execution.outputFile,
-      cwd: task.cwd,
-      command: task.command,
-    }),
-  );
+  // The initial "running" state is serialized by python (json.dumps) from argv
+  // rather than a printf|sed pipeline. Building JSON in the shell broke whenever
+  // the command, cwd, or paths contained single quotes, double quotes, or
+  // newlines (the values were spliced into the JSON literal unescaped), which
+  // produced an invalid state.json that the recovery reader then failed to
+  // parse. Passing every dynamic field as a positional argument keeps shell
+  // quoting and JSON encoding fully separated.
+  const initialStateArgs = [
+    quotedStatePath,
+    "$$",
+    '"$started_at"',
+    shellQuote(task.id),
+    shellQuote(task.kind),
+    quotedCommand,
+    quotedCwd,
+    quotedOutputFile,
+  ].join(" ");
 
   return [
     "#!/usr/bin/env bash",
     "set -euo pipefail",
     `mkdir -p $(dirname ${quotedStatePath}) $(dirname ${quotedOutputFile})`,
     "started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-    `printf '%s' ${quotedStatePayload} | sed "s/__OPENCLAW_STARTED_AT__/$started_at/g; s/\"\$\$\"/$$/g" > ${quotedStatePath}`,
+    `python3 - ${initialStateArgs} <<'PY'`,
+    ...renderInitialStateWriterPython(),
+    "PY",
     `printf '%s\n' "starting ${task.kind} ${task.id}" >> ${quotedOutputFile}`,
     `if cd ${quotedCwd} && bash -lc ${quotedCommand} >> ${quotedOutputFile} 2>&1; then`,
     "  completed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
@@ -771,6 +776,35 @@ function renderLaunchScript(task: BackgroundTaskRecord): string {
     "fi",
     "",
   ].join("\n");
+}
+
+function renderInitialStateWriterPython(): string[] {
+  return [
+    "import json",
+    "import pathlib",
+    "import sys",
+    "state_path = pathlib.Path(sys.argv[1])",
+    "pid = int(sys.argv[2])",
+    "started_at = sys.argv[3]",
+    "task_id = sys.argv[4]",
+    "kind = sys.argv[5]",
+    "command = sys.argv[6]",
+    "cwd = sys.argv[7]",
+    "output_file = sys.argv[8]",
+    "state = {",
+    "    'version': 1,",
+    "    'taskId': task_id,",
+    "    'kind': kind,",
+    "    'status': 'running',",
+    "    'pid': pid,",
+    "    'startedAt': started_at,",
+    "    'updatedAt': started_at,",
+    "    'outputFile': output_file,",
+    "    'cwd': cwd,",
+    "    'command': command,",
+    "}",
+    "state_path.write_text(json.dumps(state, indent=2) + '\\n')",
+  ];
 }
 
 function renderStateWriterPython(status: BackgroundTaskExecutionState["status"]): string[] {
@@ -794,5 +828,10 @@ function renderStateWriterPython(status: BackgroundTaskExecutionState["status"])
 }
 
 function shellQuote(value: string): string {
-  return `'${value.replaceAll(`'`, `"'"'"'`)}'`;
+  // Wrap in single quotes and escape any embedded single quote as the POSIX
+  // sequence '"'"' (close quote, a double-quoted quote, reopen quote). The
+  // replacement MUST begin with a closing single quote — starting it with a
+  // double quote (the previous "'"'"' form) left an unbalanced quote that
+  // mangled every argument containing an apostrophe.
+  return `'${value.replaceAll(`'`, `'"'"'`)}'`;
 }

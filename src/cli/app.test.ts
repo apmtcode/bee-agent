@@ -10,6 +10,12 @@ import { OperatorCliApp, parseSlashCommand } from "./app.js";
 const tempDirs: string[] = [];
 const execFileAsync = promisify(execFile);
 
+// A no-op spawn for background tasks: returns a fake pid and never launches a
+// real detached process. Tests that exercise background-task orchestration use
+// this so the recorded task state is driven solely by explicit calls, not by a
+// real process completing (or appending output) at an unpredictable time.
+const noopBackgroundSpawn = () => ({ pid: 4321, unref() {} });
+
 async function makeTempDir(): Promise<string> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "operator-cli-app-"));
   tempDirs.push(dir);
@@ -801,7 +807,12 @@ describe("OperatorCliApp", () => {
 
   it("supports session lifecycle, transcript, approvals, pairing, config, and prompt commands", async () => {
     const rootDir = await makeTempDir();
-    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    const app = new OperatorCliApp({
+      rootDir,
+      cwd: rootDir,
+      currentDate: "2026-05-25",
+      backgroundTaskSpawnProcess: noopBackgroundSpawn,
+    });
     const firstSession = await app.runtime.startSession({ title: "first", cwd: rootDir, agentId: "operator-cli" });
     const secondSession = await app.runtime.startSession({ title: "second", cwd: rootDir, agentId: "operator-cli" });
 

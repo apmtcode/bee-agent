@@ -370,4 +370,31 @@ describe("BackgroundTaskExecutionService", () => {
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
   });
+
+  it("writes valid JSON state for commands containing quotes and newlines", async () => {
+    const { execFile } = await import("node:child_process");
+    const { promisify } = await import("node:util");
+    const run = promisify(execFile);
+    const rootDir = await makeTempDir();
+    // A no-op spawn so start() only writes artifacts; we execute the rendered
+    // launch script ourselves and wait for it, instead of racing a detached
+    // process. The command mixes single quotes, double quotes and a newline —
+    // exactly the shapes that corrupted the old printf|sed JSON pipeline.
+    const store = new FileBackgroundTaskStore(
+      path.join(rootDir, "background-tasks.json"),
+      () => ({ pid: 1, unref() {} }),
+      () => true,
+    );
+    const command = "printf '%s\\n' \"it's a \\\"quoted\\\" value\"";
+    const task = await store.start({ title: "Quoted command", command, cwd: rootDir });
+
+    await run("bash", [path.join(rootDir, task.execution.launchScript)], { cwd: rootDir });
+
+    const stateRaw = await fs.readFile(path.join(rootDir, task.execution.stateFile), "utf8");
+    const state = JSON.parse(stateRaw) as BackgroundTaskExecutionState;
+    expect(state.taskId).toBe(task.id);
+    expect(state.command).toBe(command);
+    expect(typeof state.pid).toBe("number");
+    expect(state.status).toBe("completed");
+  });
 });

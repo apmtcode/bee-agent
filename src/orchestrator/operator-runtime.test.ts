@@ -531,6 +531,10 @@ describe("StandaloneOperatorRuntime", () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
       backgroundTaskIsProcessRunning: () => false,
+      // No-op spawn: the task lifecycle below is asserted entirely from explicit
+      // writeState calls, so a real detached process must not race in and rewrite
+      // state.json on its own schedule.
+      backgroundTaskSpawnProcess: () => ({ pid: 4321, unref() {} }),
     });
     const session = await runtime.startSession({ title: "Tasks", agentId: "main" });
 

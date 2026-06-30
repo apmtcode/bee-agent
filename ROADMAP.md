@@ -4,6 +4,19 @@ Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
 ## Foundations / DX
+- [x] **Fix `shellQuote` single-quote corruption + de-flake the suite**
+      (2026-06-30, run 9). `shellQuote` used `"'"'"'` (unbalanced) instead of
+      POSIX `'"'"'`, corrupting every background command with an apostrophe and
+      producing invalid `state.json` (recovery reader threw). Fixed the escape,
+      replaced the `printf|sed` initial-state writer with a python `json.dumps`
+      argv writer, added a `backgroundTaskSpawnProcess` passthrough to
+      `OperatorCliApp`, injected no-op spawns into the 4 racy bg-task tests, and
+      added a render-and-run regression test. Suite red → 175/175, stable ×8.
+- [ ] **Background-task interpreter independence** (new, run 9): the launch
+      script hard-depends on `python3` (now in 2 places) and `bash`. Add a
+      start-time capability probe + a pure-Node state-writer fallback so a task
+      never dies mid-flight on a missing interpreter; surface a clear error if
+      the shell itself is unavailable.
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`
