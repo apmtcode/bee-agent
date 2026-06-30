@@ -6,6 +6,76 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-06-30 (run 9) — 🧠 Movement-model subsystem: pluggable local backend + deterministic Markov trainer/inference (objective #2d)
+
+**Audited:** The local-movement learning subsystem (standing objective #2).
+`src/capture/` already records movements (recorder, device/os/browser adapters,
+trajectory schema, replay manifest) and `src/training/` builds *real on-device*
+training **plans + launch scripts** (MLX/Axolotl via `runner.ts`). The missing
+piece was objective **#2(d)**: an actual *train + infer* pipeline that runs
+**in-process in the cloud/CI** (no OS, no GPU) so the recorded dataset can be
+turned into a model that (c) repeats recorded movements and (d) generalizes to
+new-but-related ones — and a **pluggable backend seam** so a real on-device
+small model can be dropped in later. The on-device runner can only emit scripts;
+nothing could close the loop and be tested headlessly.
+
+**Changed (additive, isolated — new files only):**
+- **`src/training/movement-model.ts`** — the new subsystem:
+  - `buildMovementDataset(replays, tokenizer?)` turns reviewed replay manifests
+    into per-trajectory token sequences (default token = `<tool>::<summary>`),
+    ordered deterministically by `ts` then tool/summary; emits a sorted vocab.
+  - `MovementModelBackend` interface (`train`/`predictNext`/`generate`/
+    `serialize`/`deserialize`) — the pluggable seam; a real MLX-backed model
+    implements the same interface.
+  - `MarkovMovementBackend` — a deterministic, dependency-free **variable-order
+    back-off n-gram** over movement tokens (BOS/EOS framed, atomic-free, pure).
+    Back-off is what yields **generalization**: when the exact preceding n-gram
+    was never recorded it falls back to a shorter related context and still
+    predicts a sensible next movement. Argmax ties break lexicographically →
+    fully reproducible.
+  - `evaluateReplayFidelity(backend, model, sequences)` — next-movement accuracy
+    harness (on training seqs = replay fidelity; on held-out seqs = generalization).
+  - `MovementModelRegistry` + `createDefaultMovementModelRegistry()` for
+    pluggable backend registration.
+- Barrel exports added to `src/index.ts`.
+
+**Test results:** new **`movement-model.test.ts` — 13/13 passing, consistently
+green across repeated runs** (synthetic event streams only; validates dataset
+grouping, deterministic replay reproduction via `generate`, empty-seed start
+stats, back-off generalization on a held-out trajectory ≥0.8 accuracy,
+serialize round-trip, registry pluggability). `npm run build` ✅.
+`npm run typecheck:src` ✅ (source stays clean).
+
+**⚠️ Pre-existing blocker found & documented (NOT caused by this run):** the full
+suite shows **3–4 flaky failures**, *all* in the real-subprocess background-task
+integration tests (`operator-runtime`/`server`/`app`). Confirmed identical on a
+clean `git stash -u` of HEAD — they predate this run and are orthogonal to the
+movement-model feature (which is isolated new files + one barrel export). Root
+cause diagnosed in depth (kept for a dedicated fix run, see ROADMAP):
+  1. **`shellQuote` escape bug** in `src/harness/background-tasks.ts` (L796): it
+     escapes `'` as `"'"'"'` instead of the correct POSIX `'"'"'` (the sibling
+     `src/training/runner.ts` `shellQuote` is correct). Commands containing
+     single quotes corrupt the emitted JSON state file → `SyntaxError` on read.
+  2. **`sed "s/\"$$\"/$$/g"`** in the launch script never matches: bash
+     quote-parsing consumes the `"` around `$$`, so `pid` stays the string
+     `"$$"` instead of the numeric pid.
+  3. **Non-atomic state writes** (`… > state.json`; python `write_text`) let a
+     concurrent `recoverBackgroundTasks` read a torn file.
+  Fixing (1) in isolation flips a *different* previously-passing test red (it
+  unmasks (2)), so these must be fixed **together** (shellQuote + sed pid +
+  atomic temp-then-rename writes) and the tests made hermetic via the existing
+  `backgroundTaskSpawnProcess` injection seam. Deferred to keep this run's diff
+  focused and regression-free per the guardrails.
+
+**New idea:** add a **generalization eval that perturbs** held-out trajectories
+(insert/drop/reorder a movement) and measures how gracefully back-off degrades —
+a quantitative "robustness curve" per backend, so when the real on-device model
+lands we can compare it against the Markov baseline on identical synthetic
+stress sets. Pairs naturally with a `MovementModelBackend` conformance test
+suite every backend must pass.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
