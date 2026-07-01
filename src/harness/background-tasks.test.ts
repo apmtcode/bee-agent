@@ -370,4 +370,39 @@ describe("BackgroundTaskExecutionService", () => {
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
   });
+
+  it("writes a valid JSON running state when the command contains quotes and newlines", async () => {
+    // Regression: the running-state write used to be built by shell/sed string
+    // substitution, which corrupted the JSON whenever the command (or a path)
+    // contained single quotes or newlines. A concurrent recover/sync then read
+    // an unparseable state file and crashed. The launch script now serializes
+    // the payload via python/json, so the state file is always well-formed.
+    const rootDir = await makeTempDir();
+    // No injected spawner: run the *real* launch script end to end.
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"));
+    const command = "printf 'line-1\nline-2\n' && sleep 2";
+    const task = await store.start({ title: "Quoted command", command, cwd: rootDir, kind: "task" });
+    const statePath = path.join(rootDir, task.execution.stateFile);
+
+    let raw = "";
+    for (let attempt = 0; attempt < 150; attempt += 1) {
+      try {
+        const current = await fs.readFile(statePath, "utf8");
+        if (current.trim()) {
+          raw = current;
+          break;
+        }
+      } catch {
+        // state file not written yet
+      }
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+
+    // Must parse without throwing — this is exactly what recover/sync do.
+    const parsed = JSON.parse(raw) as BackgroundTaskExecutionState;
+    expect(parsed.taskId).toBe(task.id);
+    expect(parsed.status).toBe("running");
+    expect(parsed.command).toBe(command);
+    await expect(store.executionService.readState(task)).resolves.toMatchObject({ taskId: task.id, command });
+  }, 15000);
 });

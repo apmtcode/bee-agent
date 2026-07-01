@@ -1019,6 +1019,11 @@ describe("OperatorControlPlaneServer", () => {
     const breakerRuntime = new StandaloneOperatorRuntime({
       rootDir: breakerRootDir,
       backgroundTaskIsProcessRunning: () => false,
+      // Inject a no-op spawner: this test drives every task's execution state
+      // deterministically via writeState(). A real subprocess would also write
+      // its own "running" state asynchronously and race those writes, making the
+      // platform-breaker failure counts nondeterministic.
+      backgroundTaskSpawnProcess: () => ({ pid: 1, unref: () => {} }),
     });
     const breakerServer = new OperatorControlPlaneServer({ runtime: breakerRuntime });
     const breakerOne = await breakerServer.handle({

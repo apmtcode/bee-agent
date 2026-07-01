@@ -70,6 +70,19 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Generalization eval harness: measure replay fidelity on held-out but
       related synthetic trajectories.
 
+## Reliability
+- [x] Fix background-task state-file corruption (run 9): running-state write went
+      through shell/`sed` string substitution and corrupted JSON on commands with
+      quotes/newlines; now serialized via python/json and written atomically
+      (`.tmp.<pid>` + `os.replace`) for all three state writers. Restored the
+      green test gate (was 3–4 intermittent failures). Regression test added.
+- [ ] Launch-script lint test: assert `renderLaunchScript` never writes a state
+      path via a bare `>` redirect (enforce atomic temp-file + rename), so the
+      non-atomic / `sed`-mangling class of bug cannot silently return.
+- [ ] Thread `backgroundTaskSpawnProcess` through `OperatorCliApp` options too
+      (runtime already accepts it) so CLI-level tests can run deterministically
+      without launching real subprocesses.
+
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in

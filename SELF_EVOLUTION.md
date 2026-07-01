@@ -6,6 +6,63 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-01 (run 9) — 🐛 Reliability: fix background-task state-file corruption (green gate restored)
+
+**Audited:** Started the run by re-establishing the build/test baseline (step 5)
+and found the suite was **no longer green** in this environment — 3–4 tests
+failing intermittently (`operator-runtime`, `cli/app`, `control-plane/server`),
+all touching background tasks. Root-caused instead of masking.
+
+**Root cause (a real product bug, not a test bug):** `renderLaunchScript` in
+`src/harness/background-tasks.ts` wrote the initial *running* execution-state
+file by building JSON through **shell + `sed` string substitution**
+(`printf '%s' <payload> | sed … > statefile`). That is fundamentally fragile:
+when the task command (or a path) contains single quotes or newlines — e.g. the
+test's `printf 'line-1\nline-2\n'` — the shell-quoting/sed pipeline emits
+**malformed JSON**. It was also written **non-atomically** (`>` truncate-then-
+write). A concurrent `recover`/`sync` (which `readState`s every task in a
+session) then read a half-written or mangled file and threw
+`SyntaxError: … in JSON`, rejecting the whole RPC. Captured the exact corrupt
+bytes to confirm: `"command":"printf \"'line-1\n…` — quote/newline mangling.
+
+**Changed (`src/harness/background-tasks.ts`, additive):**
+- Running-state write now goes through **`python3`/`json`** like the existing
+  completed/failed writers: the payload is embedded as a JSON string literal
+  (double `JSON.stringify`) and rehydrated with `json.loads`, so quotes/newlines
+  can never corrupt it. New `renderRunningStateWriterPython(payloadLiteral)`.
+- **All three** state writers (running/completed/failed) now write to a
+  `.tmp.<pid>` file and `os.replace()` into place — atomic, so recover/sync
+  never observe a partial file (mirrors the TS-side `writeJsonAtomic`).
+
+**Also (test determinism):** the platform-breaker test in `server.test.ts` drove
+execution state purely via `writeState()` but *also* launched real `sleep 5`
+subprocesses whose async running-state writes raced those calls, making the
+breaker failure counts nondeterministic (`failureCount 3` vs `2`). Injected the
+runtime's existing `backgroundTaskSpawnProcess` no-op seam so no real subprocess
+runs — the test now controls state deterministically. (No product change; the
+injection point already existed for exactly this.)
+
+**New regression test** (`background-tasks.test.ts`): runs the *real* launch
+script with a quote+newline command (`printf 'line-1\nline-2\n' && sleep 2`) and
+asserts the running-state file is valid, parseable JSON with the command
+preserved byte-for-byte — locking in the fix with genuine end-to-end coverage.
+
+**Test results:** `typecheck:src` ✅ clean, full `tsc` **125** (unchanged — no new
+debt). Build ✅. Tests ✅ **175/175** (was 174 + 1 new regression test).
+Verified stability: previously-flaky `server.test.ts` **10/10** green in
+isolation; full suite green across repeated runs (was 3–4 intermittent
+failures at the start of this run).
+
+**New idea:** promote the `.tmp.<pid>` + `os.replace` atomic-write pattern (now
+in the launch script) into a tiny shared shell/python snippet, and add a
+**"launch-script lint" test** that asserts `renderLaunchScript` never writes a
+state path with a bare `>` redirect — so the non-atomic/`sed`-mangling class of
+bug can't silently return. Longer term: fold `typecheck:src && build && test`
+into a single `verify` script and have the engine run it as its step-5 gate
+(already queued in ROADMAP), which would have flagged this regression instantly.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
