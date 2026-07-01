@@ -58,17 +58,38 @@ unchecked items are queued. Keep this richer than you found it each run.
 ## Local-movement learning subsystem
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
-(exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
+(exporter, job store/manifest, runner, execution service, **movement-model**).
+Next increments:
+- [x] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
-      deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      — DONE run 9 (see SELF_EVOLUTION run 9). capture/schema/dataset/replay were
+      present; train→infer (2c/2d) was the gap.
+- [x] Pluggable local-model backend interface with a deterministic backend
+      (cloud/CI-safe) + documented seam for a real on-device model — DONE run 9
+      (`MovementModelBackend` + `MarkovMovementBackend` in
+      `src/training/movement-model.ts`).
+- [x] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories — DONE run 9 (`evaluateMovementModel`:
+      token-fidelity / exact-match / confidence).
+- [ ] Synthetic event-stream *generator* (parameterized flow sampler) to mass-
+      produce train/held-out splits for the eval harness, beyond the hand-built
+      fixtures used in run 9's tests.
+- [ ] Second reference backend: a prototype/transformation backend (cluster by
+      token-path, store an affine slot-transform per cluster) + auto-select the
+      higher-fidelity backend via the eval harness on held-out flows.
+- [ ] Wire `MarkovMovementBackend` into the training runner/execution service so
+      a reviewed export can be trained + evaluated in-process (no GPU) as a
+      cloud-side smoke test before an on-device mlx/axolotl run.
+
+## Known defects (discovered, not yet fixed)
+- [ ] **Background-task recovery JSON parse failure** (found run 9, environment-
+      specific). `operator-runtime` / `server` / `app` tests fail here with
+      `readJsonFile` → `SyntaxError: Expected ',' or '}'` while parsing a state
+      file written by `renderLaunchScript`-style shell quoting (`$$`/`sed`
+      substitution). Reproduces on the clean tree in this cloud environment; the
+      run-8 log recorded 174/174 on a different shell. Fix: make the shell state
+      writer produce valid JSON (or write state from Node, not `sed`), then
+      re-enable as a green gate.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

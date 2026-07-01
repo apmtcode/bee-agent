@@ -6,6 +6,62 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-01 (run 9) — 🧠 Movement learning: pluggable model backend + train→infer→eval loop
+
+**Audited:** The local-movement learning subsystem (standing objective #2) vs.
+its five required pieces. `src/capture/*` covers capture → event schema →
+dataset (trajectory/replay) and `src/capture/replay*` covers replay. `src/training/*`
+exports reviewed datasets (`exporter.ts`) and emits *on-device* mlx/axolotl
+launch plans (`runner.ts` + `execution-service.ts`). **Gap:** piece (c)/(d) —
+"post-train a local model to *repeat* recorded movements and *generalize* to new
+but related ones" — had no in-process, runnable, testable implementation. The
+runner only shells out to a real GPU trainer, so the train→infer loop could not
+be validated in the cloud at all.
+
+**Changed (additive, new files only):**
+- `src/training/movement-model.ts` — the pluggable seam. Defines:
+  - `MovementStep`/`MovementSequence`/`MovementTrainingDataset` schema and a
+    `MovementModelBackend` interface (`train`/`infer`) a real on-device small
+    model can implement.
+  - `MarkovMovementBackend` — a deterministic, dependency-free variable-order
+    n-gram backend. Learns per-context start/transition counts (orders 1..N,
+    default 4), plus **history-conditioned** target/value slot memory so a
+    gesture that repeats with different targets (tap username → tap password)
+    reproduces positionally instead of collapsing to one target. Greedy decode
+    with count backoff → **exact repeat** of a trained flow (objective 2c);
+    lower-order + **global-scope** backoff → plausible continuation on an
+    **unseen-but-related context** (objective 2d). Target-override map does
+    "same movement on a related element". Learns an explicit END token so it
+    stops on its own; ties never let END pre-empt a real continuation.
+  - `movementSequenceFromTrajectory` / `movementSequenceFromReplay` adapters
+    (capture → dataset) and `evaluateMovementModel` generalization eval harness
+    (token-fidelity / exact-match / confidence on held-out sequences).
+- `src/training/movement-model.test.ts` — 13 tests: exact repeat, self
+  termination, target-override generalization, seed continuation, unseen-context
+  backoff, direction-token disambiguation, determinism, eval fidelity (perfect /
+  partial / empty), and both capture→dataset→train→replay round-trips.
+- Exported the surface from `src/index.ts`.
+
+**Test results:** new tests ✅ **13/13**. Build ✅. `typecheck:src` ✅ (exit 0) —
+source stays green with the new module included. Full suite **184/187**; the **3
+failures are pre-existing and environment-specific** (`operator-runtime`,
+`server`, `app` background-task recovery) — confirmed by `git stash` on the clean
+tree (4 failed | 46 passed with my code removed). Root cause: `readJsonFile`
+throws `SyntaxError: Expected ',' or '}'` parsing a state file that
+`renderLaunchScript`-style shell quoting produced — a `$$`/`sed` substitution
+issue that only manifests under this environment's shell, unrelated to this
+change. Logged to ROADMAP.
+
+**New idea:** a second reference backend — a **prototype/transformation backend**
+that clusters recorded sequences by structural token-path and stores an affine
+"slot transform" (target rename + offset) per cluster, so generalization to a
+related target/screen is a learned mapping rather than frequency backoff. Pair it
+with the eval harness to A/B backends on held-out synthetic flows and pick the
+higher-fidelity one automatically — turning "pluggable backend" into
+"self-selecting backend."
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
