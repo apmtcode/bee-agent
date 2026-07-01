@@ -4,6 +4,18 @@ Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
 ## Foundations / DX
+- [x] **De-flake the verify gate** (2026-07-01, run 9) — `npm test` was
+      non-deterministically red (3–4 failures). Root cause: two real bugs in the
+      background-task/training launch-script generators — a broken `sed` `$$`
+      substitution (`pid` persisted as the literal string `"$$"` → every running
+      task misread as `missing-process`) and non-atomic `state.json` writes
+      (truncated-read `SyntaxError`). Fixed with an atomic Python writer; made the
+      affected integration tests hermetic (no-op spawn). Now 176/176, 8/8 runs.
+- [ ] **Launch-script lint test** (queued 2026-07-01): render every generated
+      shell script (background-tasks, training) and assert invariants — no
+      unescaped `"` adjacent to `$$`, atomic writes only (no in-place
+      `> …state.json`), and `pid` never persisted as a literal placeholder. Guards
+      against reintroducing the run-9 class of silently-broken substitution.
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`

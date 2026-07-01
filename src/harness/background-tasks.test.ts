@@ -370,4 +370,57 @@ describe("BackgroundTaskExecutionService", () => {
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
   });
+
+  it("renders a launch script that writes state atomically without the broken sed pid substitution", async () => {
+    const rootDir = await makeTempDir();
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"), () => ({ pid: 1111, unref() {} }));
+    const task = await store.start({ title: "Watch", command: "sleep 5", cwd: rootDir, kind: "task" });
+    const script = await fs.readFile(path.join(rootDir, task.execution.launchScript), "utf8");
+
+    // The initial "running" state must be written by the Python writer (which
+    // substitutes the real $$ pid), not the old `printf | sed > file` form that
+    // (a) never actually replaced the quoted "$$" placeholder and (b) wrote
+    // non-atomically, allowing readers to observe a truncated JSON document.
+    expect(script).toContain('python3 - ');
+    expect(script).toContain('$$ "$started_at"');
+    expect(script).not.toContain('s/"$$"/$$/g');
+    expect(script).not.toMatch(/> '[^']*state\.json'/);
+    expect(script).toContain("os.replace(tmp_path, state_path)");
+    // The placeholder pid string must never be persisted verbatim.
+    expect(script).not.toContain('"pid":"$$"');
+  });
+
+  it("runs the real launch script and records a live numeric pid", async () => {
+    const rootDir = await makeTempDir();
+    // Use the real spawn (default) so the actual launch script executes.
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"));
+    const task = await store.start({ title: "Sleeper", command: "sleep 30", cwd: rootDir, kind: "task" });
+
+    let state: BackgroundTaskExecutionState | undefined;
+    for (let attempt = 0; attempt < 50; attempt += 1) {
+      state = await store.executionService.readState(task); // never throws on partial reads
+      if (state?.status === "running" && typeof state.pid === "number") {
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+
+    try {
+      expect(state?.status).toBe("running");
+      expect(typeof state?.pid).toBe("number");
+      expect(Number.isFinite(state?.pid)).toBe(true);
+      expect(state?.pid).toBeGreaterThan(0);
+      // The recorded pid must correspond to the still-running process group,
+      // so recovery/health checks see the task as alive rather than missing.
+      expect(store.executionService.isProcessRunning(state!.pid)).toBe(true);
+    } finally {
+      if (state && typeof state.pid === "number") {
+        try {
+          process.kill(-state.pid, "SIGKILL");
+        } catch {
+          // process group already gone — nothing to clean up.
+        }
+      }
+    }
+  });
 });

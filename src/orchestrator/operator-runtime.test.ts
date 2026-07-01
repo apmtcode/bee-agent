@@ -531,6 +531,9 @@ describe("StandaloneOperatorRuntime", () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
       backgroundTaskIsProcessRunning: () => false,
+      // Stub the spawn so no real subprocess writes state.json concurrently
+      // with the manual writeState() calls below (would race and corrupt reads).
+      backgroundTaskSpawnProcess: () => ({ pid: 4242, unref() {} }),
     });
     const session = await runtime.startSession({ title: "Tasks", agentId: "main" });
 

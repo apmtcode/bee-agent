@@ -6,6 +6,64 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-01 (run 9) — Fix background-task launch scripts: real bug + de-flaked the verify gate
+
+**Audited:** The verification gate itself. `npm test` was **non-deterministically red**
+in this environment (3–4 failures, count varying between identical runs) across
+`operator-runtime.test.ts`, `server.test.ts`, and `app.test.ts` — even though run 8
+recorded 174/174. A flaky green gate silently invalidates every future run's
+"tests ✅" claim, so this was the highest-value fix.
+
+**Two real production bugs found in `renderLaunchScript` (`src/harness/background-tasks.ts`,
+and the identical twin in `src/training/runner.ts`):**
+1. **The `pid` was never substituted.** The state write used
+   `printf '%s' <json> | sed "…; s/\"\$\$\"/$$/g" > state.json`. In the emitted
+   bash the unescaped `"` around `$$` *closes and reopens* the shell's
+   double-quote, so `$$` expanded on both sides → the second sed became a no-op
+   `s/<pid>/<pid>/g` and the JSON kept the literal string `"pid":"$$"`. Result:
+   `isProcessRunning("$$")` → `Number.isFinite` false → **every running task was
+   misdiagnosed as `missing-process`**, degrading/pausing remotes that were
+   actually healthy. Root cause: a JS template literal collapses `\"`→`"` and
+   `\$`→`$`, destroying the intended shell escaping.
+2. **Non-atomic writes.** Both the `printf|sed > state.json` and Python's
+   `state_path.write_text()` wrote in place, so a concurrent reader
+   (`recoverAll`/`sync`/health check) could catch a truncated file → the exact
+   `SyntaxError … at position 311` seen in CI.
+
+**Changed:**
+- Replaced the fragile `printf|sed` initial-state write with a Python writer that
+  takes the base JSON + `$$` + timestamp as argv and persists **atomically**
+  (`os.replace` over a sibling `.tmp`). Extracted a shared
+  `PYTHON_ATOMIC_WRITE_LINES` helper used by the running/completed/failed writers.
+  Applied identically to `background-tasks.ts` and `training/runner.ts`.
+- **De-flaked the integration tests** that were implicitly relying on the pid bug:
+  `server.test.ts` (breaker/platform) and `operator-runtime.test.ts` already
+  inject `backgroundTaskIsProcessRunning: () => false` for deterministic liveness
+  but spawned **real `sleep 5`/`tail -f` subprocesses** whose async launch-script
+  writes raced with the tests' manual `writeState()`. Paired every such site with
+  a no-op `backgroundTaskSpawnProcess` so state is fully test-controlled.
+- Added 2 regression tests (`background-tasks.test.ts`): one asserts the rendered
+  script substitutes a real `$$` pid + writes atomically (`os.replace`) and no
+  longer contains the broken `s/"$$"/$$/g` or a `> state.json` redirect; one runs
+  the **real** launch script for `sleep 30` and asserts the recorded pid is a live
+  numeric process the health check sees as running.
+
+**Test results:** `npm test` now **176/176, green on 8/8 consecutive runs** (was
+flaky 3–4 failing). `typecheck:src` ✅ exit 0. Full `tsc` unchanged at **125**
+(test-file debt only; no new errors). Build ✅. `app.test.ts` — whose `sleep 5`
+remote is meant to stay *active* — now passes deterministically because the pid
+fix keeps the process correctly alive.
+
+**New idea:** the `printf|sed` + JS-template-escaping trap is exactly the class of
+bug a golden-file test would have caught at authoring time. Add a tiny
+"launch-script lint" test that renders every generated shell script
+(background-tasks, training) and asserts invariants: no unescaped `"` adjacent to
+`$$`, no in-place `> …state.json` redirect (atomic writes only), and that any
+`pid` field is either a bare `$$`/argv or absent — so the next generated-script
+writer can't reintroduce a silently-broken substitution.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
