@@ -59,16 +59,39 @@ unchecked items are queued. Keep this richer than you found it each run.
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
 (exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
-      objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Inventory what `src/capture` + `src/training` already implement vs. the
+      objective's five pieces — DONE run 9. Pipeline was complete through
+      capture→schema→dataset→replay; the train/infer piece only emitted mlx/axolotl
+      shell scripts (no cloud-runnable learnable model). Runs 9+ close that gap.
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      for a real on-device small model — DONE run 9 (`src/training/movement-policy.ts`:
+      `MovementBackend`/`MovementModel`/`MovementBackendRegistry` +
+      `MarkovMovementBackend`, an in-process n-gram policy with token + gesture
+      channels, backoff, BOS/END, serialize).
+- [x] Synthetic event-stream generator to validate capture→dataset→replay
+      round-trips without real OS input — DONE run 9
+      (`generateSyntheticMovementTrajectories`, grammar of parametric templates).
+- [x] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories — DONE run 9 (`evaluateMovementModel` +
+      `splitTrajectories`: token-acc / gesture-acc / rollout-exact-match).
+- [ ] **Online/continual movement learner**: incremental `observe(trajectory)`
+      updates on `MarkovMovementModel` so the policy adapts without a full retrain
+      (toward on-device continual learning).
+- [ ] Wire the movement policy into an RPC/CLI surface (train/eval/rollout from a
+      reviewed export) and register a `neural` backend seam alongside `markov`.
+
+## Test health / reliability
+- [ ] **Wall-clock rot (blocker, found run 9):** the full suite went from 174/174
+      green (run 8, 2026-06-23) to 3 pre-existing failures by 2026-07-01 with no
+      code change — `app.test.ts:906` (`control=active`→`degraded`),
+      `server.test.ts:719` (result-shape mismatch), both smell of health/staleness
+      checks pinned against real `Date`. Fix: inject a `Clock` seam (`() => Date`)
+      into the reconcile/health/staleness paths and pass a fixed clock in tests.
+- [ ] `operator-runtime.test.ts` background-task recovery: reconcile reads a state
+      file a live spawned process is still writing → intermittent malformed-JSON
+      `SyntaxError`. Make `readState` tolerate/retry partial writes, or stub the
+      spawn in tests so recovery is deterministic in the cloud.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

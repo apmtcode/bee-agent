@@ -6,6 +6,67 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-01 (run 9) — Movement-policy learner: train → replay → generalize (objective #2 c+d)
+
+**Audited:** The local-movement learning subsystem (standing objective #2) vs.
+what `src/capture` + `src/training` already implement. Found the pipeline was
+complete through **capture → schema → dataset → replay**, and the training piece
+(`runner.ts`) only *generates mlx/axolotl shell scripts* for a real Apple-Silicon
+box — there was **no learnable model that runs in the cloud**, so pieces (c)
+"post-train a model to repeat recorded movements" and (d) "generalize to new but
+related movements" were unvalidated. Runs 5–8 were all typecheck grind; this run
+deliberately advances the movement subsystem instead.
+
+**Changed (additive — 4 new files, 1 barrel edit):**
+- `src/training/movement-policy.ts`: a **pluggable movement-policy backend**.
+  - `MovementBackend`/`MovementModel` interfaces = the documented seam a real
+    on-device small model plugs into; `MovementBackendRegistry` makes it
+    swappable without touching call sites.
+  - `MarkovMovementBackend`: a deterministic, dependency-free n-gram policy that
+    **actually learns** from a movement dataset and runs entirely in-process
+    (cloud/CI-safe). Two channels: a *full-token* channel (gesture+target+
+    direction) for high-fidelity replay of seen flows, and a *gesture-only*
+    channel for generalizing the movement **shape** to novel targets. Backoff
+    (order-k → … → order-1 → app-prior → global) + BOS/END sentinels so rollouts
+    start and terminate correctly. Serializable for portability.
+  - `rolloutMovements()` autoregressively replays/generates a flow; and
+    `extractMovementTrajectory()` bridges recorded `TrajectorySpan` device
+    actions into the learner's schema (no schema duplication).
+- `src/training/movement-eval.ts`: a **synthetic movement-stream generator**
+  (grammar of parametric task templates → related-but-varied flows,
+  deterministic) + a **generalization eval harness** (`evaluateMovementModel`)
+  reporting token accuracy (replay fidelity), gesture accuracy (shape
+  generalization) and rollout exact-match; plus `splitTrajectories` for
+  train/holdout.
+- Tests: `movement-policy.test.ts` (9) + `movement-eval.test.ts` (6) — proves
+  exact replay of a recorded flow, correct termination, generalization of gesture
+  shape to unseen targets, serialize round-trip, determinism, and eval metrics
+  (train gesture-acc > 0.99, holdout gesture-acc > 0.9).
+- `src/index.ts`: exported the new public surface.
+
+**Test results:** `typecheck:src` ✅ (source stays green). Build ✅ (5 files,
+553 kB). My new tests ✅ **15/15**. Full suite **186 passed / 3 failed** — up from
+174 passing (+12 net).
+
+**⚠️ Pre-existing blocker (NOT introduced this run):** those 3 failures reproduce
+on the **clean branch with my changes stashed** (4 failures there), in files I did
+not touch: `operator-runtime.test.ts` (a live background-process state-file
+race → malformed JSON on reconcile — environment-dependent), `app.test.ts:906`
+(`control=active` → now `degraded`) and `server.test.ts:719` (result-shape
+mismatch). Run 8 recorded 174/174 green on 2026-06-23; today is 2026-07-01. The
+two non-race failures smell strongly of **wall-clock rot** — health/staleness
+checks pinned against real `Date` that flip once enough real days elapse. Pushed
+to the designated dev branch (not `main`) since my work is green in isolation and
+the branch already carried these failures. Queued a fix in ROADMAP.
+
+**New idea:** inject a **`Clock` seam** (`() => Date`) into the reconcile/health/
+staleness paths and have tests pass a fixed clock — kills the wall-clock rot class
+of failures for good and makes the suite reproducible regardless of run date.
+Second idea: an **online/continual movement learner** — instead of retraining
+from scratch, let `MarkovMovementModel` accept incremental `observe(trajectory)`
+updates so the policy adapts as new recorded flows arrive (a step toward
+true on-device continual learning).
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
