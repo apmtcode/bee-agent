@@ -4,6 +4,19 @@ Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
 ## Foundations / DX
+- [x] **Fix corrupt background-task `state.json`** (2026-07-01, run 9) — the
+      launcher hand-authored JSON in shell (`printf|sed`); the `s/"$$"/PID/g` sed
+      never matched (`$` is a regex metachar) and quoted/newline commands mangled
+      the JSON, crashing `json.loads` in the completion writer. Now authored via
+      `python3`/`json.dumps` with values passed as argv. Restored a stable
+      174/174 suite (was 3–4 failing incl. a hard JSON crash).
+- [ ] **Launch-script JSON contract test:** render `renderLaunchScript` for a
+      command containing quotes/single-quotes/newlines, run it (guarded on
+      bash+python3), assert `state.json` parses and round-trips the command.
+      Prevents silent reintroduction of the shell-JSON corruption.
+- [ ] Extract a committed `state_writer.py` helper the launch script invokes for
+      both the initial and terminal state writes, so the shell never authors JSON
+      and the state schema lives in one place.
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`

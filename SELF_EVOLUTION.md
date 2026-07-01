@@ -6,6 +6,60 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-01 (run 9) — 🐛 Fix corrupt background-task `state.json` (shell-authored JSON) + de-flake the suite
+
+**Audited:** The green baseline itself. After `npm install`, the suite was **not**
+174/174 as run 8 recorded — **3–4 tests failed**, one with a hard
+`SyntaxError: Expected ',' or '}' after property value in JSON` originating in
+`readJsonFile` → `BackgroundTaskExecutionService.readState`. Instrumented
+`readJsonFile` to dump the offending file and found the launcher-written
+`state.json` was invalid: `"pid":"$$"` (literal, unexpanded) and a `command`
+field with **unescaped** quotes.
+
+**Root cause — `renderLaunchScript` in `src/harness/background-tasks.ts`:** the
+initial running state was hand-authored in the shell:
+`printf '%s' <json> | sed "s/…/g; s/\"\$\$\"/$$/g" > state.json`. Two defects:
+1. The sed replacement `s/"$$"/PID/g` **never matches** — `$` is a regex
+   end-of-line metacharacter, so the pattern `"$$"` can't match the literal
+   text, leaving `pid` as the string `"$$"` (schema wants a number).
+2. Building JSON by string-interpolating `task.command`/`task.cwd` and pushing it
+   through `shellQuote → printf → sed` **mangles escaping** for any command
+   containing quotes or newlines (e.g. `printf 'line-1\nline-2\n'`), producing
+   invalid JSON. The python **completion** writer then does
+   `json.loads(state_path.read_text())` on the corrupt file and crashes — taking
+   down the whole sync/recover path.
+
+**Changed (additive, surgical):**
+- `src/harness/background-tasks.ts`: author the initial running state with
+  `python3` (`json.dumps`) via a new `renderInitialStateWriterPython()`, passing
+  dynamic values (taskId, kind, startedAt, `$$`, outputFile, cwd, command) as
+  **argv** so python escapes them correctly — quotes/newlines can never corrupt
+  the file. Mirrors the existing python completion/failure writer; removed the
+  broken `printf|sed` line and the `pid:"$$"` placeholder.
+- `src/orchestrator/operator-runtime.test.ts`: added `maxRetries:5,retryDelay:50`
+  to the `afterEach` `fs.rm` (detached run.sh can still be writing into the temp
+  dir at teardown → intermittent `ENOTEMPTY`), matching the control-plane suites.
+- `src/control-plane/server.test.ts`: injected a deterministic
+  `backgroundTaskSpawnProcess: () => ({ pid, unref() {} })` into the three
+  runtimes in the big orchestration test. They already force
+  `isProcessRunning:()=>false` and drive state via manual `writeState`; the real
+  detached `run.sh` was racing those writes and inflating the circuit-breaker
+  `failureCount`/`threshold` (2/degraded vs 3/paused). Stubbing spawn makes the
+  breaker/drift/remote sections hermetic.
+
+**Test results:** full suite **174/174, stable across 5 consecutive runs** (was
+3–4 failing, incl. one hard JSON crash). `npm run build` ✅. `npm run
+typecheck:src` ✅ (exit 0). Full `typecheck` unchanged at **125** (test-only).
+
+**New idea:** add a focused unit test that renders `renderLaunchScript` for a
+task whose command contains quotes, single-quotes, and newlines, executes it
+(guarded on `bash`+`python3` availability, skip otherwise) and asserts the
+produced `state.json` **parses and round-trips** the command verbatim — locking
+the JSON-authoring contract so a future edit to the shell template can't silently
+reintroduce corruption. Longer term: extract the JSON schema into one committed
+`state_writer.py` helper invoked by the script (initial + terminal writes share
+it), so the shell never authors JSON and the schema lives in a single place.
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

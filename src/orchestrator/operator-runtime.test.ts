@@ -31,7 +31,12 @@ function buildHookCaptureCommand(outputFile: string): string {
 }
 
 afterEach(async () => {
-  await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
+  // Background tasks spawn detached processes that may still be writing into the
+  // temp dir when cleanup runs; retry rmdir to tolerate that ENOTEMPTY race
+  // (same pattern used by the control-plane test suites).
+  await Promise.all(
+    tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })),
+  );
 });
 
 const exportManifest: ReviewedExportManifest = {
