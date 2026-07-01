@@ -59,16 +59,28 @@ unchecked items are queued. Keep this richer than you found it each run.
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
 (exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
+- [x] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+      — DONE run 9. Gap found: no model that trains/infers; `runner.ts` only emits
+      mlx/axolotl shell commands (uncloudable), so parts (c) repeat + (d) generalize
+      were untestable. Filled by the new `src/movement/` module.
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      for a real on-device small model — DONE run 9 (`src/movement/movement-model.ts`:
+      `MovementModelBackend` + registry + `NGramMovementModel` mock).
+- [x] Synthetic event-stream generator to validate capture→dataset→replay
+      round-trips without real OS input — DONE run 9 (`src/movement/synthetic.ts`,
+      seeded/deterministic, emits both `TrajectorySpan`s and token sequences).
+- [x] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories — DONE run 9 (`src/movement/movement-eval.ts`:
+      next-token/top-K accuracy, exact-replay rate, replay overlap).
+- [ ] Wire the movement model into `training/runner.ts` as a
+      `LocalTrainingRuntime = "ngram-mock"` runtime so a cloud dry-run can train the
+      in-process model over a reviewed export and emit an eval report — closing the
+      loop between the training-job orchestration and the actual learner.
+- [ ] Add a second, richer movement backend (e.g. a suffix-automaton or a tiny
+      Markov-blend) behind the same interface to prove the backend seam and give the
+      eval harness something to compare against.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
@@ -84,3 +96,11 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
       count to a baseline file and fail if a module regresses above it. Lets the
       engine pay debt down module-by-module without one green-gate blocking
       progress, and prevents backsliding while the total is still > 0.
+- [ ] **Injectable `Clock` seam for heartbeat logic** (surfaced run 9). The
+      full test suite has **3–5 pre-existing flaky failures** in
+      `control-plane/server.test.ts`, `cli/app.test.ts`, and
+      `orchestrator/operator-runtime.test.ts` — all wall-clock heartbeat
+      comparisons (remote-control `state: "active"` vs `"degraded"` depending on
+      elapsed real time). Thread an injectable `now()` into the heartbeat/degrade
+      logic (default `Date.now`) so tests can pin time; then the full `verify` gate
+      can go green instead of only `typecheck:src`.

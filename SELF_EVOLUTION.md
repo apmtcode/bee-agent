@@ -6,6 +6,59 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-01 (run 9) — Movement-learning: pluggable local model + synthetic generator + eval harness
+
+**Audited:** Standing objective #2 (local-movement learning), which had not been
+advanced since the scaffolding landed — runs 2–8 were all typecheck debt. Mapped
+the existing pieces: `src/capture/` covers capture → schema → recorder → replay
+manifest, and `src/training/` covers dataset export + a *shell-command* job runner
+(mlx/axolotl launch scripts). **The gap:** there was no actual model that learns to
+**(c) repeat** recorded movements or **(d) generalize** to new-but-related ones —
+`runner.ts` only emits Python commands to be run on a real Apple-Silicon box. In the
+cloud we can't run those, so the objective's train/infer loop was untestable.
+
+**Changed (new, additive `src/movement/` module — 3 source + 3 test files):**
+- `movement-model.ts` — a **pluggable** `MovementModelBackend` interface + registry
+  (`registerMovementBackend`/`getMovementBackend`/`listMovementBackends`) so a real
+  on-device policy (MLX/llama.cpp) can be swapped in without touching call sites.
+  Ships one deterministic in-process backend, `NGramMovementModel` (n-gram with
+  stupid-backoff): `train(sequences)` → `predict(context)` (ranked next-action
+  candidates) + `generate(seed)` (greedy rollout to an END sentinel) + serialize/
+  load. Backoff is what gives it **both** behaviours: it *repeats* a memorized
+  trajectory exactly, and *generalizes* a shared sub-sequence onto a novel prefix.
+  `tokenizeAction`/`tokenizeTrajectory` bridge the existing `TrajectorySpan` schema
+  into movement tokens.
+- `synthetic.ts` — a deterministic (seeded mulberry32 PRNG) synthetic movement
+  event-stream generator. Since bee-agent runs in the cloud with no real OS input,
+  this fabricates plausible, structured trajectories from small task grammars
+  (editor/browser/terminal), returning both recorded `TrajectorySpan`s and their
+  tokenized sequences so the whole capture→dataset→replay→train→infer pipeline is
+  exercisable end-to-end. Fixed a determinism bug: overrode `buildTrajectorySpan`'s
+  wall-clock `createdAt` with a timeline-derived value so datasets are reproducible.
+- `movement-eval.ts` — a generalization eval harness. `evaluateMovementModel`
+  reports next-token accuracy, top-K accuracy, exact-replay rate, and mean replay
+  overlap over held-out sequences.
+- Barrel: exported all three from `src/index.ts`.
+
+**Test results:** movement suite ✅ **24/24** (memorized-replay, backoff
+generalization, serialize round-trip, registry, seeded determinism, held-out
+generalization ≥0.6 accuracy). `typecheck:src` ✅ (exit 0, source stays clean).
+Build ✅. Full suite: my 24 pass; **3–5 pre-existing failures fluctuate run-to-run**
+(server.test.ts / app.test.ts / operator-runtime.test.ts) — confirmed on the clean
+baseline *before* my change (`git stash` + rerun), all timing/heartbeat flakes
+(e.g. remote-control `state: "active"` vs `"degraded"` depending on elapsed
+wall-clock). Not caused by this run; logged as a health issue. Pushed to the feature
+branch `claude/peaceful-dirac-rzkqy3` (movement code is fully green in isolation).
+
+**New idea:** the pre-existing flakes are all *wall-clock heartbeat* comparisons.
+Introduce an injectable `Clock`/`now()` seam (default `Date.now`) into the
+remote-control heartbeat logic so tests can pin time and these become deterministic
+— then the full `verify` gate can finally go green. Second idea: wire the movement
+model into the `runner.ts` seam so a `LocalTrainingRuntime = "ngram-mock"` option
+trains the in-process model as a cloud-runnable dry-run of the real MLX job.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
