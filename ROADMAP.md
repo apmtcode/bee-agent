@@ -58,17 +58,48 @@ unchecked items are queued. Keep this richer than you found it each run.
 ## Local-movement learning subsystem
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
-(exporter, job store/manifest, runner, execution service). Next increments:
+(exporter, job store/manifest, runner, execution service, **movement-model**,
+**movement-eval**). Next increments:
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
-      deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+- [x] **Pluggable local-model backend interface** with a deterministic mock
+      backend — DONE run 9. `src/training/movement-model.ts`:
+      `MovementModelBackend`/`TrainedMovementModel` + `DeterministicMarkovBackend`
+      (in-process back-off Markov: memorizes movements + generalizes via suffix
+      back-off). The apple-silicon runner is the documented "real backend" seam.
+- [x] **Synthetic event-stream generator** — DONE run 9
+      (`generateSyntheticMovementSequences`/`Dataset`, seeded LCG, no RNG) to
+      validate capture→dataset→train→replay round-trips without real OS input.
+- [x] **Generalization eval harness** — DONE run 9 (`src/training/movement-eval.ts`:
+      `evaluateNextActionAccuracy` top-1/top-K + `evaluateReplayFidelity` on
+      held-out related synthetic trajectories, deterministic split helpers).
+- [ ] Unify backends: make `LocalAppleSiliconTrainingRunner` implement
+      `MovementModelBackend`, add `trainMovementModel(backend, dataset)`, and emit
+      the eval report into the reviewed-export manifest as a pre-training gate.
+- [ ] Wire capture adapters (device/os/browser) → `buildMovementSequences*` so a
+      recorded session feeds the model directly (currently fed via reviewed export).
+
+## Test health / reliability (from run 9 triage)
+- [ ] **`server.test.ts:719` (top blocker).** The giant "handles session…
+      orchestration" test starts `remoteTask = sleep 5` (a real long-running
+      process) under a global `isProcessRunning: () => false`, so once the async
+      bash writes the "running" state it reads as `missing-process` → `degraded`,
+      but the test expects `active` after resume (line 657 passes only via a
+      timing race). A no-op spawn mock fixes 719 but breaks the platform-breaker
+      section at 1101 (which relies on the missing-process signal). Fix: a
+      *simulating* `backgroundTaskSpawnProcess` fixture that writes deterministic
+      state files + a per-task liveness fn, replacing the global `() => false`.
+- [x] **Launch-script `shellQuote` POSIX bug** — DONE run 9. `background-tasks.ts`
+      used `"'"'"'` (malformed) instead of `'"'"'`; single-quoted commands
+      corrupted `state.json`. Fixed + made the recovery test hermetic.
+- [x] **Launch-script `sed` pid substitution** — DONE run 9. `s/"$$"/$$/g` had
+      unescaped quotes; replaced with a `"__OPENCLAW_PID__"` placeholder.
+- [ ] **Same latent sed bug in `src/training/runner.ts`** (line ~188:
+      `s/\"\$\$\"/$$/g`). Its tests only assert generated content, not execution,
+      so it's green — but fix it for parity before any real training run.
+- [ ] Audit for other tests that spawn real subprocesses / touch real `$HOME`
+      and make them hermetic (run 1 did this for config; run 9 for two of three).
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

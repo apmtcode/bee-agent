@@ -400,6 +400,46 @@ export type {
   LocalTrainingRuntime,
   TrainingJobPlan,
 } from "./training/runner.js";
+export {
+  DEFAULT_MOVEMENT_ORDER,
+  DeterministicMarkovBackend,
+  MOVEMENT_END,
+  MOVEMENT_START,
+  buildMovementDataset,
+  buildMovementSequencesFromReplays,
+  buildMovementSequencesFromTrajectories,
+  loadMovementModel,
+  movementToken,
+  slugifyMovementSummary,
+} from "./training/movement-model.js";
+export type {
+  MovementCandidate,
+  MovementDataset,
+  MovementModelBackend,
+  MovementPrediction,
+  MovementRolloutOptions,
+  MovementSequence,
+  MovementStep,
+  MovementTrainingOptions,
+  SerializedMovementModel,
+  TrainedMovementModel,
+} from "./training/movement-model.js";
+export {
+  evaluateDatasetReplayFidelity,
+  evaluateNextActionAccuracy,
+  evaluateReplayFidelity,
+  generateSyntheticMovementDataset,
+  generateSyntheticMovementSequences,
+  partitionMovementDataset,
+  splitMovementDataset,
+} from "./training/movement-eval.js";
+export type {
+  MovementDatasetSplit,
+  NextActionAccuracy,
+  ReplayFidelity,
+  ReplayFidelityReport,
+  SyntheticMovementOptions,
+} from "./training/movement-eval.js";
 export type {
   ExportedMemoryReference,
   ExportedPromotedSkill,

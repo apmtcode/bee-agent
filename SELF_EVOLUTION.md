@@ -6,6 +6,79 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-01 (run 9) — 🎯 Movement-model subsystem (train + infer + generalize) + 2 real launch-script bugs fixed
+
+**Audited:** Standing objective #2 (local-movement learning). The training
+subsystem only *emitted* external launch scripts (mlx/axolotl) — there was **no
+in-process model backend**, so objective 2(c)/(d) ("post-train a local model to
+repeat movements and generalize to new-but-related ones") could not be exercised
+or tested in the cloud at all. Also re-ran the suite and found **3 pre-existing
+test files red** (server/app/operator-runtime) that run 8 recorded as 174/174 —
+they regressed once the suite actually executed on a machine with bash/python3.
+
+**Changed (additive):**
+- **New `src/training/movement-model.ts`** — the movement-model core:
+  - Token schema (`movementToken`, `slugifyMovementSummary`) + dataset builders
+    from reviewed trajectory spans and from exported replay manifests
+    (`buildMovementSequencesFromTrajectories/FromReplays`, `buildMovementDataset`).
+  - **Pluggable backend interface** `MovementModelBackend` + `TrainedMovementModel`
+    (predictNext / rollout / serialize) so the runner and eval are backend-agnostic
+    (the apple-silicon runner is the "real" backend; a real on-device model just
+    implements the same contract).
+  - **`DeterministicMarkovBackend`** — a fully deterministic, in-process back-off
+    Markov model: memorizes recorded movements (2c) and generalizes to unseen
+    prefixes via longest-suffix back-off to shared context (2d). No RNG, no OS/GPU.
+  - `serialize()`/`loadMovementModel()` for persistence round-trips.
+- **New `src/training/movement-eval.ts`** — generalization + fidelity eval harness:
+  deterministic train/test split (`splitMovementDataset`, `partitionMovementDataset`),
+  `evaluateNextActionAccuracy` (top-1/top-K + unseen-context rate),
+  `evaluateReplayFidelity`/`evaluateDatasetReplayFidelity`, and a **seeded
+  synthetic movement-stream generator** (`generateSyntheticMovementSequences`,
+  LCG — no `Math.random`) so the capture→dataset→train→replay pipeline is
+  validated in the cloud with zero real OS input.
+- Barrel exports for all of the above in `src/index.ts`.
+- **Two genuine pre-existing bugs fixed in `src/harness/background-tasks.ts`**
+  (found while triaging the red suite): (1) `shellQuote` used the malformed POSIX
+  escape `"'"'"'` instead of `'"'"'`, so any background-task command containing a
+  single quote produced **invalid JSON in the shell-written `state.json`**, which
+  then threw on recovery; (2) the launch-script `sed` pid substitution emitted
+  `s/"$$"/$$/g` (unescaped quotes broke the shell double-quote), so `pid` was
+  never substituted — replaced the `"$$"` sentinel with a quote-only
+  `"__OPENCLAW_PID__"` placeholder and fixed the sed escaping. The training runner
+  (`src/training/runner.ts`) carries the *same* latent sed bug — logged to ROADMAP.
+- Made `operator-runtime.test.ts`'s background-task test **hermetic** (inject a
+  no-op `backgroundTaskSpawnProcess` so it no longer spawns real detached bash
+  that races the test's own `writeState`).
+
+**Test results:** movement suite **16/16** green; new modules add **0** typecheck
+errors (full `tsc` steady at **125**, all in test files). Build ✅, `typecheck:src`
+✅. Full suite **190 tests → 189 pass / 1 fail** (was 3 files red at HEAD; the two
+launch-script fixes + hermetic mock cleared app.test.ts and operator-runtime.test.ts).
+
+**Remaining blocker (top priority next run):** `server.test.ts:719` — the giant
+"handles session… orchestration" integration test. Root-caused: it starts
+`remoteTask` = `sleep 5` (a real 5-second process) with a **global**
+`isProcessRunning: () => false`, so once the async bash writes the "running"
+state, `deriveRemoteDiagnostics` sees running-but-dead → `missing-process` →
+`degraded`, but the test expects `active` after `resume`. Line 657 only passes
+because bash hasn't written state yet — a timing race that "passed" on run 8's
+machine. A no-op spawn mock fixes 719 **but breaks 1101** (the platform-breaker
+section genuinely relies on the missing-process signal to trip a breaker). The
+correct fix is a *simulating* spawn fixture that writes deterministic state files
+(a "running" state whose pid a per-task liveness fn reports appropriately), not a
+global `() => false`. Non-trivial test restructuring — deferred, not hacked.
+
+**New idea:** wire the `DeterministicMarkovBackend` in as the default
+*cloud/CI* implementation of a shared `MovementModelBackend`, and have
+`LocalAppleSiliconTrainingRunner` implement the same interface — then a single
+`trainMovementModel(backend, dataset)` call site works identically in the cloud
+(mock) and on-device (mlx), and the generalization eval can gate a training job
+before it ever shells out. Bonus: emit the `evaluateNextActionAccuracy` /
+`evaluateDatasetReplayFidelity` report into the reviewed-export manifest as a
+pre-training quality signal.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
