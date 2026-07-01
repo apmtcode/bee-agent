@@ -6,6 +6,57 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-01 (run 9) — 🐛 Real bug: background-task launcher wrote invalid JSON; suite restored to green
+
+**Audited:** The test baseline — found **3 deterministic failures** at HEAD
+(`operator-runtime`, `control-plane/server`, `cli/app`) even though run 8 logged
+174/174. Root-caused rather than papered over.
+
+**Root cause (genuine production data-corruption bug) in
+`src/harness/background-tasks.ts`:** `renderLaunchScript` writes each background
+task's initial `state.json` from a bash launcher. Two defects:
+1. **`shellQuote` was wrong.** It escaped `'` as `"'"'"'` (a stray leading `"`)
+   instead of the POSIX idiom `'"'"'`. Every single-quote-containing value —
+   notably a `command` like `printf 'x'` — got an extra `"` injected, producing
+   **invalid JSON**. The completion writer's `python3 json.loads(...)` then threw
+   under `set -euo pipefail`, leaving the task stuck in a corrupt "running"
+   state. Downstream: `readJsonFile` crashed on recover (operator-runtime), and
+   "missing-process" diagnostics forced remotes to `degraded` instead of
+   `active` (server + app).
+2. **`printf | sed` `$$` substitution never fired.** The generated
+   `s/"$$"/$$/g` has an *unescaped* `$$` in the pattern, which bash expands to
+   the shell PID before sed runs — so `"pid":"$$"` was never replaced with the
+   real PID (stored as the string `"$$"`, breaking liveness probes).
+
+**Fix (additive, focused):**
+- Corrected `shellQuote` to the standard `'"'"'` escaping.
+- Replaced the fragile `printf | sed` with `printf '%s'` (writes the base JSON
+  verbatim, always valid) + a small `renderInitialStateWriterPython` that patches
+  `pid`/`startedAt`/`updatedAt` — reusing the same proven json-load-patch pattern
+  the completion writer already uses. Verified end-to-end: a command containing
+  both `'` and `"` now round-trips to valid `state.json` (correct pid, status,
+  command) with correct `output.log`.
+- **Hermetic tests (guardrail: simulate real-OS interactions).** The 3 tests
+  spawned *real detached* launcher processes that raced their own `writeState`
+  calls (the old corruption had merely masked this by killing the process early).
+  Added a `backgroundTaskSpawnProcess` test-seam to `OperatorCliApp`
+  (`src/cli/app.ts`, mirroring the existing `configHome` seam) and injected a
+  deterministic `noopSpawn` + tailored `isProcessRunning` probes into the three
+  tests so no real OS process is launched.
+
+**Test results:** **174/174** (was 171/174), **deterministic across 3 back-to-back
+runs**. `typecheck:src` ✅ exit 0. `build` ✅. Full `tsc` unchanged at **125**
+(all in test files; no new debt). 
+
+**New idea:** Add a tiny unit test for `shellQuote` (and a golden test for
+`renderLaunchScript` output → parse the emitted `state.json` payload as JSON) so
+launcher-quoting regressions are caught directly instead of surfacing three
+layers away as flaky integration failures. Longer term: a `verify` npm script
+(`typecheck:src && build && test`) the engine runs pre-push each cycle — this run
+would have caught the red baseline immediately.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

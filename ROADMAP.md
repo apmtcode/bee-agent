@@ -3,6 +3,19 @@
 Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
+## Reliability
+- [x] **Fix background-task launcher JSON corruption** (2026-07-01, run 9).
+      `shellQuote` used non-POSIX `'` escaping (`"'"'"'`) and the `printf | sed`
+      pid substitution's `$$` was shell-expanded — together they wrote invalid
+      `state.json` for any single-quoted command, crashing recovery and forcing
+      remotes to `degraded`. Corrected the escaping, replaced sed with a
+      json-load-patch Python writer, and made the 3 affected tests hermetic via a
+      new `backgroundTaskSpawnProcess` seam on `OperatorCliApp`. Suite 171→174,
+      deterministic.
+- [ ] Add a `shellQuote` unit test + a golden `renderLaunchScript` test that
+      parses the emitted `state.json` payload as JSON, so launcher-quoting
+      regressions are caught at the unit level, not as flaky integration failures.
+
 ## Foundations / DX
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.

@@ -15,6 +15,16 @@ async function makeTempDir(): Promise<string> {
   return dir;
 }
 
+// Deterministic stand-in for the real detached process launcher: tests drive
+// background-task state explicitly via `writeState`, so spawning a real OS
+// process only races with those writes (and its own async state.json). This
+// returns a stable pid and does nothing, keeping the suite hermetic in CI.
+let fakeSpawnPid = 100_000;
+function noopSpawn(): { pid: number; unref(): void } {
+  fakeSpawnPid += 1;
+  return { pid: fakeSpawnPid, unref() {} };
+}
+
 function buildHookCaptureCommand(outputFile: string): string {
   const script = [
     "import fs from 'node:fs';",
@@ -530,6 +540,7 @@ describe("StandaloneOperatorRuntime", () => {
   it("starts, syncs, recovers, lists, and cancels background tasks", async () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
+      backgroundTaskSpawnProcess: noopSpawn,
       backgroundTaskIsProcessRunning: () => false,
     });
     const session = await runtime.startSession({ title: "Tasks", agentId: "main" });
