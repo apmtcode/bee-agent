@@ -1,4 +1,5 @@
-import { execFile } from "node:child_process";
+import { execFile, spawnSync } from "node:child_process";
+import { readFileSync, writeFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -801,7 +802,16 @@ describe("OperatorCliApp", () => {
 
   it("supports session lifecycle, transcript, approvals, pairing, config, and prompt commands", async () => {
     const rootDir = await makeTempDir();
-    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    const app = new OperatorCliApp({
+      rootDir,
+      cwd: rootDir,
+      currentDate: "2026-05-25",
+      // No-op spawn: this test starts background tasks and asserts remote control
+      // stays active. A real detached launch script would asynchronously write the
+      // task's state.json and race those reads, flipping control to
+      // degraded:background-task-missing-process depending on OS scheduling.
+      backgroundTaskSpawnProcess: () => ({ pid: 999_999, unref() {} }),
+    });
     const firstSession = await app.runtime.startSession({ title: "first", cwd: rootDir, agentId: "operator-cli" });
     const secondSession = await app.runtime.startSession({ title: "second", cwd: rootDir, agentId: "operator-cli" });
 
@@ -1063,7 +1073,39 @@ describe("OperatorCliApp", () => {
 
   it("supports background and monitor task commands plus cron commands", async () => {
     const rootDir = await makeTempDir();
-    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    const app = new OperatorCliApp({
+      rootDir,
+      cwd: rootDir,
+      currentDate: "2026-05-25",
+      // Run the launch script synchronously so its real output ("ok" /
+      // "monitor-ok") is produced before the test proceeds, then rewrite the
+      // state back to "running". This deterministically reproduces the condition
+      // this test needs — a live task that has already emitted output — which the
+      // default detached spawn only achieves by luck (the process must not finish
+      // before the test's `background-sync` call, a race that is flaky under
+      // parallel-suite load). Paired with isProcessRunning:true so reconciliation
+      // keeps the task running.
+      backgroundTaskSpawnProcess: (command, args, options) => {
+        const result = spawnSync(command, args, {
+          cwd: options.cwd,
+          env: options.env,
+          stdio: "ignore",
+        });
+        const stateFile = path.join(path.dirname(command), "state.json");
+        try {
+          const state = JSON.parse(readFileSync(stateFile, "utf8"));
+          state.status = "running";
+          delete state.completedAt;
+          delete state.exitCode;
+          delete state.error;
+          writeFileSync(stateFile, `${JSON.stringify(state, null, 2)}\n`);
+        } catch {
+          // First-write may not have landed; the record already reads "running".
+        }
+        return { pid: result.pid ?? 999_999, unref() {} };
+      },
+      backgroundTaskIsProcessRunning: () => true,
+    });
     const session = await app.runtime.startSession({ title: "CLI ops", cwd: rootDir, agentId: "operator-cli" });
 
     const startOutput = await app.dispatchSlashCommand(

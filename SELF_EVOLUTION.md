@@ -6,6 +6,67 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-01 (run 9) — 🟢 Atomic background-task state writes + hermetic spawn: flaky suite → deterministic green
+
+**Audited:** The actual `npm test` result in a **fresh cloud container** (not the
+number a prior run recorded on its own machine). Found the suite was **flaky**:
+2–3 failures per run, and *which* tests failed varied run-to-run
+(`operator-runtime`, `server`, `app` — different assertions each time). This is a
+silent blocker: the engine's push gate (step 5, "don't push if tests fail")
+would misfire every cycle, and future runs couldn't trust `npm test`.
+
+**Root cause (two coupled bugs):**
+1. **Non-atomic state writes (product bug).** The background-task *and* training
+   launch scripts wrote `state.json` via shell `>` redirect (`printf|sed > file`,
+   which truncates-then-writes) and Python `write_text`. A concurrent reader —
+   `readJsonFile`, which **re-throws** `SyntaxError` on a partial parse and
+   returns `undefined` on an empty read — saw a truncated file → `SyntaxError`
+   (crash) or an empty file → `undefined` pid → `"is not running"`. Real risk on
+   real machines, not just tests.
+2. **Non-hermetic tests.** Several integration tests spawned **real detached OS
+   processes** (`sleep 5`, `printf`, `tail -f`) and depended on their lifecycle:
+   whether the detached script had written `state.json` yet, and whether the pid
+   was still alive. In a sandboxed container (fast FS, different scheduling,
+   detached procs reaped) the timing flips → `control` toggles active⇄degraded,
+   `missing-process`, etc.
+
+**Changed (additive, reversible):**
+- **`src/harness/background-tasks.ts` + `src/training/runner.ts`:** launch scripts
+  now write state **atomically** — shell writes to `state.json.tmp` then
+  `mv`s it into place; the Python completion writer writes a `.tmp` then
+  `Path.replace()`s it. `rename`/`replace` are atomic on POSIX, so a concurrent
+  reader always sees a *complete* old-or-new file, never a truncated/empty one.
+  This fixes the crash class in **production**, not only tests.
+- **`src/cli/app.ts`:** threaded `backgroundTaskSpawnProcess` /
+  `backgroundTaskIsProcessRunning` through `OperatorCliAppOptions` into the
+  runtime (defaults unchanged → production still uses real `spawn` + pid check),
+  giving tests a hermeticity seam that mirrors the existing runtime options.
+- **Tests made hermetic** (no product-behaviour change):
+  - `operator-runtime.test.ts`, `server.test.ts` (main + drifting + breaker
+    runtimes), and the `app.test.ts` remote-control test now inject a **no-op
+    spawn** so no real process writes `state.json` — control state is driven
+    solely by the tests' explicit `writeState` calls (deterministic
+    active/degraded/mixed).
+  - The `app.test.ts` background+monitor lifecycle test (which genuinely asserts
+    on *real* command output) injects a **synchronous** spawn that runs the
+    launch script to completion, then rewrites the state back to `running`
+    (+`isProcessRunning:true`) — deterministically reproducing the "live task
+    that has already emitted output" condition the test previously got only by
+    race luck.
+  - `runner.test.ts`: updated the launch-script assertion to expect the atomic
+    `> …tmp && mv …` form.
+
+**Test results:** `npm test` **174/174, stable across 5 consecutive full-suite
+runs** (was 2–3 flaky failures). `typecheck:src` ✅ clean. Build ✅. Full `tsc`
+unchanged at **125** (all pre-existing test-file debt; untouched this run).
+
+**New idea:** add a `test:repeat` script (`vitest run --retry=0` looped, or a
+tiny wrapper running the suite N times) and have the engine run it as part of the
+pre-push self-check, so **flaky** regressions (not just hard failures) are caught
+before they silently poison the push gate. Longer term: a lint that flags any
+test constructing a runtime/app that can `startBackgroundTask` without injecting
+a spawn stub — real-process spawning in unit tests should be opt-in, not default.
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

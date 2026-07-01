@@ -8,6 +8,17 @@ unchecked items are queued. Keep this richer than you found it each run.
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`
       (2026-06-22).
+- [x] **Atomic background-task/training state writes + hermetic spawn** (run 9,
+      2026-07-01). Launch scripts now write `state.json` via temp-file + `mv` /
+      `Path.replace()` (POSIX-atomic) so concurrent readers never see a
+      truncated/empty file (fixes a real crash class). Threaded
+      `backgroundTaskSpawnProcess`/`backgroundTaskIsProcessRunning` through
+      `OperatorCliApp`; the four tests that spawned real OS processes now inject
+      spawn stubs. Suite: flaky 2–3 failures → **174/174 stable ×5**.
+- [ ] **Flaky-test guard:** add a `test:repeat` wrapper (run the suite N times)
+      to the engine's pre-push self-check so flaky regressions — not just hard
+      failures — are caught before they poison the push gate. Consider a lint
+      flagging tests that can `startBackgroundTask` without a spawn stub.
 - [ ] **Pay down typecheck debt** (surfaced by the `typecheck` script). Full
       `tsc --noEmit` count was **397** on 2026-06-22; now **125**. 🎯 ALL source
       (`src/**` non-test) files typecheck clean since run 7; remaining 125 errors

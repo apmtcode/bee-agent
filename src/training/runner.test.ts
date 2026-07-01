@@ -113,7 +113,9 @@ describe("LocalAppleSiliconTrainingRunner", () => {
       replayEvalPath: `training-jobs/${job.id}/replay-eval.json`,
     });
     await expect(runner.readLaunchScript({ ...job, execution })).resolves.toEqual(
-      expect.stringContaining(`> '${execution.stateFile}'`),
+      // State is written atomically (temp file + mv) so concurrent readers never
+      // observe a truncated/empty state.json.
+      expect.stringContaining(`> '${execution.stateFile}.tmp' && mv '${execution.stateFile}.tmp' '${execution.stateFile}'`),
     );
     await expect(runner.readLaunchScript({ ...job, execution })).resolves.toContain("mlx_lm.lora");
     await expect(fs.readFile(path.join(rootDir, execution.datasetDir, "manifest.json"), "utf8")).resolves.toContain(
