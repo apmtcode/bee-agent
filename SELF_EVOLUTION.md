@@ -6,6 +6,67 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-01 (run 9) — 🎯 Pluggable local-model backend (movement learning) + 2 real launch-script bugs fixed; suite 174→185, de-flaked
+
+**Audited:** Standing objective #2 (movement subsystem). `src/training` only built
+*external* mlx/axolotl launch artifacts — there was **no in-process, backend-agnostic
+model** that could actually learn from a reviewed movement dataset and reproduce or
+generalize the movements, so the "post-train a local model to repeat & generalize
+movements" objective was untestable in the cloud. This was the top movement-subsystem
+roadmap item.
+
+**Changed (feature) — `src/training/model-backend.ts` (new, + 11 tests):**
+- `LocalModelBackend` / `TrainedMovementModel` interfaces — the pluggable seam a real
+  on-device small model can implement later.
+- `MarkovMovementBackend`: a **deterministic** order-N Markov model with stupid-backoff
+  and START/END padding. Genuinely learns token transitions from the dataset (repeat)
+  and rolls new sequences forward from novel-but-related seeds (generalize). No I/O, no
+  RNG → identical dataset+config always yields an identical model (cloud/CI reproducible).
+- `tokenizeMovementEvent(s)` + `buildMovementDataset()` — turn `ReplayTimelineEvent` /
+  exported-replay-manifest events into compact tokens (`action:focus-window`,
+  `observation:screen`, `transcript:assistant`) and a vocabulary.
+- `serialize()` / `loadMovementModel()` — JSON-safe round-trip so a trained model is a
+  portable artifact.
+- `evaluateNextTokenAccuracy()` — a generalization eval (top-1 next-token accuracy on
+  held-out sequences), seeding the roadmap's "generalization eval harness" item.
+  Exported the whole surface via `src/index.ts`.
+
+**Changed (reliability — 2 real bugs found while greening the suite):**
+- `src/harness/background-tasks.ts` `shellQuote`: the single-quote escape was
+  `"'"'"'` (an extra leading `"`) instead of the canonical `'"'"'` — so any task whose
+  **command contained a single quote** (e.g. `printf 'line-1\nline-2\n'`) produced a
+  broken launch script that wrote **corrupt JSON** to `state.json`, deterministically
+  crashing recovery with `SyntaxError: Expected ',' or '}'`. Fixed to match `runner.ts`.
+- Same file: the initial "running" state was written via `printf | sed`, but the sed
+  `s/"$$"/$$/g` rendered an **unescaped `"`** into the generated `.sh`, breaking bash
+  quoting so `$$` was never substituted → `pid` stayed the literal string `"$$"`.
+  Replaced the fragile sed with a `python3` writer (already a dependency for the
+  completed/failed writers) that injects `pid`/`startedAt`/`updatedAt` cleanly; removed
+  the now-dead payload placeholders.
+- **Test flakiness eliminated:** the three big integration tests spawned the **real**
+  launch script, which raced with their explicit `writeState` (my python writer widened
+  the window and exposed it). Mirrored the established fake-spawn pattern from
+  `background-tasks.test.ts` — added an injectable `backgroundTaskSpawnProcess` seam to
+  `OperatorCliApp` and injected a fake spawn at all five affected runtime/app
+  constructions (`runtime`, `driftingRuntime`, `breakerRuntime` in server.test; the bg
+  test in operator-runtime.test; the lifecycle test in app.test).
+
+**Test results:** typecheck:src ✅ (exit 0). Build ✅. Tests ✅ **185/185**, and
+**stable across 8 consecutive full runs** (was 3 files flaky-failing before this run).
++11 new tests; +11 net passing.
+
+**New idea:** `runner.ts` (training launch script) carries the *same* latent
+`sed`-based `$$` substitution bug, but it's never executed in tests (its test only
+asserts on the rendered string via `readLaunchScript`), so it silently ships broken pids
+when a user actually trains on Apple Silicon. Add an **execution-level regression test**
+that renders a launch script for a task with a single-quoted command, runs it through
+real `bash` once (fast command, awaited to completion), and asserts `state.json` parses
+with a numeric `pid` — locking in both fixes and catching the runner's twin. Logged to
+ROADMAP. Bigger idea: a shared `writeStateScript()` helper used by both
+background-tasks and runner so the quoting/state-writing logic can't diverge again.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

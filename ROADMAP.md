@@ -62,13 +62,41 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      for a real on-device small model. — DONE run 9 (`src/training/model-backend.ts`:
+      `LocalModelBackend`/`TrainedMovementModel` seam + deterministic
+      `MarkovMovementBackend`; tokenizer, `buildMovementDataset`,
+      serialize/`loadMovementModel` round-trip; 11 tests).
+- [~] Synthetic event-stream generator to validate capture→dataset→replay
+      round-trips without real OS input. Partial: model-backend tests build
+      synthetic replays inline; extract a reusable generator (parameterized by
+      app/tool/observation vocab + flow templates) and reuse across capture +
+      training tests.
+- [~] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories. Partial: `evaluateNextTokenAccuracy()` lands
+      top-1 next-token accuracy on held-out sequences (run 9). Extend with
+      sequence-level fidelity (edit distance / longest-common-subsequence) and a
+      train/held-out split helper.
+- [ ] Wire the model backend into the training pipeline: a `LocalTrainingExecutionService`
+      path that trains a `MarkovMovementBackend` from a `ReviewedExportManifest`'s
+      replays and persists the serialized model as a job artifact (in-process, no
+      external mlx/axolotl), so the full capture→export→train→infer loop is testable
+      end-to-end in the cloud.
+
+## Reliability / correctness
+- [x] Fix `background-tasks.ts` `shellQuote` single-quote escape + replace the
+      fragile `printf|sed` state writer with a `python3` writer (run 9). Two real
+      bugs: corrupt state JSON for single-quoted commands, and `pid` never
+      substituted (stayed `"$$"`).
+- [x] De-flake the three subprocess-spawning integration tests by injecting a
+      fake `backgroundTaskSpawnProcess` (run 9; added the seam to `OperatorCliApp`).
+- [ ] `runner.ts` (training launch script) has the SAME latent sed-based `$$`
+      substitution bug but is never executed in tests. Add an execution-level
+      regression test (render → run through real `bash` with a single-quoted
+      command → assert `state.json` parses with a numeric `pid`) and apply the
+      same python-writer fix. Consider a shared `writeStateScript()` helper used
+      by both background-tasks and runner so the quoting logic can't diverge.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

@@ -531,6 +531,9 @@ describe("StandaloneOperatorRuntime", () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
       backgroundTaskIsProcessRunning: () => false,
+      // Inject a fake spawn so no real launch script runs and races with the
+      // explicit writeState calls below (see background-tasks.test.ts).
+      backgroundTaskSpawnProcess: () => ({ pid: 987654, unref() {} }),
     });
     const session = await runtime.startSession({ title: "Tasks", agentId: "main" });
 
