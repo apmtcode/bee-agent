@@ -59,16 +59,38 @@ unchecked items are queued. Keep this richer than you found it each run.
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
 (exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
-      objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
-      deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+- [x] Inventory what `src/capture` + `src/training` already implement vs. the
+      objective's five pieces (2026-07-01, run 9). Pieces 1–4 (capture, schema,
+      dataset, replay) exist; **piece 5 (train/infer) was missing** — the runner
+      only emitted mlx/axolotl launch scripts, never learned/predicted.
+- [x] Pluggable local-model backend interface (`MovementModelBackend`) with a
+      deterministic mock backend (`MarkovMovementBackend`: order-k + smoothing +
+      stupid-backoff) — DONE run 9 (`src/training/movement-model.ts`). Documented
+      seam for a real on-device small model (mlx/gguf) implementing the same shape.
+- [x] Synthetic event-stream generator (`createSyntheticMovementDataset`,
+      seeded LCG, grammar random-walk) to validate capture→dataset→train→infer
+      without real OS input — DONE run 9.
+- [x] Generalization eval harness (`evaluateMovementModel`: top-1 teacher-forced
+      accuracy + perplexity on held-out sequences) — DONE run 9. Proven to beat an
+      untrained baseline on held-out grammar sequences.
+- [ ] **Closed-loop replay-fidelity metric:** feed `generateMovementSequence`
+      output back through `replay-service` and score order+tool reconstruction of
+      the recorded timeline — an end-to-end capture→train→replay regression signal.
+- [ ] Wire the movement-model backend into the training runner/execution service
+      so a reviewed export can be "trained" (mock) and its eval report persisted
+      alongside the job manifest, mirroring the real on-device flow.
+- [ ] Richer tokenization: include action payload (coords/keys) beyond the tool
+      name so the model can reproduce *parameterized* movements, not just types.
+
+## Test hermeticity / reliability
+- [ ] **Make background-task execution tests hermetic** (found run 9). The
+      `operator-runtime`/`server`/`app` tests that exercise `startBackgroundTask`
+      shell out to a real bash+python+sed toolchain; `renderLaunchScript`
+      substitutes the shell PID `$$` into the state JSON. In sandboxes where that
+      substitution doesn't resolve, the state file is malformed and
+      `readJsonFile` throws `SyntaxError`, failing 3 tests (pre-existing, not a
+      logic regression). Mock the launcher + state I/O (inject `LaunchProcess` /
+      `writeState`) so these tests don't depend on live process/shell semantics.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

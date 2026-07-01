@@ -6,6 +6,67 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-01 (run 9) — 🧠 Movement-model backend: the train→infer loop, closed in the cloud
+
+**Audited:** The local-movement learning subsystem (standing objective #2) vs.
+its five required pieces (capture → schema → dataset → replay → **train/infer**).
+Pieces 1–4 exist in `src/capture/` + `src/training/` (recorder, replay,
+trajectory, exporter, job manifest/runner). **Piece 5 was entirely missing in the
+cloud:** `src/training/runner.ts` only emits shell scripts that launch real
+on-device training (mlx/axolotl). Nothing ever *learned* from a movement dataset
+or *predicted* new movements, so objective 2(c) "post-train a local model to
+repeat recorded movements" and 2(d) "generalize to related movements" were
+unvalidated — there is no GPU or real OS input in the cloud.
+
+**Changed (additive) — new `src/training/movement-model.ts` (+ barrel exports):**
+a pluggable movement-model backend that closes the train→infer loop with a
+deterministic, dependency-free reference implementation.
+- **`MovementModelBackend` interface** — the pluggable seam; a real on-device
+  small model (mlx/gguf) can implement the same shape later.
+- **`MarkovMovementBackend`** — order-k Markov model with Laplace smoothing and
+  **stupid-backoff** (order → unigram → uniform). Fully deterministic (argmax +
+  stable tie-breaks), so it is cloud/CI safe.
+- **Tokenization** — `tokenizeMovement` + dataset builders from trajectories
+  (`buildMovementDatasetFromTrajectories`) and replay manifests
+  (`buildMovementDatasetFromReplays`), keeping token→action exemplars so a
+  prediction maps back to a **replayable** action (`detokenizeMovements`).
+- **Inference** — `predictNextMovement` (ranked candidates w/ backoff level) and
+  `generateMovementSequence` (greedy rollout): with a seen prefix it *reproduces*
+  recorded movements; from novel contexts it *generalizes* via backoff.
+- **Generalization eval harness** — `evaluateMovementModel` reports top-1
+  teacher-forced accuracy + perplexity on held-out sequences.
+- **Synthetic event-stream generator** — `createSyntheticMovementDataset`
+  random-walks a movement grammar via a seeded LCG (no `Math.random`/`Date`), so
+  the whole pipeline is validated without real OS input. This single increment
+  clears **three** roadmap items (pluggable backend, synthetic generator,
+  generalization eval).
+
+**Test results:** new `movement-model.test.ts` **13/13 ✅** (incl. a
+generalization test proving a grammar-trained model beats an untrained baseline
+on *held-out* sequences — 0.5+ top-1 accuracy, lower perplexity — i.e.
+generalization, not memorization). `npm run build` ✅. `npm run typecheck:src` ✅
+(source stays 100% green). Full suite **184/187** — the 3 failures are
+**pre-existing and unrelated** (confirmed via `git stash`: they fail identically
+on the clean baseline).
+
+**Pre-existing failure — root-caused (new ROADMAP item):** `app.test.ts` (2),
+`server.test.ts` (1), `operator-runtime.test.ts` (1) fail with
+`SyntaxError: … JSON` at an unresolved literal `$$`. These tests shell out to a
+**real bash + python + sed toolchain** (`renderLaunchScript` substitutes the
+shell PID `$$` into the state file). This sandbox's process/shell semantics
+differ from run 8's environment, so the substitution doesn't resolve and the
+state JSON is malformed. Not a logic regression — a **non-hermetic test**
+finding: the background-task execution tests should mock the launcher/state I/O
+instead of depending on a live shell toolchain.
+
+**New idea:** add a **closed-loop replay-fidelity metric** — after
+`generateMovementSequence`, run the tokens back through the existing
+`replay-service` and score how faithfully the model's rollout reconstructs the
+recorded action timeline (order + tool match), turning the eval harness into an
+end-to-end capture→train→replay regression signal, not just next-token accuracy.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
