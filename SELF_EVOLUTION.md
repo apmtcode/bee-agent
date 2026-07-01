@@ -6,6 +6,75 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-01 (run 9) — 🧠 In-process movement model (train→repeat→generalize) + corrupt-state recovery hardening
+
+**Audited:** Standing objective #2 (local-movement learning) end-to-end. The
+capture→schema→dataset→replay layers exist (`src/capture/`), and `src/training/`
+generates **external** mlx/axolotl launch plans — but there was **no in-process,
+testable model** that actually *learns from a movement dataset and predicts /
+generalizes movements*. Pieces (c) "post-train to repeat" and (d) "generalize to
+new-but-related movements" had zero runnable code and zero cloud-testable
+coverage. This was the highest-value gap (also the roadmap's "pluggable
+local-model backend with a deterministic mock backend").
+
+**Changed (additive):**
+- **New `src/training/movement-model.ts`** — the missing model layer behind a
+  `MovementModelBackend` seam (so a real on-device small model can slot in
+  later):
+  - `MarkovMovementBackend`: a deterministic n-gram sequence model with
+    stupid-backoff. **Repeat:** exact-context match reproduces the recorded
+    continuation, so replay is faithful. **Generalize:** unseen contexts back
+    off to shorter contexts (down to the unigram prior), so novel-but-related
+    prefixes still yield a plausible next movement. Fully deterministic ⇒
+    cloud/CI-testable. Serializable snapshot (`snapshot()`/`load()`) for
+    persistence.
+  - `movementTokenFromAction` / `movementSequencesFromTrajectories`: turn
+    recorded `TrajectoryAction`s into canonical movement tokens (prefers the
+    structured gesture/target/direction metadata the device+browser adapters
+    emit; slugified-summary fallback).
+  - `evaluateNextTokenAccuracy`: generalization eval harness — top-1 next-token
+    accuracy on held-out sequences, reporting how much accuracy came from
+    backoff (i.e. generalization) vs exact recall.
+  - `generateSyntheticMovementSequences`: deterministic (seeded `mulberry32`, no
+    `Math.random`) synthetic movement-stream generator with a learnable motif —
+    validates the whole train→predict→generalize pipeline without any real OS
+    input.
+  - Barrel exports added to `src/index.ts`.
+- **Reliability fix in `src/harness/background-tasks.ts`:** while validating the
+  full suite I found a genuine pre-existing crash — `recoverBackgroundTasks`
+  threw a `SyntaxError` and aborted the *entire recovery batch* when any one
+  task's state file was partially written (a process that crashed mid-write
+  leaves truncated JSON). Hardened `BackgroundTaskExecutionService.readState` to
+  treat unparseable state as "no readable state" (returns `undefined`), so
+  recovery degrades to the missing-state path instead of crashing. Added a
+  focused regression test.
+
+**Test results:** **17 new tests, all green** (16 movement-model + 1
+corrupt-state recovery). `typecheck:src` ✅ clean. Build ✅ (545.85 kB). Full
+suite **188 passing**. The **3 remaining failures are PRE-EXISTING and unrelated
+to this diff** — proven by re-running the clean HEAD (`git stash`), which shows
+the identical failures (`control=active`, an RPC result-shape mismatch, and a
+background-task listing race). They stem from those three integration tests
+spawning **real** child processes whose launch-script `sed` pid-substitution +
+async state writes race with the tests' manual `writeState` (e.g. a recovered
+task shows `processId: "$$"` un-substituted). My `readState` hardening actually
+*reduced* the pre-existing failure count from 4→3. This is an environment/timing
+issue in the real-spawn path, not a regression I introduced; logged to ROADMAP
+rather than chased (rewriting the OS-spawn shell path is out of a focused hour's
+scope and risky).
+
+**New idea:** a **movement policy service** that wraps a `TrainedMovementModel`
+behind the replay engine — given a live/simulated context prefix it proposes the
+next movement, and the replay engine either executes it (repeat mode) or scores
+it against ground truth (shadow/eval mode). Combined with the synthetic
+generator this gives a closed train→infer→replay→eval loop entirely in-process,
+and is the natural home for a confidence threshold that decides
+repeat-vs-defer-to-operator. Longer term: make the integration tests that spawn
+real processes injectable with a mock spawner (as the unit tests already do) so
+CI is deterministic.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

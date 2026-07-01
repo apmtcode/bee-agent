@@ -59,16 +59,44 @@ unchecked items are queued. Keep this richer than you found it each run.
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
 (exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
-      objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Inventory what `src/capture` + `src/training` already implement vs. the
+      objective's five pieces (2026-07-01, run 9): capture (recorder + device/
+      browser/os adapters + consent), schema (`trajectory.ts`), dataset
+      (exporter/manifest), replay (`replay.ts`/`replay-service.ts`) all exist;
+      the train/infer piece only generated **external** mlx/axolotl launch plans
+      — no in-process learnable/predicting model. Run 9 filled that gap.
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      for a real on-device small model — DONE run 9 (`src/training/movement-model.ts`:
+      `MovementModelBackend` interface + `MarkovMovementBackend` n-gram/backoff
+      reference backend, snapshot persistence, tokenizer from trajectory actions).
+- [x] Synthetic event-stream generator to validate capture→dataset→replay
+      round-trips without real OS input — DONE run 9
+      (`generateSyntheticMovementSequences`, deterministic seeded, no Math.random).
+- [x] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories — DONE run 9 (`evaluateNextTokenAccuracy`
+      reports top-1 accuracy + backoff/generalization share).
+- [ ] **Movement policy service** wrapping a `TrainedMovementModel` behind the
+      replay engine: propose next movement from a live/simulated context prefix,
+      execute (repeat) or score (shadow/eval), with a confidence threshold that
+      decides repeat-vs-defer-to-operator. Closes an in-process
+      train→infer→replay→eval loop.
+- [ ] Wire the movement model into the training runner/execution-service so a
+      reviewed export can be trained with the in-process backend as a fallback
+      when no on-device runtime (mlx/axolotl) is available.
+
+## Reliability / test determinism
+- [x] Harden `BackgroundTaskExecutionService.readState` against corrupt/partial
+      state files (crash-mid-write) so recovery degrades gracefully instead of
+      aborting the batch with a `SyntaxError` — DONE run 9 (+regression test).
+- [ ] **Make the real-subprocess integration tests deterministic.** `app.test.ts`,
+      `server.test.ts`, and `operator-runtime.test.ts` spawn **real** child
+      processes; their launch-script `sed` pid-substitution + async state writes
+      race with the tests' manual `writeState` (a recovered task can show
+      `processId: "$$"` un-substituted), producing 3 pre-existing, environment/
+      timing-dependent failures. Inject a mock spawner (as the unit tests already
+      do) so these are deterministic in CI/cloud. This is the last thing between
+      the suite and a true all-green gate.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

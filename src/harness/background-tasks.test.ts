@@ -370,4 +370,31 @@ describe("BackgroundTaskExecutionService", () => {
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
   });
+
+  it("treats a partially-written (corrupt) state file as unreadable instead of throwing", async () => {
+    const rootDir = await makeTempDir();
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"), () => ({ pid: 2222, unref() {} }));
+    const task = await store.start({
+      sessionId: "sess-corrupt",
+      title: "Watch logs",
+      command: "tail -f app.log",
+      cwd: rootDir,
+      kind: "monitor",
+    });
+
+    // Simulate a process that crashed mid-write: truncated JSON on disk.
+    const statePath = path.join(rootDir, task.execution.stateFile);
+    await fs.mkdir(path.dirname(statePath), { recursive: true });
+    await fs.writeFile(statePath, '{ "version": 1, "taskId": "', "utf8");
+
+    // readState must not throw on corrupt JSON — it degrades to undefined.
+    await expect(store.executionService.readState(task)).resolves.toBeUndefined();
+
+    // Recovery must therefore complete (via the missing-state path) rather than
+    // aborting the whole batch with a SyntaxError.
+    const recovered = await store.recoverBySession("sess-corrupt");
+    expect(recovered).toEqual([
+      expect.objectContaining({ task: expect.objectContaining({ id: task.id, status: "failed" }) }),
+    ]);
+  });
 });
