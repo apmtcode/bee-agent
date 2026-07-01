@@ -59,16 +59,39 @@ unchecked items are queued. Keep this richer than you found it each run.
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
 (exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
-      objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
-      deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
+- [x] Inventory what `src/capture` + `src/training` already implement vs. the
+      objective's five pieces (2026-07-01, run 9): (a) capture + (b) schema/dataset
+      + replay live in `src/capture`; export→job-manifest→runner in `src/training`,
+      but the runner only emitted an mlx/axolotl shell command — no runnable
+      train/infer. That gap is what run 9 filled.
+- [x] Pluggable local-model backend interface for the training runner with a
+      deterministic backend (so cloud/CI tests pass) and a documented seam for a
+      real on-device small model — DONE run 9 (`src/training/movement-model.ts`:
+      `MovementModelBackend`/`MovementModel` seam + deterministic back-off n-gram
+      `NgramMovementBackend`, serializable to a `MovementModelSnapshot` artifact).
+- [x] Generalization eval harness: measure prediction fidelity on held-out but
+      related synthetic sequences — DONE run 9 (`evaluateMovementModel` scores
+      kind-match/exact-match + a back-off `generalized*` breakdown).
 - [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      round-trips without real OS input (run 9's tests hand-build synthetic
+      sequences; generalize this into a reusable generator with parameterised
+      grammars / noise).
+- [ ] **Movement-model registry** (parallel `subagent-registry.ts`): name/select
+      backends at runtime (`ngram-backoff` now; `mlx-small`, transformer later) via
+      a config field.
+- [ ] **`completeMovement(prefix, k)` API**: emit the k most likely next movements
+      as a replayable `ReplayTimelineEvent[]`, closing capture→train→replay-the-
+      prediction (feed model output back through the replay engine).
+
+## Known defects (discovered, not yet fixed)
+- [ ] **Flaky platform-control tests** (found run 9): at plain HEAD the full suite
+      shows 2–4 failures whose count varies run-to-run — `server.test.ts`
+      "orchestration methods" and `app.test.ts` assert platform control
+      `state: "active"` but intermittently get `"degraded"`. Root cause is
+      wall-clock/breaker threshold sensitivity. Fix by threading an injectable
+      `now()` clock into the platform-breaker store (same pattern as the
+      `configHome` isolation fix) so state is deterministic in tests. Unblocks a
+      real green `verify` gate.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

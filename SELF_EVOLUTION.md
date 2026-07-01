@@ -6,6 +6,68 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-01 (run 9) — Movement-model backend: real train + infer + generalize (objective #2 c/d)
+
+**Audited:** The local-movement learning subsystem (standing objective #2).
+`src/capture/` covers (a) capture + (b) dataset/schema + (c-partial) replay, and
+`src/training/` had exporter → job-manifest → `runner.ts`. But `runner.ts` only
+*emits a shell command* to launch `mlx_lm.lora`/`axolotl` on the user's Apple
+Silicon machine — there was **no pluggable model-backend seam and nothing that
+actually trains a model or does inference/generalization**. So objective #2 parts
+(c) "post-train a local model to repeat the recorded movements" and (d)
+"generalize to new but related movements" had zero runnable, cloud-testable
+implementation. This was the highest-value gap (the roadmap queued exactly it).
+
+**Changed (additive, new module `src/training/movement-model.ts`):**
+- **Schema/dataset:** `MovementStep` (ts, type `observation|action`, `channel`,
+  summary), `MovementSequence`, `MovementDataset` — the atomic units a movement
+  model learns over. Distillers `movementSequenceFromTrajectory` /
+  `movementSequenceFromReplay` and dataset builders
+  `movementDatasetFromTrajectories` / `movementDatasetFromReplays` bridge the
+  existing capture/replay types into the training format (drops empty sequences;
+  time-orders observations+actions; ignores transcript events).
+- **Pluggable backend seam:** `MovementModelBackend` (`train(dataset, opts) →
+  MovementModel`) + `MovementModel` (`predictNext(context) → MovementPrediction`,
+  `serialize()`). This is the documented seam where a real on-device small model
+  drops in; the runner's mlx/axolotl launch stays the production path.
+- **Reference backend `NgramMovementBackend` / `NgramMovementModel`:** a
+  deterministic (no clock/no randomness) back-off n-gram over movement *channels*.
+  It **recalls** recorded sequences exactly (repeat the movement) and
+  **generalizes** two ways: (1) suffix back-off — an unseen full-order token
+  context resolves via a shorter matching suffix; (2) channel abstraction — token
+  keys ignore the concrete summary, so a flow over a brand-new app still predicts
+  the right next movement. Serializable to/from a `MovementModelSnapshot` artifact
+  (`restore()`), so a trained model round-trips to disk.
+- **Generalization eval harness:** `evaluateMovementModel(model, heldOut)` replays
+  held-out sequences step-by-step and scores next-movement accuracy (kind match =
+  generalization; exact match = recall) plus a `generalized*` breakdown of how
+  often back-off fired and stayed correct.
+- Exported the surface from `src/index.ts`.
+
+**Test results:** new `movement-model.test.ts` — **10/10, stable across repeated
+runs** (recall, base-rate fallback, cross-app back-off generalization, held-out
+eval accuracy ≥0.75, determinism, snapshot round-trip, distillation). Source
+typecheck (`npm run typecheck:src`) ✅ clean. Build (`npm run build`) ✅.
+- **Pre-existing failures (NOT caused by this change):** the full suite shows
+  2–4 failures whose count *varies run-to-run* at plain HEAD with my code removed
+  (true-HEAD baseline this run: 3 failed / 171 passed). Root cause is
+  time-sensitive: `server.test.ts` "orchestration methods" asserts a platform
+  control `state: "active"` but gets `"degraded"`, and `app.test.ts` has a
+  matching one — both cross a wall-clock/breaker threshold mid-suite, which is why
+  the aggregate count drifts. Logged to ROADMAP as a discovered flake to fix with
+  an injectable clock. My diff is isolated to `src/training/` + one barrel export
+  and its own tests are green.
+
+**New idea:** a **movement-model registry** paralleling `subagent-registry.ts` so
+backends are named/pluggable at runtime (`ngram-backoff` today; an on-device
+`mlx-small` and a transformer backend later), selected by a config field — plus
+an `RRule`-style *sequence-completion* API (`completeMovement(prefix, k)`) that
+emits the k most likely next movements as a replayable `ReplayTimelineEvent[]`,
+closing the loop capture→train→**replay-what-the-model-predicts**. Second idea:
+make the flaky platform-control tests deterministic by threading a `now()` clock
+into the breaker store (the same injectable-clock pattern already used for
+`configHome`), which would also unblock a real green `verify` gate.
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
