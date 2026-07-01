@@ -3,6 +3,25 @@
 Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
+## Reliability (run 9)
+- [x] Fix two latent launch-script corruption bugs shared by
+      `harness/background-tasks.ts` + `training/runner.ts` (2026-07-01): broken
+      `shellQuote` single-quote escape (corrupts state JSON for any quoted command)
+      and unescaped `sed` `"$$"`→PID substitution (live task mis-read as
+      missing-process). Added recovery-idempotency guard (terminal record wins over
+      stale running marker) + a real-launch-script regression test.
+- [x] Make background-task tests hermetic (2026-07-01): inject the
+      `backgroundTaskSpawnProcess` stub in server/operator-runtime/app tests so no
+      real OS process is spawned; exposed the seam on `OperatorCliApp`.
+- [ ] **Extract shared `src/shared/launch-script.ts`** — the two `renderLaunchScript`
+      generators are near-duplicate bash builders that both carried the same bug.
+      Consolidate the `shellQuote` + state-writer into one unit-tested module (table
+      test over quotes/newlines/`$`/backslash), and prefer a single python-based
+      state writer over the fragile `printf | sed` pipeline.
+- [ ] Consider a `preexisting-flake` guard: the suite executes real bash launch
+      scripts; document that any remaining real-spawn tests must inject a spawn stub
+      to stay deterministic in CI/cloud.
+
 ## Foundations / DX
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.

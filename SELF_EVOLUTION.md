@@ -6,6 +6,68 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-01 (run 9) — 🐞 Two latent launch-script corruption bugs fixed + test hermeticity
+
+**Audited:** The test suite on a fresh checkout. Unlike prior runs' claim of
+174/174, **3 tests failed deterministically in this environment** — the
+background-task tests actually *execute real bash launch scripts*, and the
+scripts were producing corrupt state. Root-caused two genuine, previously-masked
+runtime bugs in the shell-script generator shared by `src/harness/background-tasks.ts`
+and `src/training/runner.ts`:
+
+1. **Broken `shellQuote` POSIX escape.** `background-tasks.ts` escaped a single
+   quote as `"'"'"'` (6 chars) instead of the correct `'"'"'` (5 chars). Any
+   background-task **command containing a single quote** produced a malformed
+   state JSON — `readState` then threw `SyntaxError`, breaking sync/recovery/status
+   at runtime (not just in tests). Verified by reproducing the exact corrupt output
+   with real bash. Fixed to match the correct escape already used in `runner.ts`.
+2. **Unescaped `sed` PID substitution.** The template `s/\"\$\$\"/$$/g` collapsed
+   in the JS template literal to `s/"$$"/$$/g`, whose bare `"` broke out of bash's
+   double-quoted string — so the `"$$"` → real-PID substitution **never ran** and
+   the running-state carried `pid: "$$"` (a string). `isProcessRunning(NaN)` →
+   false → a live task is immediately mis-read as **missing-process**. Fixed the
+   escaping (`s/\\"\\$\\$\\"/$$/g` in source → `s/\"\$\$\"/$$/g` in bash) in both
+   files; verified end-to-end that the state now carries a numeric pid.
+
+3. **Recovery idempotency** (`background-tasks.ts`): a task already in a terminal
+   state was resurrected and re-failed by a stale on-disk "running" marker (written
+   late by the async launch script). Added a guard: a terminal store record is
+   authoritative over a stale running marker for a dead process → recovery is now a
+   true no-op (`isTerminalStatus`).
+
+4. **Test hermeticity** (root cause of the residual flake): three background-task
+   tests set `backgroundTaskIsProcessRunning: () => false` but still spawned **real**
+   OS processes, so the async launch script raced the assertions (control flipped
+   active↔degraded by timing). Injected the already-existing `backgroundTaskSpawnProcess`
+   stub in `server.test.ts` (×3) and `operator-runtime.test.ts`, and **exposed the
+   same injection seam on `OperatorCliApp`** (`OperatorCliAppOptions.backgroundTaskSpawnProcess`
+   / `backgroundTaskIsProcessRunning`, forwarded to the runtime) so `app.test.ts` is
+   hermetic too. No assertions changed — every test drives state via explicit
+   `writeState`/`writeOutput`.
+
+5. **Regression guard:** added a deterministic integration test in
+   `background-tasks.test.ts` that runs the **real** launch script for a
+   single-quoted, briefly-blocking command and asserts the running-state pid is a
+   real number and the command round-trips. Confirmed it **fails if either fix is
+   reverted** and passes with both.
+
+**Test results:** **3 failing → 0**; suite **174 → 175** (new regression test),
+green and **stable across 4 full runs**. Build ✅. `typecheck:src` ✅ (exit 0).
+Full `tsc` unchanged at **125** (test-file debt untouched). Since the reference
+`runner.ts` shared the sed bug, its launch scripts were latently broken too — now
+fixed.
+
+**New idea:** the `renderLaunchScript` bash generators in `background-tasks.ts`
+and `training/runner.ts` are near-duplicates (same shellQuote, sed line, python
+state-writer) and both carried the same class of bug. Extract a shared,
+unit-tested `src/shared/launch-script.ts` (pure string builders + a `shellQuote`
+with a table-driven test covering quotes/newlines/`$`/backslashes) so a fix in one
+place can't drift from the other — and so the fragile sed/printf pipeline can be
+replaced wholesale by a single python-based state writer (already a hard dep of
+the script) without touching two files.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

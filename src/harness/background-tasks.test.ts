@@ -109,6 +109,72 @@ describe("FileBackgroundTaskStore", () => {
     });
   });
 
+  it("launch script writes valid JSON state with a numeric pid for a single-quoted command", async () => {
+    // Regression guard for two launch-script quoting bugs:
+    //   1. shellQuote used a malformed POSIX single-quote escape, corrupting the
+    //      state JSON for any command containing a single quote.
+    //   2. the sed PID substitution's double quotes were unescaped in the rendered
+    //      bash, so `"$$"` was never replaced and `pid` stayed the literal string.
+    // Uses the REAL spawn + launch script (default constructor) end to end.
+    const rootDir = await makeTempDir();
+    const filePath = path.join(rootDir, "background-tasks.json");
+    const store = new FileBackgroundTaskStore(filePath);
+
+    // Single-quoted (shellQuote coverage) and briefly-blocking (so the "running"
+    // state persists long enough to inspect the sed-substituted pid).
+    // Single-quoted (shellQuote coverage) and briefly-blocking (so the "running"
+    // state persists long enough to inspect the sed-substituted pid).
+    const command = "sh -c 'sleep 0.4'";
+    const task = await store.start({
+      sessionId: "sess-real",
+      title: "Real launch",
+      command,
+      cwd: rootDir,
+      kind: "task",
+    });
+    const readState = async (): Promise<BackgroundTaskExecutionState | undefined> =>
+      store.executionService.readState(task);
+
+    // The launch script writes "running" (with a sed-substituted numeric pid) first,
+    // then "completed" via the python writer once the command exits.
+    let running: BackgroundTaskExecutionState | undefined;
+    for (let attempt = 0; attempt < 200; attempt += 1) {
+      const state = await readState();
+      if (state?.status === "running") {
+        running = state;
+        break;
+      }
+      if (state?.status === "completed" || state?.status === "failed") {
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+
+    expect(running).toBeDefined();
+    // shellQuote fix: the single-quoted command round-trips through the JSON payload
+    // (a malformed escape corrupts the JSON and readState would throw / return junk).
+    expect(running?.command).toBe(command);
+    // sed fix: `"$$"` is substituted to a real number, never the literal string "$$".
+    // Without the fix the running state carries `pid: "$$"`, so a live task is
+    // immediately mis-read as missing-process.
+    expect(typeof running?.pid).toBe("number");
+    expect(Number.isFinite(running?.pid)).toBe(true);
+    expect(running?.pid).toBeGreaterThan(0);
+
+    // And the terminal state lands cleanly once the command exits.
+    let terminal: BackgroundTaskExecutionState | undefined;
+    for (let attempt = 0; attempt < 200; attempt += 1) {
+      const state = await readState();
+      if (state?.status === "completed" || state?.status === "failed") {
+        terminal = state;
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    expect(terminal?.status).toBe("completed");
+    expect(terminal?.exitCode).toBe(0);
+  });
+
   it("cancels running tasks and records cancelled state", async () => {
     const rootDir = await makeTempDir();
     const filePath = path.join(rootDir, "background-tasks.json");

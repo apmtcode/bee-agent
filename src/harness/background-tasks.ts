@@ -472,6 +472,13 @@ export class FileBackgroundTaskStore {
       if (this.executionService.isProcessRunning(state.pid)) {
         return await this.persistRecoveredTask(task, applyExecutionState(task, state), "state-running");
       }
+      // A terminal store record is authoritative: a task the store already knows
+      // finished must not be resurrected by a stale "running" state file (e.g. one
+      // written late by an async launch script whose process has since exited).
+      // Recovery is idempotent — re-reconciling a finished task is a no-op.
+      if (isTerminalStatus(task.status)) {
+        return { task, changed: false, reason: "unchanged" };
+      }
       const failedState = createFailedExecutionState(task, state.pid, {
         startedAt: state.startedAt,
         exitCode: state.exitCode ?? 1,
@@ -637,6 +644,10 @@ function createFailedExecutionState(
   };
 }
 
+function isTerminalStatus(status: BackgroundTaskStatus): boolean {
+  return status === "completed" || status === "failed" || status === "cancelled";
+}
+
 function recoveryReasonForState(
   status: BackgroundTaskExecutionState["status"],
 ): Extract<BackgroundTaskRecoveryReason, "state-running" | "state-completed" | "state-failed" | "state-cancelled"> {
@@ -754,7 +765,7 @@ function renderLaunchScript(task: BackgroundTaskRecord): string {
     "set -euo pipefail",
     `mkdir -p $(dirname ${quotedStatePath}) $(dirname ${quotedOutputFile})`,
     "started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-    `printf '%s' ${quotedStatePayload} | sed "s/__OPENCLAW_STARTED_AT__/$started_at/g; s/\"\$\$\"/$$/g" > ${quotedStatePath}`,
+    `printf '%s' ${quotedStatePayload} | sed "s/__OPENCLAW_STARTED_AT__/$started_at/g; s/\\"\\$\\$\\"/$$/g" > ${quotedStatePath}`,
     `printf '%s\n' "starting ${task.kind} ${task.id}" >> ${quotedOutputFile}`,
     `if cd ${quotedCwd} && bash -lc ${quotedCommand} >> ${quotedOutputFile} 2>&1; then`,
     "  completed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
@@ -794,5 +805,9 @@ function renderStateWriterPython(status: BackgroundTaskExecutionState["status"])
 }
 
 function shellQuote(value: string): string {
-  return `'${value.replaceAll(`'`, `"'"'"'`)}'`;
+  // POSIX single-quote escaping: close the quote, emit an escaped quote via a
+  // double-quoted segment, then reopen — i.e. `'` -> `'"'"'`. A malformed escape
+  // here corrupts the JSON state file the launch script writes for any command
+  // that contains a single quote, breaking sync/recovery/status reads.
+  return `'${value.replaceAll(`'`, `'"'"'`)}'`;
 }
