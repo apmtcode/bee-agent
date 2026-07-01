@@ -6,6 +6,53 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-01 (run 9) — Fix flaky background-task tests (real-spawn race) + atomic state writes
+
+**Audited:** The verification gate itself. On a clean tree `npm test` was
+**non-deterministic** — 3–4 of 174 tests failed on ~half of runs
+(`operator-runtime` "starts, syncs, recovers…", `server` "handles session…",
+`app` "session lifecycle…" + "background and monitor task commands"). This
+silently undermined step 5 of the procedure (can't trust build+test to gate a
+push). Root cause traced to one mechanism: these tests call
+`startBackgroundTask`, which spawns a **real detached bash process** that
+asynchronously rewrites `state.json` via a non-atomic `python write_text`. That
+races the tests' own explicit `writeState` calls → torn-JSON `SyntaxError`
+crashes and status flips (`missing-process`, "no active task"). The tests
+mocked `isProcessRunning` but forgot to mock the *spawn*.
+
+**Changed (additive):**
+- `src/harness/background-tasks.ts`: new exported production utility
+  **`createInertBackgroundSpawn(startPid?)`** — a `SpawnBackgroundProcess` that
+  launches nothing and returns a synthetic monotonic pid. Real capability for
+  embedding contexts that forbid `spawn` (sandboxes, dry-run/planning), not just
+  a test hook.
+- `src/cli/app.ts`: added `backgroundTaskSpawnProcess` /
+  `backgroundTaskIsProcessRunning` options to `OperatorCliAppOptions` and threaded
+  them into the runtime — mirrors the runtime's existing seam so an embedded app
+  can also disable real spawning. Production defaults unchanged.
+- **Production robustness fix (real latent bug):** the launch-script state
+  writers (background-tasks *and* training/runner) wrote `state.json`
+  non-atomically (`write_text` / `> file`), so a concurrent `sync`/reconcile
+  could read a torn document. Made both the python writer (temp + `os.replace`)
+  and the initial shell write (`> .tmp` + `mv`) atomic.
+- Injected the inert spawn into the 4 flaky tests (+ the `999999` dead-pid
+  sentinel semantics in the app lifecycle test; explicit `writeOutput`/running
+  state in the app background/monitor test), and added 2 unit tests directly
+  covering `createInertBackgroundSpawn`.
+
+**Test results:** `typecheck:src` ✅, build ✅. Full `tsc` **125 → 125** (no
+regression). Tests **174 → 176** and now **deterministic: 8/8 consecutive green
+runs** (was ~50% pass). The verification gate is trustworthy again.
+
+**New idea:** add a `test:repeat` script (e.g. `vitest run --retry=0` looped, or
+a tiny `--runs N` wrapper) and have the engine run the suite 2–3× as its per-run
+pre-push self-check, so flakiness is *caught by the gate* instead of only when a
+single run happens to hit the bad interleaving. Longer term: a lint that flags
+any test constructing a runtime/app which can reach `startBackgroundTask`
+without injecting a spawn seam.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

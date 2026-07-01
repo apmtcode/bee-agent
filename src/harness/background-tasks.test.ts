@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   BackgroundTaskExecutionService,
   FileBackgroundTaskStore,
+  createInertBackgroundSpawn,
   type BackgroundTaskExecutionState,
 } from "./background-tasks.js";
 
@@ -18,6 +19,39 @@ async function makeTempDir(): Promise<string> {
 
 afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
+});
+
+describe("createInertBackgroundSpawn", () => {
+  it("hands back monotonically increasing synthetic pids without launching a process", () => {
+    const spawn = createInertBackgroundSpawn(500);
+    const first = spawn("/tmp/run.sh", [], { cwd: "/tmp", env: {}, stdio: "ignore", detached: true });
+    const second = spawn("/tmp/run.sh", [], { cwd: "/tmp", env: {}, stdio: "ignore", detached: true });
+    expect(first.pid).toBe(500);
+    expect(second.pid).toBe(501);
+    // unref is a no-op but must exist so callers can detach safely.
+    expect(() => first.unref()).not.toThrow();
+  });
+
+  it("lets a task store record a running task with no real OS process", async () => {
+    const rootDir = await makeTempDir();
+    const store = new FileBackgroundTaskStore(
+      path.join(rootDir, "background-tasks.json"),
+      createInertBackgroundSpawn(1000),
+      () => true,
+    );
+    const task = await store.start({ title: "Inert", command: "noop" });
+    expect(task.status).toBe("running");
+    expect(task.execution.processId).toBe(1000);
+    // No launch script was executed, so reconciliation has no persisted state to
+    // read; it falls back to the (mocked-live) pid, synthesizes a running state,
+    // and keeps the task running.
+    await expect(store.sync(task.id)).resolves.toMatchObject({ id: task.id, status: "running" });
+    await expect(store.getExecutionState(task.id)).resolves.toMatchObject({
+      taskId: task.id,
+      status: "running",
+      pid: 1000,
+    });
+  });
 });
 
 describe("FileBackgroundTaskStore", () => {

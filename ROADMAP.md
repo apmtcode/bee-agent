@@ -4,6 +4,14 @@ Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
 ## Foundations / DX
+- [x] **Make the test suite deterministic** (2026-07-01, run 9). 4 background-task
+      tests were flaky (~50% pass) because they spawned real detached processes
+      that raced their own `writeState`. Fixed via `createInertBackgroundSpawn`
+      injection + atomic state writes; 8/8 consecutive green.
+- [ ] Add a `test:repeat`/`--runs N` self-check so the engine runs the suite 2–3×
+      pre-push and *catches* flakiness at the gate (surfaced run 9).
+- [ ] Lint: flag any test that builds a runtime/app reaching `startBackgroundTask`
+      without injecting a spawn seam (would have caught run 9's flakiness earlier).
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`

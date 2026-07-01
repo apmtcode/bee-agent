@@ -108,6 +108,29 @@ export type SpawnBackgroundProcess = (
 
 export type IsProcessRunning = (pid: number) => boolean;
 
+/**
+ * Build a {@link SpawnBackgroundProcess} that performs no real OS launch and
+ * instead hands back a synthetic, monotonically increasing pid. Useful for
+ * embedding contexts where the task-store bookkeeping is wanted without spawning
+ * a detached process — e.g. a sandbox that forbids `spawn`, a dry-run/planning
+ * mode, or deterministic tests. Pair it with an `isProcessRunning` that matches
+ * your environment (commonly `() => false` so reconciliation is driven purely by
+ * persisted state instead of a live pid probe).
+ */
+export function createInertBackgroundSpawn(startPid = 100_000): SpawnBackgroundProcess {
+  let nextPid = startPid;
+  return () => {
+    const pid = nextPid;
+    nextPid += 1;
+    return {
+      pid,
+      unref() {
+        /* no-op: nothing was spawned */
+      },
+    };
+  };
+}
+
 export type BackgroundTaskRecoveryReason =
   | "unchanged"
   | "state-running"
@@ -754,7 +777,8 @@ function renderLaunchScript(task: BackgroundTaskRecord): string {
     "set -euo pipefail",
     `mkdir -p $(dirname ${quotedStatePath}) $(dirname ${quotedOutputFile})`,
     "started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-    `printf '%s' ${quotedStatePayload} | sed "s/__OPENCLAW_STARTED_AT__/$started_at/g; s/\"\$\$\"/$$/g" > ${quotedStatePath}`,
+    `printf '%s' ${quotedStatePayload} | sed "s/__OPENCLAW_STARTED_AT__/$started_at/g; s/\"\$\$\"/$$/g" > ${quotedStatePath}.tmp`,
+    `mv ${quotedStatePath}.tmp ${quotedStatePath}`,
     `printf '%s\n' "starting ${task.kind} ${task.id}" >> ${quotedOutputFile}`,
     `if cd ${quotedCwd} && bash -lc ${quotedCommand} >> ${quotedOutputFile} 2>&1; then`,
     "  completed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
@@ -789,7 +813,12 @@ function renderStateWriterPython(status: BackgroundTaskExecutionState["status"])
     "state['completedAt'] = timestamp",
     "state['exitCode'] = exit_code",
     `state['error'] = None if '${status}' == 'completed' else f'background task exited non-zero ({exit_code})'`,
-    "state_path.write_text(json.dumps(state, indent=2) + '\\n')",
+    // Write atomically (temp file + os.replace) so a concurrent reconcile/sync
+    // reading state.json can never observe a torn/partial JSON document.
+    "import os",
+    "tmp_path = state_path.with_suffix(state_path.suffix + '.tmp')",
+    "tmp_path.write_text(json.dumps(state, indent=2) + '\\n')",
+    "os.replace(tmp_path, state_path)",
   ];
 }
 
