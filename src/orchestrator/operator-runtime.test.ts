@@ -530,6 +530,10 @@ describe("StandaloneOperatorRuntime", () => {
   it("starts, syncs, recovers, lists, and cancels background tasks", async () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
+      // Hermetic: never launch a real OS process for background tasks — the test
+      // drives execution state explicitly via writeState, so a real detached
+      // process would only race with (and clobber) those writes.
+      backgroundTaskSpawnProcess: () => ({ pid: 43210, unref() {} }),
       backgroundTaskIsProcessRunning: () => false,
     });
     const session = await runtime.startSession({ title: "Tasks", agentId: "main" });

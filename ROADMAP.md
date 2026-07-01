@@ -4,6 +4,20 @@ Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
 ## Foundations / DX
+- [x] **Fix launch-script state-JSON corruption** (2026-07-01, run 9): a
+      `shellQuote` typo (`"'"'"'` vs `'"'"'`) mangled single-quoted commands, and
+      a fragile `sed` PID substitution left `"pid":"$$"` — both produced invalid
+      JSON that crashed background-task/training recovery. Fixed the escape and
+      replaced the `sed` with a Python initial-state writer in
+      `background-tasks.ts` + `runner.ts`; added a real-`bash` regression test.
+- [x] **Hermetic background-task tests** (2026-07-01, run 9): threaded the
+      `backgroundTaskSpawnProcess`/`…IsProcessRunning` seams through
+      `OperatorCliApp` and injected mock spawns in the CLI/server/runtime tests
+      (one previously launched a real `tail -f` that hung the suite).
+- [ ] **Unify `shellQuote`**: the two copies in `harness/background-tasks.ts` and
+      `training/runner.ts` had silently diverged (one buggy). Extract a single
+      `src/shared/shell.ts#shellQuote` + a property test that round-trips nasty
+      strings (single quotes, `$$`, `"`, backslashes, newlines) through `bash`.
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`

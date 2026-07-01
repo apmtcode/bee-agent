@@ -370,4 +370,36 @@ describe("BackgroundTaskExecutionService", () => {
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
   });
+
+  it("generates a launch script that persists valid JSON state with a numeric pid", async () => {
+    // Regression: the initial-state writer previously used a fragile `sed`
+    // expression (`s/"$$"/$$/g`) whose embedded double quotes broke out of the
+    // surrounding bash double-quoted string, leaving the literal placeholder
+    // `"pid":"$$"` on disk — invalid JSON that also crashed the Python
+    // completed-state writer, so recovery threw a SyntaxError.
+    const rootDir = await makeTempDir();
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"), () => ({ pid: 2222, unref() {} }));
+    const task = await store.start({
+      title: "Emit output",
+      command: "printf 'line-1\\nline-2\\n'",
+      cwd: rootDir,
+      kind: "task",
+    });
+
+    const { execFileSync } = await import("node:child_process");
+    execFileSync("bash", [path.join(rootDir, task.execution.launchScript)], {
+      cwd: rootDir,
+      stdio: "ignore",
+    });
+
+    const raw = await fs.readFile(path.join(rootDir, task.execution.stateFile), "utf8");
+    // Must be parseable JSON — the bug produced a SyntaxError here.
+    const state = JSON.parse(raw) as BackgroundTaskExecutionState;
+    expect(raw).not.toContain("$$");
+    expect(typeof state.pid).toBe("number");
+    expect(state.pid).toBeGreaterThan(0);
+    expect(state.status).toBe("completed");
+    expect(state.exitCode).toBe(0);
+    expect(state.startedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+  });
 });

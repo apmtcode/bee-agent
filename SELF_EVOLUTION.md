@@ -6,6 +6,64 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-01 (run 9) — 🐞 Fix two launch-script bugs that corrupted background-task/training state JSON
+
+**Audited:** The green baseline itself. A fresh `npm install` + `npm test`
+surfaced **4 deterministically failing tests** (baseline was NOT green in this
+cloud env, contrary to run 8's report — those tests were passing only by
+environment luck, e.g. `python3`/`bash` availability + async timing). All four
+traced to the background-task (and training) **launch-script generators**, which
+spawn a real detached shell that writes a JSON state file.
+
+**Two genuine source bugs found & fixed:**
+1. **`shellQuote` typo** (`src/harness/background-tasks.ts`): escaped a single
+   quote as `` "'"'"' `` (6 chars, leading `"`) instead of the correct POSIX
+   `` '"'"' `` (5 chars). The stray `"` failed to close the surrounding
+   single-quoted string, so any command containing a single quote (e.g.
+   `printf 'line-1\nline-2\n'`) round-tripped through bash as invalid JSON
+   (`"command":"printf "'line-1…`). The identical function in
+   `src/training/runner.ts` was already correct — the two had silently diverged.
+2. **Fragile `sed` PID substitution** (both `background-tasks.ts` &
+   `runner.ts`): the initial-state writer used
+   `sed "…; s/"$$"/$$/g"` to swap the `"$$"` placeholder for the real PID. The
+   embedded double quotes broke out of the surrounding **double-quoted** sed arg
+   in bash, so `$$` expanded to a no-op and the literal `"pid":"$$"` stayed on
+   disk — invalid JSON that then also crashed the Python completed-state writer
+   (`json.loads` throws), leaving the corrupt state permanently. Replaced the
+   `sed` line with a small **Python** initial-state writer (consistent with the
+   already-present completed/failed writers): payload now ships `pid: 0`
+   (valid JSON) and Python fills in the real PID + timestamps. Robust and
+   quoting-safe. Bonus: if `python3` is ever missing, the on-disk state is now
+   still valid JSON (pid 0) instead of a parse-time crash.
+
+**Test hermeticity (guardrail: mock real-OS features):** the CLI/server/runtime
+tests were spawning **real** OS processes for background tasks — one even
+launched `tail -f` which hangs the suite forever. Made them hermetic:
+- Threaded the existing `backgroundTaskSpawnProcess` /
+  `backgroundTaskIsProcessRunning` runtime seams through **`OperatorCliApp`**
+  options (additive) so CLI tests can inject a deterministic stub.
+- Injected a mock spawn in `operator-runtime.test.ts`, `server.test.ts`, and all
+  `app.test.ts` constructions. The one test that watches a still-running task
+  gets a `() => true` liveness probe; the failure-detection test keeps the
+  default (fake PID reads as dead).
+- Added a **hermetic regression test** that renders a launch script for a
+  single-quoted command, runs it under real `bash`, and asserts the state file
+  is valid JSON with a numeric PID and `completed` status — pins both bugs.
+
+**Test results:** `npm test` **175/175 ✅** (was 171/174 at this run's baseline;
++1 new regression test). `npm run build` ✅. `npm run typecheck:src` ✅ (exit 0).
+Full `tsc` debt unchanged at **125** (all in test files).
+
+**New idea:** add a tiny `scripts/lint-shell-quote.mjs` (or a unit test) that
+round-trips a corpus of nasty strings (single quotes, `$$`, `"`, backslashes,
+newlines) through *every* `shellQuote`/launch-script generator in the repo and
+asserts `bash -c` reproduces them byte-for-byte. The two generators had already
+diverged once; a shared property test would catch the next drift — and ideally
+the two `shellQuote` copies should be unified into one `src/shared/shell.ts`
+helper so there is a single source of truth.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
