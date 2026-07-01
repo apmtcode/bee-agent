@@ -6,6 +6,75 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-01 (run 9) — 🧠 Pluggable movement-model backend (train/infer/generalize) + 2 real shell-escaping bugs fixed (test failures 3→1)
+
+**Audited:** The local-movement learning subsystem (standing objective #2) and
+the reference training pipeline. Found the biggest gap: `src/training/runner.ts`
+only emits **plans/launch scripts** for on-device mlx/axolotl — there was **no
+in-process model that can actually train and infer**, so objective #2 pieces
+(c) "post-train a local model to repeat the recorded movements" and (d)
+"generalize to related movements" were untested and unrunnable in the cloud.
+Also discovered the full test suite was **red on clean HEAD** (3 failing
+integration tests) — the last logged "174/174" no longer held.
+
+**Changed (additive):**
+- **`src/training/model-backend.ts` (new)** — the pluggable local-model seam the
+  roadmap called for. `LocalModelBackend` interface (`train(dataset) →
+  TrainedMovementModel`); `NGramMovementBackend`, a **deterministic** stupid-
+  back-off n-gram policy that (a) reproduces recorded movement sequences exactly
+  (memorization/repeat) and (b) generalizes to novel prefixes via suffix
+  back-off; `buildMovementDataset`/`tokenizeMovementEvent`/`extractMovementSequence`
+  tie it to the real `ExportedReplayManifest` action-event schema; serialize/
+  `loadMovementModel` round-trip (the mock analogue of a `.gguf` artifact);
+  `MovementBackendRegistry` + `createDefaultMovementBackendRegistry()` as the
+  registration point where a real on-device backend attaches under its own id
+  without touching callers. Exported from `src/index.ts`.
+- **`src/training/model-backend.test.ts` (new)** — 12 tests: tokenization,
+  dataset extraction/ordering/EOS, exact repetition, generalization via back-off
+  (order-1 suffix match), unigram fallback, empty-model undefined, serialization
+  round-trip, and the registry seam.
+- **Two genuine shell-escaping bugs fixed** (surfaced while diagnosing the red
+  suite, both in emitted launch scripts):
+  1. `src/harness/background-tasks.ts` `shellQuote` used `"'"'"'` (leading
+     double-quote) instead of the POSIX `'"'"'`. For **any command containing a
+     single-quote** (e.g. `printf 'line-1\nline-2\n'`) this leaked a stray `"`
+     into the shell-quoted state payload, corrupting the emitted `state.json`
+     (unparseable → recovery crash). `runner.ts` already had the correct form.
+  2. `background-tasks.ts` **and** `runner.ts`: the sed pid substitution was
+     emitted as `s/"$$"/$$/g` (single-escaped template literal), whose bare `"`
+     prematurely close bash's double-quoted sed arg — so `"pid":"$$"` was never
+     replaced and stayed a **string** instead of the numeric PID. Fixed by
+     doubling the backslashes so the file gets `s/\"\$\$\"/$$/g` (proved with a
+     bash repro: `"pid":"$$"` → `"pid":8039`).
+- **`src/orchestrator/operator-runtime.test.ts`** — injected a no-op
+  `backgroundTaskSpawnProcess` mock into the background-task test. It drove all
+  execution state via explicit `writeState`/`writeOutput`, but also spawned the
+  **real** detached launch script, which wrote `state.json` asynchronously and
+  raced those writes. Fix #2 (valid state instead of corrupt) unmasked the race;
+  the mock spawn makes it deterministic (mirrors `background-tasks.test.ts`).
+- **`src/harness/background-tasks.test.ts`** — regression test asserting the
+  emitted launch script uses the correct `'"'"'` escape (not the buggy variant)
+  and the escaped `s/\"\$\$\"/$$/g` sed (not `s/"$$"/$$/g`).
+
+**Test results:** `typecheck:src` ✅ (source stays green). Build ✅.
+Suite **3 failing (clean HEAD) → 1** (`server.test.ts:719` only). New tests
+**+13, all passing**; full suite **186/187**. operator-runtime stable **5/5**.
+The lone remaining failure is **pre-existing and unrelated** — it fails at the
+identical line 719 on clean HEAD (verified by `git stash`): `resume` returns
+`degraded` because the real `isProcessRunning(-pid, 0)` on a **detached process
+group** reports the live `sleep 5` as dead in this cloud sandbox's PID namespace.
+Environment-specific; needs the same hermetic-spawn treatment (roadmapped), not
+a code change.
+
+**New idea:** now that a real in-process backend exists, add a **generalization
+eval harness**: hold out one of several related synthetic trajectories, train on
+the rest, and score `model.generate(seed)` against the held-out sequence (exact-
+match ratio + first-divergence index). That turns "does it generalize?" into a
+tracked metric per run, and gives a concrete target for a future real on-device
+backend to beat the n-gram baseline.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

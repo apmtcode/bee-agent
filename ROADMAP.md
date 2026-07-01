@@ -59,16 +59,48 @@ unchecked items are queued. Keep this richer than you found it each run.
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
 (exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
-      objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Inventory what `src/capture` + `src/training` already implement vs. the
+      objective's five pieces (run 9). Present: event schema (`ReplayTimelineEvent`
+      transcript/observation/action), dataset export (`ReviewedExportManifest`),
+      replay engine, training **plan/script** emitter (mlx/axolotl). Gap that
+      remained: an actual in-process **train→infer** model. Now filled ↓.
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
+      for a real on-device small model — DONE run 9 (`src/training/model-backend.ts`:
+      `LocalModelBackend`, `NGramMovementBackend`, `MovementBackendRegistry`,
+      dataset builder from replay manifests, serialize/load, 12 tests).
 - [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      round-trips without real OS input. (Partial: `buildMovementDataset` +
+      `NGramMovementBackend` now round-trip synthetic action sequences; still want
+      a richer generator producing full observation/transcript timelines.)
+- [ ] Generalization eval harness: hold out one of several related synthetic
+      trajectories, train on the rest, score `model.generate(seed)` vs. held-out
+      (exact-match ratio + first-divergence index) as a tracked per-run metric and
+      a baseline for a future real on-device backend to beat.
+- [ ] Real on-device backend registered under the `MovementBackendRegistry` seam
+      (llama.cpp / mlx adapter) that trains from the same `MovementDataset` and
+      loads via `loadMovementModel`-style artifacts; keep the n-gram mock as the
+      cloud/CI default.
+
+## Reliability / test hermeticity
+- [x] Fix `shellQuote` single-quote escape (`"'"'"'` → `'"'"'`) in
+      `background-tasks.ts` — corrupted `state.json` for any command containing a
+      single-quote (run 9).
+- [x] Fix sed pid substitution emitted as `s/"$$"/$$/g` (bare quotes break bash
+      parsing) → `s/\"\$\$\"/$$/g` in `background-tasks.ts` + `runner.ts`; `pid`
+      now serializes as the numeric PID, not the string `"$$"` (run 9).
+- [ ] **Make `server.test.ts` "handles session…" hermetic** (the last failing
+      test, fails identically on clean HEAD at line 719). It spawns a real
+      `sleep 5` and relies on `isProcessRunning(-pid, 0)` over a **detached
+      process group**, which this cloud sandbox reports as dead → `resume`
+      yields `degraded` not `active`. Inject `backgroundTaskSpawnProcess` +
+      a controllable `backgroundTaskIsProcessRunning` (as run 9 did for
+      operator-runtime.test.ts) — carefully, since later assertions in the same
+      mega-test depend on missing-process detection for other tasks.
+- [ ] Consider making the launch scripts write `state.json` atomically
+      (temp + `mv` / `os.replace`, as `writeJsonAtomic` already does) so any
+      concurrent reader never observes a half-written file — defensive even after
+      the escaping fixes.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

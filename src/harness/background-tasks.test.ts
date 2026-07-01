@@ -109,6 +109,35 @@ describe("FileBackgroundTaskStore", () => {
     });
   });
 
+  it("emits a launch script that shell-quotes single-quote commands and escapes the sed pid substitution", async () => {
+    // Regression for two shell-escaping bugs in the emitted launch script:
+    //  1) shellQuote used `"'"'"'` (leading double-quote) instead of the POSIX
+    //     `'"'"'`, leaking a stray `"` into the state payload for any command
+    //     containing a single-quote — corrupting the emitted state.json.
+    //  2) the sed pid substitution was emitted as `s/"$$"/$$/g` (unescaped
+    //     quotes) which bash mis-parses, leaving `"pid":"$$"` as a string
+    //     rather than the numeric PID.
+    const rootDir = await makeTempDir();
+    const store = new FileBackgroundTaskStore(
+      path.join(rootDir, "background-tasks.json"),
+      () => ({ pid: 4242, unref() {} }),
+    );
+    const task = await store.start({
+      title: "Quoted command",
+      command: "printf 'hello world'",
+      cwd: rootDir,
+      kind: "task",
+    });
+    const script = await fs.readFile(path.join(rootDir, task.execution.launchScript), "utf8");
+
+    // (1) correct POSIX single-quote escape present, buggy variant absent.
+    expect(script).toContain(`'"'"'`);
+    expect(script).not.toContain(`"'"'"'`);
+    // (2) sed substitution reaches the file with escaped quotes and `$$`.
+    expect(script).toContain(`s/\\"\\$\\$\\"/$$/g`);
+    expect(script).not.toContain(`s/"$$"/$$/g`);
+  });
+
   it("cancels running tasks and records cancelled state", async () => {
     const rootDir = await makeTempDir();
     const filePath = path.join(rootDir, "background-tasks.json");

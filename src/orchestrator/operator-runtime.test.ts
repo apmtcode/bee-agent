@@ -530,6 +530,11 @@ describe("StandaloneOperatorRuntime", () => {
   it("starts, syncs, recovers, lists, and cancels background tasks", async () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
+      // Mock the spawn so the launch script never actually runs; the test drives
+      // all execution state explicitly via writeState/writeOutput below. Without
+      // this, the real detached launch script writes state.json asynchronously
+      // and races those explicit writes, making the assertions flaky.
+      backgroundTaskSpawnProcess: () => ({ pid: 4242, unref() {} }),
       backgroundTaskIsProcessRunning: () => false,
     });
     const session = await runtime.startSession({ title: "Tasks", agentId: "main" });
