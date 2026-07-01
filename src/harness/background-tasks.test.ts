@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -369,5 +370,26 @@ describe("BackgroundTaskExecutionService", () => {
     await expect(fs.readFile(path.join(rootDir, task.execution.launchScript), "utf8")).resolves.toContain("bash -lc");
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
+  });
+
+  it("writes a well-formed state file with a numeric pid for commands containing quotes and newlines", async () => {
+    const rootDir = await makeTempDir();
+    // A command with embedded single quotes AND real newlines is exactly what
+    // corrupted the sed-based state bootstrap (invalid JSON + a non-numeric
+    // "$$" pid). Execute the real launch script and assert the resulting state
+    // parses and carries a numeric pid.
+    const command = "printf 'line-1\nline-2\n'";
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"), () => ({ pid: 4242, unref() {} }));
+    const task = await store.start({ title: "Quote heavy", command, cwd: rootDir });
+
+    const launchScriptPath = path.join(rootDir, task.execution.launchScript);
+    execFileSync("bash", [launchScriptPath], { cwd: rootDir, stdio: "ignore" });
+
+    const stateRaw = await fs.readFile(path.join(rootDir, task.execution.stateFile), "utf8");
+    const state = JSON.parse(stateRaw) as BackgroundTaskExecutionState;
+    expect(typeof state.pid).toBe("number");
+    expect(Number.isInteger(state.pid)).toBe(true);
+    expect(state.command).toBe(command);
+    expect(state.status).toBe("completed");
   });
 });

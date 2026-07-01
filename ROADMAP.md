@@ -70,6 +70,25 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Generalization eval harness: measure replay fidelity on held-out but
       related synthetic trajectories.
 
+## Reliability / test hermeticity
+- [x] **Fix corrupt launch-script state JSON** (run 9): `background-tasks.ts`
+      `shellQuote` used a wrong POSIX escape (`"'"'"'`) that injected a stray `"`
+      and broke JSON for commands with quotes/newlines. Corrected to `'"'"'`.
+- [x] **Fix non-numeric pid in launch scripts** (run 9): replaced the
+      `printf | sed "s/"$$"/$$/g"` bootstrap (pid stayed the string `"$$"`) with
+      a robust `python3` initial-state writer in both `background-tasks.ts` and
+      `training/runner.ts`.
+- [x] **De-flake real-subprocess integration tests** (run 9): added a spawn/
+      liveness injection seam to `OperatorCliAppOptions` and used mock spawns so
+      task state is test-controlled instead of racing detached launch scripts.
+- [ ] **Deduplicate `shellQuote`** into a single tested `src/shared/shell.ts`
+      helper imported by both launch-script renderers (the two copies diverged;
+      one was buggy for 8 runs). Add unit tests covering single quotes, double
+      quotes, newlines, and empty strings.
+- [ ] **Hermetic-integration lint/test**: flag test files that build a runtime
+      with the default spawn but then assert on background-task execution state,
+      so new tests inject the mock seam instead of racing real processes.
+
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in

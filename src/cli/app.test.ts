@@ -801,7 +801,15 @@ describe("OperatorCliApp", () => {
 
   it("supports session lifecycle, transcript, approvals, pairing, config, and prompt commands", async () => {
     const rootDir = await makeTempDir();
-    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    // Mock spawn/liveness so background-task state is fully test-controlled and
+    // never races a real detached launch script.
+    const app = new OperatorCliApp({
+      rootDir,
+      cwd: rootDir,
+      currentDate: "2026-05-25",
+      backgroundTaskSpawnProcess: () => ({ pid: 4242, unref() {} }),
+      backgroundTaskIsProcessRunning: () => false,
+    });
     const firstSession = await app.runtime.startSession({ title: "first", cwd: rootDir, agentId: "operator-cli" });
     const secondSession = await app.runtime.startSession({ title: "second", cwd: rootDir, agentId: "operator-cli" });
 

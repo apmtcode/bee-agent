@@ -6,6 +6,64 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-01 (run 9) — Fix two latent launch-script bugs; de-flake the real-subprocess integration suite (174→175, deterministic)
+
+**Audited:** Repo health on a fresh clone. Found the suite **RED** — 4 tests
+that run 8 recorded as green (`server.test.ts`, `app.test.ts` ×2,
+`operator-runtime.test.ts`) now failed deterministically. Root-caused two
+**real source bugs** in the background-task launch scripts (not test bugs):
+
+1. **Corrupt state JSON (`src/harness/background-tasks.ts`).** `shellQuote` used
+   the wrong POSIX single-quote escape — replacement `"'"'"'` (a stray leading
+   `"`) instead of the correct `'"'"'`. It injected a spurious `"` before every
+   escaped `'`, so any command containing single quotes/newlines
+   (`printf 'line-1\nline-2\n'`) produced an unparseable state file →
+   `JSON.parse` crash in `recoverBySession`. (`training/runner.ts` already had
+   the correct idiom — the two copies had silently diverged.)
+2. **Non-numeric pid (`background-tasks.ts` + `training/runner.ts`).** The
+   initial "running" state was bootstrapped via `printf '%s' <payload> | sed
+   "…s/"$$"/$$/g"`. In a TS template literal `\$\$` collapses to `$$`, so the
+   emitted shell was `s/"$$"/$$/g`; the unescaped embedded `"` broke bash
+   quoting and the pid stayed the literal string `"$$"`. `isProcessRunning`
+   (`Number.isFinite("$$")` → false) then reported every running task as
+   `missing-process` → control state wrongly `degraded` instead of `active`.
+
+**Changed (source, additive):**
+- Replaced the fragile `printf | sed` bootstrap in **both** launch-script
+  renderers with a robust `python3` initial-state writer (the same mechanism
+  already used for completed/failed states): it takes the static payload as one
+  JSON argv plus `$$` and the timestamp, and fills `pid`/`startedAt`/`updatedAt`
+  — no sed, no quote gymnastics, always well-formed JSON with a real integer pid.
+- Corrected `background-tasks.ts` `shellQuote` to the standard `'"'"'` idiom.
+- Added a testability seam to `OperatorCliAppOptions`
+  (`backgroundTaskSpawnProcess` / `backgroundTaskIsProcessRunning`), threaded
+  into the runtime. Production is unchanged (real detached processes).
+
+**Changed (tests):**
+- New regression test: execute the real launch script for a command with quotes
+  **and** newlines, assert the state file parses and carries a numeric pid.
+- Made the real-subprocess integration tests **hermetic** by injecting a mock
+  spawn (server main / drifting / breaker runtimes; the two flaky app tests; the
+  operator-runtime background-task test). These tests already drive execution
+  state via `writeState`/`writeOutput`; the real detached launch script only
+  *raced* those writes (e.g. overwriting an explicit "completed" state), which
+  is what made them flaky once the launch script started writing valid state.
+- Updated the runner-plan assertion to match the new python bootstrap line.
+
+**Test results:** full `tsc` source gate `typecheck:src` ✅ (exit 0). Build ✅.
+Tests ✅ **175/175** (was 174 + 1 new regression test). Verified **deterministic**:
+0 failures across 12 back-to-back runs of the previously-flaky files (they had
+been failing ~1-in-5 before the hermetic pass, and 4-of-4 deterministically red
+on arrival).
+
+**New idea:** the `shellQuote` divergence (one correct copy, one buggy copy)
+is the real lesson — extract a single tested `src/shared/shell.ts#shellQuote`
+(POSIX single-quote escaping) and have both launch-script renderers import it,
+so this class of bug can't live in one copy again. Bonus: a tiny "hermetic
+integration test" guard — flag test files that construct a runtime with the
+*default* spawn yet assert on background-task execution state, nudging authors
+to inject the mock seam. Both queued in ROADMAP.
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

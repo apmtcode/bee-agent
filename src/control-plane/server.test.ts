@@ -83,6 +83,10 @@ describe("OperatorControlPlaneServer", () => {
     const rootDir = await makeTempDir();
     const runtime = new StandaloneOperatorRuntime({
       rootDir,
+      // Mock spawn: this test drives every task's execution state explicitly via
+      // writeState/writeOutput, so a real (async, detached) launch script would
+      // only race and overwrite those deterministic states.
+      backgroundTaskSpawnProcess: () => ({ pid: 4242, unref() {} }),
       backgroundTaskIsProcessRunning: () => false,
       delivery: new OperatorDeliveryService(rootDir, {
         sendBrowserPush: async () => {},
@@ -952,6 +956,9 @@ describe("OperatorControlPlaneServer", () => {
     const driftingRootDir = await makeTempDir();
     const driftingRuntime = new StandaloneOperatorRuntime({
       rootDir: driftingRootDir,
+      // Mock spawn keeps drift/recovery state fully test-controlled (no racing
+      // launch script).
+      backgroundTaskSpawnProcess: () => ({ pid: 4242, unref() {} }),
       backgroundTaskIsProcessRunning: () => false,
     });
     const driftingServer = new OperatorControlPlaneServer({ runtime: driftingRuntime });
@@ -1018,6 +1025,12 @@ describe("OperatorControlPlaneServer", () => {
     const breakerRootDir = await makeTempDir();
     const breakerRuntime = new StandaloneOperatorRuntime({
       rootDir: breakerRootDir,
+      // Inject a mock spawn so background tasks never launch a real (async,
+      // detached) process. This keeps the breaker staging deterministic: a
+      // task's execution state exists only when the test writes it explicitly,
+      // rather than racing an out-of-band launch script that writes its own
+      // "running" state.
+      backgroundTaskSpawnProcess: () => ({ pid: 4242, unref() {} }),
       backgroundTaskIsProcessRunning: () => false,
     });
     const breakerServer = new OperatorControlPlaneServer({ runtime: breakerRuntime });
