@@ -4,6 +4,16 @@ Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
 ## Foundations / DX
+- [x] **Restore green baseline** (2026-07-01, run 9): 4 tests depended on real
+      detached-subprocess timing and failed in the cloud sandbox
+      (`app.test.ts` ×2, `server.test.ts` ×1, `operator-runtime.test.ts` ×1).
+      Threaded `backgroundTaskSpawnProcess` / `backgroundTaskIsProcessRunning`
+      through `OperatorCliAppOptions` and switched the failing tests to the
+      established no-op spawner. Now 174/174, stable across repeated runs.
+- [ ] **No-real-spawn test guard**: a shared vitest setup that wraps the default
+      background-task spawner and throws unless a test injected an explicit stub,
+      so "accidentally launches a real subprocess" is a loud authoring error
+      instead of a latent timing flake (surfaced by run 9).
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`

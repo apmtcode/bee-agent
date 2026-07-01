@@ -6,6 +6,59 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-01 (run 9) — 🔴→🟢 Restored a red baseline: 4 real-subprocess test flakes → deterministic
+
+**Audited:** The actual build/test baseline (not just the log's claim). The
+recorded state was "174/174 ✅", but a fresh `npm test` in this environment
+showed **4 failing tests** across 3 files — the log's green claim did not
+reproduce. Root-caused every failure to the same design smell: **tests that
+launch real detached subprocesses and depend on OS timing.**
+
+**Root cause (one mechanism, four symptoms):** `FileBackgroundTaskStore` spawns
+a real bash launch script that writes a `running` execution-state file, runs the
+command, then rewrites the state to `completed`/`failed`. Control-health
+diagnostics (`server.ts:deriveRemoteDiagnostics`) flag a task as
+`missing-process` *only when a persisted `running` state file exists whose pid is
+dead*. On the original machine these tests passed by luck — the real subprocess
+either stayed alive or hadn't written its state file yet when the assertions ran.
+In this (faster) cloud sandbox the timing flips:
+- `src/cli/app.test.ts` ×2 — a `printf drift` / `printf ok` task completes (or is
+  reconciled to `missing-process`) before the `control=active` / `watch-active`
+  assertion, so a remote reads `degraded` / a task is no longer "active".
+- `src/control-plane/server.test.ts` ×1 (one giant test) — the breaker
+  progression expected `mixed → degraded → paused` as tasks fail one-by-one, but
+  three real `sleep 5` launches each wrote a `running` state file at once,
+  tripping the breaker straight to `degraded`.
+- `src/orchestrator/operator-runtime.test.ts` ×1 — a real `printf` / `tail -f`
+  detached process raced tempdir cleanup → `ENOTEMPTY: rmdir`.
+
+**Changed (additive, no production behaviour change):**
+- `src/cli/app.ts`: threaded two already-existing `StandaloneOperatorRuntime`
+  seams — `backgroundTaskSpawnProcess` and `backgroundTaskIsProcessRunning` —
+  through `OperatorCliAppOptions` into the runtime it constructs. Production
+  defaults are unchanged (real `spawn` / real `process.kill(pid,0)`); this only
+  gives callers (tests) an injection point the runtime already supported but the
+  CLI app hid.
+- The 3 failing tests now inject the **established no-op spawner**
+  (`() => ({ pid: 4242, unref() {} })`, the exact pattern already used across
+  `background-tasks.test.ts`) plus a deterministic liveness probe, and stage
+  command output explicitly where an assertion reads it (e.g. `"ok"`). No real
+  subprocess is launched, so nothing races and nothing leaks.
+
+**Test results:** `npm test` **170/174 → 174/174**, and **stable across 3
+consecutive full runs** (previously order/timing-dependent). `npm run build` ✅.
+`npm run typecheck:src` ✅ (exit 0 — source stays green). Full `tsc` total
+unchanged at **125** (all in test files; my edits added zero new type errors).
+
+**New idea:** add a tiny `vitest`-level guard that fails any test which calls the
+real `child_process.spawn` for a background task — e.g. a shared setup that wraps
+the default spawner and throws unless an explicit stub was injected. That turns
+"accidentally depends on real subprocess timing" from a latent flake into a
+loud, immediate authoring error, so this class of red-baseline regression can't
+recur silently. (Logged to ROADMAP.)
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

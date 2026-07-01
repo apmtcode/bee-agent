@@ -530,6 +530,10 @@ describe("StandaloneOperatorRuntime", () => {
   it("starts, syncs, recovers, lists, and cancels background tasks", async () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
+      // Stub the spawner so the test never launches real detached subprocesses
+      // (which raced with tempdir cleanup → ENOTEMPTY). State/output are written
+      // explicitly below, so a no-op spawn is fully sufficient.
+      backgroundTaskSpawnProcess: () => ({ pid: 4242, unref() {} }),
       backgroundTaskIsProcessRunning: () => false,
     });
     const session = await runtime.startSession({ title: "Tasks", agentId: "main" });
