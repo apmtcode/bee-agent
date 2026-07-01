@@ -6,6 +6,73 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-01 (run 9) — 🐛 Fixed a real launcher JSON-corruption bug + de-flaked the whole suite
+
+**Audited:** The build/test verification gate itself. On a clean checkout the
+suite was **flaky-failing** — 3–4 of 174 tests failed nondeterministically
+(different counts/tests each run: `170`, then `171`, then `170`). A broken gate
+means the engine can't trust its own step-5 self-check, so this was the
+highest-value target.
+
+**Root cause #1 — a genuine source bug** in `src/harness/background-tasks.ts`
+(`renderLaunchScript`). The launcher wrote the initial `running` execution state
+via `printf '%s' <payload> | sed "…; s/\"\$\$\"/$$/g"`. Two defects:
+- **pid never substituted:** in a sed regex `$` is an *end-of-line anchor*, so
+  the pattern `"$$"` never matches the literal text `"$$"` — the pid stayed the
+  string `"$$"` instead of the real number.
+- **JSON corruption:** commands containing quotes/newlines (e.g.
+  `printf 'line-1\nline-2\n'`) got mangled through the printf→sed→shell-quoting
+  layers, producing invalid JSON. `readJsonFile` then threw
+  `SyntaxError: Expected ',' or '}'…`, surfacing as the flaky test failure.
+  **Fix:** write the initial state with a `python3` heredoc (values passed as
+  shell args), exactly like the already-robust completion/failure paths —
+  `renderInitialStateWriterPython()`. No more sed, no more corruption; pid is a
+  real int.
+
+**Root cause #1b — a second real bug found by the new regression test.**
+`shellQuote` escaped embedded single quotes with the sequence `"'"'"'` — the
+POSIX idiom reversed. For any command/path containing a `'` (e.g.
+`printf 'line-1\n'`) it produced `printf "'line-1…"'`, so the launched process
+got a malformed argument and exited non-zero. Fixed to the correct `'"'"'`
+idiom (close-quote → double-quoted quote → reopen-quote). Verified in bash:
+buggy → `printf "'hi"'`, fixed → `printf 'hi'`.
+
+**Root cause #2 — test hygiene.** Three suites launched **real detached
+processes** (`sleep 5`, `tail -f`, `printf …`) through the default
+`child_process.spawn`. These leaked past the test (racing `fs.rm` cleanup →
+`ENOTEMPTY`) and their async state writes raced assertions. Fixes (additive):
+- Threaded `backgroundTaskSpawnProcess` / `backgroundTaskIsProcessRunning`
+  through `OperatorCliAppOptions` → runtime (`src/cli/app.ts`), so app-level
+  tests can inject deterministic mocks (production still uses real `spawn`).
+- `operator-runtime.test.ts`: inject a no-op spawn.
+- `app.test.ts`: a **pid-set-aware** mock — pids the mock hands out report
+  running (task stays `running` until explicitly stopped) while a hand-injected
+  dead pid (e.g. `999999`) still reconciles to `failed` (needed by the
+  degraded-control assertion); seeded the one output the launcher would have.
+- `server.test.ts`: a **no-op spawn that writes no state file** + kept
+  `isProcessRunning: () => false`, which preserves the circuit-breaker's
+  missing-process counting (2/3 tasks failed → degraded, 3/3 → paused) that was
+  previously passing only by luck of launcher-write timing.
+
+**New coverage:** added a launcher regression test that actually *executes* the
+generated `run.sh` for a command with single quotes AND newlines, then asserts
+`state.json` parses, `pid` is a number (never the string `"$$"`), the command
+round-trips exactly, and the task completes with exit 0 — locking in both fixes.
+
+**Test results:** full `npm test` **175/175 green across 3+ consecutive runs**
+(174 prior tests, now deterministic — was flaky 170–171 — plus the new
+regression test). Build ✅. `typecheck:src` ✅ (exit 0 — the `app.ts` threading
+didn't regress the source gate). Full `tsc` unchanged at **125** (all test-file
+debt; no source regressions).
+
+**New idea:** ship the long-queued `verify` script but make it **flake-aware** —
+run the suite N× (e.g. `vitest run --retry=0` twice) in the pre-push gate so
+nondeterminism fails loudly instead of intermittently. Complement it with a
+tiny test-lint that flags any `new StandaloneOperatorRuntime` /
+`new OperatorCliApp` in a `*.test.ts` that calls `startBackgroundTask`/
+`background-start` without a `backgroundTaskSpawnProcess` override — i.e. "no
+real process spawns in tests" — so this class of flake can't silently return.
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

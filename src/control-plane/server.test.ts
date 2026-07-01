@@ -18,6 +18,15 @@ async function makeTempDir(): Promise<string> {
   return dir;
 }
 
+// A no-op spawn for background-task tests: it launches no real detached process
+// (so nothing keeps writing to the temp dir after the test ends and races
+// assertions) and, crucially, writes NO state file. Tasks therefore stay in
+// their in-memory `running` record until the test explicitly writes execution
+// state, which — combined with `backgroundTaskIsProcessRunning: () => false` —
+// lets tests deterministically drive missing-process reconciliation.
+let backgroundTestPid = 900000;
+const noopBackgroundSpawn = () => ({ pid: (backgroundTestPid += 1), unref: () => {} });
+
 afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })));
 });
@@ -83,6 +92,7 @@ describe("OperatorControlPlaneServer", () => {
     const rootDir = await makeTempDir();
     const runtime = new StandaloneOperatorRuntime({
       rootDir,
+      backgroundTaskSpawnProcess: noopBackgroundSpawn,
       backgroundTaskIsProcessRunning: () => false,
       delivery: new OperatorDeliveryService(rootDir, {
         sendBrowserPush: async () => {},
@@ -952,6 +962,7 @@ describe("OperatorControlPlaneServer", () => {
     const driftingRootDir = await makeTempDir();
     const driftingRuntime = new StandaloneOperatorRuntime({
       rootDir: driftingRootDir,
+      backgroundTaskSpawnProcess: noopBackgroundSpawn,
       backgroundTaskIsProcessRunning: () => false,
     });
     const driftingServer = new OperatorControlPlaneServer({ runtime: driftingRuntime });
@@ -1018,6 +1029,7 @@ describe("OperatorControlPlaneServer", () => {
     const breakerRootDir = await makeTempDir();
     const breakerRuntime = new StandaloneOperatorRuntime({
       rootDir: breakerRootDir,
+      backgroundTaskSpawnProcess: noopBackgroundSpawn,
       backgroundTaskIsProcessRunning: () => false,
     });
     const breakerServer = new OperatorControlPlaneServer({ runtime: breakerRuntime });

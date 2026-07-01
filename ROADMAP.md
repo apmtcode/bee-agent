@@ -38,8 +38,23 @@ unchecked items are queued. Keep this richer than you found it each run.
     `skills.executable.*`, `push.subscriptions.*`, `trajectories.*`, `replays.*`,
     `cron.runs`/misc — plus a few genuine test-only typings. Map the rest, then
     fix residual test-only typings.
-- [ ] Add a `verify` npm script (`typecheck && build && test`) and have the
-      engine run it as a pre-push self-check each cycle.
+- [x] **Fixed a real launcher bug + de-flaked the suite** (2026-07-01, run 9).
+      `renderLaunchScript` wrote the initial running-state via `printf | sed`;
+      the sed `$` acted as a regex anchor (pid never substituted) and quoted/
+      newline commands corrupted the JSON → `readJsonFile` threw. Rewrote the
+      initial-state write as a `python3` heredoc (like the completion path).
+      Also stopped three tests from launching real detached processes by
+      injecting deterministic spawn mocks (threaded through `OperatorCliApp`).
+      Also fixed a second real bug the new regression test surfaced: `shellQuote`
+      used the reversed single-quote escape (`"'"'"'`), corrupting any command/
+      path with a `'`; now the correct `'"'"'` idiom. Suite now 175/175 green
+      ×3+ runs (was flaky 170–171); added a launcher end-to-end regression test.
+- [ ] Add a **flake-aware** `verify` npm script (`typecheck:src && build &&
+      test`, running the suite 2× to catch nondeterminism) and have the engine
+      run it as a pre-push self-check each cycle.
+- [ ] "No real spawns in tests" lint: flag any `*.test.ts` runtime/app that
+      calls `startBackgroundTask`/`background-start` without a
+      `backgroundTaskSpawnProcess` override, so process-leak flake can't return.
 - [x] Interim **source-only typecheck gate** — DONE run 7. `tsconfig.src.json`
       (excludes `**/*.test.ts`) + `typecheck:src` script; passes (exit 0). Next:
       have the engine run it as a per-run pre-push self-check.

@@ -1,12 +1,16 @@
+import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   BackgroundTaskExecutionService,
   FileBackgroundTaskStore,
   type BackgroundTaskExecutionState,
 } from "./background-tasks.js";
+
+const execFileAsync = promisify(execFile);
 
 const tempDirs: string[] = [];
 
@@ -369,5 +373,30 @@ describe("BackgroundTaskExecutionService", () => {
     await expect(fs.readFile(path.join(rootDir, task.execution.launchScript), "utf8")).resolves.toContain("bash -lc");
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
+  });
+
+  it("generates a launch script that writes valid state JSON for commands with quotes and newlines", async () => {
+    const rootDir = await makeTempDir();
+    const store = new FileBackgroundTaskStore(
+      path.join(rootDir, "background-tasks.json"),
+      () => ({ pid: 2222, unref() {} }),
+    );
+    // A command containing single quotes AND embedded newlines — the exact shape
+    // that previously corrupted the sed/printf-generated state.json (and left the
+    // pid as the literal string "$$" because `$` is a sed end-of-line anchor).
+    const command = "printf 'line-1\nline-2\n'";
+    const task = await store.start({ title: "tricky", command, cwd: rootDir, kind: "task" });
+
+    // Run the real generated launch script (the mock spawn above never executes it).
+    const scriptPath = path.join(rootDir, task.execution.launchScript);
+    await execFileAsync("bash", [scriptPath], { cwd: rootDir });
+
+    const raw = await fs.readFile(path.join(rootDir, task.execution.stateFile), "utf8");
+    const state = JSON.parse(raw) as BackgroundTaskExecutionState; // must not throw
+    expect(typeof state.pid).toBe("number"); // a real pid, never the string "$$"
+    expect(state.command).toBe(command); // command round-trips exactly, no corruption
+    expect(state.taskId).toBe(task.id);
+    expect(state.status).toBe("completed");
+    expect(state.exitCode).toBe(0);
   });
 });

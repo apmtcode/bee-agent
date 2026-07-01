@@ -10,6 +10,23 @@ import { OperatorCliApp, parseSlashCommand } from "./app.js";
 const tempDirs: string[] = [];
 const execFileAsync = promisify(execFile);
 
+// Deterministic background-task overrides for tests: never launch a real
+// detached process (which would keep writing to the temp dir after the test
+// ends and race assertions). A "process" is considered running iff it is a pid
+// this mock actually handed out — so tasks stay `running` until explicitly
+// stopped, while a pid the test injects by hand (to simulate a dead process)
+// correctly reconciles to `failed`.
+let backgroundTestPid = 900000;
+const backgroundTestSpawnedPids = new Set<number>();
+const backgroundTaskTestOverrides = {
+  backgroundTaskSpawnProcess: () => {
+    const pid = (backgroundTestPid += 1);
+    backgroundTestSpawnedPids.add(pid);
+    return { pid, unref: () => {} };
+  },
+  backgroundTaskIsProcessRunning: (pid: number) => backgroundTestSpawnedPids.has(pid),
+} as const;
+
 async function makeTempDir(): Promise<string> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "operator-cli-app-"));
   tempDirs.push(dir);
@@ -801,7 +818,7 @@ describe("OperatorCliApp", () => {
 
   it("supports session lifecycle, transcript, approvals, pairing, config, and prompt commands", async () => {
     const rootDir = await makeTempDir();
-    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25", ...backgroundTaskTestOverrides });
     const firstSession = await app.runtime.startSession({ title: "first", cwd: rootDir, agentId: "operator-cli" });
     const secondSession = await app.runtime.startSession({ title: "second", cwd: rootDir, agentId: "operator-cli" });
 
@@ -1063,7 +1080,7 @@ describe("OperatorCliApp", () => {
 
   it("supports background and monitor task commands plus cron commands", async () => {
     const rootDir = await makeTempDir();
-    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25", ...backgroundTaskTestOverrides });
     const session = await app.runtime.startSession({ title: "CLI ops", cwd: rootDir, agentId: "operator-cli" });
 
     const startOutput = await app.dispatchSlashCommand(
@@ -1078,6 +1095,9 @@ describe("OperatorCliApp", () => {
     if (!task) {
       throw new Error("expected background task");
     }
+    // The mock spawn never runs the real command, so seed the output the way the
+    // launcher would (the task stays `running` via the isProcessRunning override).
+    await app.runtime.backgroundTasks.executionService.writeOutput(task, "starting task\nok\n");
 
     const listOutput = await app.dispatchSlashCommand({ kind: "background-list" });
     expect(listOutput).toContain(task.id);

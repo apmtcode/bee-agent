@@ -528,9 +528,15 @@ describe("StandaloneOperatorRuntime", () => {
   });
 
   it("starts, syncs, recovers, lists, and cancels background tasks", async () => {
+    let nextPid = 4300;
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
       backgroundTaskIsProcessRunning: () => false,
+      // Use a no-op spawn so the test never leaks real detached processes
+      // (e.g. `tail -f`) that would keep writing to the temp dir after the test
+      // ends — the source of ENOTEMPTY-on-cleanup and cross-test flakiness.
+      // State/output are written deterministically by the assertions below.
+      backgroundTaskSpawnProcess: () => ({ pid: (nextPid += 1), unref: () => {} }),
     });
     const session = await runtime.startSession({ title: "Tasks", agentId: "main" });
 
