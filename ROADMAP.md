@@ -38,8 +38,19 @@ unchecked items are queued. Keep this richer than you found it each run.
     `skills.executable.*`, `push.subscriptions.*`, `trajectories.*`, `replays.*`,
     `cron.runs`/misc — plus a few genuine test-only typings. Map the rest, then
     fix residual test-only typings.
-- [ ] Add a `verify` npm script (`typecheck && build && test`) and have the
-      engine run it as a pre-push self-check each cycle.
+- [x] **Deterministic background-task tests** (2026-07-01, run 9) — the baseline
+      was flaky (3–4 varying fails/run) because tests launched real detached
+      subprocesses that raced hand-written state files. Added
+      `src/harness/background-tasks.testkit.ts` doubles + an
+      `OperatorCliApp` options passthrough; wired into the 4 flaky tests. Now
+      174/174 green 3×/3×.
+- [ ] Add a `verify` npm script (`typecheck:src && build && test`) and have the
+      engine run it as a pre-push self-check each cycle — run `test` **twice**
+      (a single green run hid the background-task flakiness for 8 runs).
+- [ ] **Flaky-test guard:** a test/lint that flags any `*.test.ts` calling
+      `startBackgroundTask` (via a runtime/app constructed without a
+      `backgroundTaskSpawnProcess` override), so a real detached subprocess can't
+      re-enter the suite.
 - [x] Interim **source-only typecheck gate** — DONE run 7. `tsconfig.src.json`
       (excludes `**/*.test.ts`) + `typecheck:src` script; passes (exit 0). Next:
       have the engine run it as a per-run pre-push self-check.

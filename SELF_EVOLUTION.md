@@ -6,6 +6,57 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-01 (run 9) — 🩹 Deterministic background-task tests: killed a flaky baseline (3–4 → 0 failures)
+
+**Audited:** The engine's own verification gate. On a fresh `npm test` the
+baseline was **flaky, not green** — 3–4 failures that varied run to run
+(`operator-runtime`, `server`, and two `app` tests). Root-caused it: those tests
+call `startBackgroundTask` with the **real** `child_process.spawn`, launching a
+detached bash/python subprocess that asynchronously writes its own
+`state.json`/`output.log`. That real process **races** the state files the tests
+write by hand:
+- The "control=active" assertions rely on a task having *no* persisted state yet
+  (diagnostics skip → active). When the subprocess wins the race and writes a
+  `running` state whose pid then reads as dead, diagnostics flip to
+  `degraded:… background task missing-process` — a flaky fail.
+- The `watch-active`/`background-view` assertions expect the task still
+  `running` with `ok` output, but `printf ok` completes+reconciles first →
+  "No active run or background task".
+
+This silently undermines *every* self-evolve run: step 5 says "do not push if
+tests fail", so a flaky baseline can block a good change or mask a real
+regression.
+
+**Changed (additive, test-only seam):**
+- `src/harness/background-tasks.testkit.ts` (**new**): deterministic doubles for
+  the already-injectable execution seam — `spawnFakeBackgroundProcess` (launches
+  no real process, returns a stable fake pid) + `isFakeBackgroundProcessRunning`
+  (that pid alive, all others dead). Clean under `typecheck:src`.
+- `src/cli/app.ts`: threaded two optional overrides
+  (`backgroundTaskSpawnProcess`, `backgroundTaskIsProcessRunning`) through
+  `OperatorCliAppOptions` into the runtime it constructs — production defaults
+  untouched (real spawn + real liveness). Mirrors the seam the runtime and store
+  already exposed.
+- Wired the doubles into the four flaky tests: `operator-runtime.test.ts` (1),
+  `server.test.ts` (3 runtimes), `app.test.ts` (2 apps). App-test-2 also gets a
+  one-line `writeOutput(task, "ok\n")` so the view/watch assertions have
+  deterministic output now that no real `printf` runs.
+
+**Test results:** `npm test` **174/174, green 3×/3× consecutively** (was 3–4
+flaky fails/run). Build ✅. `typecheck:src` ✅ (exit 0). Full `typecheck`
+unchanged at **125** (all in test files; no new debt). Zero production behaviour
+change — the fix is entirely in test wiring + an opt-in options passthrough.
+
+**New idea:** add a `verify` npm script (`typecheck:src && build && test`) and,
+crucially, run `vitest run --retry=0` **twice** in the engine's pre-push
+self-check — a single green run can hide flakiness (as this baseline did for 8
+runs). Bigger: a lint/test that greps `*.test.ts` for `startBackgroundTask`/
+`new StandaloneOperatorRuntime`/`new OperatorCliApp` **without** a
+`backgroundTaskSpawnProcess` override, so no future test can reintroduce a real
+detached subprocess into the suite.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
