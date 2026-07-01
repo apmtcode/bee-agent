@@ -15,6 +15,15 @@ async function makeTempDir(): Promise<string> {
   return dir;
 }
 
+// Deterministic stand-in for a spawned background process. Tests that drive the
+// execution state explicitly via `writeState` must not also race a real
+// detached `bash` process writing `state.json` underneath them.
+let fakePidCounter = 40000;
+function noopSpawnBackgroundProcess(): { pid: number; unref(): void } {
+  fakePidCounter += 1;
+  return { pid: fakePidCounter, unref() {} };
+}
+
 function buildHookCaptureCommand(outputFile: string): string {
   const script = [
     "import fs from 'node:fs';",
@@ -530,6 +539,7 @@ describe("StandaloneOperatorRuntime", () => {
   it("starts, syncs, recovers, lists, and cancels background tasks", async () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
+      backgroundTaskSpawnProcess: () => noopSpawnBackgroundProcess(),
       backgroundTaskIsProcessRunning: () => false,
     });
     const session = await runtime.startSession({ title: "Tasks", agentId: "main" });

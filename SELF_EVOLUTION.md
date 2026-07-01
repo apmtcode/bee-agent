@@ -6,6 +6,49 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-01 (run 9) — Fix `shellQuote` corruption in the background-task launcher (3 red tests → green)
+
+**Audited:** The actual test suite health at HEAD. Despite run 8 logging
+"174/174 passing", `npm test` showed **3 failing** tests
+(`operator-runtime.test.ts`, `control-plane/server.test.ts`, `cli/app.test.ts`),
+all cascading from `src/harness/background-tasks.ts`. Root-caused two coupled
+production bugs in the detached background-task launch script:
+
+1. **`shellQuote` used the wrong POSIX escape.** It replaced each `'` with
+   `"'"'"'` (leading `"`) instead of `'"'"'`. Any value containing a single
+   quote was corrupted — including `bash -lc ${quotedCommand}` (so commands with
+   single quotes could not even *run* correctly) and the emitted `state.json`
+   (invalid JSON → `readState` threw `SyntaxError`, tripping the "background task
+   missing-process" breaker and degrading remote control).
+2. **The `printf | sed` state writer never substituted `"$$"` → pid.** The
+   running `state.json` kept `"pid":"$$"` (a string), so `isProcessRunning(pid)`
+   saw a non-number and reported every real task as dead.
+
+**Changed (additive, `src/harness/background-tasks.ts`):**
+- Fixed `shellQuote` to emit the correct `'"'"'` escape.
+- Replaced the fragile `printf '%s' … | sed` initial-state write with a Python
+  writer (`renderRunningStateWriterPython`) fed the base payload through a
+  shell-safe env var (`OPENCLAW_STATE_BASE`); pid + timestamps come from argv, so
+  the running state is always valid JSON with a numeric pid. Reuses the same
+  `python3` seam the completed/failed writers already use.
+- Exported `renderLaunchScript` so it can be tested end-to-end.
+
+**Tests:** new `src/harness/launch-script.test.ts` renders + *executes* the real
+script (awaited, no race) for a hazard command full of quotes/newlines/`$` and
+asserts valid JSON, numeric pid, exact command round-trip, and real exit codes.
+Made the three previously-flaky tests deterministic by injecting a no-op
+`backgroundTaskSpawnProcess` where they force `isProcessRunning: () => false`
+(they drive state explicitly via `writeState`, so a real detached process must
+not race them). Full suite **176/176**, green on **3 consecutive runs**;
+`typecheck:src` clean; build ✅.
+
+**New idea (queued in ROADMAP):** a `writeJsonAtomic`-style *read* guard —
+`readJsonFile` should treat a `JSON.parse` failure the same as ENOENT when a
+fallback is provided (a half-written/**racing** file is indistinguishable from a
+missing one to a recovering reader), instead of throwing and tripping breakers.
+Pair it with a one-line "corrupt state file, using fallback" telemetry counter so
+genuine corruption is still visible.
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

@@ -4,6 +4,13 @@ Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
 ## Foundations / DX
+- [x] **Fix `shellQuote` corruption + broken pid substitution in the
+      background-task launcher** (2026-07-01, run 9). The POSIX single-quote
+      escape was mis-ordered (`"'"'"'` → `'"'"'`) and the `printf|sed` state
+      writer left `pid` a string; both are fixed and the initial running state is
+      now written by a Python writer via a shell-safe env var. Cleared 3 red
+      tests; suite 176/176 deterministic. New `launch-script.test.ts` executes
+      the real script end-to-end.
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`
@@ -80,6 +87,12 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Barrel-collision lint: scan `src/index.ts` re-exports for names exported
       from more than one module and flag them, so duplicate-identifier debt is
       caught at authoring time instead of accumulating silently.
+- [ ] **Corruption-tolerant `readJsonFile`** (from run 9): when a fallback is
+      provided, treat a `JSON.parse` failure like ENOENT (a half-written/racing
+      state file is indistinguishable from a missing one to a recovering reader)
+      instead of throwing and tripping the missing-process breaker. Add a
+      "corrupt state file, using fallback" telemetry counter so genuine
+      corruption stays visible. Small, high-leverage reliability fix.
 - [ ] Per-module typecheck ratchet: record each module's current `tsc` error
       count to a baseline file and fail if a module regresses above it. Lets the
       engine pay debt down module-by-module without one green-gate blocking
