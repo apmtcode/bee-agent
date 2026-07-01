@@ -4,6 +4,16 @@ Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
 ## Foundations / DX
+- [x] **Green the test suite** (2026-07-01, run 9). Fixed a real state-file
+      corruption bug in the background-task launch script (fragile `printf|sed`
+      write → invalid JSON for commands containing quotes; now a base64+python
+      atomic write) and de-flaked the tests that spawned real detached processes
+      (injected `noopSpawn` via the existing seam; added that seam to
+      `OperatorCliApp`). Suite went from 3–4/174 intermittent failures to
+      0 failures across ~55 full-suite runs.
+- [ ] **Soak/flake gate**: add a `test:soak` script (`vitest run` ×N, fail if any
+      iteration fails) and run it pre-push so "green once" can't mask a race.
+      Optionally a lint rule banning raw `child_process.spawn` in `*.test.ts`.
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`

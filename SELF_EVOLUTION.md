@@ -6,6 +6,53 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-01 (run 9) — Fix background-task state-file corruption + deterministic tests
+
+**Audited:** Project health. `npm test` was **not** green as the last run
+claimed — it failed **3–4/174 tests intermittently**. Root-caused two distinct,
+compounding defects (one real source bug, one test-harness race).
+
+**Bug 1 — state-file corruption (real production bug, `src/harness/background-tasks.ts`).**
+The background-task launch script wrote its initial "running" execution state via
+a `printf '%s' <json> | sed "…s/\"$$\"…/g" > state.json` pipeline. Two problems:
+(a) the `sed` term `s/"$$"/…/` embedded raw `"` inside the shell's double-quoted
+sed argument, silently breaking the quoting; (b) any task **command containing
+single quotes** (e.g. `printf 'line-1\nline-2\n'`) got mangled by the fragile
+`shellQuote` round-trip, producing **invalid JSON** on disk. A concurrent
+`recover`/`sync` reader then hit `SyntaxError: Expected ',' or '}'` — a crash
+that affects real deployments, not just tests. **Fix:** render the initial state
+from a **base64-encoded JSON payload** (shell-safe: `[A-Za-z0-9+/=]`) decoded and
+stamped by `python3` — the same robust path the completion writers already use —
+and make **all three** state writes **atomic** (`tmp` file + `os.replace`/`mv`)
+so readers never observe a torn document. Verified end-to-end: a launch script
+for a command with single *and* double quotes now writes valid JSON with the
+command preserved byte-for-byte.
+
+**Bug 2 — real detached processes in unit tests (flaky + leaky).** Several tests
+constructed runtimes that **actually `spawn`ed** `sleep 5` / `tail -f app.log`
+detached processes, whose launch scripts wrote state files asynchronously,
+racing the tests' manual `writeState` and leaking orphan processes. This made the
+platform circuit-breaker test observe **3 failures instead of 2** (~8/15 flake).
+**Fix:** used the pre-existing `backgroundTaskSpawnProcess` injection seam to pass
+a `noopSpawn` stub in the state-driven tests, and **added the same seam to
+`OperatorCliApp`** (`backgroundTaskSpawnProcess` / `backgroundTaskIsProcessRunning`
+options → passed through to its runtime) so `app.test.ts` can be deterministic
+too. One genuine end-to-end integration test (`printf ok` → real launch pipeline)
+was deliberately **kept on the real spawn** and documented as such.
+
+**Test results:** full suite **174/174**, now **0 failures across ~55 full-suite
+runs** (was 3–4/174 intermittent, and the breaker test alone flaked 8/15).
+`typecheck:src` ✅ (exit 0). Full `tsc` unchanged at **125** (no regression).
+Build ✅.
+
+**New idea:** add a tiny **`scripts/soak-test`** (or `test:soak` npm script) that
+runs `vitest run` N times and fails if any iteration fails — a cheap flake gate
+the engine can run pre-push so a "green once" suite can't mask a race like this
+again. Longer term, a lint rule forbidding raw `child_process.spawn` in `*.test.ts`
+(require the injected seam) would prevent reintroducing real-process leakage.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
