@@ -8,7 +8,13 @@ import { OperatorCronService } from "./cron-service.js";
 import { OperatorDeliveryService } from "./delivery.js";
 import { buildRuntimeEventFilter, subscribeRuntimeEvents } from "./subscriptions.js";
 import { StandaloneOperatorRuntime } from "../orchestrator/operator-runtime.js";
+import type { SpawnBackgroundProcess } from "../harness/background-tasks.js";
 import type { ReviewedExportManifest } from "../training/export-manifest.js";
+
+// Deterministic stand-in for the real detached `spawn`. Returns a fake child
+// (pid + no-op unref) so no real process runs and asynchronously writes its own
+// state file, which would race the tests' manual state writes and flake.
+const mockBackgroundSpawn: SpawnBackgroundProcess = () => ({ pid: 4242, unref() {} });
 
 const tempDirs: string[] = [];
 
@@ -84,6 +90,7 @@ describe("OperatorControlPlaneServer", () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir,
       backgroundTaskIsProcessRunning: () => false,
+      backgroundTaskSpawnProcess: mockBackgroundSpawn,
       delivery: new OperatorDeliveryService(rootDir, {
         sendBrowserPush: async () => {},
       }),
@@ -953,6 +960,7 @@ describe("OperatorControlPlaneServer", () => {
     const driftingRuntime = new StandaloneOperatorRuntime({
       rootDir: driftingRootDir,
       backgroundTaskIsProcessRunning: () => false,
+      backgroundTaskSpawnProcess: mockBackgroundSpawn,
     });
     const driftingServer = new OperatorControlPlaneServer({ runtime: driftingRuntime });
     const driftingBootstrap = await driftingServer.handle({
@@ -1019,6 +1027,7 @@ describe("OperatorControlPlaneServer", () => {
     const breakerRuntime = new StandaloneOperatorRuntime({
       rootDir: breakerRootDir,
       backgroundTaskIsProcessRunning: () => false,
+      backgroundTaskSpawnProcess: mockBackgroundSpawn,
     });
     const breakerServer = new OperatorControlPlaneServer({ runtime: breakerRuntime });
     const breakerOne = await breakerServer.handle({
@@ -2098,7 +2107,7 @@ describe("OperatorControlPlaneServer", () => {
   });
 
   it("filters runtime events by session, run, and family", async () => {
-    const runtime = new StandaloneOperatorRuntime({ rootDir: await makeTempDir() });
+    const runtime = new StandaloneOperatorRuntime({ rootDir: await makeTempDir(), backgroundTaskSpawnProcess: mockBackgroundSpawn });
     const sessionA = await runtime.startSession({ title: "Session A" });
     const sessionB = await runtime.startSession({ title: "Session B" });
     const runA = await runtime.startRun({ sessionId: sessionA.id, title: "Run A" });

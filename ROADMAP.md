@@ -70,6 +70,20 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Generalization eval harness: measure replay fidelity on held-out but
       related synthetic trajectories.
 
+## Reliability / correctness
+- [x] Fix `shellQuote` in `src/harness/background-tasks.ts` (emitted `"'"'"'`
+      instead of `'\''`, corrupting state JSON for any command/cwd with a single
+      quote) and make background-task state writes atomic — run 9. Also de-flaked
+      the three integration tests that spawned real detached processes.
+- [ ] **Shell-quote fuzz guard:** property-style test feeding `shellQuote` a
+      corpus of nasty strings (`'`, `"`, `$`, backtick, newline, `\`) and
+      asserting `bash -c "printf %s <quoted>"` round-trips byte-for-byte. Would
+      have caught the run-9 bug; guards all shell-embedding paths.
+- [ ] Audit other `spawn`/shell-embedding sites (cron delivery, worktree,
+      execution-policy hooks) for the same unquoted-interpolation class of bug
+      the launch script had (e.g. `printf "starting ${task.kind} ${task.id}"`
+      still interpolates ids into a double-quoted bash string).
+
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in

@@ -6,6 +6,60 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-02 (run 9) — Fix background-task state corruption (`shellQuote` bug) + de-flake tests
+
+**Audited:** Test health at run start. The suite was **not** green — 3 tests
+failed (`operator-runtime`, `control-plane/server`, `cli/app`), all with the
+same `SyntaxError: Expected ',' or '}' … JSON` thrown from `readJsonFile` while
+reading a background-task **execution state file**. This contradicted run 8's
+"174/174" claim, so I treated getting to a *stable* green as the highest-value
+step before any new capability.
+
+**Root cause (two real bugs in `src/harness/background-tasks.ts`):**
+1. **`shellQuote` was wrong.** It escaped `'` as `` "'"'"' `` (6 chars, leading
+   `"`) instead of the POSIX-correct `'\''` / `'"'"'` (leading `'`). The stray
+   leading `"` injected a spurious `"` before *every* single quote, corrupting
+   any command/cwd containing a quote. The launch script embeds the command in
+   the JSON state file, so `printf 'line-1\nline-2\n'` produced
+   `"command":"printf "'line-1…"'"` → invalid JSON → every reader crashed on
+   `JSON.parse`. This is a genuine production defect: any real background task
+   whose command or cwd contains a single quote would corrupt its own state.
+2. **The `sed` pid substitution never fired.** `s/"$$"/$$/g` had unescaped inner
+   `"` (broke bash's double-quoting) and `$` is a regex metachar, so the running
+   state kept `pid` as the literal string `"$$"` instead of the numeric PID.
+
+**Changed (additive, `src/harness/background-tasks.ts`):**
+- Fixed `shellQuote` to the correct `'\''` escape (documented why).
+- Replaced the fragile `printf | sed > file` running-state write with the same
+  atomic Python writer the completed/failed paths use, passing all values via
+  **argv** (never interpolated into the script body) — eliminating the sed
+  placeholder path *and* the pid bug in one move.
+- Made all three state writes **atomic** (temp file + `os.replace`/`mv -f`) so a
+  concurrent reader can never observe a half-written JSON file (defense against
+  the detached-process/reader race).
+- New injectable seam `backgroundTaskSpawnProcess` on `OperatorCliAppOptions`
+  (forwarded to the runtime) so `cli/app` background tasks can be driven
+  deterministically in tests.
+
+**De-flaked the integration tests:** they spawned *real* detached processes
+(only `isProcessRunning` was mocked) that asynchronously wrote state and raced
+the tests' manual `writeState`. Injected a deterministic no-op spawn mock into
+every runtime/app that starts a background task (`operator-runtime`, `server` ×4,
+`cli/app`). Added a real-bash regression test that runs the generated launch
+script with a single-quote-heavy command and asserts the state file is valid
+JSON with a numeric pid and the command preserved verbatim.
+
+**Test results:** suite **3-failing → 175/175**, and now **stable** (5/5 full
+runs green, previously ~50% flake). `typecheck:src` ✅ exit 0. `build` ✅. Full
+`tsc` unchanged at **125** (test-file additions typecheck clean).
+
+**New idea:** add a tiny `assertShellQuoteRoundTrip` property-style test that
+feeds `shellQuote` a fuzz corpus of nasty strings (embedded `'`, `"`, `$`, `` ` ``,
+newlines, `\`) and asserts `bash -c "printf %s <quoted>"` returns the input
+byte-for-byte. That would have caught this class of bug immediately and guards
+all future shell-embedding code paths (the launch script isn't the only one).
+Queued in ROADMAP.
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

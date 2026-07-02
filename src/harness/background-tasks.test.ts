@@ -370,4 +370,28 @@ describe("BackgroundTaskExecutionService", () => {
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
   });
+
+  it("emits a launch script that writes valid JSON state for commands containing single quotes", async () => {
+    // Regression: shellQuote once produced `"'"'"'` (leading double quote), which
+    // injected a stray `"` before every single quote and corrupted the JSON
+    // state file the launch script writes — crashing every reader on JSON.parse.
+    const rootDir = await makeTempDir();
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"), () => ({ pid: 1111, unref() {} }));
+    const command = "printf 'quoted \"value\" %s\\n' 'it'\\''s here'";
+    const task = await store.start({ title: "Quoted", command, cwd: rootDir, kind: "task" });
+
+    // Run the generated launch script for real and inspect the state file it writes.
+    const scriptPath = path.join(rootDir, task.execution.launchScript);
+    const { spawnSync } = await import("node:child_process");
+    const result = spawnSync("bash", [scriptPath], { cwd: rootDir, encoding: "utf8" });
+    expect(result.status).toBe(0);
+
+    const raw = await fs.readFile(path.join(rootDir, task.execution.stateFile), "utf8");
+    const state = JSON.parse(raw) as BackgroundTaskExecutionState;
+    expect(state.status).toBe("completed");
+    expect(state.exitCode).toBe(0);
+    expect(typeof state.pid).toBe("number");
+    // The original command (single quotes and all) must survive verbatim.
+    expect(state.command).toBe(command);
+  });
 });
