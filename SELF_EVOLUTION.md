@@ -6,6 +6,64 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-02 (run 9) — 🐞 Fixed broken `shellQuote` + racy state writer: background tasks now actually run; suite deterministically green
+
+**Audited:** Ran the full suite fresh and found a **regression from the claimed
+174/174** — 3 tests failed with `SyntaxError: Expected ',' or '}' … at position
+311` while reconciling background-task state. Traced it end-to-end (dumped the
+generated `run.sh`, the launch-script output, and the offending state file).
+
+**Three real, latent bugs found and fixed** (all in `src/harness/background-tasks.ts`):
+1. **`shellQuote` was broken** — it escaped a literal `'` as `"'"'"'` (leading
+   double-quote) instead of the POSIX `'"'"'`. That left an *unbalanced quote*,
+   so `bash -lc <command>` died with `unexpected EOF while looking for matching '`
+   for **any** command, cwd, or path containing a single quote. i.e. a whole
+   class of background tasks silently never executed (exit 2, no output). One-char
+   fix; the highest-impact bug of the run.
+2. **Initial state writer produced malformed/incorrect JSON.** The old
+   `printf '%s' PAYLOAD | sed "s/\"$$\"/$$/g"` pipeline (a) corrupted the JSON
+   whenever the command contained quotes/newlines (via the broken `shellQuote`),
+   and (b) the pid substitution `s/"$$"/$$/g` collapsed to a no-op after shell
+   quoting, so the recorded pid stayed the literal string `"$$"`. Replaced it with
+   a **Python writer fed a base64-encoded payload** (base64 is shell-safe — no
+   quotes/newlines/`$`), with pid + timestamps filled in by Python.
+3. **Non-atomic state writes → partial reads.** Both the initial writer and the
+   completion/`failed` Python writer did truncate-then-write, so a reconciler
+   racing the launcher could read a half-written file. Made **all** launch-script
+   state writes atomic (temp file + `os.replace`), matching `writeJsonAtomic`.
+
+**Test-isolation fixes** (the failures only reproduced under parallel load
+because the tests use a **real** spawn): injected a no-op
+`backgroundTaskSpawnProcess: () => ({ pid, unref })` into the 4 runtimes that
+drive task/breaker state via manual `writeState` (operator-runtime + the 3
+server.test.ts runtimes) so the real launcher can't clobber those writes.
+
+**Bonus real bug — reconnect cursor could drop events.** Chasing the *last*
+intermittent failure (`gateway-transport.test.ts`, ~1/8 under load) surfaced a
+genuine product bug: events are stamped with millisecond `Date.now()`, and a
+consumer resuming with an `afterTs` cursor filters `event.ts > afterTs` — so any
+event tying the boundary millisecond is **silently lost on reconnect**. Fixed at
+the source: `OperatorEventBus.publish` now enforces **strictly-increasing** `ts`
+(bumps to `lastTs + 1` on any tie/regression), making replay lossless.
+
+**New tests:** a real end-to-end launch-script test (quote+newline command →
+valid terminal state, numeric pid, exit 0, output round-trip — previously no test
+executed the real script) and event-bus monotonicity tests.
+
+**Test results:** full suite **0 failures across 12 consecutive runs** (was
+flaky 1–3/run before). `typecheck:src` ✅. Full `tsc` unchanged at **125** (all
+test-file debt). Build ✅. Net **177/177** (was 174; +1 e2e launch test, +2
+event-bus monotonicity tests).
+
+**New idea:** the launch-script generator emits bash+Python inline strings that
+no compiler checks — a lint that renders the script for a battery of adversarial
+commands (single quotes, double quotes, newlines, `$()`, backticks, unicode) and
+asserts the produced state JSON parses and round-trips would have caught bugs #1
+and #2 at authoring time. Alternatively, drop the bash launcher entirely for a
+small Node runner child that reads its spec from a file (no shell quoting at all).
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

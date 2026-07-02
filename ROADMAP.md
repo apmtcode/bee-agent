@@ -3,6 +3,25 @@
 Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
+## Reliability (background tasks + event stream)
+- [x] **Fix broken `shellQuote`** (2026-07-02, run 9) — escaped `'` as `"'"'"'`
+      instead of POSIX `'"'"'`, breaking `bash -lc` for any command/cwd/path with
+      a single quote (whole class of background tasks never ran).
+- [x] **Robust + atomic background-task state writer** (2026-07-02, run 9) —
+      base64 payload + Python writer (no fragile `printf|sed`), correct numeric
+      pid, and temp-file+`os.replace` atomic writes (no partial reads).
+- [x] **Strictly-monotonic event timestamps** (2026-07-02, run 9) —
+      `OperatorEventBus.publish` bumps tied/regressing `ts` so `afterTs` reconnect
+      cursors are lossless.
+- [x] **Test isolation for real-spawn background-task tests** (2026-07-02, run 9)
+      — inject a no-op spawn where tests drive state via manual `writeState`.
+- [ ] **Fix `bash -lc` newline handling / launcher robustness.** Commands with
+      embedded newlines now execute (shellQuote fixed), but the bash launcher is
+      still quoting-sensitive. Consider replacing the bash+Python launch script
+      with a small Node runner child that reads a JSON spec file — zero shell
+      quoting. Add an adversarial launch-script lint (single/double quotes,
+      newlines, `$()`, backticks, unicode) asserting the state JSON round-trips.
+
 ## Foundations / DX
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.

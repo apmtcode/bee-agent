@@ -16,6 +16,7 @@ export class OperatorEventBus<T extends OperatorEvent = OperatorEvent> {
   private readonly listeners = new Set<(event: T) => void>();
   private readonly waiters = new Set<() => void>();
   private closed = false;
+  private lastTs = 0;
 
   constructor(options: { replayLimit?: number } = {}) {
     this.replayLimit = options.replayLimit ?? 0;
@@ -24,6 +25,17 @@ export class OperatorEventBus<T extends OperatorEvent = OperatorEvent> {
   publish(event: T): void {
     if (this.closed) {
       return;
+    }
+    if (typeof event.ts === "number") {
+      // Guarantee strictly-increasing timestamps. Callers stamp events with
+      // millisecond-granular `Date.now()`, so bursts published within the same
+      // millisecond would otherwise share a `ts`. A reconnecting consumer that
+      // resumes with a `ts > afterTs` cursor silently drops any event whose ts
+      // ties the cursor boundary; monotonic timestamps make that replay lossless.
+      if (event.ts <= this.lastTs) {
+        event.ts = this.lastTs + 1;
+      }
+      this.lastTs = event.ts;
     }
     if (this.replayLimit > 0) {
       this.replayEvents.push(event);

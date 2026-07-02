@@ -734,27 +734,36 @@ function renderLaunchScript(task: BackgroundTaskRecord): string {
   const quotedOutputFile = shellQuote(task.execution.outputFile);
   const quotedCwd = shellQuote(task.cwd);
   const quotedCommand = shellQuote(task.command);
-  const quotedStatePayload = shellQuote(
+  // The initial "running" state is emitted by Python from a base64-encoded JSON
+  // payload rather than a `printf | sed` pipeline. base64 is shell-safe (no
+  // quotes, newlines, or `$`), so commands that themselves contain single
+  // quotes or newlines can no longer corrupt the JSON, and the pid/timestamp are
+  // filled in by Python (the old `sed "s/\"$$\"/$$/g"` never actually replaced
+  // the pid — it collapsed to a no-op, leaving `"pid":"$$"`).
+  const encodedStatePayload = Buffer.from(
     JSON.stringify({
       version: 1,
       taskId: task.id,
       kind: task.kind,
       status: "running",
-      pid: "$$",
-      startedAt: "__OPENCLAW_STARTED_AT__",
-      updatedAt: "__OPENCLAW_STARTED_AT__",
       outputFile: task.execution.outputFile,
       cwd: task.cwd,
       command: task.command,
     }),
-  );
+    "utf8",
+  ).toString("base64");
 
   return [
     "#!/usr/bin/env bash",
     "set -euo pipefail",
     `mkdir -p $(dirname ${quotedStatePath}) $(dirname ${quotedOutputFile})`,
     "started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-    `printf '%s' ${quotedStatePayload} | sed "s/__OPENCLAW_STARTED_AT__/$started_at/g; s/\"\$\$\"/$$/g" > ${quotedStatePath}`,
+    // Write the initial state atomically (temp file + os.replace) so a concurrent
+    // reader — e.g. reconciliation racing the freshly spawned launcher — never
+    // observes a truncated or half-written JSON document.
+    `python3 - ${quotedStatePath} $$ "$started_at" <<'PY'`,
+    ...renderInitialStateWriterPython(encodedStatePayload),
+    "PY",
     `printf '%s\n' "starting ${task.kind} ${task.id}" >> ${quotedOutputFile}`,
     `if cd ${quotedCwd} && bash -lc ${quotedCommand} >> ${quotedOutputFile} 2>&1; then`,
     "  completed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
@@ -773,6 +782,27 @@ function renderLaunchScript(task: BackgroundTaskRecord): string {
   ].join("\n");
 }
 
+function renderInitialStateWriterPython(encodedPayload: string): string[] {
+  return [
+    "import base64",
+    "import json",
+    "import pathlib",
+    "import sys",
+    "state_path = pathlib.Path(sys.argv[1])",
+    "pid = int(sys.argv[2])",
+    "started_at = sys.argv[3]",
+    `state = json.loads(base64.b64decode("${encodedPayload}").decode("utf-8"))`,
+    "state['pid'] = pid",
+    "state['startedAt'] = started_at",
+    "state['updatedAt'] = started_at",
+    // Atomic write: stage to a temp file then os.replace() so readers never see
+    // a partially-written state document.
+    "tmp_path = state_path.with_name(state_path.name + '.init.' + str(pid) + '.tmp')",
+    "tmp_path.write_text(json.dumps(state, indent=2) + '\\n')",
+    "tmp_path.replace(state_path)",
+  ];
+}
+
 function renderStateWriterPython(status: BackgroundTaskExecutionState["status"]): string[] {
   return [
     "import json",
@@ -789,10 +819,19 @@ function renderStateWriterPython(status: BackgroundTaskExecutionState["status"])
     "state['completedAt'] = timestamp",
     "state['exitCode'] = exit_code",
     `state['error'] = None if '${status}' == 'completed' else f'background task exited non-zero ({exit_code})'`,
-    "state_path.write_text(json.dumps(state, indent=2) + '\\n')",
+    // Atomic write: stage to a temp file then os.replace() so readers never see
+    // a partially-written state document.
+    "tmp_path = state_path.with_name(state_path.name + '.exit.' + str(pid) + '.tmp')",
+    "tmp_path.write_text(json.dumps(state, indent=2) + '\\n')",
+    "tmp_path.replace(state_path)",
   ];
 }
 
 function shellQuote(value: string): string {
-  return `'${value.replaceAll(`'`, `"'"'"'`)}'`;
+  // POSIX single-quote escaping: a literal `'` inside a single-quoted string is
+  // written as `'"'"'` (close the quote, an escaped `'` inside double quotes,
+  // reopen the quote). The previous sequence started with a double quote
+  // (`"'"'"'`), which left an unbalanced quote and broke `bash -lc` for any
+  // command, cwd, or path containing a single quote.
+  return `'${value.replaceAll(`'`, `'"'"'`)}'`;
 }

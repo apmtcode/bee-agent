@@ -370,4 +370,38 @@ describe("BackgroundTaskExecutionService", () => {
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
   });
+
+  it("runs the real launch script and writes valid terminal state for quote/newline commands", async () => {
+    const rootDir = await makeTempDir();
+    // Default (real) spawn — actually execute the generated launch script.
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"));
+    // Single quotes + embedded newlines previously corrupted the `printf | sed`
+    // state writer (producing malformed single-line JSON) and never substituted
+    // the pid (left the literal `"$$"`). The base64 + Python writer must handle
+    // them and always leave a well-formed, atomically-written state document.
+    const command = "printf 'line-1\nline-2\n'";
+    const task = await store.start({ sessionId: "sess-e2e", title: "Emit lines", command, cwd: rootDir });
+
+    let state: BackgroundTaskExecutionState | undefined;
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      // readState must never throw — atomic writes guarantee no partial reads.
+      state = await store.executionService.readState(task);
+      if (state && (state.status === "completed" || state.status === "failed")) {
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+
+    expect(state).toBeDefined();
+    expect(state?.status).toBe("completed");
+    expect(state?.exitCode).toBe(0);
+    // pid is a real number now, not the literal "$$" the old sed writer left.
+    expect(typeof state?.pid).toBe("number");
+    // Command round-trips through base64 without corruption.
+    expect(state?.command).toBe(command);
+
+    const output = await store.executionService.readOutput(task);
+    expect(output).toContain("line-1");
+    expect(output).toContain("line-2");
+  });
 });

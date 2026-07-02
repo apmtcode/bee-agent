@@ -531,6 +531,11 @@ describe("StandaloneOperatorRuntime", () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
       backgroundTaskIsProcessRunning: () => false,
+      // Use a no-op spawn so the real launch script's asynchronous state/output
+      // writes can't race the manual writeState/writeOutput calls this test uses
+      // to drive specific recovery scenarios. Launch-script rendering + execution
+      // is covered separately by the end-to-end launch test.
+      backgroundTaskSpawnProcess: () => ({ pid: 4242, unref() {} }),
     });
     const session = await runtime.startSession({ title: "Tasks", agentId: "main" });
 
