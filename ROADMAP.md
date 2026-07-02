@@ -58,17 +58,43 @@ unchecked items are queued. Keep this richer than you found it each run.
 ## Local-movement learning subsystem
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
-(exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
-      objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
-      deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+(exporter, job store/manifest, runner, execution service, and now `model/`). Next
+increments:
+- [x] Inventory `src/capture` + `src/training` vs. the objective's five pieces —
+      DONE run 9. Capture→schema→dataset→export existed; the runner only emitted
+      on-device **launch scripts**; there was no trainable/inferable model. That gap
+      is what run 9 filled.
+- [x] Pluggable local-model backend interface (`MovementModelBackend`) with a
+      deterministic mock backend (order-N Markov + n-gram back-off) and a documented
+      seam for a real on-device small model — DONE run 9 (`src/training/model/`).
+- [x] Synthetic event-stream generator to validate capture→dataset→replay
+      round-trips without real OS input — DONE run 9 (`synthetic.ts`, seeded LCG).
+- [x] Generalization eval harness: next-event accuracy + rollout fidelity (LCS) on
+      held-out related synthetic trajectories — DONE run 9 (`eval.ts`).
+- [ ] Wire the model layer into the control plane: a `trainMovementModel` RPC that
+      fits `MockMovementBackend` on approved trajectories (via `buildMovementDataset`)
+      and a `movement.generate`/`movement.replay` method that returns a generalized
+      rollout + its eval-harness fidelity score, so the operator can dry-run before
+      launching real on-device training.
+- [ ] Real on-device backend implementing `MovementModelBackend` (MLX/GGUF) behind
+      the registry, plus a persistence path using `serialize()`/`loadMovementModel`.
+
+## Test health (pre-existing, surfaced run 9)
+- [ ] **Deterministic background-task process simulation for the big integration
+      tests.** `control-plane/server.test.ts` and `cli/app.test.ts` each have one
+      large aggregate control-health case that calls `startBackgroundTask` with real
+      commands (`sleep 5`, `printf drift`) and asserts a specific mix of
+      active/degraded/failed remote control states. Because this environment has
+      `bash`/`python3`/`date`, the real detached launch scripts write `state.json`
+      and flap control health non-deterministically (both fail on the clean tree).
+      Fix: inject a *controllable* `backgroundTaskSpawnProcess`/`backgroundTaskIs
+      ProcessRunning` per task (a fake process table the test drives) so each task's
+      lifecycle is explicit — some running, some completed, some failed — matching
+      the assertions. (Run 9 fixed the analogous `operator-runtime.test.ts` case with
+      a simple no-op spawn; these two need per-task control, not a global mock.)
+- [x] Fixed malformed POSIX `shellQuote` in `src/harness/background-tasks.ts` that
+      corrupted background-task `state.json` for commands containing single quotes —
+      DONE run 9.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

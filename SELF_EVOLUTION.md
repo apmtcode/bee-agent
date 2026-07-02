@@ -6,6 +6,68 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-02 (run 9) — 🧠 Movement-model subsystem: train + infer + generalize (objective #2 c/d) + a real reliability bug fix
+
+**Audited:** The local-movement learning subsystem (`src/capture/` + `src/training/`)
+against objective #2. Found the capture→dataset→export pipeline exists and the
+`LocalAppleSiliconTrainingRunner` emits **launch scripts** for real on-device
+MLX/axolotl runs — but there was **no model that can actually train or infer**, even
+in simulation. Objective #2 (c) "post-train a local model to repeat movements" and
+(d) "generalize to new-but-related movements" had zero runnable implementation in the
+cloud/CI where there is no real machine or GPU.
+
+**Changed (new module `src/training/model/`, all additive):**
+- `movement-model.ts` — a pluggable `MovementModelBackend` interface (so a real
+  on-device backend can slot in later), plus a deterministic, dependency-free
+  `MockMovementBackend`: an **order-N Markov model with n-gram back-off** that learns
+  transitions between movement tokens (`action:{tool}` / `observation:{source}`),
+  replays recorded movements, and generalizes to unseen prefixes by backing off to
+  lower-order transitions learned across other sequences. Serializable
+  (`serialize()`/`loadMovementModel`) and registry-resolvable (`MovementModelRegistry`).
+  Default order bumped 3→4 so repeated sub-movements (e.g. two `type→press→screen`
+  blocks) are faithfully reproduced rather than truncated at an ambiguous 3-gram.
+- `dataset.ts` — builds a `MovementDataset` from `TrajectorySpan[]` (reviewed/redacted
+  views honored) and from the exporter's `ReplayManifest[]`, bridging capture → model.
+- `synthetic.ts` — a deterministic (seeded LCG, no RNG) synthetic movement-stream
+  generator with built-in desktop task templates, for train/held-out splits without
+  real OS input (roadmap item).
+- `eval.ts` — a generalization eval harness: held-out next-event accuracy + rollout
+  fidelity (token-level LCS) + exact-match rate (roadmap item).
+- Exported the whole surface from `src/index.ts`.
+
+**Bonus — a genuine reliability bug fixed in `src/harness/background-tasks.ts`:**
+while getting the suite green I traced a background-task recovery crash to a
+**malformed POSIX single-quote escape** in `shellQuote` — it replaced `'` with
+`"'"'"'` (6 chars, extra leading `"`) instead of the correct `'"'"'` (the sibling
+`src/training/runner.ts` already had it right). For any background command containing
+a single quote (e.g. `printf 'line-1\nline-2\n'`) the launch script wrote a corrupt,
+unparseable `state.json`, crashing `recoverBackgroundTasks` with a JSON `SyntaxError`.
+Corrected it to match `runner.ts`.
+
+**Also:** made the `operator-runtime` background-task test deterministic by injecting
+the existing `backgroundTaskSpawnProcess` seam (a no-op spawn) so a real detached
+process no longer races the test's manual state writes.
+
+**Test results:** new module **23/23 pass**; `operator-runtime.test.ts` **17/17**
+(was flaky/red). Build ✅, `typecheck:src` ✅ (source stays clean — new files
+typecheck). Full suite **195/197**; the **2 remaining failures are pre-existing**
+(confirmed red on the clean tree via `git stash`) — `server.test.ts` and
+`app.test.ts` each have one large aggregate control-health integration case that
+spawns **real** background processes and asserts a specific mix of active/degraded
+remote states. Now that this environment actually has `bash`/`python3`/`date`, those
+real processes write `state.json` and flap control health non-deterministically. A
+global spawn mock can't express the per-remote intent (some tasks *should* be
+running, others *should* be failed), so a correct fix is a per-task controllable
+process simulation — logged to ROADMAP as the next step, not hacked in this run.
+
+**New idea:** add a `trainMovementModel` RPC + a `movement.replay`/`movement.generate`
+control-plane method so the operator can, from the CLI, fit a model on approved
+trajectories and dry-run a generalized rollout — closing the loop from the existing
+`trajectories.*`/`replays.*` methods to the new model layer, with the eval harness
+surfacing a fidelity score before any real on-device training is launched.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
