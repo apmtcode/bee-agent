@@ -6,6 +6,65 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-02 (run 9) — 🐛 Fix `shellQuote` corruption + atomic state writes; suite back to green (deterministic 175/175)
+
+**Audited:** The test suite health (the run-8 log claimed 174/174, but the suite
+now fails). Baseline `npm test` was **flaky: 3–4 failures per run**, blocking the
+green gate entirely. Traced every failure to the **background-task execution
+subsystem** (`src/harness/background-tasks.ts`) and its launch-script emitter.
+
+**Two real bugs found + fixed (production code, not test-only):**
+1. **`shellQuote` double-quote injection (root cause).** The helper escaped a
+   single quote as `` `"'"'"'` `` — a spurious *leading* `"`. Correct POSIX
+   escaping is `` `'"'"'` ``. For any value containing a `'` (e.g. the command
+   `echo 'hello world'`, or the JSON payload embedding such a command), it
+   injected a stray `"`, producing invalid shell **and** invalid JSON. This is
+   exactly the runtime crash we captured: a state file reading
+   `"command":"printf "'line-1…` → `SyntaxError … in JSON` inside
+   `recoverBackgroundTasks`. `training/runner.ts` already had the correct form;
+   only `background-tasks.ts` was wrong. One-character class fix.
+2. **Non-atomic state writes.** The launch script wrote its state file via
+   `printf … > stateFile` (initial) and `state_path.write_text()` (terminal) —
+   both non-atomic, so a concurrent `recover`/`sync` could read a torn file.
+   Reworked both to write a temp file + `os.replace`/`mv` (atomic rename), matching
+   `writeJsonAtomic`. Also **eliminated the fragile printf/sed JSON emission**: Node
+   now writes a valid-JSON *seed* (`state.json.seed`) via `writeJsonAtomic`, and the
+   script's Python step loads it, stamps live pid + timestamp, and renames atomically
+   — so no shell ever hand-quotes JSON again (commands with quotes/newlines
+   round-trip safely). `training/runner.ts` got the same atomic-rename treatment.
+
+**Test determinism (root cause = real detached processes in tests).** With the
+corruption fixed, a residual flake remained: several kitchen-sink tests launch
+**real** detached background processes (`sleep 5`, `tail -f`) via the default
+spawn, whose launch scripts write `running` state *asynchronously* — racing both
+the recovery assertions and the `afterEach` temp-dir cleanup (`ENOTEMPTY`). These
+tests already drive state explicitly via `writeState` + inject
+`backgroundTaskIsProcessRunning: () => false`, so the real process was never
+needed. Injected `backgroundTaskSpawnProcess: () => ({ pid, unref })` (a no-op
+spawn) in the 4 affected runtimes (`operator-runtime.test.ts` big task test;
+`server.test.ts` main/drifting/breaker runtimes) — removes the OS-process race
+without changing intent.
+
+**New test:** `background-tasks.test.ts` — a command carrying single quotes runs
+end-to-end through the generated script and the resulting state file is valid,
+parseable JSON with the command preserved; asserts no `printf '%s'` JSON emission
+and atomic `os.replace`.
+
+**Test results:** `npm test` **175/175, deterministic across 8 consecutive full
+runs** (was 3–4 failing, nondeterministic). `npm run build` ✅.
+`npm run typecheck:src` ✅ (source still clean).
+
+**New idea:** the real-detached-process-in-tests race is a *latent footgun* — any
+future test that calls `startBackgroundTask` without a spawn stub reintroduces it.
+Add a tiny shared test helper `makeTestRuntime()` that defaults
+`backgroundTaskSpawnProcess` to a no-op + `isProcessRunning` to `false`, so tests
+opt into real spawning explicitly rather than by omission. Bigger idea: give
+`writeJsonAtomic` a companion `spawnStateWriter` used by *both* the TS path and the
+launch script (single source of truth for the atomic-write recipe), so the shell
+and Node can never drift on the write protocol again.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

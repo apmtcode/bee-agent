@@ -531,6 +531,11 @@ describe("StandaloneOperatorRuntime", () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
       backgroundTaskIsProcessRunning: () => false,
+      // Stub spawn so background tasks never launch a real detached process. The
+      // test drives task state via writeState; a real process (e.g. a `tail -f`
+      // monitor) writes state asynchronously and lingers, racing both the
+      // recovery assertions and the afterEach temp-dir cleanup (ENOTEMPTY).
+      backgroundTaskSpawnProcess: () => ({ pid: 424242, unref() {} }),
     });
     const session = await runtime.startSession({ title: "Tasks", agentId: "main" });
 

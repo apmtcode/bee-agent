@@ -4,6 +4,15 @@ Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
 ## Foundations / DX
+- [x] **Fix background-task launch-script bugs + green the flaky suite** (run 9,
+      2026-07-02). Real bugs: (1) `shellQuote` used `"'"'"'` (spurious leading `"`)
+      instead of `'"'"'`, corrupting any quoted command/JSON → runtime
+      `SyntaxError` in `recoverBackgroundTasks`; (2) non-atomic state writes.
+      Reworked to a Node-written valid-JSON seed + Python atomic-rename writer (no
+      more shell-quoted JSON); applied atomic renames in `training/runner.ts` too.
+      Also killed a real-detached-process test race by stubbing
+      `backgroundTaskSpawnProcess`. Suite: flaky 3–4 fails → **deterministic
+      175/175** (×8).
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`
@@ -71,6 +80,18 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
       related synthetic trajectories.
 
 ## Innovation backlog
+- [ ] **Shared `makeTestRuntime()` helper** that defaults
+      `backgroundTaskSpawnProcess` to a no-op and `isProcessRunning` to `false`, so
+      tests opt into real OS spawning explicitly. Prevents re-introducing the
+      real-detached-process race (async state writes + `ENOTEMPTY` cleanup flakes)
+      whenever a new test calls `startBackgroundTask` without a stub (run 9).
+- [ ] **Single source of truth for the atomic state-write recipe.** The launch
+      scripts (background-tasks + training runner) and the TS `writeJsonAtomic`
+      independently implement temp-file + rename. Factor a `spawnStateWriter`
+      snippet so the shell and Node can't drift on the write protocol (run 9).
+- [ ] **Flake sentinel in the pre-push self-check:** run the suite 2–3× (or
+      `vitest --sequence.shuffle`) before pushing to catch nondeterminism like run
+      9's real-process races, which a single green run hides.
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in
       project health over time.

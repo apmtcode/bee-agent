@@ -1,3 +1,4 @@
+import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -369,5 +370,41 @@ describe("BackgroundTaskExecutionService", () => {
     await expect(fs.readFile(path.join(rootDir, task.execution.launchScript), "utf8")).resolves.toContain("bash -lc");
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
+  });
+
+  it("emits a valid-JSON state file for commands containing quotes and newlines", async () => {
+    const rootDir = await makeTempDir();
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"), () => ({ pid: 4242, unref() {} }));
+    // A command with single quotes + embedded newlines previously corrupted the
+    // state file: it was hand-quoted through `printf '%s' | sed`, which broke the
+    // `'"'"'` escaping and produced invalid JSON that crashed recover/sync.
+    const task = await store.start({
+      title: "Collect logs",
+      command: "echo 'hello world'",
+      cwd: rootDir,
+      kind: "task",
+    });
+    // Node writes the initial state as a valid-JSON seed; the script never hand-quotes JSON.
+    // A command carrying single quotes AND newlines round-trips intact through the seed.
+    const seedRaw = await fs.readFile(path.join(rootDir, `${task.execution.stateFile}.seed`), "utf8");
+    expect(JSON.parse(seedRaw)).toMatchObject({ taskId: task.id, status: "running", command: "echo 'hello world'" });
+
+    const launchScriptPath = path.join(rootDir, task.execution.launchScript);
+    const script = await fs.readFile(launchScriptPath, "utf8");
+    // No fragile printf/sed JSON emission; both the initial and terminal writers rename atomically.
+    expect(script).not.toContain("printf '%s'");
+    expect(script).toContain("os.replace(str(tmp_path), str(state_path))");
+
+    // The generated script actually runs and produces a parseable state file — the
+    // quote-containing command must not corrupt the JSON.
+    await new Promise<void>((resolve, reject) => {
+      execFile("bash", [launchScriptPath], { cwd: rootDir }, (error, _stdout, stderr) =>
+        error ? reject(new Error(`${error.message}\n${stderr}`)) : resolve(),
+      );
+    });
+    const stateRaw = await fs.readFile(path.join(rootDir, task.execution.stateFile), "utf8");
+    const parsed = JSON.parse(stateRaw);
+    expect(parsed).toMatchObject({ taskId: task.id, status: "completed", command: "echo 'hello world'" });
+    expect(typeof parsed.pid).toBe("number");
   });
 });

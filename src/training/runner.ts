@@ -185,7 +185,8 @@ function renderLaunchScript(execution: LocalTrainingExecution, plan: TrainingJob
     "set -euo pipefail",
     `mkdir -p ${shellQuote(execution.artifactDir)} $(dirname ${quotedLogFile}) $(dirname ${quotedStatePath})`,
     "started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-    `printf '%s' ${quotedStatePayload} | sed "s/__OPENCLAW_STARTED_AT__/$started_at/g; s/\"\$\$\"/$$/g" > ${quotedStatePath}`,
+    `printf '%s' ${quotedStatePayload} | sed "s/__OPENCLAW_STARTED_AT__/$started_at/g; s/\"\$\$\"/$$/g" > ${quotedStatePath}.tmp.$$`,
+    `mv ${quotedStatePath}.tmp.$$ ${quotedStatePath}`,
     `printf '%s\n' "starting ${plan.mode} training for ${plan.jobId}" >> ${quotedLogFile}`,
     `if ${quotedCommand} >> ${quotedLogFile} 2>&1; then`,
     "  completed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
@@ -207,6 +208,7 @@ function renderLaunchScript(execution: LocalTrainingExecution, plan: TrainingJob
 function renderStateWriterPython(status: TrainingExecutionState["status"]): string[] {
   return [
     "import json",
+    "import os",
     "import pathlib",
     "import sys",
     "state_path = pathlib.Path(sys.argv[1])",
@@ -220,7 +222,9 @@ function renderStateWriterPython(status: TrainingExecutionState["status"]): stri
     "state['completedAt'] = timestamp",
     "state['exitCode'] = exit_code",
     `state['error'] = None if '${status}' == 'completed' else 'training process exited non-zero'`,
-    "state_path.write_text(json.dumps(state, indent=2) + '\\n')",
+    "tmp_path = state_path.with_name(state_path.name + f'.tmp.{pid}')",
+    "tmp_path.write_text(json.dumps(state, indent=2) + '\\n')",
+    "os.replace(str(tmp_path), str(state_path))",
   ];
 }
 

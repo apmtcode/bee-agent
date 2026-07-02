@@ -84,6 +84,10 @@ describe("OperatorControlPlaneServer", () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir,
       backgroundTaskIsProcessRunning: () => false,
+      // Stub spawn: this test drives task state via writeState; a real detached
+      // process would write a "running" state file asynchronously and race the
+      // recovery-driven assertions below.
+      backgroundTaskSpawnProcess: () => ({ pid: 424242, unref() {} }),
       delivery: new OperatorDeliveryService(rootDir, {
         sendBrowserPush: async () => {},
       }),
@@ -953,6 +957,8 @@ describe("OperatorControlPlaneServer", () => {
     const driftingRuntime = new StandaloneOperatorRuntime({
       rootDir: driftingRootDir,
       backgroundTaskIsProcessRunning: () => false,
+      // Stub spawn (state is driven manually below; avoid a racing real process).
+      backgroundTaskSpawnProcess: () => ({ pid: 424242, unref() {} }),
     });
     const driftingServer = new OperatorControlPlaneServer({ runtime: driftingRuntime });
     const driftingBootstrap = await driftingServer.handle({
@@ -1019,6 +1025,12 @@ describe("OperatorControlPlaneServer", () => {
     const breakerRuntime = new StandaloneOperatorRuntime({
       rootDir: breakerRootDir,
       backgroundTaskIsProcessRunning: () => false,
+      // Stub the spawn so background tasks never launch a real detached process.
+      // This test drives task state explicitly via writeState; a real process would
+      // race those writes (its launch script writes a "running" state file
+      // asynchronously), making recovery — and the breaker failure count —
+      // nondeterministic.
+      backgroundTaskSpawnProcess: () => ({ pid: 424242, unref() {} }),
     });
     const breakerServer = new OperatorControlPlaneServer({ runtime: breakerRuntime });
     const breakerOne = await breakerServer.handle({
