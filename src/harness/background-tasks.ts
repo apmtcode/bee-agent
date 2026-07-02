@@ -734,27 +734,24 @@ function renderLaunchScript(task: BackgroundTaskRecord): string {
   const quotedOutputFile = shellQuote(task.execution.outputFile);
   const quotedCwd = shellQuote(task.cwd);
   const quotedCommand = shellQuote(task.command);
-  const quotedStatePayload = shellQuote(
-    JSON.stringify({
-      version: 1,
-      taskId: task.id,
-      kind: task.kind,
-      status: "running",
-      pid: "$$",
-      startedAt: "__OPENCLAW_STARTED_AT__",
-      updatedAt: "__OPENCLAW_STARTED_AT__",
-      outputFile: task.execution.outputFile,
-      cwd: task.cwd,
-      command: task.command,
-    }),
-  );
+  const basePayloadLiteral = pythonJsonLiteral({
+    version: 1,
+    taskId: task.id,
+    kind: task.kind,
+    status: "running",
+    outputFile: task.execution.outputFile,
+    cwd: task.cwd,
+    command: task.command,
+  });
 
   return [
     "#!/usr/bin/env bash",
     "set -euo pipefail",
     `mkdir -p $(dirname ${quotedStatePath}) $(dirname ${quotedOutputFile})`,
     "started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-    `printf '%s' ${quotedStatePayload} | sed "s/__OPENCLAW_STARTED_AT__/$started_at/g; s/\"\$\$\"/$$/g" > ${quotedStatePath}`,
+    `python3 - ${quotedStatePath} $$ "$started_at" <<'PY'`,
+    ...renderRunningStateWriterPython(basePayloadLiteral),
+    "PY",
     `printf '%s\n' "starting ${task.kind} ${task.id}" >> ${quotedOutputFile}`,
     `if cd ${quotedCwd} && bash -lc ${quotedCommand} >> ${quotedOutputFile} 2>&1; then`,
     "  completed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
@@ -771,6 +768,19 @@ function renderLaunchScript(task: BackgroundTaskRecord): string {
     "fi",
     "",
   ].join("\n");
+}
+
+function renderRunningStateWriterPython(basePayloadLiteral: string): string[] {
+  return [
+    "import json",
+    "import pathlib",
+    "import sys",
+    `state = json.loads(${basePayloadLiteral})`,
+    "state['pid'] = int(sys.argv[2])",
+    "state['startedAt'] = sys.argv[3]",
+    "state['updatedAt'] = sys.argv[3]",
+    "pathlib.Path(sys.argv[1]).write_text(json.dumps(state, indent=2) + '\\n')",
+  ];
 }
 
 function renderStateWriterPython(status: BackgroundTaskExecutionState["status"]): string[] {
@@ -794,5 +804,24 @@ function renderStateWriterPython(status: BackgroundTaskExecutionState["status"])
 }
 
 function shellQuote(value: string): string {
-  return `'${value.replaceAll(`'`, `"'"'"'`)}'`;
+  // POSIX-safe: wrap in single quotes and escape embedded single quotes as
+  // '\'' (close-quote, escaped-quote, reopen-quote). The previous `"'"'"'`
+  // form left an unbalanced quote, so any command containing a single quote
+  // (e.g. `printf 'x'`, `git commit -m 'msg'`) failed to launch.
+  return `'${value.replaceAll(`'`, `'\\''`)}'`;
+}
+
+/**
+ * Serialize a value to a Python string literal holding its JSON encoding.
+ *
+ * The launch script embeds task-controlled strings (command, cwd) into a
+ * heredoc-fed Python snippet. Building the JSON in Python via `json.loads`
+ * of this literal — rather than `printf | sed` — means all quoting, newlines
+ * and shell metacharacters are handled by the JSON/Python parsers instead of
+ * fragile shell substitution. `JSON.stringify` of a string emits only escape
+ * sequences that are also valid in a Python string literal, and the heredoc
+ * delimiter is single-quoted (`<<'PY'`) so the shell performs no expansion.
+ */
+function pythonJsonLiteral(value: unknown): string {
+  return JSON.stringify(JSON.stringify(value));
 }

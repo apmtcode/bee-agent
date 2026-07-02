@@ -70,6 +70,26 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Generalization eval harness: measure replay fidelity on held-out but
       related synthetic trajectories.
 
+## Reliability / correctness
+- [x] Fix `shellQuote` unbalanced single-quote escape so background/training
+      commands containing `'` can launch (run 9, `background-tasks.ts`).
+- [x] Replace the fragile `printf | sed` initial-state writer with a `python3`
+      writer so `state.json` is valid JSON for commands with quotes/newlines
+      (run 9, `background-tasks.ts` + `training/runner.ts`).
+- [x] Thread `backgroundTaskSpawnProcess`/`backgroundTaskIsProcessRunning`
+      through `OperatorCliAppOptions` so app-layer task tests are deterministic
+      (run 9).
+- [ ] **Shell-quoting fuzz harness**: round-trip an adversarial command corpus
+      (quotes, newlines, `$`, backticks, `;|&`, unicode) through
+      `shellQuote → bash -lc → capture` and assert fidelity. Would have caught the
+      two run-9 launch-script bugs at authoring time.
+- [ ] Lint/CI gate: flag any test that starts a background task without injecting
+      `backgroundTaskSpawnProcess`, to keep detached-spawn races from re-entering.
+- [ ] Investigate the rare (~1/20 under full-suite parallel load) flake in
+      `gateway-transport.test.ts > replays only missed events after reconnect
+      cursor…` — passes 12/12 in isolation; likely a fake-timer/scheduling
+      sensitivity to CPU contention. Make its timing deterministic.
+
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in

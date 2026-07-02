@@ -6,6 +6,60 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-02 (run 9) — 🐛 Two real launch-script bugs fixed + background-task test races made deterministic
+
+**Audited:** The test suite baseline in this cloud environment (where `bash`,
+`python3` and `sed` actually execute — unlike the machine that recorded the
+earlier "174/174"). This surfaced **4 failing tests** the log believed green:
+all traced to the background-task/training **launch scripts**, which only run
+for real when a shell toolchain is present.
+
+**Three real bugs fixed (all pre-existing, all reversible):**
+1. **`shellQuote` produced un-runnable commands** (`src/harness/background-tasks.ts`).
+   The single-quote escape was `"'"'"'` (6 chars) — an *unbalanced* quote — so
+   **any** background/training command containing a `'` (e.g. `git commit -m 'msg'`,
+   `printf 'x'`) made `bash -lc <command>` die with `unexpected EOF while looking
+   for matching quote`, and the task launch failed. Fixed to the POSIX-standard
+   `'\''` (close-quote, escaped-quote, reopen-quote). `src/training/runner.ts`
+   already had the correct 5-char form; unified for consistency.
+2. **Corrupt `state.json` for commands with quotes/newlines.** The initial
+   "running" state was written by `printf '%s' <payload> | sed "…s/\"\$\$\"/$$/g"`.
+   The JS template literal collapsed the `\$\$`/`\"` backslashes *intended for
+   bash* before bash saw them, so the pid substitution mis-fired and payloads with
+   special characters produced **invalid JSON** — `readJsonFile` then threw
+   `SyntaxError`, breaking recovery/sync. Replaced the `printf|sed` writer with a
+   `python3` writer (the pattern the completed/failed writers already use): it
+   `json.loads` a safely double-encoded literal (`JSON.stringify(JSON.stringify(x))`
+   — valid in both JSON and Python, fed via a single-quoted `<<'PY'` heredoc so the
+   shell can't mangle it) and injects the real integer pid + timestamps. Applied to
+   both `background-tasks.ts` and `training/runner.ts`.
+3. **App-layer background-task tests couldn't stub spawn.**
+   `StandaloneOperatorRuntime` already exposed `backgroundTaskSpawnProcess`, but
+   `OperatorCliApp` hard-coded `new StandaloneOperatorRuntime({ rootDir })`, so
+   the *detached* launch script raced the tests' manual `writeState`/`writeOutput`.
+   Threaded `backgroundTaskSpawnProcess` + `backgroundTaskIsProcessRunning` through
+   `OperatorCliAppOptions` (additive; also lets embedders sandbox process creation).
+
+**Tests:** updated the 4 racing tests (operator-runtime, server ×3 runtimes,
+app ×2) to inject a no-op spawn stub so their simulated lifecycle is
+authoritative; added a **new regression test** that generates *and executes* the
+launch script for a command containing quotes + newlines and asserts `state.json`
+parses as valid JSON with `status: "completed"` (guarded via `it.runIf` on
+bash+python3 availability). Suite **174 → 175 tests, deterministically green**
+(10/10 consecutive full-suite runs; was 1–2 failures every run before). Build ✅.
+`typecheck:src` ✅. Full `tsc` **125** (unchanged — no debt added).
+
+**Note:** a *separate*, very rare (~1/20) parallel-load timing flake remains in
+`gateway-transport.test.ts` (12/12 green in isolation) — orthogonal to this run;
+logged to ROADMAP.
+
+**New idea:** a **shell-quoting fuzz harness** — round-trip a corpus of
+adversarial command strings (single/double quotes, newlines, `$`, backticks,
+`;|&`, unicode) through `shellQuote → bash -lc → capture` and assert output
+fidelity. It would have caught *both* bug #1 and #2 at authoring time. Companion
+lint: flag any test that starts a background task without injecting
+`backgroundTaskSpawnProcess`, so this class of detached-spawn race can't re-enter.
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

@@ -166,26 +166,23 @@ function renderLaunchScript(execution: LocalTrainingExecution, plan: TrainingJob
   const quotedLogFile = shellQuote(execution.logFile);
   const quotedWorkingDirectory = shellQuote(execution.workingDirectory);
   const quotedCommand = `${shellQuote(plan.command[0] ?? "")}${plan.command.slice(1).map((arg) => ` ${shellQuote(arg)}`).join("")}`;
-  const quotedStatePayload = shellQuote(
-    JSON.stringify({
-      version: 1,
-      jobId: plan.jobId,
-      status: "running",
-      pid: "$$",
-      startedAt: "__OPENCLAW_STARTED_AT__",
-      updatedAt: "__OPENCLAW_STARTED_AT__",
-      logFile: execution.logFile,
-      workingDirectory: execution.workingDirectory,
-      command: plan.command,
-    }),
-  );
+  const basePayloadLiteral = pythonJsonLiteral({
+    version: 1,
+    jobId: plan.jobId,
+    status: "running",
+    logFile: execution.logFile,
+    workingDirectory: execution.workingDirectory,
+    command: plan.command,
+  });
 
   return [
     "#!/usr/bin/env bash",
     "set -euo pipefail",
     `mkdir -p ${shellQuote(execution.artifactDir)} $(dirname ${quotedLogFile}) $(dirname ${quotedStatePath})`,
     "started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-    `printf '%s' ${quotedStatePayload} | sed "s/__OPENCLAW_STARTED_AT__/$started_at/g; s/\"\$\$\"/$$/g" > ${quotedStatePath}`,
+    `python3 - ${quotedStatePath} $$ "$started_at" <<'PY'`,
+    ...renderRunningStateWriterPython(basePayloadLiteral),
+    "PY",
     `printf '%s\n' "starting ${plan.mode} training for ${plan.jobId}" >> ${quotedLogFile}`,
     `if ${quotedCommand} >> ${quotedLogFile} 2>&1; then`,
     "  completed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
@@ -202,6 +199,23 @@ function renderLaunchScript(execution: LocalTrainingExecution, plan: TrainingJob
     "fi",
     "",
   ].join("\n");
+}
+
+function renderRunningStateWriterPython(basePayloadLiteral: string): string[] {
+  return [
+    "import json",
+    "import pathlib",
+    "import sys",
+    `state = json.loads(${basePayloadLiteral})`,
+    "state['pid'] = int(sys.argv[2])",
+    "state['startedAt'] = sys.argv[3]",
+    "state['updatedAt'] = sys.argv[3]",
+    "pathlib.Path(sys.argv[1]).write_text(json.dumps(state, indent=2) + '\\n')",
+  ];
+}
+
+function pythonJsonLiteral(value: unknown): string {
+  return JSON.stringify(JSON.stringify(value));
 }
 
 function renderStateWriterPython(status: TrainingExecutionState["status"]): string[] {
@@ -225,5 +239,6 @@ function renderStateWriterPython(status: TrainingExecutionState["status"]): stri
 }
 
 function shellQuote(value: string): string {
-  return `'${value.replaceAll(`'`, `'"'"'`)}'`;
+  // POSIX-safe single-quote escaping (close-quote, escaped-quote, reopen-quote).
+  return `'${value.replaceAll(`'`, `'\\''`)}'`;
 }

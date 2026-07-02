@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -370,4 +371,37 @@ describe("BackgroundTaskExecutionService", () => {
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
   });
+
+  const hasShellRuntime =
+    spawnSync("bash", ["-c", "true"]).status === 0 && spawnSync("python3", ["-c", "pass"]).status === 0;
+
+  // Guards the regression for the corrupt-state bug: commands containing quotes
+  // and newlines used to break the `printf | sed` state writer, producing
+  // invalid JSON in state.json. The launch script now writes state via python3.
+  it.runIf(hasShellRuntime)(
+    "generates a launch script that writes valid JSON state for commands with quotes and newlines",
+    async () => {
+      const rootDir = await makeTempDir();
+      const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"), () => ({
+        pid: 4242,
+        unref() {},
+      }));
+      const command = `printf 'a"b\nc"d\n'`;
+      const task = await store.start({ title: "tricky", command, cwd: rootDir });
+
+      const scriptPath = path.join(rootDir, task.execution.launchScript);
+      const result = spawnSync("bash", [scriptPath], { cwd: rootDir, encoding: "utf8" });
+      expect(result.status).toBe(0);
+
+      const raw = await fs.readFile(path.join(rootDir, task.execution.stateFile), "utf8");
+      const state = JSON.parse(raw) as BackgroundTaskExecutionState;
+      expect(state.status).toBe("completed");
+      expect(state.exitCode).toBe(0);
+      expect(state.command).toBe(command);
+      expect(typeof state.pid).toBe("number");
+
+      const output = await fs.readFile(path.join(rootDir, task.execution.outputFile), "utf8");
+      expect(output).toContain('a"b');
+    },
+  );
 });
