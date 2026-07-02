@@ -59,16 +59,40 @@ unchecked items are queued. Keep this richer than you found it each run.
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
 (exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
-      objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
-      deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
+- [x] Inventory what `src/capture` + `src/training` already implement vs. the
+      objective's five pieces — DONE run 9. capture→schema→dataset→replay solid;
+      train/infer only existed as external mlx/axolotl launch-script emission
+      (`runner.ts`), untestable in-cloud. Gap = an in-process learnable policy.
+- [x] Pluggable local-model backend interface with a deterministic mock backend
+      (so cloud/CI tests pass) and a documented seam for a real on-device small
+      model — DONE run 9. `src/training/movement-model.ts`:
+      `MovementModelBackend` interface + `NGramMovementBackend` (stupid-backoff,
+      deterministic, repeats *and* generalizes) + `evaluateMovementModel`.
 - [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      round-trips without real OS input. (Run 9 used inline synthetic spans in
+      tests; extract a reusable exported generator next — deterministic,
+      seed/task-template driven.)
+- [ ] `ReplayEngine` bridge: feed a `TrainedMovementModel`'s `generate()` into a
+      simulated/real action executor to close capture→train→**act**. Needs a
+      mockable `ActionExecutor` interface (cloud test) + OS seam.
+- [ ] Generalization eval harness: train on N-1 synthetic task variants, score
+      held-out variant #N — one "did it generalize" number tracked across runs.
+      (`evaluateMovementModel` is the primitive; add the train/hold-out split.)
+- [ ] Persist trained movement models via `serialize()`/`restore()` into a
+      training-artifact store so a trained policy survives across sessions.
+
+## Known pre-existing test failures (discovered run 9)
+Clean HEAD reports **4 failing tests / 174** (not caused by run 9's additive
+change; run-8 log claimed 174/174, so these are environment/date-sensitive):
+- [ ] `operator-runtime.test.ts` "starts, syncs, recovers…": background-task
+      recovery reads a state file containing non-JSON placeholders (e.g. `pid: $$`,
+      `__OPENCLAW_STARTED_AT__`), so `readJsonFile` (`src/shared/fs.ts:17`) throws
+      `SyntaxError` in `BackgroundTaskExecutionService.readState`
+      (`background-tasks.ts:234`). Fix: make `readState` tolerant of a
+      not-yet-materialized/placeholder state file (treat parse errors as "state
+      unknown" rather than throwing), or have the test fixture write valid JSON.
+- [ ] `app.test.ts` (×2) and `server.test.ts` (×1) companion failures — likely the
+      same recovery/state-file path surfaced through the higher-level flows.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
