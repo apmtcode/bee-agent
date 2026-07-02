@@ -6,6 +6,66 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-02 (run 9) — 🔴→🟢 Fix flaky background-task tests: hermetic spawn seam
+
+**Audited:** The health of the test suite at the start of the run — it was **RED**
+(3/174 failing), which by the standing procedure blocks any push to `main`. All
+three failures (`operator-runtime.test.ts` "starts, syncs, recovers…",
+`server.test.ts` "handles session, transcript…", `app.test.ts` "supports session
+lifecycle…") crashed at the same site: `readJsonFile` → `SyntaxError: Expected
+',' or '}' … at position 311` while reading a background task's `state.json`.
+
+**Root cause (a real latent test-infra bug, not a product regression):** the
+background-task launcher (`FileBackgroundTaskStore` → `BackgroundTaskExecutionService.launch`)
+spawns a **real detached bash process** via the default `spawn`. These three
+integration tests only overrode `backgroundTaskIsProcessRunning`, *not*
+`backgroundTaskSpawnProcess`, so a real shell ran `renderLaunchScript` and wrote
+`state.json` on its own asynchronous schedule (`printf … | sed … > state.json`,
+non-atomic), racing the tests' own explicit `writeState`/`readState`. A read that
+landed mid-write parsed a half-written file. It also leaked real `sleep 5` /
+`tail -f` children for the life of the suite. The dedicated launcher unit test
+(`harness/background-tasks.test.ts`) already injects a fake spawn everywhere — the
+integration tests simply forgot to. Timing-dependent, hence "174/174" last run
+and "3 failed" this run with identical code.
+
+**Changed (additive, test-hermeticity + a small product seam):**
+- **New `src/harness/background-tasks.testkit.ts`** — `createNoopBackgroundSpawn(pid?)`,
+  a documented, reusable in-memory replacement for the real `spawn` (stable fake
+  pid, no-op `unref`, touches nothing on disk or in the process table).
+- **`src/cli/app.ts`** — `OperatorCliAppOptions` now forwards
+  `backgroundTaskSpawnProcess` + `backgroundTaskIsProcessRunning` to the runtime
+  (typed via the exported `StandaloneOperatorOptions`), so an app-level test can
+  make background tasks hermetic without reaching into the runtime.
+- **Injected the no-op spawn** at every background-task-launching construction in
+  the three integration test files (runtime ×1, server ×4, app ×all-but-one).
+- **Rewrote the one genuinely-racy e2e case** (`app.test.ts` "supports background
+  and monitor task commands…"): it conflated "read the real `printf ok` output"
+  with "the task is still *active* at `watch-active`" — contradictory for an
+  instant command, so it only ever passed by timing luck (my other fixes reduced
+  machine load and exposed it). Now it drives `writeOutput`/`writeState(running)`
+  explicitly with `isProcessRunning: () => true`, mirroring the deterministic
+  monitor half of the same test. One deliberately-real-launcher e2e case remains
+  (documented) for true end-to-end coverage of the shell path.
+
+**Test results:** 🟢 **174/174**, stable across **3 back-to-back runs** (these
+were timing races, so repeated runs matter). `typecheck:src` ✅ (exit 0). Build ✅.
+Full `tsc` (incl. tests) unchanged at **125** — no new typecheck debt, new source
+file is clean.
+
+**New ideas:**
+1. **Non-hermetic-test guard.** A `vitest` `globalSetup` (or a tiny custom lint)
+   that fails a test which constructs `StandaloneOperatorRuntime`/`OperatorCliApp`
+   and launches a background task without injecting `backgroundTaskSpawnProcess`
+   — catching real-`spawn` leaks at authoring time instead of as an hourly flake.
+2. **Atomic launcher state writes (product hardening).** `renderLaunchScript`
+   writes `state.json` via `… > state.json` (bash) and `path.write_text` (python) —
+   both non-atomic, so a concurrent reader in *production* can also observe a
+   partially-written file (exactly the failure the tests hit). Write to a temp
+   file + `mv`/`os.replace` so readers only ever see a complete document, then
+   `readJsonFile` never needs to tolerate corruption.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

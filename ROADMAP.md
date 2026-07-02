@@ -71,6 +71,23 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
       related synthetic trajectories.
 
 ## Innovation backlog
+- [x] **Hermetic background-task test seam** (2026-07-02, run 9). Added
+      `createNoopBackgroundSpawn` (`src/harness/background-tasks.testkit.ts`) and
+      an `OperatorCliApp` passthrough for `backgroundTaskSpawnProcess` /
+      `backgroundTaskIsProcessRunning`; fixed 3 flaky integration tests that were
+      launching real detached shells and racing their own state writes. Suite
+      🔴 3-failing → 🟢 174/174 (stable ×3).
+- [ ] **Non-hermetic-test guard** (follow-up to run 9). A `vitest` `globalSetup`
+      or small lint that fails any test constructing
+      `StandaloneOperatorRuntime`/`OperatorCliApp` and launching a background task
+      without injecting a fake `backgroundTaskSpawnProcess` — catch real-`spawn`
+      leaks at authoring time, not as an hourly flake.
+- [ ] **Atomic launcher state writes** (product hardening, found in run 9).
+      `renderLaunchScript` writes `state.json` non-atomically (bash `> file` and
+      python `write_text`), so a concurrent reader in production can observe a
+      half-written file (the exact corruption run 9's tests hit). Write to a temp
+      file then `mv` / `os.replace` inside the launch script so readers only ever
+      see a complete JSON document.
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in
       project health over time.
