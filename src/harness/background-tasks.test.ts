@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -107,6 +108,44 @@ describe("FileBackgroundTaskStore", () => {
       status: "completed",
       execution: { exitCode: 0 },
     });
+  });
+
+  it("generates a launch script that writes valid state JSON for single-quoted commands", async () => {
+    // Regression: the launch script embeds the command in a JSON state payload
+    // via a single-quoted shell literal, then substitutes the pid. A malformed
+    // single-quote escape corrupted any command containing `'` (e.g.
+    // `printf 'x'`) into invalid JSON, and a `sed` pattern of `"$$"` (where `$`
+    // is a regex end-anchor) left the pid as the literal string "$$".
+    const rootDir = await makeTempDir();
+    const filePath = path.join(rootDir, "background-tasks.json");
+    const store = new FileBackgroundTaskStore(filePath, () => ({ pid: 4242, unref() {} }));
+
+    const command = "printf 'line-1\nline-2\n'";
+    const task = await store.start({
+      sessionId: "sess-quote",
+      title: "Quoted command",
+      command,
+      cwd: rootDir,
+      kind: "task",
+    });
+
+    const scriptPath = path.join(rootDir, task.execution.launchScript);
+    // Run the generated script deterministically (synchronously, not detached).
+    // The command completes instantly; the trailing state writer may require
+    // python3, but the initial state (written by the bash+sed line under test)
+    // is already valid regardless of whether that later step succeeds.
+    try {
+      execFileSync("bash", [scriptPath], { cwd: rootDir, stdio: "ignore" });
+    } catch {
+      // Ignore a non-zero exit from the optional completion writer.
+    }
+
+    const raw = await fs.readFile(path.join(rootDir, task.execution.stateFile), "utf8");
+    const state = JSON.parse(raw) as BackgroundTaskExecutionState;
+    expect(state.command).toBe(command);
+    expect(typeof state.pid).toBe("number");
+    expect(state.pid).toBeGreaterThan(0);
+    expect(state.startedAt).not.toContain("__OPENCLAW_STARTED_AT__");
   });
 
   it("cancels running tasks and records cancelled state", async () => {

@@ -22,6 +22,7 @@
     "build": "tsdown src/index.ts src/cli/entry.ts --no-config --platform node --format esm --dts --out-dir dist --clean",
     "typecheck": "tsc --noEmit",
     "typecheck:src": "tsc --noEmit --project tsconfig.src.json",
+    "verify": "npm run typecheck:src && npm run build && npm test",
     "test": "vitest run",
     "test:watch": "vitest"
   },

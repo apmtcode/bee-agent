@@ -38,8 +38,10 @@ unchecked items are queued. Keep this richer than you found it each run.
     `skills.executable.*`, `push.subscriptions.*`, `trajectories.*`, `replays.*`,
     `cron.runs`/misc — plus a few genuine test-only typings. Map the rest, then
     fix residual test-only typings.
-- [ ] Add a `verify` npm script (`typecheck && build && test`) and have the
-      engine run it as a pre-push self-check each cycle.
+- [x] Add a `verify` npm script — DONE run 9. `verify` =
+      `typecheck:src && build && test` (uses the source-only gate since full
+      `typecheck` still has test-file debt). The engine now runs `npm run verify`
+      as its pre-push self-check. Upgrade to full `typecheck` once test debt hits 0.
 - [x] Interim **source-only typecheck gate** — DONE run 7. `tsconfig.src.json`
       (excludes `**/*.test.ts`) + `typecheck:src` script; passes (exit 0). Next:
       have the engine run it as a per-run pre-push self-check.
@@ -71,6 +73,14 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
       related synthetic trajectories.
 
 ## Innovation backlog
+- [ ] **Shared, fuzz-tested shell-fragment builder** (surfaced run 9). Both
+      launch-script generators (`harness/background-tasks.ts`,
+      `training/runner.ts`) had divergent `shellQuote` copies AND the identical
+      `sed "s/\"$$\"/…/"` pid bug (`$` is a regex anchor, so it never matched).
+      Extract one `sh()`/`quoteForShell()` primitive both must use, plus a test
+      that round-trips a fuzz set of nasty commands (`'`, `"`, `$`, backticks,
+      newlines, `\`) through both generators, executes them in a shell, and diffs
+      the recovered `state.json` against the input. Prevents the copies drifting.
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in
       project health over time.

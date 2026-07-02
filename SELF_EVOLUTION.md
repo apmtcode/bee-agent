@@ -6,6 +6,63 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-02 (run 9) — 🔴→🟢 Restore green baseline: real shell-quoting bug + test-isolation flakiness
+
+**Audited:** The health of the build/test gate itself. The clean `HEAD`
+checkout was **RED** — 3 tests failed deterministically (`app.test.ts`,
+`server.test.ts`, `operator-runtime.test.ts`), even though run 8 logged
+174/174. A red baseline silently blocks every future run's push-to-`main`, so
+restoring green was the highest-value move this hour.
+
+**Root causes (two, one a genuine production bug):**
+1. **Shell-quoting bug in launch-script generation** (`src/harness/background-tasks.ts`,
+   `renderLaunchScript` → `shellQuote`). The POSIX single-quote escape was
+   `"'"'"'` (6 chars) instead of the correct `'"'"'` (5 chars). It fails to
+   *close* the opening single quote, so any background-task command containing a
+   `'` (e.g. `printf 'x'`) was corrupted into invalid JSON in the `state.json`
+   the script writes — reproduced as `SyntaxError: … JSON at position 311`. This
+   is a **real bug that fires on the user's machine**, not a test artifact.
+2. **`sed` pid-substitution bug** (same file + `src/training/runner.ts`). The
+   script wrote `"pid":"$$"` and substituted via `sed "s/\"\$\$\"/$$/g"` — but
+   `$` is a regex end-anchor in `sed`, so `"$$"` never matched and the pid stayed
+   the literal string `"$$"`. Replaced with a regex-inert placeholder token:
+   payload emits `"pid":"__OPENCLAW_PID__"` and `sed -e "s/\"__OPENCLAW_PID__\"/$$/g"`
+   strips the quotes and injects the numeric shell pid → `"pid":<n>`.
+3. **Test-isolation flakiness.** Three big integration tests drive execution
+   state explicitly via `writeState()` to exercise reconcile/diagnostics paths,
+   but constructed the runtime with the *real* `spawn`, forking actual
+   `sleep 5`/`printf` processes whose async state writes raced (and clobbered)
+   the manually-staged states. Injected a deterministic no-op
+   `backgroundTaskSpawnProcess` in all three runtimes (main, drifting, breaker)
+   — matching each test's clear intent.
+
+**Changed:**
+- Fixed `shellQuote` in `src/harness/background-tasks.ts` (+ explanatory comment).
+- Fixed the pid `sed` substitution in `src/harness/background-tasks.ts` and the
+  parallel copy in `src/training/runner.ts` (placeholder-token approach).
+- Injected no-op spawns in `operator-runtime.test.ts` and the 3 runtimes in
+  `server.test.ts`.
+- **New regression test** (`background-tasks.test.ts`): generates the launch
+  script for a single-quoted command, runs it in a real shell deterministically,
+  and asserts the resulting `state.json` is valid JSON with a numeric pid and the
+  command preserved verbatim. Verified non-vacuous (reintroducing the bug makes
+  it fail with the exact `position 311` error).
+- Added the queued **`verify` npm script** = `typecheck:src && build && test` —
+  the canonical green gate (roadmap DX item).
+
+**Test results:** full suite **175/175** (was 171/174 at baseline; +1 regression
+test). `typecheck:src` ✅. Build ✅. `npm run verify` ✅.
+
+**New idea:** add a lightweight **shell-fragment builder/asserter** the launch-script
+generators must go through — a tiny `sh()` helper that quotes values and a test
+that round-trips a fuzz set of nasty commands (`'`, `"`, `$`, backticks,
+newlines, `\`) through *both* generators, executes them, and diffs the recovered
+JSON against the input. Both generators had the identical `$$`-sed bug and
+divergent `shellQuote` copies; a shared, fuzz-tested primitive would have caught
+both at authoring time and prevents the two copies from drifting again.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

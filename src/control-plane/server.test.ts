@@ -83,6 +83,11 @@ describe("OperatorControlPlaneServer", () => {
     const rootDir = await makeTempDir();
     const runtime = new StandaloneOperatorRuntime({
       rootDir,
+      // Deterministic spawn: background tasks here are proxies for reconcile /
+      // diagnostics assertions, not real work. A real forked process writes its
+      // own "running" state asynchronously, which races the assertions and
+      // (with isProcessRunning mocked to false) flips control state to degraded.
+      backgroundTaskSpawnProcess: () => ({ pid: 4321, unref: () => {} }),
       backgroundTaskIsProcessRunning: () => false,
       delivery: new OperatorDeliveryService(rootDir, {
         sendBrowserPush: async () => {},
@@ -952,6 +957,10 @@ describe("OperatorControlPlaneServer", () => {
     const driftingRootDir = await makeTempDir();
     const driftingRuntime = new StandaloneOperatorRuntime({
       rootDir: driftingRootDir,
+      // Deterministic spawn: the drift scenario is set up via an explicit
+      // writeState("running") below; a real forked process would race and
+      // overwrite it, making the degraded-state assertion flaky.
+      backgroundTaskSpawnProcess: () => ({ pid: 4321, unref: () => {} }),
       backgroundTaskIsProcessRunning: () => false,
     });
     const driftingServer = new OperatorControlPlaneServer({ runtime: driftingRuntime });
@@ -1018,6 +1027,11 @@ describe("OperatorControlPlaneServer", () => {
     const breakerRootDir = await makeTempDir();
     const breakerRuntime = new StandaloneOperatorRuntime({
       rootDir: breakerRootDir,
+      // Deterministic spawn: per-remote control states here are set up with
+      // explicit writeState calls to produce a "mixed" aggregate; real forked
+      // processes would write their own "running" state and drive every remote
+      // to degraded, collapsing the mix.
+      backgroundTaskSpawnProcess: () => ({ pid: 4321, unref: () => {} }),
       backgroundTaskIsProcessRunning: () => false,
     });
     const breakerServer = new OperatorControlPlaneServer({ runtime: breakerRuntime });
