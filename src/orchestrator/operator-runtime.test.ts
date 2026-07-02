@@ -531,6 +531,9 @@ describe("StandaloneOperatorRuntime", () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
       backgroundTaskIsProcessRunning: () => false,
+      // Stub the launcher so the detached bootstrap script never actually runs
+      // and races the execution-state this test writes/reads deterministically.
+      backgroundTaskSpawnProcess: () => ({ pid: 4242, unref() {} }),
     });
     const session = await runtime.startSession({ title: "Tasks", agentId: "main" });
 

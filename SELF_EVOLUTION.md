@@ -6,6 +6,58 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-02 (run 9) — 🐛 Fix corrupt background-task state files (buggy `shellQuote`) + kill a flaky test
+
+**Audited:** Project health / the green gate itself. `npm test` was **flaky** —
+2–3 failures out of 174 that varied run-to-run (prior runs claimed 174/174, so
+this was a live regression in trustworthiness). Isolated the worst offender:
+`operator-runtime.test.ts › "starts, syncs, recovers…"` failed *deterministically*
+in isolation with `SyntaxError: Expected ',' or '}' after property value in JSON
+at position 311` coming out of `readState`.
+
+**Root cause (real production bug, not just a test bug):**
+`src/harness/background-tasks.ts` → `shellQuote()` used the **malformed** POSIX
+single-quote-escape `"'"'"'` (leading `"`) instead of the correct `'"'"'`. The
+stray leading `"` gets absorbed into the preceding single-quoted literal, so any
+command/path/JSON payload containing a `'` was corrupted. The background-task
+**launch script** shell-quotes a JSON state payload; with a single-quote in the
+command (e.g. `printf 'line-1\nline-2\n'`) the generated `state.json` was **invalid
+JSON** — unreadable forever by `readState`/`sync`/`getExecutionState`. The test's
+detached launcher raced this corrupt bootstrap write into the read window ⇒ flaky
+crash. Every prior "green" run had this latent data-corruption bug for any task
+whose command contained a `'`.
+
+**Changed (additive/surgical) in `src/harness/background-tasks.ts`:**
+- **Fixed `shellQuote`** to the correct `'"'"'` idiom (the actual bug).
+- **Hardened the bootstrap state write:** replaced the fragile
+  `printf … | sed "s/…/…/; s/\"\$\$\"/$$/"` JSON string-munging with a
+  `python3` writer (`renderBootstrapStateWriterPython`) that receives the base
+  payload as a shell-quoted argv and fills `pid`/`startedAt`/`updatedAt` via
+  `json` — mirroring the existing completion/failure writers. No more
+  string-patching a JSON document in the shell, and `pid` is now a real number
+  instead of the `"$$"` placeholder.
+
+**Tests:**
+- `operator-runtime.test.ts`: stubbed `backgroundTaskSpawnProcess` in the
+  background-task test so the detached launcher can't race the state the test
+  writes/reads (matches the deterministic pattern already used in
+  `background-tasks.test.ts`).
+- **New regression suite** (`background-tasks.test.ts`, 4 `it.each` cases):
+  renders the real launch script, executes it synchronously via `bash`, and
+  asserts `state.json` parses cleanly with `status:"completed"`, numeric `pid`,
+  and the **original command preserved byte-for-byte** — for single-quote+newline,
+  double-quote, embedded-JSON, and mixed-quote commands.
+
+**Test results:** flaky **171–172/174 → stable 178/178** across 3 full runs and
+the previously-flaky file 5/5 green. Build ✅. `typecheck:src` ✅ (exit 0).
+
+**New idea:** the engine's per-run self-check should run the full suite **twice**
+(or `vitest run --retry=0` with a repeat) and fail on *any* nondeterminism, not
+just a single-run pass — a one-shot green masked this flake for multiple runs.
+Cheap insurance: add a `test:flake` script (`vitest run` ×2) and wire it into the
+pre-push gate. Longer term, seed a deterministic clock/PID into the launch-script
+renderer so its output is fully reproducible and snapshot-testable.
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

@@ -734,15 +734,17 @@ function renderLaunchScript(task: BackgroundTaskRecord): string {
   const quotedOutputFile = shellQuote(task.execution.outputFile);
   const quotedCwd = shellQuote(task.cwd);
   const quotedCommand = shellQuote(task.command);
+  // Base state written by the launch script's bootstrap step. `pid`, `startedAt`,
+  // and `updatedAt` are filled in by Python at runtime (see the bootstrap writer
+  // below) so we never string-munge JSON in the shell — commands or paths that
+  // contain quotes would otherwise produce invalid JSON that can never be read
+  // back.
   const quotedStatePayload = shellQuote(
     JSON.stringify({
       version: 1,
       taskId: task.id,
       kind: task.kind,
       status: "running",
-      pid: "$$",
-      startedAt: "__OPENCLAW_STARTED_AT__",
-      updatedAt: "__OPENCLAW_STARTED_AT__",
       outputFile: task.execution.outputFile,
       cwd: task.cwd,
       command: task.command,
@@ -754,7 +756,9 @@ function renderLaunchScript(task: BackgroundTaskRecord): string {
     "set -euo pipefail",
     `mkdir -p $(dirname ${quotedStatePath}) $(dirname ${quotedOutputFile})`,
     "started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-    `printf '%s' ${quotedStatePayload} | sed "s/__OPENCLAW_STARTED_AT__/$started_at/g; s/\"\$\$\"/$$/g" > ${quotedStatePath}`,
+    `python3 - ${quotedStatePath} $$ "$started_at" ${quotedStatePayload} <<'PY'`,
+    ...renderBootstrapStateWriterPython(),
+    "PY",
     `printf '%s\n' "starting ${task.kind} ${task.id}" >> ${quotedOutputFile}`,
     `if cd ${quotedCwd} && bash -lc ${quotedCommand} >> ${quotedOutputFile} 2>&1; then`,
     "  completed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
@@ -771,6 +775,22 @@ function renderLaunchScript(task: BackgroundTaskRecord): string {
     "fi",
     "",
   ].join("\n");
+}
+
+function renderBootstrapStateWriterPython(): string[] {
+  return [
+    "import json",
+    "import pathlib",
+    "import sys",
+    "state_path = pathlib.Path(sys.argv[1])",
+    "pid = int(sys.argv[2])",
+    "started_at = sys.argv[3]",
+    "state = json.loads(sys.argv[4])",
+    "state['pid'] = pid",
+    "state['startedAt'] = started_at",
+    "state['updatedAt'] = started_at",
+    "state_path.write_text(json.dumps(state, indent=2) + '\\n')",
+  ];
 }
 
 function renderStateWriterPython(status: BackgroundTaskExecutionState["status"]): string[] {
@@ -794,5 +814,8 @@ function renderStateWriterPython(status: BackgroundTaskExecutionState["status"])
 }
 
 function shellQuote(value: string): string {
-  return `'${value.replaceAll(`'`, `"'"'"'`)}'`;
+  // POSIX-safe single-quoting: close the quote, emit an escaped single quote
+  // (`'"'"'` = close-quote, double-quoted quote, reopen-quote), then reopen.
+  // A malformed idiom here corrupts every quoted command/path/JSON payload.
+  return `'${value.replaceAll(`'`, `'"'"'`)}'`;
 }

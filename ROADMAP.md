@@ -4,6 +4,19 @@ Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
 ## Foundations / DX
+- [x] **Fix corrupt background-task `state.json` + flaky test** (2026-07-02, run
+      9). `shellQuote` used a malformed single-quote escape (`"'"'"'` instead of
+      `'"'"'`), corrupting any shell-quoted command/path/JSON payload containing a
+      `'` — so the launch script wrote invalid JSON that `readState` could never
+      parse. Fixed the idiom, moved the bootstrap state write from `printf|sed`
+      to a `python3` json writer, de-raced the test with a spawn stub, and added
+      a 4-case launch-script regression suite. Tests 171–172/174 flaky → 178/178
+      stable.
+- [ ] **Flake guard in the pre-push self-check** (new, run 9): run the suite ≥2×
+      (`test:flake` script) and fail on any nondeterminism; a one-shot green
+      masked a live flake for multiple runs. Optionally seed a deterministic
+      clock/PID into `renderLaunchScript` for reproducible, snapshot-testable
+      output.
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`

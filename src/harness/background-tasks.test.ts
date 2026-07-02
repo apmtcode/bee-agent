@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -370,4 +371,40 @@ describe("BackgroundTaskExecutionService", () => {
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
   });
+
+  it.each([
+    ["single quotes + newlines", "printf 'line-1\nline-2\n'"],
+    ["double quotes", 'echo "hello world"'],
+    ["embedded JSON", `echo '{"a":1,"b":"x"}'`],
+    ["mixed quotes", `printf '%s\\n' "he said \\"hi\\"" 'done'`],
+  ])(
+    "generates a launch script that writes valid execution-state JSON (%s)",
+    async (_label, command) => {
+      const rootDir = await makeTempDir();
+      let launchScript: string | undefined;
+      let launchCwd: string | undefined;
+      const store = new FileBackgroundTaskStore(
+        path.join(rootDir, "background-tasks.json"),
+        (scriptPath, _args, options) => {
+          launchScript = scriptPath;
+          launchCwd = options.cwd;
+          return { pid: 9090, unref() {} };
+        },
+      );
+      const task = await store.start({ title: "Quoting", command, cwd: rootDir, kind: "task" });
+
+      // Run the generated bootstrap+completion script for real (deterministically,
+      // not detached) and assert the persisted state.json parses back cleanly with
+      // the original command preserved byte-for-byte. This is the regression guard
+      // for the shellQuote / JSON-escaping bug that corrupted state files.
+      execFileSync("bash", [launchScript!], { cwd: launchCwd, stdio: "ignore" });
+
+      const state = await store.executionService.readState(task);
+      expect(state).toBeDefined();
+      expect(state?.status).toBe("completed");
+      expect(typeof state?.pid).toBe("number");
+      expect(state?.exitCode).toBe(0);
+      expect(state?.command).toBe(command);
+    },
+  );
 });
