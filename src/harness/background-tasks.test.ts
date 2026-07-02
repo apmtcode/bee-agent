@@ -370,4 +370,41 @@ describe("BackgroundTaskExecutionService", () => {
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
   });
+
+  it("executes the generated launch script into a valid, numeric-pid state file", async () => {
+    // Regression: the launch script must (1) shell-quote a command containing
+    // single quotes/newlines without corrupting the JSON, (2) substitute the
+    // real pid as a number (not the literal "$$" string), and (3) write state
+    // atomically so a concurrent read never sees a partial file. Uses the real
+    // spawn + real bash launch script (no mocked spawn) to exercise all three.
+    const rootDir = await makeTempDir();
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"));
+    const task = await store.start({
+      title: "Quoted command",
+      command: "printf 'line-1\nline-2\n'",
+      cwd: rootDir,
+      kind: "task",
+    });
+
+    const statePath = path.join(rootDir, task.execution.stateFile);
+    let state: BackgroundTaskExecutionState | undefined;
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      const raw = await fs.readFile(statePath, "utf8").catch(() => undefined);
+      if (raw && raw.trim()) {
+        // Any parse error here means the launch script produced corrupt JSON.
+        const parsed = JSON.parse(raw) as BackgroundTaskExecutionState;
+        if (parsed.status === "completed") {
+          state = parsed;
+          break;
+        }
+      }
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+
+    expect(state, "launch script never wrote a completed state").toBeDefined();
+    expect(typeof state?.pid).toBe("number");
+    expect(Number.isFinite(state?.pid)).toBe(true);
+    expect(state?.status).toBe("completed");
+    expect(state?.command).toBe("printf 'line-1\nline-2\n'");
+  });
 });

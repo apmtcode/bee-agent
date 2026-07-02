@@ -38,8 +38,22 @@ unchecked items are queued. Keep this richer than you found it each run.
     `skills.executable.*`, `push.subscriptions.*`, `trajectories.*`, `replays.*`,
     `cron.runs`/misc — plus a few genuine test-only typings. Map the rest, then
     fix residual test-only typings.
+- [x] **Restore the green test suite** (2026-07-02, run 9). Clean HEAD was
+      silently red (3 deterministic failures) despite run 8 logging 174/174 —
+      the verification gate was broken. Fixed 3 real launch-script bugs
+      (single-quote mis-escape, unsubstituted pid, non-atomic state writes) +
+      injected a no-op spawn in the 3 racing tests + added a regression test that
+      runs the real launch script. Now 175/175, stable across repeated runs.
 - [ ] Add a `verify` npm script (`typecheck && build && test`) and have the
-      engine run it as a pre-push self-check each cycle.
+      engine run it as a pre-push self-check each cycle. **Make it run the
+      background-task/training suite ≥3× and fail on any variance** — a single
+      green run hid the run-9 timing-races for 8 cycles.
+- [ ] **De-duplicate the launch-script state writer.** `background-tasks.ts` and
+      `training/runner.ts` carry two near-identical hand-rolled bash/sed/python
+      JSON-state emitters — run 9 fixed the same 3 bugs in both. Extract one
+      audited `renderAtomicJsonStateWrite()` helper (quote-safe, numeric-pid,
+      atomic-rename) and a shared `shellQuote`, so this correctness lives in one
+      place. Add a lint forbidding raw `> $statePath` redirects in launch scripts.
 - [x] Interim **source-only typecheck gate** — DONE run 7. `tsconfig.src.json`
       (excludes `**/*.test.ts`) + `typecheck:src` script; passes (exit 0). Next:
       have the engine run it as a per-run pre-push self-check.

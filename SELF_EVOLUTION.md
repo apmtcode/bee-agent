@@ -6,6 +6,58 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-02 (run 9) — 🐛 Fix the launch-script state writer: 3 real bugs → suite green + stable
+
+**Audited:** The verification gate itself. On a clean checkout of HEAD the suite was
+**not green** — 3 tests failed *deterministically* despite run 8 recording 174/174
+(`operator-runtime`, `control-plane/server`, `cli/app`). A red gate blocks the whole
+engine (step 5 says never push on failure), so restoring it was the highest-value
+action. Root-caused the background-task/training **launch-script state writer**
+(`src/harness/background-tasks.ts`, `src/training/runner.ts`) by capturing the actual
+corrupt state file mid-run.
+
+**Three genuine production bugs found + fixed (additive):**
+1. **`shellQuote` mis-escaped single quotes** (`background-tasks.ts`): the POSIX
+   single-quote escape was written `"'"'"'` (leading `"`) instead of `'"'"'`. Any
+   command containing a `'` (e.g. `printf 'line-1\nline-2\n'`) produced invalid shell
+   → `printf` emitted mangled JSON → the state file failed to parse (`SyntaxError …
+   position 312`). `training/runner.ts` already had the correct form.
+2. **pid was never substituted** (both files): the state payload used `pid: "$$"` and
+   a sed clause `s/"$$"/$$/g`, but the unescaped `"` closed the shell double-quote and
+   `$$` expanded early, so the pattern never matched — `state.pid` persisted as the
+   **string** `"$$"`. `isProcessRunning("$$")` → `Number.isFinite` false → every
+   *running* task read as `missing-process` → control reported `degraded` instead of
+   `active`. Replaced with a quoted placeholder `"__OPENCLAW_PID__"` + `sed
+   s/\"__OPENCLAW_PID__\"/$$/g` (verified numeric substitution empirically).
+3. **Non-atomic state writes** (both files): the sed write (`… > state.json`) and the
+   Python completion writer (`write_text`) truncated the live file in place, so a
+   concurrent reconcile read caught a partial write. Made both atomic — write to
+   `state.json.$$.tmp` then `mv -f` / `os.replace()` (rename is atomic) — matching the
+   established `writeJsonAtomic` pattern.
+
+**Test determinism:** the 3 failing tests forced `backgroundTaskIsProcessRunning:()=>
+false` but still spawned a **real** detached process whose launch script wrote state
+asynchronously, racing the test's own `writeState`. Injected the already-supported
+`backgroundTaskSpawnProcess` no-op at those 4 sites so state is fully test-controlled
+(production behaviour unchanged; these tests never asserted on real process output).
+
+**New regression test** (`background-tasks.test.ts`): executes the *real* bash launch
+script for a single-quote+newline command and asserts the state file parses as valid
+JSON with a **numeric** pid and terminal `completed` status — locks in all three fixes
+(prior tests all mocked spawn, so the launch script was never exercised).
+
+**Test results:** clean HEAD **3 failed / 171 passed** → now **175/175 passing**,
+verified stable across 6× affected-file runs + 2× full-suite runs. `typecheck:src`
+CLEAN. Build ✅. Focused diff: 2 source files, 3 test files, +1 test.
+
+**New idea:** add an engine pre-push self-check that runs the affected suite **N times**
+(e.g. 3×) and treats *any* variance as a failure — a single green run hid this class of
+timing-races for 8 cycles. Bigger: a lint that forbids hand-rolled shell/`sed` JSON
+emission in launch scripts and routes all state persistence through one audited
+`renderAtomicJsonWrite()` helper shared by background-tasks + training, so the
+quote/pid/atomicity correctness lives in exactly one place instead of two divergent
+copies.
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
