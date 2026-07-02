@@ -57,18 +57,42 @@ unchecked items are queued. Keep this richer than you found it each run.
 
 ## Local-movement learning subsystem
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
-device/os/browser adapters, consent store, ingestion) and `src/training/`
-(exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
-      objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
-      deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+device/os/browser adapters, consent store, ingestion), `src/training/`
+(exporter, job store/manifest, runner, execution service), and — new as of
+run 9 — `src/movement/` (the model layer: low-level event schema, tokenizer,
+synthetic generator, pluggable learnable backend, eval harness).
+- [x] **Inventory** capture/training vs. the objective's five pieces (run 9).
+      Finding: `capture`/`training` covered *high-level* trajectory spans
+      (summarized observations/actions) + shelled training out to mlx/axolotl,
+      but the **model layer was entirely missing** — no low-level movement
+      schema, no learnable repeat/generalize model, no synthetic streams, no
+      eval. `src/movement/` fills exactly that gap.
+- [x] **Pluggable local-model backend interface** + deterministic reference
+      backend (run 9). `MovementModelBackend` seam in `src/movement/backend.ts`;
+      `MarkovMovementBackend` (variable-order Markov + stupid-backoff) is a
+      dependency-free, fully deterministic learner for cloud/CI. Real on-device
+      small-model backends implement the same interface.
+- [x] **Synthetic event-stream generator** (run 9) — `src/movement/synthetic.ts`,
+      seeded PRNG (mulberry32), parametrized tasks (open-and-type / menu-select /
+      scroll-and-click). Validates capture→dataset→train→replay round-trips with
+      no OS input.
+- [x] **Generalization eval harness** (run 9) — `src/movement/eval.ts`:
+      teacher-forced next-step accuracy + free-running replay fidelity (LCS
+      overlap) on held-out trajectories. Tests prove perfect self-replay
+      (objective 2c) and recomposition of learned sub-movements on a
+      novel-but-related held-out trajectory (objective 2d).
+- [ ] **Coordinate-abstracted tokenization** so the model generalizes to *new*
+      screen locations, not just new recombinations of seen cells. Predict
+      pointer targets *relative to task anchors* (e.g. "to focused element")
+      instead of absolute grid cells, so a held-out target in an unseen cell
+      still replays. Current backoff generalizes structure but reuses familiar
+      coordinates.
+- [ ] **Persist/load a trained movement model** (snapshot() → JSON on disk) and
+      wire it into `src/training/runner.ts` as a first, real, on-device-free
+      training target alongside the mlx/axolotl launch plans.
+- [ ] **Bridge high-level `TrajectorySpan` ↔ low-level `MovementEvent`**: derive
+      movement datasets from recorded capture spans (device-adapter gestures →
+      movement events) so the two halves of the subsystem share one pipeline.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
@@ -84,3 +108,13 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
       count to a baseline file and fail if a module regresses above it. Lets the
       engine pay debt down module-by-module without one green-gate blocking
       progress, and prevents backsliding while the total is still > 0.
+- [ ] **Fix the flaky background-task recovery test** (surfaced run 9). Under
+      parallel `vitest run`, `operator-runtime.test.ts` (and sometimes
+      `background-tasks.test.ts`) intermittently throw a JSON parse error in
+      `readState`/`readJsonFile` ("Expected ',' or '}' … position 311"). Fails on
+      clean HEAD too — pre-existing, ~1–3 failures depending on scheduling.
+      `writeState` uses atomic temp+rename and each task has a `randomUUID`
+      baseDir, so the corruption source is non-obvious; needs dedicated
+      reproduction under load (suspect: `writeJsonAtomic`'s module-global
+      `writeCounter` temp-name scheme, or a shared path under concurrency).
+      Making the suite deterministically green unblocks the `verify` pre-push gate.

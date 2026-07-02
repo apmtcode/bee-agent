@@ -6,6 +6,64 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-02 (run 9) — Movement model layer: schema + synthetic streams + learnable backend + eval
+
+**Audited:** The local-movement learning subsystem (standing objective #2)
+against the objective's five pieces (capture → schema → dataset → replay →
+train/infer). Read `src/capture/*` and `src/training/*`. **Finding:** the
+existing stack handles *high-level* trajectory spans (summarized
+observations/actions) and shells training out to `mlx_lm`/`axolotl` launch
+scripts — but the **model layer is entirely missing**: no low-level movement
+event schema (mouse/keyboard/scroll/window), no model that actually learns to
+*repeat* or *generalize* movements, no synthetic event streams to validate
+in-cloud, and no eval harness. Seven prior runs were all typecheck-debt paydown;
+this run advances the flagship objective instead.
+
+**Changed (additive — new self-contained `src/movement/` module, no existing
+files touched except the barrel):**
+- `events.ts` — low-level `MovementEvent` union (mouse-move/down/up, scroll,
+  key-down/up, window-focus), a `CoordinateQuantizer` (grid discretization so
+  the model is robust to sub-cell jitter), and a finite-vocabulary tokenizer
+  (`tokenizeEvent`/`tokenizeTrajectory`) with intent-conditioning BOS/label/EOS
+  sentinels.
+- `synthetic.ts` — deterministic seeded PRNG (mulberry32; avoids `Math.random`
+  for reproducibility) + a parametrized task generator (`open-and-type`,
+  `menu-select`, `scroll-and-click`) producing labeled movement trajectories.
+  This is how we validate the pipeline in the cloud with **no real OS input**.
+- `backend.ts` — the **pluggable `MovementModelBackend` seam** (real on-device
+  small-model backends implement this) plus `MarkovMovementBackend`: a
+  dependency-free, fully deterministic variable-order Markov learner with
+  stupid-backoff. It genuinely learns P(next token | context) and, at inference,
+  uses the longest seen context, backing off to shorter ones — which is what
+  lets it generalize by recombining sub-movements. Argmax ties break lexically
+  so output is stable across platforms.
+- `eval.ts` — generalization harness: teacher-forced `evaluateNextStepAccuracy`
+  and free-running `evaluateReplayFidelity` (LCS overlap of a rollout vs. ground
+  truth), plus an exported `longestCommonSubsequence`.
+- `src/index.ts` — barrel exports for all four (placed before the memory block).
+
+**Test results:** new suites `events/synthetic/backend/eval` = **19/19 pass**.
+Tests prove **objective 2c** (perfect self-replay: next-step accuracy 1.0,
+replay fidelity 1.0 on a recorded trajectory) and **objective 2d**
+(generalization: a novel-but-related held-out trajectory — unseen type length —
+is replayed at ≥0.6 fidelity by recomposing learned sub-movements, and the
+correct intent replays strictly better than a mislabeled cross-task intent).
+`npm run typecheck:src` ✅ (source stays green). `npm run build` ✅ (tsdown, 5
+files). Full `npm test`: **190/193** — the 3 failures are a **pre-existing flaky
+test** in `operator-runtime.test.ts`/`background-tasks.test.ts` (JSON parse race
+in `readState`), reproduced identically on clean HEAD with my changes stashed,
+so they are not caused by this work. Logged to ROADMAP for a dedicated fix.
+
+**New idea (logged to ROADMAP):** the current backend generalizes movement
+*structure* but reuses familiar *coordinates* (absolute-cell tokens break the
+Markov chain at unseen locations). Next: **coordinate-abstracted tokenization** —
+predict pointer targets *relative to a task anchor* ("to the focused element")
+rather than absolute grid cells, so a held-out target in a genuinely unseen cell
+still replays correctly. Also: persist `snapshot()` to disk and wire the movement
+model into `training/runner.ts` as a real, OS-free training target.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

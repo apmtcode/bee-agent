@@ -285,6 +285,47 @@ export {
   type TrajectorySpan,
 } from "./capture/trajectory.js";
 export {
+  MOVEMENT_BOS,
+  MOVEMENT_EOS,
+  cellCenter,
+  createCoordinateQuantizer,
+  labelToken,
+  quantizeCell,
+  tokenizeEvent,
+  tokenizeTrajectory,
+  type CoordinateQuantizer,
+  type MouseButton,
+  type MovementDataset,
+  type MovementEvent,
+  type MovementEventKind,
+  type MovementModifier,
+  type MovementTrajectory,
+} from "./movement/events.js";
+export {
+  createSeededRandom,
+  generateMovementDataset,
+  generateTaskTrajectory,
+  type GenerateDatasetOptions,
+  type MovementTaskName,
+  type SyntheticTarget,
+  type SyntheticTaskSpec,
+} from "./movement/synthetic.js";
+export {
+  MarkovMovementBackend,
+  type MovementModelBackend,
+  type MovementPrediction,
+  type TrainMovementModelOptions,
+  type TrainedMovementModel,
+  type TrainedMovementModelSnapshot,
+} from "./movement/backend.js";
+export {
+  evaluateNextStepAccuracy,
+  evaluateReplayFidelity,
+  longestCommonSubsequence,
+  type NextStepEvalResult,
+  type ReplayFidelityResult,
+} from "./movement/eval.js";
+export {
   FileMemoryStore,
   type MemoryStoreShape,
 } from "./memory/memory-store.js";
