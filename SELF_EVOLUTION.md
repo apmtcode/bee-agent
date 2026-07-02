@@ -6,6 +6,75 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-02 (run 9) — 🎯 Movement subsystem: in-process, cloud-testable train→infer pipeline
+
+**Audited:** The local-movement learning subsystem (objective #2) — `src/capture`
+(recorder → trajectory → replay) and `src/training` (exporter → job manifest →
+runner → execution-service). Found the pipeline was complete **through dataset
+export and *plan generation*** but had a hard gap at objective 2(c)/(d): the
+`LocalAppleSiliconTrainingRunner` only emits **shell commands** for real
+on-device trainers (`mlx_lm.lora`, `axolotl`). Nothing could actually *train a
+model* or *run inference* in-process, so the train→repeat→generalize loop was
+neither runnable nor testable in the cloud. This is exactly what the charter's
+guardrail says to solve with "code, schema, pipelines, simulations, and tests"
+plus a "pluggable model backend."
+
+**Changed (additive) — new `src/training/movement-model.ts` (+ tests):**
+- **Pluggable backend interface** `MovementModelBackend` (`train(dataset) →
+  MovementModel`, `predict(model, context) → MovementPrediction`). Real on-device
+  backends (mlx/gguf) implement the same seam; the model is plain JSON, so it
+  persists as a genuine artifact via the existing `writeJsonAtomic`.
+- **Deterministic reference backend** `MarkovMovementBackend` — a variable-order
+  backoff Markov predictor. No external deps, no randomness (argmax with a
+  lexicographic tie-break), so it runs in CI/cloud. Trains on tokenized movement
+  sequences recording, for every action, its distribution across each backoff
+  context length 0..order.
+- **Tokenizer + dataset builder**: `actionToken`/`observationToken` (slugged,
+  stable vocab), `movementSequenceFromTrajectory`, `movementSequenceFromReplay`,
+  `buildMovementDataset`/`movementDatasetFromTrajectories`. Bridges the existing
+  `TrajectorySpan`/`ReplayManifest` capture schema into a training-ready dataset.
+- **Inference/rollout**: `generateMovementSequence` greedily rolls out a movement
+  chain from a seed context, stopping on a learned `<stop>` token — used to
+  *replay* a recorded movement (objective 2c) and to *generalize* from a
+  related-but-unseen seed (objective 2d).
+- **Eval harness**: `evaluateReplayFidelity` (teacher-forced next-action accuracy
+  on trained sequences — measures 2c; = 1.0 on the recorded data) and
+  `evaluateGeneralization` (deterministic train/holdout split, measures 2d and the
+  share of correct predictions resolved via context backoff rather than exact
+  recall). Both roadmap items ("pluggable local-model backend", "generalization
+  eval harness") landed in one cohesive module.
+- Exported the whole surface from `src/index.ts`.
+
+**Test results:** new `movement-model.test.ts` **13/13 ✅** (exact replay = 1.0;
+held-out generalization > 0.5 via backoff; deterministic tie-break; stop-token
+termination; empty-model + clamping edges). `npm run build` ✅ (550 kB).
+`npm run typecheck:src` ✅ (source stays green — the new module typechecks clean).
+
+**Blocker (pre-existing, NOT from this run):** the full `npm test` shows **4
+failing tests on the clean HEAD** — `operator-runtime.test.ts` (background-task
+recovery: `readJsonFile` hits a `SyntaxError` on a state file written by the
+`sed`-based launch script), `app.test.ts` ×2 (monitor-stop label + `control=
+active` status), `server.test.ts` ×1 (result-shape mismatch). All are in
+monitor/background-task/control-plane code this run never touched; they reproduce
+after `git stash` of my diff, so they are environmental (shell/`date`/`sed`
+behavior on this cloud image differs from run 8's machine, which logged 174/174).
+Per the branch requirements I push this additive, isolated, in-isolation-green
+work to `claude/peaceful-dirac-mae4hv` and log the pre-existing failures for a
+dedicated future run rather than hiding them.
+
+**New idea:** now that a movement model can *predict the next action*, add a
+`MovementReplayController` that closes the loop with the existing capture
+`replay-service` — feed live captured observations into `predict`, emit the
+predicted action through the `device-adapter` seam (mock in cloud, real locally),
+and score online replay drift against the recorded trajectory. That turns the
+offline eval into an interactive "learned autopilot" with a safety gate
+(confidence threshold + human-approval fallback below it). Also: make the
+tokenizer **parameter-aware** (bucket `mouse.move (x,y)` coordinates instead of
+slugging the whole summary) so the model generalizes over *continuous* movement
+targets, not just discrete action labels.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

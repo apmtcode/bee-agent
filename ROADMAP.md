@@ -44,6 +44,15 @@ unchecked items are queued. Keep this richer than you found it each run.
       (excludes `**/*.test.ts`) + `typecheck:src` script; passes (exit 0). Next:
       have the engine run it as a per-run pre-push self-check.
 - [ ] Add a minimal CI workflow mirroring `verify` for human-opened PRs.
+- [ ] **Fix 4 environmental test failures** surfaced on the cloud image (run 9;
+      run 8 logged 174/174 on a different machine). Root causes to chase:
+      `operator-runtime.test.ts` background-task recovery reads a state file
+      written by the `sed`-based launch script and `readJsonFile` throws a JSON
+      `SyntaxError` (likely `sed`/`date`/`$$`-substitution portability in
+      `runner.ts`'s `renderLaunchScript`); `app.test.ts` ×2 (monitor-stop label,
+      `control=active` status) and `server.test.ts` ×1 (result-shape) look like
+      timing/shell-dependent state. Make the fixtures hermetic (no reliance on host
+      `sed`/`date`) so the suite is green in cloud and local alike.
 
 ## Capability parity (audit reference agents → port gaps)
 - [ ] Build a "capability inventory" generator: enumerate bee-agent's exported
@@ -62,13 +71,26 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
+      for a real on-device small model. — DONE run 9 (`src/training/movement-model.ts`:
+      `MovementModelBackend` interface + `MarkovMovementBackend` reference; model
+      is plain JSON, real on-device backends implement the same seam).
 - [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      round-trips without real OS input. (Partial: run 9 added tokenizer +
+      `buildMovementDataset` from `TrajectorySpan`/`ReplayManifest`; still want a
+      generator that fabricates *raw* device/OS event streams end-to-end.)
+- [x] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories. — DONE run 9 (`evaluateReplayFidelity` for
+      2c; `evaluateGeneralization` for 2d, reporting held-out next-action accuracy
+      and the backoff share).
+- [ ] `MovementReplayController`: close the loop — feed live captured observations
+      into `predict`, emit predicted actions through the `device-adapter` seam
+      (mock in cloud, real locally), score online replay drift, and gate on a
+      confidence threshold with human-approval fallback below it (run 9 idea).
+- [ ] Parameter-aware tokenizer: bucket continuous action params (e.g. `mouse.move`
+      x/y) instead of slugging the whole summary, so the model generalizes over
+      continuous movement targets, not just discrete labels (run 9 idea).
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
