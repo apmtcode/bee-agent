@@ -62,13 +62,37 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
+      for a real on-device small model. — DONE run 9 (`src/training/model-backend.ts`:
+      `MovementModelBackend`/`TrainedMovementModel` seam + deterministic weighted
+      n-gram backend with stupid-backoff that reproduces recorded trajectories and
+      generalizes to related prefixes; `createMovementModelBackend` registry;
+      serialize/restore; 13 tests). Next: wire it into the training runner/execution
+      service so a job can `train` a model artifact in-process (CI path) alongside
+      the Apple-Silicon shell plan.
 - [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      round-trips without real OS input. (The n-gram backend tests hand-build small
+      streams; a generator would scale coverage.)
+- [ ] Generalization eval harness: hold out related synthetic trajectories and
+      measure the trained model's next-token replay fidelity (top-1 accuracy +
+      backoff-order histogram); gate training jobs on a minimum fidelity.
+
+## Reliability / test hermeticity (surfaced run 9)
+- [x] Fix malformed POSIX single-quote escape in `background-tasks.ts` `shellQuote`
+      (`"'"'"'` → `'"'"'`) that corrupted the JSON state payload and crashed
+      recovery for any command/path containing a `'`. — DONE run 9.
+- [x] Make background-task + training launch-script state writes atomic
+      (temp file + `mv`/`os.replace`) so a live task's write can't be read torn.
+      — DONE run 9 (`background-tasks.ts` + `training/runner.ts`).
+- [ ] **Shared hermetic test factory** `makeHermeticApp()`/`makeHermeticRuntime()`
+      that injects a no-op `backgroundTaskSpawnProcess` + controllable
+      `isProcessRunning` by default, and migrate the ~30 background-task test sites
+      to it. Two tests still depend on real OS subprocess timing and flake under
+      parallel load: `server.test.ts:719` (auto platform-breaker degrades from a
+      `sleep 5` remote task seen as `missing-process` under `isProcessRunning:false`)
+      and `app.test.ts:1080` (needs `printf ok` output produced *and* the task still
+      stoppable — inherently racy; redesign to inject output + control state).
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

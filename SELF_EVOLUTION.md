@@ -6,6 +6,66 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-02 (run 9) — Pluggable movement-model backend + a real `shellQuote` corruption bug
+
+**Audited:** The movement-learning subsystem (standing objective #2). `src/capture`
+records trajectories and `src/training` emits Apple-Silicon `mlx`/`axolotl` launch
+*plans*, but there was **no in-process model** that actually learns a movement
+policy and predicts next movements — so objectives 2(c) *reproduce* and 2(d)
+*generalize* were unimplemented and untestable in the cloud (the shell plans can't
+run here). This is the top movement-subsystem roadmap item.
+
+**Changed (additive) — new capability:**
+- **`src/training/model-backend.ts`** — a backend-agnostic seam:
+  `MovementModelBackend.train(dataset) → TrainedMovementModel` with
+  `predictNext(context)`, `generate(prefix)`, and JSON `serialize()`/`restore()`.
+  Dataset builders (`buildMovementDatasetFromReplays`,
+  `buildMovementDatasetFromTrajectories`, reward-weighted) tokenize the existing
+  `ReplayTimelineEvent`/`TrajectorySpan` shapes. Default **`NgramMovementBackend`**
+  is a deterministic weighted n-gram with stupid-backoff decoding: it **reproduces**
+  a recorded trajectory exactly (argmax on seen context) and **generalizes** to
+  new-but-related prefixes by backing off to the longest matching suffix — both
+  runnable in CI with no native deps. Registry `createMovementModelBackend(kind)`
+  leaves a documented seam for a real on-device small model. Exported from the
+  barrel. **13 new tests, deterministic across 5 runs.**
+
+**Changed — a real correctness bug found while chasing test flakiness:**
+- **`src/harness/background-tasks.ts` `shellQuote`** used a *malformed* POSIX
+  single-quote escape — `replaceAll("'", `"'"'"'`)` (stray leading `"`) instead of
+  the correct `'"'"'`. Any background-task whose command/cwd/path contains a single
+  quote produced a **corrupted JSON state payload**, so `recoverBackgroundTasks`
+  read torn JSON and **threw `SyntaxError`, crashing recovery**. Proved the mangling
+  in isolation, then fixed the escape (`training/runner.ts` already had it right).
+- **Atomic state writes:** the launch scripts wrote state via `printf … > file`
+  and Python `write_text` (truncate-in-place) — a reader during a live task's write
+  saw a torn file. Both now write to a temp file and `mv`/`os.replace` (atomic),
+  in `background-tasks.ts` **and** `training/runner.ts`.
+- **Test hermeticity:** `OperatorCliApp` now forwards optional
+  `backgroundTaskSpawnProcess`/`backgroundTaskIsProcessRunning` seams to the runtime
+  (`src/cli/app.ts`), and the three tests that start+inspect background tasks inject
+  a no-op spawn so a real launch subprocess no longer races the test's own state
+  writes. This took **operator-runtime.test.ts 16→17/17** and **app.test.ts** (the
+  session-lifecycle + freeform-gating + executable-skill cases) green in isolation.
+
+**Test results:** `npm run typecheck:src` ✅ (exit 0). Build ✅. New backend
+**13/13** (5× deterministic). Full suite **185/187**; the 2 remaining are
+**pre-existing** and fail on pure base too (verified via `git stash -u`):
+`server.test.ts:719` (an automatic platform-breaker degrades because injected
+`isProcessRunning:()=>false` makes a `sleep 5` remote task look `missing-process`)
+and `app.test.ts:1080` (a background test that needs a real `printf ok` subprocess
+to have produced output yet still be stoppable — a subprocess-timing race under
+parallel load). Both are real-OS-subprocess/timing issues in the *tests*, not the
+new code, and are out of this run's scope to redesign safely.
+
+**New idea:** now that a deterministic policy model exists, add a **generalization
+eval harness** — hold out related synthetic trajectories, measure next-token replay
+fidelity (top-1 / backoff-order histogram) of the trained model, and gate training
+jobs on a minimum fidelity. Second idea (reliability): the two pre-existing failures
+share a root cause — tests that spawn *real* OS subprocesses. Introduce a shared
+`makeHermeticApp()`/`makeHermeticRuntime()` test factory that injects a no-op spawn
++ controllable process-liveness by default, and migrate the ~30 background-task test
+sites to it, so the suite stops depending on real `bash`/`sleep`/`printf` timing.
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
