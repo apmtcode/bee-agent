@@ -6,6 +6,70 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-02 (run 9) — Movement-model subsystem: pluggable backend + train→infer→generalize loop (objective #2c/#2d)
+
+**Audited:** The local-movement learning subsystem (standing objective #2). The
+capture→trajectory→replay→export chain and the training **runner** all existed,
+but the runner (`src/training/runner.ts`) only emits *launch scripts* for real
+on-device MLX/axolotl training on Apple Silicon — which cannot execute in the
+cloud. **Gap:** there was no in-process, pluggable model backend, so objective
+#2(c) "post-train a model to repeat recorded movements" and #2(d) "generalize to
+new but related movements" were completely un-validatable in CI. That is the
+highest-value increment.
+
+**Changed (additive, new files only + barrel exports):**
+- **`src/training/movement-model.ts`** — the backend seam and a deterministic
+  reference backend:
+  - `MovementModelBackend` / `MovementModel` interfaces (native small-model
+    backends implement the same seam; deterministic is the default + safe
+    fallback).
+  - Dataset construction from replay events: `MovementEvent`,
+    `MovementExample`, `MovementDataset`, `buildMovementDataset`,
+    `buildMovementDatasetFromReplays`, `movementSequenceFromReplay` — consumes
+    the exact `ReplayTimelineEvent` shape the exporter already produces (every
+    `action` becomes a labeled example over its preceding context).
+  - `DeterministicMovementBackend` — dependency-free, **fully deterministic** (no
+    `Math.random`, lexical tie-breaks). Combines (1) a back-off n-gram
+    transition model over whole-event tokens for exact replay, (2) a
+    nearest-neighbour fallback over **word-level** context bags (Jaccard) for
+    generalization to reworded/related contexts, (3) a global action prior.
+  - `evaluateMovementModel` (fidelity/tool-fidelity + per-source breakdown) and
+    `trainMovementModel` (train + optional self-replay + held-out generalization
+    eval) — the generalization eval harness the roadmap asked for.
+- **`src/training/movement-synthetic.ts`** — deterministic synthetic
+  event-stream generator (`synthesizeSequence`, `synthesizeRepetitions`,
+  `relatedVariant`) so capture→dataset→replay→train→infer round-trips validate
+  with no real OS input.
+- **`src/index.ts`** — exported the new public surface (values + types).
+
+**Test results:** `npm run typecheck:src` ✅ (exit 0, source stays green).
+`npm run build` ✅. **New `movement-model.test.ts`: 10/10 pass** — proves perfect
+self-replay fidelity (1.0), deterministic re-training, generalization to a
+reworded variant (tool-fidelity ≥0.75 via the similarity path), prior fallback,
+empty-model safety, and third-party backend pluggability (a `ConstantBackend`).
+
+**⚠️ Pre-existing failures (NOT caused by this run):** the full suite shows
+**4 failing tests** in `app.test.ts` (2), `server.test.ts` (1),
+`operator-runtime.test.ts` (1). Verified by removing all my files and stashing
+`index.ts` → the same 3 files still fail on the pristine run-8 commit. Root
+cause is **environmental**: background-task recovery spawns a shell/python helper
+that writes a state file, and `readJsonFile` then hits malformed JSON
+(`SyntaxError: Expected ',' or '}' … position 311`) — a cloud-shell state-file
+race in `harness/background-tasks.ts`, entirely outside this diff (my module does
+no IO/subprocess). Run 8 logged 174/174 green, so these surfaced from an
+environment change, not code. My contribution is verified green in isolation.
+
+**New idea:** add a **beam/temperature policy head** to the movement model so it
+can propose *multi-step* movement plans (not just the single next action) and
+expose an `epsilon`-style exploration knob for the RL (`rl` mode) path — then the
+generalization eval can score whole-plan fidelity (edit distance over predicted
+vs recorded action sequences), which is a stronger signal than per-step accuracy.
+Second idea: quarantine the flaky background-task recovery test behind a
+shell-availability probe so environmental shell races stop masking real
+regressions in the suite's green signal.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
