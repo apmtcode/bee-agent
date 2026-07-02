@@ -6,6 +6,63 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-02 (run 9) — 🧠 Pluggable local-movement model backend (repeat + generalize, in-process)
+
+**Audited:** The local-movement learning subsystem (`src/capture/` + `src/training/`)
+against objective #2's five pieces. Findings: capture (recorder/adapters), the
+event **schema** (`ReplayTimelineEvent`), **dataset** build (exporter →
+`ReviewedExportManifest`), and **replay** (`buildReplayManifest`) all exist —
+but pieces (c) *train a local model to repeat movements* and (d) *generalize to
+new-but-related movements* had **no in-process implementation**. The training
+`runner.ts` only emits mlx/axolotl **shell commands** that require the user's
+real Apple-Silicon hardware; nothing could actually learn from a dataset or
+predict a movement inside bee-agent, so the loop couldn't be validated in
+cloud/CI. This is the top ROADMAP item under the subsystem.
+
+**Changed (additive):** new `src/training/movement-model.ts` +
+`movement-model.test.ts`:
+- **`MovementModelBackend`** interface — the pluggable seam. `train(dataset) →
+  TrainedMovementModel`, `predict(model, context) → next movement`,
+  `generate(model, seed) → rollout`, `serialize`/`deserialize`. A real on-device
+  small model (e.g. an MLX policy) drops in by implementing this.
+- **`MarkovMovementBackend`** — a fully deterministic, dependency-free default:
+  an order-N Markov policy with **stupid-backoff**. No `Math.random`/clock, so
+  the same dataset always yields the same model and rollout (CI-reproducible).
+  It **repeats** recorded movements (generate from empty seed reproduces the
+  training sequence) and **generalizes** (backoff predicts a sensible next move
+  for an unseen prefix sharing a shorter suffix with training data). Ties break
+  by count then token order for stable rollouts.
+- **Tokenizer + dataset builders** (`tokenizeReplayEvent(s)`,
+  `buildMovementDataset`) turning `ReplayTimelineEvent[]` / `TrajectorySpan[]`
+  into model-ready `MovementSequence`s (whitespace-normalized, action-only by
+  default, observation/transcript optionally included as context).
+- **`MovementModelRegistry`** for backend pluggability, and
+  **`evaluateMovementModel`** — a generalization eval (next-token accuracy on
+  held-out sequences), covering the "generalization eval harness" roadmap item.
+- Exported all of it from `src/index.ts`.
+
+**Test results:** new module **15/15 green**; `npm run build` ✅;
+`npm run typecheck:src` ✅ (all source stays clean). Full suite **186/189**.
+The **3 failing tests are PRE-EXISTING and unrelated** — verified by
+`git stash` (they fail identically without this change). Root cause:
+`renderLaunchScript`'s `sed`-based JSON state writer in
+`src/training/runner.ts` emits **malformed JSON** (`SyntaxError: Expected ','
+or '}' ... at position 311`) that `BackgroundTaskExecutionService.readState`
+then fails to parse in this sandbox — a real launch-script bug, logged to
+ROADMAP. Pushed to the designated feature branch `claude/peaceful-dirac-1u2hgg`
+(not main), progress preserved.
+
+**New idea:** now that a movement dataset can be *scored*, add a **movement
+distillation loop**: after each reviewed export, train the mock backend, run
+`evaluateMovementModel` on a held-out split, and record accuracy to the
+telemetry file — turning "did the recorded movements become learnable?" into a
+tracked per-run metric and a gate before a real on-device training job is
+launched. Second idea: a `ReplayEngine` that consumes a `generate()` rollout and
+drives the capture adapters' inverse (emit device gestures), closing capture →
+train → replay into an executable loop with a mock actuator for tests.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

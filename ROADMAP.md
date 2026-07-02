@@ -59,18 +59,40 @@ unchecked items are queued. Keep this richer than you found it each run.
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
 (exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
-      objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Inventory what `src/capture` + `src/training` already implement vs. the
+      objective's five pieces — DONE run 9. capture/schema/dataset/replay all
+      exist; pieces (c) train-to-repeat and (d) generalize had no in-process impl.
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
+      for a real on-device small model — DONE run 9 (`src/training/movement-model.ts`:
+      `MovementModelBackend` interface + deterministic `MarkovMovementBackend` +
+      `MovementModelRegistry`). Repeats recorded movements and generalizes via
+      stupid-backoff; fully in-process, no external deps.
+- [x] Generalization eval harness — DONE run 9 (`evaluateMovementModel`:
+      next-token accuracy on held-out sequences). Next: wire it into a per-run
+      metric (see Innovation backlog "movement distillation loop").
 - [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      round-trips without real OS input. (Partial: tests hand-build sequences;
+      a reusable generator producing correlated mouse/keyboard/window streams is
+      still open.)
+- [ ] **[BUG, discovered run 9]** `renderLaunchScript` in `src/training/runner.ts`
+      builds the training-job state JSON then rewrites it with
+      `sed "s/__OPENCLAW_STARTED_AT__/.../g; s/\"\$\$\"/$$/g"`. The `$$`/pid
+      substitution corrupts the JSON — `readJsonFile` throws `SyntaxError:
+      Expected ',' or '}' ... at position 311`, which is why 3 background-task
+      execution tests fail in-sandbox (pre-existing; reproduces on the base
+      branch). Fix: write the state file from the python state-writer (which
+      already runs) instead of pre-seeding via `sed`, or `printf`-escape the pid.
+- [ ] `ReplayEngine` that consumes a `generate()` rollout and drives the inverse
+      of the capture adapters (emit device gestures) behind a mock actuator, so
+      capture → train → replay is an executable, testable loop.
 
 ## Innovation backlog
+- [ ] **Movement distillation loop** (new run 9): after each reviewed export,
+      train `MarkovMovementBackend`, run `evaluateMovementModel` on a held-out
+      split, and record accuracy to the telemetry file — a tracked per-run
+      "did the recorded movements become learnable?" metric, and a gate before a
+      real on-device training job is launched.
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in
       project health over time.
