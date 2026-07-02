@@ -6,6 +6,66 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-02 (run 9) — Pluggable in-process movement-model backend (train + infer)
+
+**Audited:** The local-movement learning subsystem (standing objective #2),
+specifically `src/training/`. Finding: the pipeline had capture → dataset →
+`ReviewedExportManifest`, and a `runner.ts` that only **plans** a shell-out to
+an on-device trainer (`mlx_lm.lora` / `axolotl`). There was **no in-process,
+pluggable model** that can actually *train* on captured movements and *infer*
+the next movement — so objective 2(d) ("post-train a local model to repeat
+recorded movements, and generalize to related ones") was untestable in the
+cloud. That gap was the top item under "Local-movement learning subsystem" in
+ROADMAP.
+
+**Changed (additive):** new `src/training/movement-model.ts` +
+`movement-model.test.ts`, exported from the barrel.
+- **`LocalMovementModelBackend`** interface — the pluggable seam (`train` +
+  `load`) so a real on-device small model can drop in later behind the same
+  contract.
+- **`NgramMovementModelBackend`** — a deterministic variable-order Markov model
+  with **backoff**. It *repeats* recorded movements (exact-context match, source
+  `"exact"`) and *generalizes* to new-but-related movements (shorter-context
+  backoff, source `"backoff"` → `"prior"` → `"none"`). `predict()` left-pads the
+  query with start tokens so training and inference score contexts identically —
+  the empty context predicts the start-of-sequence distribution, not the corpus
+  unigram. Fully serializable (`serialize()`/`backend.load()`).
+- **Tokenizer + dataset builders** — `tokenizeTrajectory`,
+  `tokenizeReplayManifest`, `tokenizeAction/Observation/ReplayEvent`,
+  `buildMovementDataset` turn captured trajectories (and replay manifests) into
+  `MovementSequence`s. Respects review redactions.
+- **`evaluateReplayFidelity`** — generalization/replay-fidelity harness: run on
+  training sequences it measures repeat fidelity; on held-out related sequences
+  it measures generalization (used in tests to assert the file→save tail is
+  recovered from a novel opener).
+
+**Test results:** new suite **11/11 passing**. `typecheck:src` ✅ (exit 0).
+`npm run build` ✅. Full suite **184/185**.
+
+**⚠️ Pre-existing failure (NOT introduced by this run):** the 1 failing test is
+`operator-runtime.test.ts > starts, syncs, recovers, lists, and cancels
+background tasks`. Verified it fails **3/3 on clean HEAD** with my changes
+stashed, and my module never touches that code. Root cause diagnosed: the
+**background-task launch script** (`renderLaunchScript` in
+`src/harness/background-tasks.ts:757`) writes a *single-line* `state.json` via
+`printf … | sed "…s/\"\$\$\"/$$/g"`; in this container that produces JSON that
+`readJsonFile` rejects ("Expected ',' or '}' … line 1 column 312"). The
+`writeJsonAtomic` path is multi-line and fine, so the bad file is the spawned
+script's, and it's environment-sensitive (run 8's env passed it). Logged to
+ROADMAP as a high-priority fix. Per the designated-branch requirement I pushed
+the green additive work to `claude/peaceful-dirac-571vtf` (not main, and not a
+`wip/*` branch — the branch rules forbid diverting), with this blocker recorded.
+
+**New idea:** give `evaluateReplayFidelity` a *k-fold* mode — hold out each
+captured trajectory in turn, train on the rest, and report mean held-out
+next-movement accuracy as a single "generalization score" per capture session.
+That score becomes the reviewed-export gate (only export/promote skills whose
+source trajectories exceed a generalization threshold) and a regression metric
+the engine can track across runs — tying the movement model directly into the
+existing consent/review/export flow.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

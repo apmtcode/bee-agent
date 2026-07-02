@@ -62,13 +62,41 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
+      for a real on-device small model. DONE run 9 —
+      `src/training/movement-model.ts`: `LocalMovementModelBackend` seam +
+      `NgramMovementModelBackend` (variable-order Markov w/ backoff) that trains
+      on movement sequences, repeats recorded movements, generalizes to related
+      ones, and serializes. Tokenizer + `buildMovementDataset` included.
 - [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      round-trips without real OS input. (Tokenizer + dataset builder landed in
+      run 9; still want a generator that emits realistic device/OS event streams
+      end-to-end through the recorder → trajectory store.)
+- [x] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories. DONE run 9 — `evaluateReplayFidelity`.
+      Next: k-fold generalization score (see below) wired into the export gate.
+- [ ] **Wire the movement backend into the training runner + control plane:**
+      add a `trajectories/replays` → `buildMovementDataset` → backend `.train`
+      path and expose `movement.train`/`movement.predict` RPCs, so a real
+      capture session can produce a usable local model (currently `runner.ts`
+      only emits an mlx/axolotl shell plan).
+- [ ] **k-fold generalization score:** hold out each captured trajectory in
+      turn, train on the rest, report mean held-out next-movement accuracy as a
+      per-session score; use it as the reviewed-export/skill-promotion gate and
+      track it across runs as a regression metric.
+
+## Known bugs
+- [ ] **Background-task launch script writes malformed `state.json`** (HIGH).
+      `operator-runtime.test.ts > starts, syncs, recovers, lists, and cancels
+      background tasks` fails 3/3 on clean HEAD in the cloud env (passed in run
+      8's env). `renderLaunchScript` (`src/harness/background-tasks.ts:757`)
+      emits a single-line state file via `printf … | sed "…s/\"\$\$\"/$$/g"`;
+      `readJsonFile` then throws "Expected ',' or '}' … line 1 column 312". The
+      `writeJsonAtomic` path is multi-line and fine — the bad file is the
+      spawned script's. Fix: make the shell/python state writer emit guaranteed
+      valid JSON (prefer the python heredoc writer for the *initial* state too,
+      or `printf` the fields without sed substitution). Discovered run 9.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
