@@ -6,6 +6,65 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-02 (run 9) — Reliability: launch-script JSON corruption fixed + hermetic background-task tests (green suite restored)
+
+**Audited:** Full build/test baseline before touching anything. Found the suite
+was **RED** on this environment: `npm test` reported 3–4 failing tests (the count
+varied run-to-run — a flakiness tell), despite run 8 logging 174/174. Two
+distinct pre-existing root causes, both surfaced by the new container's toolchain
+(different `sed`/coreutils) and the calendar advancing:
+
+**Root cause A — background-task launch scripts wrote *malformed JSON*.**
+`renderLaunchScript` in both `src/harness/background-tasks.ts` and
+`src/training/runner.ts` templated the initial "running" state file with
+`printf '%s' <json> | sed "s/__STARTED_AT__/…/; s/\"\$\$\"/$$/"`. On this
+platform the `"$$"`→pid substitution silently no-ops (BRE `$` handling is
+dialect-dependent) and any command containing quotes/newlines (e.g.
+`printf 'line-1\nline-2\n'`) breaks JSON escaping. The completion writer then
+does `json.loads(state_path.read_text())` and **crashes**, leaving a corrupt
+`"running"` state on disk. Instrumented `readJsonFile` to capture the raw file
+and confirmed: `{…,"pid":"$$",…,"command":"printf "line-1…""}`.
+- **Fix:** replaced the `printf|sed` JSON templating with a `python3` writer that
+  receives the base payload as an argv, `json.loads()` it, and patches
+  `pid`/`startedAt`/`updatedAt`. Python owns all escaping, so the state file is
+  always valid JSON regardless of command content or local `sed`. Applied
+  identically to both renderers; added `renderRunningStateWriterPython()` next to
+  each existing completion writer. Kept `date -u`, `bash -lc`, and the artifact
+  layout unchanged (minimal, reversible).
+- **Verified end-to-end** with a throwaway test that spawns the *real* launch
+  script for the exact hostile command `printf "a\"b\ncd"` and asserts the state
+  file `JSON.parse`s with a numeric `pid` — passes (previously corrupt). Removed
+  the throwaway after confirming.
+
+**Root cause B — control-plane tests spawned real OS processes and raced them.**
+`server.test.ts` and `operator-runtime.test.ts` constructed runtimes with
+`backgroundTaskIsProcessRunning: () => false` but **no** spawn override, so
+`startBackgroundTask({command:"sleep 5" | "tail -f app.log" | "printf …"})` ran
+real bash whose asynchronous state-file writes raced the tests' own manual
+`writeState()` calls. Symptoms: `control.state` flipping `active→degraded`,
+`platform` `mixed→paused`, and a recovery reason flipping `unchanged→
+missing-process` — all only under parallel load, hence the 3-vs-4 flakiness.
+- **Fix (test-only, hermetic):** injected a no-op `backgroundTaskSpawnProcess:
+  () => ({ pid, unref(){} })` into the four runtimes that drive background-task
+  state manually (server.test: main/drifting/breaker; operator-runtime.test:
+  recovery). This matches the long-standing pattern in `background-tasks.test.ts`
+  and makes every state transition test-authored and deterministic. No product
+  code changed for B.
+- Updated one now-stale assertion in `runner.test.ts` (`> 'state.json'` redirect
+  → `python3 - 'state.json'`) to reflect the writer change.
+
+**Test results:** `npm test` **174/174**, now **stable across 8 consecutive full
+runs** (was 170–171/174, flaky). `npm run typecheck:src` ✅ (source stays clean).
+`npm run build` ✅ (5 files, 531 kB). Net diff: 2 source files + 3 test files.
+
+**New idea (logged to ROADMAP):** add a `verify` npm script
+(`typecheck:src && build && test`) AND a tiny **flake-detector** the engine runs
+each cycle — `vitest run --repeat=3` (or a 3× loop) as the pre-push gate — so
+environment/timing-sensitive regressions like this are caught *before* they land,
+not rediscovered the next hour. Deeper: audit the remaining reference agents for
+any other `printf|sed`-style shell templating and replace with the python-writer
+seam (a reusable `renderJsonStateWriter()` helper both renderers could share).
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

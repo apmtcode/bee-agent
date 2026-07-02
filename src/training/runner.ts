@@ -166,14 +166,15 @@ function renderLaunchScript(execution: LocalTrainingExecution, plan: TrainingJob
   const quotedLogFile = shellQuote(execution.logFile);
   const quotedWorkingDirectory = shellQuote(execution.workingDirectory);
   const quotedCommand = `${shellQuote(plan.command[0] ?? "")}${plan.command.slice(1).map((arg) => ` ${shellQuote(arg)}`).join("")}`;
+  // Base state written as JSON and handed to python via argv; python parses it
+  // and patches pid + timestamps. Avoids `printf | sed` JSON templating, which
+  // corrupts payloads containing quotes/newlines (e.g. the command array) and
+  // depends on the local sed dialect for `$`-escapes.
   const quotedStatePayload = shellQuote(
     JSON.stringify({
       version: 1,
       jobId: plan.jobId,
       status: "running",
-      pid: "$$",
-      startedAt: "__OPENCLAW_STARTED_AT__",
-      updatedAt: "__OPENCLAW_STARTED_AT__",
       logFile: execution.logFile,
       workingDirectory: execution.workingDirectory,
       command: plan.command,
@@ -185,7 +186,9 @@ function renderLaunchScript(execution: LocalTrainingExecution, plan: TrainingJob
     "set -euo pipefail",
     `mkdir -p ${shellQuote(execution.artifactDir)} $(dirname ${quotedLogFile}) $(dirname ${quotedStatePath})`,
     "started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-    `printf '%s' ${quotedStatePayload} | sed "s/__OPENCLAW_STARTED_AT__/$started_at/g; s/\"\$\$\"/$$/g" > ${quotedStatePath}`,
+    `python3 - ${quotedStatePath} "$$" "$started_at" ${quotedStatePayload} <<'PY'`,
+    ...renderRunningStateWriterPython(),
+    "PY",
     `printf '%s\n' "starting ${plan.mode} training for ${plan.jobId}" >> ${quotedLogFile}`,
     `if ${quotedCommand} >> ${quotedLogFile} 2>&1; then`,
     "  completed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
@@ -202,6 +205,20 @@ function renderLaunchScript(execution: LocalTrainingExecution, plan: TrainingJob
     "fi",
     "",
   ].join("\n");
+}
+
+function renderRunningStateWriterPython(): string[] {
+  return [
+    "import json",
+    "import pathlib",
+    "import sys",
+    "state_path = pathlib.Path(sys.argv[1])",
+    "state = json.loads(sys.argv[4])",
+    "state['pid'] = int(sys.argv[2])",
+    "state['startedAt'] = sys.argv[3]",
+    "state['updatedAt'] = sys.argv[3]",
+    "state_path.write_text(json.dumps(state, indent=2) + '\\n')",
+  ];
 }
 
 function renderStateWriterPython(status: TrainingExecutionState["status"]): string[] {

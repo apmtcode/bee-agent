@@ -530,6 +530,11 @@ describe("StandaloneOperatorRuntime", () => {
   it("starts, syncs, recovers, lists, and cancels background tasks", async () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
+      // No-op spawn keeps the test hermetic: the launch scripts would otherwise
+      // run real `printf`/`tail -f` processes whose asynchronous state-file
+      // writes race with the manual writeState() calls below (flaky under
+      // parallel load). This test drives every state transition explicitly.
+      backgroundTaskSpawnProcess: () => ({ pid: 4321, unref() {} }),
       backgroundTaskIsProcessRunning: () => false,
     });
     const session = await runtime.startSession({ title: "Tasks", agentId: "main" });

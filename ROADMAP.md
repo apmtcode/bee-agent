@@ -40,6 +40,27 @@ unchecked items are queued. Keep this richer than you found it each run.
     fix residual test-only typings.
 - [ ] Add a `verify` npm script (`typecheck && build && test`) and have the
       engine run it as a pre-push self-check each cycle.
+- [ ] **Flake-detector pre-push gate** (run 9). Run 9 found the suite was
+      silently flaky (170–171/174, count varying run-to-run) because several
+      control-plane tests spawned real OS processes that raced their own manual
+      state writes. A single `npm test` masked it; only repeated runs revealed it.
+      Make the engine's pre-push gate `vitest run` **3×** (or `--repeat=3` if the
+      vitest version supports it) so timing/environment-sensitive regressions are
+      caught before landing. Cheap insurance (~7s/run here).
+- [x] **Fix background-task launch-script JSON corruption** (run 9). The
+      `printf | sed` state-file templating in `background-tasks.ts` +
+      `training/runner.ts` produced malformed JSON on this container's `sed`
+      dialect / for commands with quotes/newlines; replaced with a `python3`
+      argv-based writer that can't corrupt JSON. See SELF_EVOLUTION run 9.
+- [x] **Make background-task tests hermetic** (run 9). Injected no-op
+      `backgroundTaskSpawnProcess` into the four runtimes that drive task state
+      manually (server.test ×3, operator-runtime.test ×1) so they no longer spawn
+      real `sleep`/`tail`/`printf` processes that race the assertions. Suite now
+      174/174 stable across 8 consecutive full runs.
+- [ ] **Extract a shared `renderJsonStateWriter()` helper** — the running/completed
+      state-writer python is now duplicated across `background-tasks.ts` and
+      `training/runner.ts`. Factor into `src/shared/` so the JSON-safe seam has one
+      home and future state fields stay in sync. (New, run 9.)
 - [x] Interim **source-only typecheck gate** — DONE run 7. `tsconfig.src.json`
       (excludes `**/*.test.ts`) + `typecheck:src` script; passes (exit 0). Next:
       have the engine run it as a per-run pre-push self-check.
