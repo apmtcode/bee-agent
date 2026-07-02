@@ -3,6 +3,23 @@
 Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
+## Reliability / correctness
+- [x] **Fix background-task launch pipeline** (2026-07-02, run 9). `shellQuote`
+      mis-escaped single quotes (invalid JSON in `state.json`); the initial
+      running-state write left `"pid":"$$"` because JS consumed the sed backslash
+      escapes. Replaced `printf|sed` with a Python state writer; corrected
+      `shellQuote`. Any command containing a quote now recovers correctly.
+- [x] **Strictly-monotonic event timestamps** (2026-07-02, run 9). `EventBus.publish`
+      dedupes same-millisecond `Date.now()` ties so `afterTs` replay has a total
+      order.
+- [x] **Deterministic background-task tests** (2026-07-02, run 9). Injected mock
+      `backgroundTaskSpawnProcess` so tests stop racing real detached launch
+      scripts; added the spawn seam to `OperatorCliApp`.
+- [ ] **`test:stress` pre-push gate.** Loop the suite N times in the engine's
+      self-check so flaky tests are caught before they poison the baseline (the
+      run-8→run-9 "logged green, actually flaky" gap). Optionally lint tests that
+      construct `StandaloneOperatorRuntime` without a spawn override.
+
 ## Foundations / DX
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.

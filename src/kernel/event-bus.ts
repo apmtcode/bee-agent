@@ -16,6 +16,7 @@ export class OperatorEventBus<T extends OperatorEvent = OperatorEvent> {
   private readonly listeners = new Set<(event: T) => void>();
   private readonly waiters = new Set<() => void>();
   private closed = false;
+  private lastTs = 0;
 
   constructor(options: { replayLimit?: number } = {}) {
     this.replayLimit = options.replayLimit ?? 0;
@@ -25,6 +26,16 @@ export class OperatorEventBus<T extends OperatorEvent = OperatorEvent> {
     if (this.closed) {
       return;
     }
+    // Enforce strictly-monotonic timestamps. Callers stamp events with
+    // Date.now() (millisecond resolution), so a burst of events within the
+    // same millisecond would otherwise share a `ts`. Consumers that page by
+    // `afterTs` (e.g. gateway reconnect replay) rely on `ts` being a total
+    // order; ties break that boundary. Preserve wall-clock time when it
+    // advances and only bump by 1ms within a same-millisecond burst.
+    const requested = typeof event.ts === "number" ? event.ts : this.lastTs + 1;
+    const normalized = requested > this.lastTs ? requested : this.lastTs + 1;
+    this.lastTs = normalized;
+    event.ts = normalized;
     if (this.replayLimit > 0) {
       this.replayEvents.push(event);
       const overflow = this.replayEvents.length - this.replayLimit;

@@ -6,6 +6,62 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-02 (run 9) — 🐛 Fix background-task launch pipeline (invalid JSON + bad pid) + make suite deterministic
+
+**Audited:** Project health. The baseline suite was **red and flaky** (4→3→1→2
+failing across repeated `npm test` runs) even though run 8 logged 174/174. Root
+caused two genuine bugs in the background-task subsystem plus a cluster of
+real-process test races.
+
+**Real bugs fixed (`src/harness/background-tasks.ts`):**
+1. **`shellQuote` corrupted every command containing a single quote.** It
+   escaped `'` as `"'"'"'` (a stray leading `"`) instead of the correct
+   `'"'"'`. Verified empirically: `printf 'hi'` round-tripped to
+   `printf "'hi"'`. Any task command with a quote (`printf '…'`, `bash -c '…'`,
+   etc.) produced **invalid JSON** in the launch script's `state.json`, so
+   recovery threw `SyntaxError` and marked the task failed → control plane went
+   `degraded`.
+2. **Initial "running" state persisted `"pid":"$$"` (a string).** It was written
+   via `printf '%s' … | sed "…; s/\"\$\$\"/$$/g"`, but the backslash escapes in
+   the JS template literal were consumed by **JavaScript**, so the emitted bash
+   mis-quoted the pattern and the pid substitution degraded to a no-op
+   `s/<pid>/<pid>/g`. Any long-running task (monitors) kept a non-numeric pid.
+   Replaced the fragile `printf|sed` with a **Python writer** (consistent with
+   the existing completed/failed writers) that takes pid + every string field as
+   shell-quoted argv — robust to quotes, newlines, and `$`.
+
+**Reliability fix (`src/kernel/event-bus.ts`):** `publish()` now enforces
+**strictly-monotonic timestamps**. Callers stamp events with ms-resolution
+`Date.now()`, so a synchronous burst shared a `ts`; consumers paging by
+`afterTs` (gateway reconnect replay) rely on a total order, so ties dropped/kept
+the wrong boundary event (the "healthy status after pong" flake). Wall-clock is
+preserved when it advances; only same-ms bursts get +1ms. Added an event-bus
+unit test.
+
+**Test determinism:** the operator-runtime / control-plane / CLI tests spawned
+**real detached launch scripts** (`sleep 5`, `printf …`) that asynchronously
+rewrote `state.json`, racing the tests' own `writeState` and nondeterministically
+flipping control state / inflating the breaker failure count. Injected a **mock
+`backgroundTaskSpawnProcess`** into all such runtimes (4 in `server.test.ts`
+across the main/drifting/breaker/monitor runtimes, plus operator-runtime and the
+CLI app test). Added a `backgroundTaskSpawnProcess` /
+`backgroundTaskIsProcessRunning` seam to `OperatorCliApp` so the app is testable
+without real subprocesses (also a legit production injection point).
+
+**Test results:** full `npm test` **175/175, 8/8 consecutive runs green** (was
+flaky 1–4 failing). Build ✅. `typecheck:src` exit 0 ✅. Full `tsc` unchanged at
+**125** (all in test files — no regression). +1 net test (event-bus monotonic).
+
+**New idea:** add a **`test:stress` script** (`vitest run --retry=0` looped, or a
+tiny wrapper that runs the suite N times) and have the engine run it as part of
+the pre-push self-check, so flaky/nondeterministic tests are caught *before* they
+poison the baseline — the run-8→run-9 gap (logged green, actually flaky) is
+exactly the failure mode a stress gate prevents. Complementary: a lint that flags
+`new StandaloneOperatorRuntime(` in tests without a `backgroundTaskSpawnProcess`
+override, so real-process races can't silently re-enter the suite.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

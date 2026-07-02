@@ -81,9 +81,14 @@ const exportManifest: ReviewedExportManifest = {
 describe("OperatorControlPlaneServer", () => {
   it("handles session, transcript, approval, trajectory, memory, and orchestration methods", async () => {
     const rootDir = await makeTempDir();
+    let nextPid = 4200;
     const runtime = new StandaloneOperatorRuntime({
       rootDir,
       backgroundTaskIsProcessRunning: () => false,
+      // Mock spawn so the test drives task state deterministically instead of
+      // racing a real detached launch script that asynchronously writes
+      // state.json (which would nondeterministically flip control to degraded).
+      backgroundTaskSpawnProcess: () => ({ pid: (nextPid += 1), unref() {} }),
       delivery: new OperatorDeliveryService(rootDir, {
         sendBrowserPush: async () => {},
       }),
@@ -950,9 +955,11 @@ describe("OperatorControlPlaneServer", () => {
     });
 
     const driftingRootDir = await makeTempDir();
+    let driftingPid = 5200;
     const driftingRuntime = new StandaloneOperatorRuntime({
       rootDir: driftingRootDir,
       backgroundTaskIsProcessRunning: () => false,
+      backgroundTaskSpawnProcess: () => ({ pid: (driftingPid += 1), unref() {} }),
     });
     const driftingServer = new OperatorControlPlaneServer({ runtime: driftingRuntime });
     const driftingBootstrap = await driftingServer.handle({
@@ -1016,9 +1023,14 @@ describe("OperatorControlPlaneServer", () => {
     });
 
     const breakerRootDir = await makeTempDir();
+    let breakerPid = 6200;
     const breakerRuntime = new StandaloneOperatorRuntime({
       rootDir: breakerRootDir,
       backgroundTaskIsProcessRunning: () => false,
+      // Mock spawn: the test steps the breaker failure count by writing each
+      // task's running state one at a time. A real launch script writing
+      // state.json asynchronously would inflate the count nondeterministically.
+      backgroundTaskSpawnProcess: () => ({ pid: (breakerPid += 1), unref() {} }),
     });
     const breakerServer = new OperatorControlPlaneServer({ runtime: breakerRuntime });
     const breakerOne = await breakerServer.handle({
@@ -2098,7 +2110,12 @@ describe("OperatorControlPlaneServer", () => {
   });
 
   it("filters runtime events by session, run, and family", async () => {
-    const runtime = new StandaloneOperatorRuntime({ rootDir: await makeTempDir() });
+    let monitorPid = 7200;
+    const runtime = new StandaloneOperatorRuntime({
+      rootDir: await makeTempDir(),
+      // Mock spawn so the monitors don't leak real detached subprocesses.
+      backgroundTaskSpawnProcess: () => ({ pid: (monitorPid += 1), unref() {} }),
+    });
     const sessionA = await runtime.startSession({ title: "Session A" });
     const sessionB = await runtime.startSession({ title: "Session B" });
     const runA = await runtime.startRun({ sessionId: sessionA.id, title: "Run A" });
