@@ -6,6 +6,64 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-02 (run 9) — 🐛 Fixed two real background-task launcher bugs; suite green again
+
+**Audited:** Project health first. `npm test` at HEAD was **RED** (3–4 failing,
+fluctuating) even though run 8 recorded 174/174 — so the very first job was to
+diagnose the regression before adding any capability. Traced it into
+`src/harness/background-tasks.ts` (the background-task launch script generator).
+
+**Two genuine production bugs found & fixed** (both corrupt the on-disk
+`state.json` that crash-recovery reads):
+1. **`shellQuote` used the wrong single-quote escape.** It emitted `"'"'"'`
+   (6 chars, leading `"`) instead of the POSIX idiom `'\''`. Any value
+   containing a `'` — e.g. a task command like `printf 'line-1\nline-2\n'` —
+   round-tripped through the shell **corrupted** (`'` → `"`), producing invalid
+   JSON. Fixed to `value.replaceAll("'", "'\\''")`. This helper quotes the
+   command, cwd, and state paths, so the fix hardens all of them.
+2. **The in-shell `sed` pid substitution never matched.** After TS template
+   evaluation the rendered bash was `s/"$$"/$$/g`; bash quote-toggling turned the
+   pattern into the literal PID, so `pid` stayed the string `"$$"` in the state
+   file (→ recovery saw a "running" task whose pid isn't a live process →
+   spurious `missing-process`). Replaced the initial-state write with a fast,
+   **atomic** `printf | sed … | mv` that (a) keeps the double-quote-bearing pid
+   pattern inside a single-quoted `-e` program (`s/"__OPENCLAW_PID__"/'"$$"'/g`)
+   so `$$` expands to a real integer, and (b) renames a temp file into place so
+   recovery never observes a half-written/placeholder state.
+
+**Why run 8 "passed" and this run failed:** pure timing. The tests spawn a
+*real* detached shell and then hand-manage state; run 8's machine was slow enough
+that the launcher hadn't written `state.json` before the assertions ran (so the
+manual state won), while this machine's launcher was fast enough to clobber it
+with the buggy state. Fix + determinism removes the luck.
+
+**Test determinism (additive):** added `backgroundTaskSpawnProcess` /
+`backgroundTaskIsProcessRunning` seams to `OperatorCliAppOptions` (threaded into
+the runtime) and injected a deterministic mock spawn into the three
+state-hand-managing tests (`operator-runtime`, `server` ×3 runtimes) — mirroring
+the pattern `background-tasks.test.ts` already uses. `app.test` legitimately
+exercises real execution output, so it keeps the real spawn and is fixed purely
+by the launcher bug fix.
+
+**New regression test** (`background-tasks.test.ts`): drives the *real* launcher
+for a single-quote command and asserts `state.json` stays valid JSON with an
+**integer** pid and preserved command + output. Guarded with `it.skipIf` on
+`bash`/`python3` availability. Verified it **fails** against the old buggy
+`shellQuote` and passes against the fix.
+
+**Test results:** full suite **175 passed** (was 174 + this new test; 3–4 were
+failing at HEAD). `typecheck:src` ✅ exit 0. Build ✅. Full `tsc` unchanged at
+**125** (all test-file debt; no new errors). Behaviour change is strictly a
+correctness fix.
+
+**New idea (logged to ROADMAP):** add a tiny **project-health guard** the engine
+runs at the *start* of every cycle — `git stash`-free `npm test` on untouched
+HEAD — and, if RED, fix the regression before any feature work (as this run did).
+Bigger: move the initial `state.json` write out of the shell entirely and have
+Node write it atomically via `writeJsonAtomic` right after spawn, so the launcher
+shell only ever appends terminal state — eliminating the last shell-side JSON
+assembly and the whole class of quoting bugs.
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

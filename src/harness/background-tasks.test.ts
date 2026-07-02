@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -7,6 +8,16 @@ import {
   FileBackgroundTaskStore,
   type BackgroundTaskExecutionState,
 } from "./background-tasks.js";
+
+function hasTool(tool: string): boolean {
+  try {
+    return spawnSync(tool, ["--version"], { stdio: "ignore" }).status === 0;
+  } catch {
+    return false;
+  }
+}
+
+const launcherToolsAvailable = hasTool("bash") && hasTool("python3");
 
 const tempDirs: string[] = [];
 
@@ -370,4 +381,39 @@ describe("BackgroundTaskExecutionService", () => {
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
   });
+
+  // Regression: the rendered launch script must always write a well-formed
+  // state.json with a real integer pid, even when the command contains single
+  // quotes. A prior `shellQuote` bug (wrong single-quote escape) and a broken
+  // in-shell `sed` pid substitution corrupted the JSON / left pid as the literal
+  // string "$$", crashing recovery. This drives the real detached launcher.
+  it.skipIf(!launcherToolsAvailable)(
+    "launches a quoted command and persists valid JSON state with an integer pid",
+    async () => {
+      const rootDir = await makeTempDir();
+      const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"));
+      const task = await store.start({
+        title: "Quoted command",
+        command: "printf 'quoted-ok'",
+        cwd: rootDir,
+      });
+
+      const deadline = Date.now() + 5000;
+      let state: BackgroundTaskExecutionState | undefined;
+      while (Date.now() < deadline) {
+        // readState throws on malformed JSON — the launcher must never write it.
+        state = await store.executionService.readState(task);
+        if (state && state.status !== "running") {
+          break;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+
+      expect(state).toBeDefined();
+      expect(state?.status).toBe("completed");
+      expect(typeof state?.pid).toBe("number");
+      expect(state?.command).toBe("printf 'quoted-ok'");
+      await expect(store.executionService.readOutput(task)).resolves.toContain("quoted-ok");
+    },
+  );
 });

@@ -70,6 +70,23 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Generalization eval harness: measure replay fidelity on held-out but
       related synthetic trajectories.
 
+## Reliability / correctness
+- [x] **Fix background-task launcher state corruption** (2026-07-02, run 9).
+      `shellQuote` used a broken single-quote escape (`"'"'"'` vs POSIX `'\''`)
+      and the in-shell `sed` pid substitution never matched — both corrupted
+      `state.json`. Fixed both; initial state now written atomically; added a
+      real-launcher regression test (skipped when `bash`/`python3` absent).
+- [ ] **Move the initial `state.json` write out of the shell.** Have Node write
+      the initial running state atomically (`writeJsonAtomic`) right after spawn,
+      so the launcher shell only appends terminal (completed/failed) state via
+      python. Eliminates the last shell-side JSON assembly and the whole class of
+      quoting bugs; also makes the initial state immediately readable without
+      waiting on the detached shell.
+- [ ] **Project-health guard at cycle start.** Before any feature work, the
+      engine runs `npm test` on untouched HEAD; if RED, the run's job is to fix
+      the regression first (as run 9 did). Cheap insurance against pushing on top
+      of a broken baseline.
+
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in
