@@ -45,6 +45,16 @@ unchecked items are queued. Keep this richer than you found it each run.
       have the engine run it as a per-run pre-push self-check.
 - [ ] Add a minimal CI workflow mirroring `verify` for human-opened PRs.
 
+- [ ] **🔴 Fix pre-existing background-task test race** (found run 9). The
+      `operator-runtime`, `cli/app`, and `control-plane/server` suites each have
+      1 failing test — all a JSON-parse error in `FileBackgroundTaskStore.readState`
+      (`src/shared/fs.ts:17`). `startBackgroundTask` spawns a real process whose
+      shell/`sed`-templated state write (cf. `runner.ts:renderLaunchScript`) races
+      with the test's `writeState` on the same file → malformed JSON at byte 311.
+      Fix: emit state JSON via `writeJsonAtomic`/a Node writer instead of `sed`
+      string-substitution, and stub the spawn in tests. Run 8 was 174/174, so this
+      is timing/environment-surfaced, not a source regression.
+
 ## Capability parity (audit reference agents → port gaps)
 - [ ] Build a "capability inventory" generator: enumerate bee-agent's exported
       RPC/tool surface (`src/index.ts`) and diff it against `openclaw`,
@@ -59,16 +69,31 @@ unchecked items are queued. Keep this richer than you found it each run.
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
 (exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
-      objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
-      deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+- [x] Inventory what `src/capture` + `src/training` already implement vs. the
+      objective's five pieces (2026-07-02, run 9). Present: capture (recorder +
+      device/os/browser adapters), schema (`trajectory.ts`), dataset
+      (`exporter.ts` → `ReviewedExportManifest`), replay (`replay.ts`), and a
+      *training-launch* runner (`runner.ts`, shells to mlx/axolotl). **Was
+      missing: the in-repo inference layer** (repeat + generalize) — now added.
+- [x] Pluggable local-model backend interface with a deterministic mock backend
+      (2026-07-02, run 9) — `src/training/movement-model.ts`:
+      `MovementModelBackend`/`TrainedMovementModel` seam +
+      `DeterministicNearestNeighborBackend`. Documented seam for a real on-device
+      small model; mock proves repeat (2c) + generalize (2d), runs in CI.
+- [x] Generalization eval harness (2026-07-02, run 9) — `evaluateMovementModel`
+      returns accuracy + recall/generalize/abstain counts on held-out synthetic
+      trajectories.
+- [ ] Wire a real on-device backend behind the seam (e.g. an mlx LoRA adapter or
+      a small ONNX model) that loads the artifacts `runner.ts` produces and
+      implements `TrainedMovementModel.predict`.
+- [ ] Online/continual-learning wrapper: `observe(context, chosenAction)` appends
+      confirmed replays and lazily re-trains, plus a confidence-gated executor
+      that only auto-performs above a threshold (uses the abstain/low-conf path).
+- [ ] Richer featurizer for the mock backend: TF-IDF / n-gram weighting or an
+      embedding hook, so generalization is less brittle than set-Jaccard.
+- [ ] Synthetic event-stream generator (reusable, in `src/`) to validate
+      capture→dataset→replay round-trips without real OS input — the run-9 tests
+      build synthetic replays inline; promote that into a shared generator.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

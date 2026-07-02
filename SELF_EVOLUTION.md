@@ -6,6 +6,63 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-02 (run 9) — Movement subsystem: pluggable local-model backend + learn→repeat→generalize loop
+
+**Audited:** The local-movement learning subsystem (standing objective #2) end to
+end. `src/capture/` (recorder, adapters, trajectory, replay, consent) and
+`src/training/` (exporter → job-store → runner) already implement capture →
+schema → dataset → replay → *training-launch-plan*. **Gap found (highest value):**
+the `runner` only shells out to an external on-device trainer (mlx/axolotl) — it
+builds a launch script but there is **no in-repo inference layer**, so objectives
+2c (repeat recorded movements) and 2d (generalize to related movements) were
+never exercised or testable in the cloud. The whole learn→act loop was untested.
+
+**Changed (additive) — new `src/training/movement-model.ts` + tests:**
+- **Pluggable backend seam** `MovementModelBackend` / `TrainedMovementModel`: a
+  real on-device small model implements the same interface as the mock, so callers
+  never depend on the backend (proven by a `constant` backend in the tests).
+- **`DeterministicNearestNeighborBackend`** — a dependency-free, I/O-free,
+  randomness-free reference model. It featurizes each example's context into a
+  namespaced token set and retrieves the most-similar training context (Jaccard).
+  Identical context ⇒ **exact recall** (confidence 1, objective 2c); related-but-
+  unseen context ⇒ **generalization** (confidence = neighbour similarity, 2d);
+  unrelated context ⇒ abstains (`undefined`).
+- **Dataset construction** `buildMovementExamplesFromReplay(s)` reuses the existing
+  `ReplayManifest`/`ReplayTimelineEvent` schema (no new format): walks the timeline,
+  keeps a bounded observation/action window, emits one supervised example per action.
+- **Generalization eval harness** `evaluateMovementModel` — accuracy + recall/
+  generalize/abstain breakdown on held-out synthetic trajectories.
+- Barrel exports wired in `src/index.ts` (`featurize` aliased to
+  `featurizeMovementContext`).
+
+**Test results:** `typecheck:src` ✅ CLEAN. Build ✅ (5 files, 542 kB). New
+`movement-model.test.ts` ✅ **13/13** (synthetic login-flow: exact repeat, paraphrase
+generalization, abstention, determinism, eval harness, pluggability). Full suite
+**184/187**; the **3 failures pre-date this run** (reproduce on clean HEAD with my
+changes stashed) and are unrelated to this diff.
+
+**⚠️ Blocker discovered (pre-existing, not from this run):** `operator-runtime`,
+`cli/app`, and `control-plane/server` each have 1 failing test — all trace to a
+JSON-parse error in `FileBackgroundTaskStore.readState` (`src/shared/fs.ts:17`).
+Root cause: those tests `startBackgroundTask` a **real** process whose shell/`sed`-
+templated state-file write (same pattern as `runner.ts:renderLaunchScript`) races
+with the test's explicit `writeState` to the *same* state file, so the reader
+occasionally sees malformed JSON (fails at byte 311). Run 8 logged 174/174, so this
+surfaced from process-spawn/sed timing in this container, not a source change.
+Filed as a high-priority ROADMAP item — needs the launch/state writer to emit JSON
+via `writeJsonAtomic` (or a Node writer) instead of `sed` string-substitution, and
+the tests to stub the spawn. Left untouched this run to keep the diff focused and
+reversible.
+
+**New idea:** add an **online/continual-learning wrapper** around the backend seam —
+`observe(context, chosenAction)` that appends confirmed replays to the training set
+and lazily re-trains, so bee-agent improves from live corrections without a full
+export→train cycle. Pairs naturally with a **confidence-gated executor** that only
+auto-performs a predicted movement above a threshold and otherwise asks for
+confirmation (the `abstain`/low-confidence path already exists).
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
