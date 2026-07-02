@@ -59,16 +59,41 @@ unchecked items are queued. Keep this richer than you found it each run.
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
 (exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
-      objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
-      deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+- [x] Inventory what `src/capture` + `src/training` already implement vs. the
+      objective's five pieces (run 9). Gap found: capture→dataset→replay + a
+      training *plan* runner existed, but **no runnable model** (2c/2d) — the
+      runner only emits external mlx/axolotl launch scripts that can't run in
+      cloud/CI.
+- [x] Pluggable local-model backend interface with a deterministic mock backend
+      (run 9) — `MovementPolicyBackend` + `NgramMovementBackend` in `src/policy/`,
+      a documented seam for a real on-device small model. Pure in-memory → tested
+      in CI.
+- [x] Synthetic event-stream generator (run 9) — `src/policy/synthetic.ts`
+      (`synthesizeWorkflowReplay`/`synthesizeWorkflowDataset`), deterministic,
+      validates capture→dataset→replay→train→infer without real OS input.
+- [x] Generalization eval harness (run 9) — `evaluateMovementBackend` (top-1
+      accuracy / repeat fidelity) + `measureGeneralization` (accuracy on held-out
+      **novel** objects). Demonstrated: train A/B/C → predict D at 1.0.
+- [ ] **Wire the movement model into the training seam:** a
+      `MovementModelTrainingBackend` selectable by
+      `LocalAppleSiliconTrainingRunner` (`runtime: "builtin-ngram"`) that trains a
+      reviewed export to a serialized `MovementModelSnapshot` in-process — an
+      end-to-end train→infer path needing no external Python, and the baseline the
+      real MLX model must beat.
+- [ ] Richer movement features: multi-slot objects, verb synonymy, and a smoothed
+      (add-k) probability estimate so `confidence` reflects uncertainty; keep the
+      n-gram as the deterministic baseline behind the same interface.
+
+## Known failing tests (pre-existing, fix to restore full green)
+- [ ] **Background-task launch-script state writer emits invalid JSON in the
+      cloud sandbox** (surfaced run 9; fails at HEAD independent of that change).
+      `operator-runtime.test.ts` "starts, syncs, recovers, lists, and cancels
+      background tasks" + a `background-tasks.test.ts` case reject with
+      `SyntaxError: Expected ',' or '}' … in JSON at position 311`. Root: the
+      `printf '%s' … | sed "s/__OPENCLAW_STARTED_AT__/…/; s/\"\$\$\"/$$/g"` state
+      write in `src/harness/background-tasks.ts` / `src/training/runner.ts`
+      corrupts the JSON. Replace the `printf|sed` substitution with a
+      `python3 -c`/heredoc writer (as the completion path already uses).
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

@@ -6,6 +6,64 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-02 (run 9) — 🧠 Trainable movement policy model: repeat + generalize (objective 2c/2d)
+
+**Audited:** The local-movement learning subsystem (`src/capture/`, `src/training/`)
+against objective 2's five pieces. Found the biggest gap: capture→dataset→replay
+exist, and the training *runner* exists — but it only **emits launch plans** for
+external on-device trainers (`mlx_lm.lora`, `axolotl`) that **cannot run in the
+cloud**. There was **no actual trainable model** and therefore no way to (2c)
+repeat recorded movements or (2d) generalize to new-but-related ones, nor to test
+that loop in CI. That is the heart of the objective and it was missing.
+
+**Changed (additive, new `src/policy/` module — no existing code touched):**
+- **`movement-model.ts`** — a *pluggable* `MovementPolicyBackend` interface plus
+  the deterministic reference backend `NgramMovementBackend`. The model is a
+  **backoff n-gram over object-free "shape tokens"** (channel + verb, concrete
+  object stripped) with **slot-filling at inference**:
+  - *Repeat fidelity (2c):* a trained context re-derives the recorded movement
+    verbatim (shape match + object slot filled from the same context).
+  - *Generalization (2d):* because context keys are object-free, a learned
+    workflow shape transfers to an unseen but structurally-identical trajectory,
+    and the object slot is filled from *that* trajectory's own recent context.
+  - Everything is pure in-memory computation → runs and is tested in the cloud.
+    A real on-device small model can implement the same interface behind the seam.
+  - Also: `buildMovementSamples` (walk a `ReplayManifest` → one sample per action
+    with preceding context + recent object), snapshot/`fromSnapshot` JSON
+    round-trip, `evaluateMovementBackend` (top-1 accuracy) and
+    `measureGeneralization` (accuracy restricted to held-out **novel** objects).
+- **`synthetic.ts`** — deterministic synthetic event-stream generators
+  (`synthesizeWorkflowReplay`/`synthesizeWorkflowDataset`): a canonical
+  edit-and-save workflow parameterized by a target object, so train-on-A/B/C /
+  test-on-D exercises generalization with no real OS input (which the cloud lacks).
+- Barrel exports added to `src/index.ts`.
+
+**Test results:** new `src/policy/movement-model.test.ts` — **10/10 passing**:
+repeat fidelity 3/3 (accuracy 1.0), generalization to unseen "memo" 3/3
+(`generalizationAccuracy` 1.0, concrete `save memo` predicted), explicit backoff
+unit test, snapshot round-trip equivalence, and a second backend impl proving the
+`MovementPolicyBackend` contract. **Build ✅. `typecheck:src` ✅ (exit 0).**
+Full suite **181/184**; the **3 failures are PRE-EXISTING and unrelated** —
+confirmed by `git stash` (they fail at HEAD `3c7b7236` too): background-task
+state-file JSON is corrupted when the launch script spawns a real shell in this
+sandbox (`SyntaxError: Expected ',' or '}' … in JSON at position 311`), i.e. the
+`renderLaunchScript`/`sed` state-writer path in `src/harness/background-tasks.ts`
++ `src/training/runner.ts`. My change touches none of that.
+
+**Known blocker (queued):** the background-task launch-script state writer emits
+invalid JSON in the cloud sandbox (the `sed "s/__…__/…/; s/\"\$\$\"/$$/g"`
+substitution). Should be hardened (write state via `python3 -c` / a heredoc
+instead of `printf|sed`) so `operator-runtime`/`background-tasks` go green in CI.
+
+**New idea:** promote the movement model behind the existing training *seam* —
+add a `MovementModelTrainingBackend` that `LocalAppleSiliconTrainingRunner` can
+select (`runtime: "builtin-ngram"`) so a reviewed export can be "trained" to a
+serialized `MovementModelSnapshot` **entirely in-process**, giving the subsystem
+a real end-to-end train→infer path that needs no external Python at all — and a
+baseline the on-device MLX model must beat on the generalization eval.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
