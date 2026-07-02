@@ -59,16 +59,28 @@ unchecked items are queued. Keep this richer than you found it each run.
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
 (exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
+- [x] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+      — DONE run 9. Gap found: train/infer had no in-process backend (runner only
+      emitted MLX/axolotl scripts). All other pieces exist.
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      for a real on-device small model — DONE run 9. `src/training/movement-model.ts`:
+      `MovementModelBackend`/`TrainedMovementModel` interfaces + `MarkovMovementBackend`
+      (order-N Markov w/ stupid-backoff). Repeats recorded movements AND
+      generalizes via backoff; serialize/load round-trip.
+- [x] Synthetic event-stream generator to validate capture→dataset→replay
+      round-trips without real OS input — DONE run 9 (`synthesizeMovementSequences`,
+      seeded/deterministic).
+- [x] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories — DONE run 9 (`scoreMovementReplay`).
+- [ ] **Wire `MarkovMovementBackend` into the training runner** as a selectable
+      in-process `runtime: "mock"` alongside `mlx`/`axolotl`, and expose a
+      `training.*` RPC that runs train→infer→`scoreMovementReplay` on a reviewed
+      export so training is a *runnable* cloud capability, not just script
+      emission.
+- [ ] Add a second backend behind `MovementModelBackend` (e.g. a tiny neural
+      n-gram / logistic next-token model) to prove the pluggable seam is real.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

@@ -6,6 +6,63 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-02 (run 9) — 🧠 Pluggable movement-model backend: train + infer in-process (objective 2c/2d)
+
+**Audited:** The local-movement learning subsystem (standing objective #2) and
+its top ROADMAP item. Traced the pipeline end-to-end: capture (`src/capture/`
+recorder + device/os/browser adapters) → schema (`trajectory.ts`) → dataset
+(`training/exporter.ts` → `ReviewedExportManifest.replays`) → replay
+(`capture/replay.ts` `ReplayTimelineEvent`) → **training**. Found the gap: the
+only training path was `LocalAppleSiliconTrainingRunner`, which *emits MLX/axolotl
+launch scripts for real hardware* — there was **no backend that actually trains a
+model or runs inference in the cloud**, so pieces (c) "repeat recorded movements"
+and (d) "generalize to new but related movements" were unvalidated and the
+"make the model backend pluggable" requirement had no interface.
+
+**Changed (additive) — new `src/training/movement-model.ts`:**
+- **`MovementModelBackend` interface** (pluggable seam) + **`TrainedMovementModel`**
+  (`predictNext` / `rankNext` / `generate` / `vocabulary` / `serialize`). A real
+  on-device small model can implement the same surface; the runner's script path
+  is untouched.
+- **`MarkovMovementBackend`** — a deterministic order-N Markov chain with
+  stupid-backoff. Learns `(context → next)` counts for every context length
+  0..order. **Repeats recorded movements** (2c): `generate(["open"])` reproduces
+  the recorded continuation; `predictNext` returns the exact next token at
+  probability 1. **Generalizes** (2d): a novel full-order prefix (e.g. `["Q","B"]`)
+  backs off to a shorter learned context (`"after B comes C"`) and still predicts
+  — surfaced via `contextOrder`/`backedOff` on the prediction.
+- **Tokenizer** (`tokenizeMovement`, `extractMovementSequence`) turns replay
+  `action` events into stable normalized tokens; **`buildMovementDataset`** turns
+  replay manifests into a training dataset.
+- **`synthesizeMovementSequences`** — deterministic (seeded LCG) synthetic
+  movement generator so capture→dataset→train→replay round-trips validate in the
+  cloud without real OS input (also a ROADMAP checkbox).
+- **`scoreMovementReplay`** — a generalization/replay-fidelity eval harness
+  (mean exact-match ratio, per-sequence detail) for held-out synthetic
+  trajectories (also a ROADMAP checkbox).
+- **`loadMovementModel`** + `serialize()` — full model artifact round-trip
+  (persist/reload behaves identically).
+- Exported all of the above from `src/index.ts`.
+
+**Test results:** new `movement-model.test.ts` **12/12 pass** (repeat, generalize,
+ranking/tie-break determinism, serialization round-trip, synthetic determinism,
+fidelity eval). `typecheck:src` ✅ CLEAN (exit 0). Build ✅ (5 files, 546 kB).
+Full suite: **183 passed**, +12 net from this run. **3–4 pre-existing FLAKY
+failures** (`app.test.ts` git-worktree, `operator-runtime.test.ts`/`server.test.ts`
+background-task state) are **environmental and NOT caused by this change** —
+verified by `git stash` on a clean tree (4 failures there, 3 with my change →
+non-deterministic; root cause is a `SyntaxError` parsing a JSON state file that a
+shell/`python3`/`date` launch script writes, i.e. the `python3`/worktree harness,
+which this run never touches). This module is fully green in isolation.
+
+**New idea:** wire `MarkovMovementBackend` as a selectable in-process backend on
+the training runner (`runtime: "mock" | "mlx" | "axolotl"`) so the control-plane
+`training.*` RPC can *actually run* a train+infer+fidelity-score loop on reviewed
+exports in the cloud — turning training from "emit a script" into a testable
+capability. Then add a second backend (e.g. a tiny neural n-gram / logistic
+next-token model) behind the same interface to prove the seam is real, and feed
+`scoreMovementReplay` fidelity into a per-run metrics file.
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
