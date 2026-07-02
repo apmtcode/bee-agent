@@ -1,3 +1,4 @@
+import { type ChildProcess, spawn as realSpawn } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -369,5 +370,39 @@ describe("BackgroundTaskExecutionService", () => {
     await expect(fs.readFile(path.join(rootDir, task.execution.launchScript), "utf8")).resolves.toContain("bash -lc");
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
+  });
+
+  it("renders a launch script whose state payload survives commands containing single quotes", async () => {
+    // Regression for a POSIX single-quote escaping bug in shellQuote: when the
+    // task command (or any embedded value) contained a "'", the launch script's
+    // JSON state payload was mangled and the persisted state.json became invalid
+    // JSON, so readState threw a SyntaxError during recovery. This runs the real
+    // launch script end-to-end and asserts the state file is parseable.
+    const rootDir = await makeTempDir();
+    const children: ChildProcess[] = [];
+    const store = new FileBackgroundTaskStore(
+      path.join(rootDir, "background-tasks.json"),
+      (command, args, options) => {
+        const child = realSpawn(command, args, options);
+        children.push(child);
+        return child;
+      },
+      () => false,
+    );
+
+    const command = "printf 'quoted %s\\n' done";
+    const task = await store.start({ title: "Quoted command", command, cwd: rootDir, kind: "task" });
+
+    // The launch script writes terminal state after the command exits; await it
+    // so the assertion is deterministic rather than racing the subprocess.
+    await Promise.all(
+      children.map((child) => new Promise<void>((resolve) => child.on("exit", () => resolve()))),
+    );
+
+    const raw = await fs.readFile(path.join(rootDir, task.execution.stateFile), "utf8");
+    expect(() => JSON.parse(raw)).not.toThrow();
+    const state = await store.executionService.readState(task);
+    expect(state?.command).toBe(command);
+    expect(state?.status).toBe("completed");
   });
 });

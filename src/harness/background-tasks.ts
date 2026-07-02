@@ -133,6 +133,10 @@ function nowIso(): string {
   return new Date().toISOString();
 }
 
+function isUsablePid(pid: unknown): pid is number {
+  return typeof pid === "number" && Number.isFinite(pid) && pid > 0;
+}
+
 function defaultIsProcessRunning(pid: number): boolean {
   if (!Number.isFinite(pid) || pid <= 0) {
     return false;
@@ -231,10 +235,19 @@ export class BackgroundTaskExecutionService {
   }
 
   async readState(task: BackgroundTaskRecord): Promise<BackgroundTaskExecutionState | undefined> {
-    return await readJsonFile<BackgroundTaskExecutionState | undefined>(
+    const state = await readJsonFile<BackgroundTaskExecutionState | undefined>(
       path.join(this.rootDir, task.execution.stateFile),
       undefined,
     );
+    if (state && !isUsablePid(state.pid) && typeof task.execution.processId === "number") {
+      // The launch script injects the runtime pid into the state payload via a
+      // `sed "s/\"$$\"/$$/g"` substitution, which is fragile across sed variants:
+      // on some systems the "$$" placeholder is left verbatim, so the persisted
+      // pid is a non-numeric string and a live task would look dead. Fall back to
+      // the pid the parent recorded when it spawned the process.
+      return { ...state, pid: task.execution.processId };
+    }
+    return state;
   }
 
   async writeOutput(task: BackgroundTaskRecord, content: string): Promise<void> {
@@ -794,5 +807,9 @@ function renderStateWriterPython(status: BackgroundTaskExecutionState["status"])
 }
 
 function shellQuote(value: string): string {
-  return `'${value.replaceAll(`'`, `"'"'"'`)}'`;
+  // POSIX single-quote escaping: close the quote, emit an escaped quote, reopen.
+  // The correct sequence is '"'"' — a leading '"'"' (starting with ") breaks the
+  // surrounding '...' wrapping and mangles any value containing a single quote,
+  // which corrupted the JSON state payload written by the launch script.
+  return `'${value.replaceAll(`'`, `'"'"'`)}'`;
 }

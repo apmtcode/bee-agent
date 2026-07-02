@@ -6,6 +6,67 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-02 (run 9) — Background-task reliability: two real bugs fixed (shellQuote + fragile pid), suite 3 fails → 1
+
+**Audited:** Ran the full suite and — unlike the "174/174" recorded by run 8 — hit
+**3 failing tests** in this cloud container (`operator-runtime.test.ts`,
+`server.test.ts`, `app.test.ts`, all in the background-task subsystem). Rather than
+add a feature on a red suite, I root-caused the failures. Two turned out to be
+**genuine, environment-portability bugs** in `src/harness/background-tasks.ts`, not
+test flakiness.
+
+**Bug 1 — broken POSIX single-quote escaping (`shellQuote`).** The helper escaped a
+`'` as `"'"'"'` (leading `"`) instead of the correct `'"'"'`. When a background
+command contained a single quote (e.g. the test command `printf 'line-1\nline-2\n'`),
+the launch script's `printf '%s' '<payload>'` quoting broke and mangled the JSON
+state payload — a `"` leaked in and closed a string early, so the persisted
+`state.json` was **invalid JSON** and `readState` threw `SyntaxError` during recovery.
+`runner.ts` already had the correct form; `background-tasks.ts` did not. Fixed to
+`'"'"'`. Captured the exact corrupt bytes to confirm, and added a **deterministic
+regression test** (`background-tasks.test.ts`) that renders + executes a real launch
+script for a single-quote command, awaits the child, and asserts the state file is
+valid JSON with the command preserved — verified it fails on the old code (SyntaxError
+at pos 310) and passes on the new.
+
+**Bug 2 — fragile `sed`-based pid injection.** The launch script sets the runtime pid
+via `printf '%s' PAYLOAD | sed "…; s/\"$$\"/$$/g"`. A vitest probe proved that on this
+container's `sed` the `"$$"` placeholder is **left verbatim**, so the persisted pid is
+the string `"$$"` — `Number.isFinite("$$")` is false, so `isProcessRunning` reports
+**every live task as dead** → spurious `missing-process` → remotes flip to `degraded`
+(this was the "2/2 background task missing-process" seen in `app.test`/`server.test`).
+Fix (single-point, defensive): `readState(task)` now falls back to the pid the parent
+recorded at spawn (`task.execution.processId`) whenever the persisted pid isn't a
+usable positive number. Strictly more correct — it never masks a truly-dead process
+(`isProcessRunning` still runs on the real pid). Considered but rejected: (a) having
+the parent write the initial running state — it breaks the circuit-breaker test, which
+depends on freshly-started tasks having *no* state file until the test writes one one
+at a time; (b) rewriting the `sed` escaping across TS→shell→sed layers — too fragile.
+
+**Also:** made `operator-runtime.test.ts`'s background-task test deterministic by
+injecting a fake `spawnProcess` (it drives all state manually, so a real detached
+subprocess writing state files asynchronously only ever races the assertions — the
+same pattern `background-tasks.test.ts` already uses).
+
+**Test results:** **3 → 1** failing (stable across repeated runs; the pid fallback also
+de-flaked the `app.test` monitor test). `npm run build` ✅. `npm run typecheck:src` ✅
+(source stays clean). The remaining failure — `server.test.ts` "handles session…" — is
+**pre-existing and environment-coupled**: within one runtime + one injected
+`isProcessRunning` it needs the `sleep` task treated as *alive* but the `printf` task
+as *dead*, and asserts the printf task's execution state is *absent* at a point that
+only holds if async subprocess writes are slow (they aren't in this fast container).
+It cannot be greened without a larger rewrite that models each task's lifecycle
+deterministically (queued in ROADMAP).
+
+**New idea:** give `StandaloneOperatorRuntime`/`OperatorCliApp` a first-class
+**`FakeBackgroundProcessHost`** test double — a command-aware spawn+liveness pair that
+records `pid → intended lifecycle` (alive / completes-0 / fails-N) and drives the state
+file synchronously — so the subprocess-coupled integration tests become deterministic
+*and* keep exercising the real reconcile/health logic, instead of each test hand-rolling
+`spawnProcess`/`isProcessRunning` fakes. This is the clean path to also greening
+`server.test.ts` "handles session…".
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

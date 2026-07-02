@@ -3,6 +3,28 @@
 Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
+## Reliability / correctness
+- [x] **Fix `shellQuote` POSIX single-quote escaping** in
+      `src/harness/background-tasks.ts` (2026-07-02, run 9) — was `"'"'"'`, now
+      `'"'"'`; single-quote commands no longer corrupt the JSON state payload.
+      Covered by a deterministic launch-script regression test.
+- [x] **Robust pid resolution** (2026-07-02, run 9) — `readState` falls back to the
+      parent-recorded `processId` when the persisted pid isn't a usable number, so the
+      environment-fragile `sed "s/\"$$\"/$$/g"` substitution can't make live tasks
+      look dead (`missing-process`).
+- [ ] **Determinize the subprocess-coupled background-task integration tests.**
+      `server.test.ts` "handles session…" (and, more subtly, `app.test.ts` +
+      `operator-runtime.test.ts`) spawn real detached processes and assert on
+      reconcile/liveness outcomes that depend on real timing + per-task process
+      liveness — irreducibly flaky/environment-coupled. Build a command-aware
+      `FakeBackgroundProcessHost` test double (pid → intended lifecycle:
+      alive / completes-0 / fails-N, driving state synchronously) and thread a
+      `backgroundTaskSpawnProcess`/`backgroundTaskIsProcessRunning` seam through
+      `OperatorCliApp`. This is the clean path to a fully green suite while still
+      exercising the real reconcile/health logic. **Known-red until done:**
+      `server.test.ts` "handles session, transcript, approval, trajectory, memory,
+      and orchestration methods".
+
 ## Foundations / DX
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
