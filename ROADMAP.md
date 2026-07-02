@@ -62,13 +62,43 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
+      for a real on-device small model. **DONE run 9** —
+      `src/training/model-backend.ts`: `MovementModelBackend` interface +
+      `DeterministicMarkovBackend` (variable-order Markov w/ backoff → repeat &
+      generalize), tokenizers, dataset builders, JSON-serializable models. 17
+      tests.
 - [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      round-trips without real OS input. (Tokenizers + dataset builders landed in
+      run 9; still need a generator that emits *plausible correlated* synthetic
+      movement streams — e.g. Markov-sampled from a seed grammar — to stress the
+      whole pipeline.)
+- [~] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories. Seed landed run 9 (`evaluateMovementModel`:
+      held-out next-token accuracy + mean Markov order). Next: fidelity over
+      *sequence-level* replays and a train/held-out split helper.
+- [ ] Novelty-aware generation guard (run 9 idea): when `generate()` backs off
+      below a configured Markov order for N consecutive steps it is extrapolating
+      beyond recorded movements — emit an `extrapolated` marker / stop, so the
+      replay engine has a safety signal before executing a generalized (not
+      recorded) action chain on a real machine.
+- [ ] Pluggable non-Markov backend (run 9 seam): implement a second
+      `MovementModelBackend` (e.g. a tiny embedding/neighbour model) to prove the
+      interface is truly backend-agnostic, and document how a real on-device model
+      plugs in.
+
+## Reliability (found + fixed in run 9)
+- [x] **Background-task `state.json` corruption** — the launch script embedded a
+      JSON blob in a single-quoted shell string + `sed`, so any command with shell
+      metacharacters wrote malformed JSON and `readState` threw. Now written via
+      `python3` with argv-passed values, atomically (temp + `os.replace`). Also
+      added a finalizer pid-guard (don't clobber state reassigned to another pid).
+- [x] Made the reconcile tests hermetic (no-op `backgroundTaskSpawnProcess`) so
+      they no longer race real detached processes. Suite is now deterministic.
+- [ ] Apply the same atomic argv-based state write to the **training runner**
+      launch script (`src/training/runner.ts`) — same latent pattern, though its
+      commands are controlled arrays so it doesn't corrupt in practice today.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

@@ -6,6 +6,65 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-02 (run 9) — Movement-model backend (train/infer/generalize) + fixed a real state-file corruption bug
+
+**Audited:** The local-movement learning subsystem (`src/capture`, `src/training`)
+against objective #2. The runner emitted mlx/axolotl *launch scripts* but had no
+in-process model that could actually train, infer, or generalize — so objective
+2(c)/2(d) could not be exercised or tested in the cloud at all. Also ran the full
+suite on a real machine and found **4 pre-existing test failures** (present at the
+branch tip, independent of this run) that run 8's "174/174" no longer held.
+
+**Changed (new capability, `src/training/model-backend.ts` + tests):** a
+**pluggable movement-model backend** — the ROADMAP's top movement-subsystem item.
+- `MovementModelBackend` interface (`train` / `predictNext` / `generate`) — the
+  documented seam for a real on-device small model.
+- `DeterministicMarkovBackend`: a variable-order Markov model with stupid-backoff.
+  Trained models are plain JSON (persistable/replayable/diffable), and everything
+  is pure (no fs/clock/randomness) so it runs and tests anywhere. **Repeat** =
+  verbatim context resolves at the highest order to the recorded next move;
+  **generalize** = novel contexts of familiar tokens resolve via backoff.
+  `predictNext` reports the Markov `order` used (repeat vs. generalized signal).
+- Tokenizers (`tokenizeAction`/`tokenizeObservation`) + dataset builders from the
+  existing `TrajectorySpan`/replay-event types (redacted actions preferred, so
+  training never sees reviewer-removed data).
+- `evaluateMovementModel`: held-out next-token fidelity metric (seed of the
+  generalization eval harness). Exported all via the barrel. **17 new tests.**
+
+**Real bug fixed (`src/harness/background-tasks.ts`):** while investigating the
+pre-existing failures I found the root cause was **not flakiness but data
+corruption**. The background-task launch script wrote `state.json` by embedding a
+whole JSON blob inside a single-quoted shell string and running it through `sed`
+(`printf '%s' '…' | sed … > state.json`). Any command containing shell
+metacharacters (e.g. `printf 'line-1\nline-2\n'`) produced **malformed JSON** —
+`readState` then threw `SyntaxError`, cascading into the control-plane breaker,
+CLI status, and recovery tests. Fix: write the running state via `python3` with
+values passed as **argv** (nothing embedded in shell-quoted JSON), atomically
+(temp + `os.replace`). Added a **finalizer pid-guard** so the completed/failed
+writer never clobbers a state reassigned to a different pid.
+
+**Test-hermeticity fix:** the reconcile tests (`backgroundTaskIsProcessRunning:
+() => false`) spawned *real* `sleep 5` processes whose async state-writes raced the
+tests' explicitly-injected states — the corruption bug had been masking this as a
+hard failure. Injected a no-op `backgroundTaskSpawnProcess` at the 4 state-
+injecting runtime sites so state is controlled solely by the tests (intent-
+preserving). This is only in test files.
+
+**Test results:** `typecheck:src` ✅ (exit 0). Build ✅. `npm test` ✅ **191/191**
+(was 174 + 17 new), now **deterministic — 18/18 clean runs** (previously 4
+deterministic failures; then 5/6 flaky after the corruption fix alone; hermetic
+spawn closed it). Full `tsc` unchanged at **125** (all pre-existing, in test
+files; the new module is type-clean).
+
+**New idea:** the Markov backend already exposes per-prediction `order`. Add a
+*novelty-aware generation guard* — when `generate()` backs off below a configurable
+order for N consecutive steps it's extrapolating beyond recorded movements, so it
+should emit a `confidence: "extrapolated"` marker (or stop) rather than silently
+inventing a movement chain. This gives the replay engine a safety signal before it
+executes a generalized (not-recorded) action sequence on a real machine.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
