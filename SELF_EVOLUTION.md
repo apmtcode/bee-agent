@@ -6,6 +6,70 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-03 (run 9) — 🧠 Pluggable local-movement model backend: train → reproduce → generalize
+
+**Audited:** The **local-movement learning subsystem** (standing objective 2),
+untouched by runs 4–8 (all typecheck DX). Existing `src/capture/*` (recorder,
+replay, trajectory) + `src/training/*` (exporter, job store, runner) cover
+capture → schema → dataset → *external* train launch, but had **no in-process
+model that actually learns to repeat and generalize movements** — the runner
+only emits mlx/axolotl launch scripts that can't run in the cloud. That is
+objective 2(c)/(d) and the top queued movement item ("Pluggable local-model
+backend interface … with a deterministic mock backend").
+
+**Changed (additive) — new `src/training/movement-model.ts` (+ test):**
+- **`MovementModelBackend<TModel>` interface** — pluggable seam: `train`,
+  `predictNext`, `generate`, `serialize`/`deserialize`. Contract documents
+  determinism + string round-trip so a real on-device small model (MLX, matching
+  the runner's apple-silicon target) can drop in behind the same interface.
+- **`NGramMovementBackend`** — deterministic, dependency-free reference backend:
+  Katz-style backoff n-gram over movement tokens with a `<begin>`/`<end>`
+  anchored sequence model. **Reproduces** recorded movement sequences
+  (autoregressive `generate` reconstructs a trained flow exactly) and
+  **generalizes** to novel-but-related prefixes via suffix backoff (unseen
+  `hover→move→click` correctly predicts the shared-tail `key.type`). Serializes
+  to a UTF-8 JSON model for persistence beside export/job artifacts.
+- **Pipeline adapters:** `replayEventsToMovementTokens` +
+  `datasetFromReviewedExport` wire the existing replay/export manifests straight
+  into a trainable `MovementDataset` (transcript dropped; actions+observations
+  kept), so capture → export → **train** is now one continuous path.
+- **`evaluateMovementModel`** — teacher-forced next-token accuracy = replay
+  fidelity / generalization eval harness (roadmap item, partial).
+- **`buildSyntheticMovementDataset`** — deterministic synthetic movement-program
+  generator so the whole round-trip is validated with **no real OS input**
+  (roadmap item, partial). Exported all of the above from `src/index.ts`.
+
+**Design bug caught & fixed mid-run:** first cut let the empty-context row
+accumulate a *global unigram*, so start-of-sequence prediction collapsed to the
+most frequent token (`pointer.move`) instead of the true first movement. Added a
+`<begin>` anchor so the start distribution is distinct from the unconditional
+backoff fallback — start prediction and empty-prompt reproduction now correct.
+
+**Test results:** new `movement-model.test.ts` **13/13 green** (codec round-trip,
+reproduction, generalization via backoff, unconditional fallback, serialize
+round-trip, replay/export adapters). `typecheck:src` ✅ (exit 0). Build ✅.
+Full suite **184 passed / 3 failed** — the **3 failures are PRE-EXISTING** and
+unrelated (confirmed by re-running on the stashed clean tree: same 3 fail):
+`app.test.ts` (`control=active` missing), `server.test.ts` (result has 10 keys,
+test expects 2), `operator-runtime.test.ts` (`recoverBackgroundTasks` hits a
+malformed-JSON fixture: `SyntaxError … JSON position 311` via
+`FileBackgroundTaskStore.reconcileTask`). These look like runtime-shape drift
+introduced by the runs 5–8 result-map refactor and are now logged as a blocker
+for the next run. Pushed to the designated feature branch
+`claude/peaceful-dirac-l0e7yn` (not `main`).
+
+**New idea:** add a **movement-model persistence + inference RPC** on the control
+plane — `movement.train` (dataset → serialized model artifact under the job
+store) and `movement.suggestNext`/`movement.autocomplete` (context → predicted
+next movement(s)). That turns this backend into a live "movement autocomplete"
+capability the operator can call during a session, and gives the replay engine a
+model-driven mode (predict-and-verify) alongside literal replay. Second idea:
+add a **perplexity/held-out split** to `evaluateMovementModel` so generalization
+is measured on genuinely held-out synthetic programs, not just next-token
+accuracy on the training set.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

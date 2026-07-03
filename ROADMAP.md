@@ -62,13 +62,42 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
-      deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+- [x] **Pluggable local-model backend interface** for the training pipeline with
+      a deterministic mock backend (so cloud/CI tests pass) and a documented seam
+      for a real on-device small model — DONE run 9 (`src/training/movement-model.ts`:
+      `MovementModelBackend` interface + `NGramMovementBackend` reference impl;
+      trains, reproduces recorded flows, generalizes via backoff, serializes).
+- [~] Synthetic event-stream generator to validate capture→dataset→replay
+      round-trips without real OS input — PARTIAL run 9
+      (`buildSyntheticMovementDataset` = deterministic movement-program generator;
+      still want a richer event-level generator that emits `ReplayTimelineEvent`s
+      with timestamps/jitter, not just token programs).
+- [~] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories — PARTIAL run 9 (`evaluateMovementModel` =
+      teacher-forced next-token accuracy). Next: a proper train/held-out split +
+      perplexity so generalization is scored on unseen related programs.
+- [ ] Movement-model control-plane RPCs: `movement.train` (dataset → serialized
+      model artifact in the job store) + `movement.suggestNext` /
+      `movement.autocomplete` (context → predicted next movement) so the operator
+      gets live movement autocomplete and the replay engine a model-driven mode.
+- [ ] Real on-device backend behind `MovementModelBackend` (MLX small model on
+      apple-silicon, matching `LocalAppleSiliconTrainingRunner`); keep the n-gram
+      backend as the deterministic CI default.
+
+## Pre-existing test failures (discovered run 9 — fix next)
+Three test files fail on the clean tree (confirmed independent of run 9's
+additive change by re-running on the stash). Likely runtime-shape drift from the
+runs 5–8 result-map refactor:
+- [ ] `src/orchestrator/operator-runtime.test.ts` — `recoverBackgroundTasks`
+      rejects with `SyntaxError: … JSON at position 311` via
+      `FileBackgroundTaskStore.reconcileTask` → `readState` → `readJsonFile`
+      (`src/harness/background-tasks.ts:234/440/460`). A state fixture is written
+      malformed; find the writer and fix the serialization (or the fixture).
+- [ ] `src/control-plane/server.test.ts` — the session/orchestration method
+      result now has 10 keys where the test asserts a 2-key shape; reconcile the
+      test with the current result map or the result with the intended contract.
+- [ ] `src/cli/app.test.ts` — output missing `control=active` and a
+      `Stopped monitor …` line; trace the changed control/monitor formatting.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
