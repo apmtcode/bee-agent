@@ -6,6 +6,69 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-03 (run 9) — 🧠 Movement subsystem: pluggable local-model backend + train/infer/generalize
+
+**Audited:** Standing objective #2 (local-movement learning). `src/capture/`
+covers capture→schema→dataset→replay and `src/training/` builds real launch
+scripts/plans for on-device mlx/axolotl runs (`runner.ts`) — but there was **no
+in-process, cloud-testable model that actually learns from the recorded dataset
+and predicts/generalizes movements**. That is pieces (c) *post-train a local
+model* and (d) *generalize to new but related movements*, and the top queued
+roadmap item ("pluggable local-model backend interface … deterministic mock").
+
+**Changed (additive) — new `src/training/movement-model.ts` (+ barrel exports):**
+- **`MovementModelBackend` interface** — the pluggable seam. `train(dataset,
+  config)` → `TrainedMovementModel`. A backend **registry**
+  (`createMovementModelBackend`, `registerMovementModelBackend`,
+  `listMovementModelBackends`) is the documented seam for swapping in a real
+  on-device small model behind the same interface.
+- **`MarkovMovementBackend`** (default, `id: "markov-backoff"`) — a real,
+  deterministic, dependency-free k-order Markov learner with **stupid-backoff**.
+  It counts transitions at every context length 0..order; at inference it uses
+  the longest matching suffix and shortens the context when a context is unseen.
+  That back-off is what yields **generalization** to novel-but-related sequences
+  rather than only replaying memorized ones. Ties break on count then
+  lexicographic token → fully reproducible training.
+- **Inference + persistence:** `predictNext(context)`, `generate({seed,
+  maxTokens})` (halts on a learned `<end>` token), `toJSON()` +
+  `loadMovementModel()` to rehydrate a trained model for inference without
+  retraining.
+- **Dataset builders** wiring capture→train: `buildMovementDatasetFromReplays`
+  (from reviewed-export replay manifests) and
+  `buildMovementDatasetFromTrajectories` (time-ordered obs+action tokens);
+  `tokenizeReplayEvent` maps timeline events → stable tokens (`obs:`/`act:`/`msg:`).
+- **Generalization eval harness:** `evaluateNextTokenAccuracy(model, heldOut)`
+  scores next-token accuracy on held-out sequences (roadmap item, partial).
+
+**Test results:** new `movement-model.test.ts` — **12/12 pass** (majority-vote
+prediction, reproducibility, seeded generation, back-off generalization on an
+unseen context, serialize round-trip, both dataset builders, eval on
+memorized+held-out+empty, registry + custom-backend plug-in). `npm run build`
+✅. `npm run typecheck:src` ✅ (source stays fully green). Full `npm test`:
+**183/186**.
+
+**⚠️ Blocker discovered (pre-existing, NOT from this run):** 3 tests fail on the
+untouched baseline HEAD (verified via `git stash`) — `server.test.ts`
+(remoteControl `resume` expects `state: "active"`, gets `"degraded"`),
+`app.test.ts` (×2, session-lifecycle + background/monitor/cron). They are
+**timing/environment-dependent**: the tests stamp `Date.now()` for heartbeat
+`updatedAt`/`lastClientActivityAt` and assert a staleness-derived control state,
+so they flake under vitest 4 parallelism/clock. Run 8 logged 174/174, so these
+regressed since then (env/toolchain drift, not a source change). My change is
+additive and introduces **zero** new failures. Because the designated dev branch
+already carries these failures, pushing my clean feature there adds no
+regression; the flakes are queued as a dedicated roadmap item to fix with
+injectable time rather than wall-clock.
+
+**New idea:** give the movement model a *conditioning goal token* per sequence
+(derived from `trajectory.outcome.summary`/skill title) so generation is
+**goal-directed** — `generate({ goal, seed })` biases toward the transitions
+seen under that goal. That's the concrete bridge from "repeat recorded
+movements" to "perform a new but related movement to achieve a stated goal,"
+and it drops straight into the same backend seam.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

@@ -62,15 +62,36 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
+      for a real on-device small model. **DONE run 9** —
+      `src/training/movement-model.ts`: `MovementModelBackend` interface +
+      registry (`createMovementModelBackend`/`registerMovementModelBackend`),
+      default `MarkovMovementBackend` (deterministic k-order back-off learner
+      that trains, predicts, generates, serializes, and generalizes to unseen
+      contexts). 12/12 tests.
 - [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      round-trips without real OS input. (Partial: run 9 added dataset builders
+      `buildMovementDatasetFrom{Replays,Trajectories}` + `tokenizeReplayEvent`;
+      still want a generator that emits realistic multi-app synthetic streams.)
+- [~] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories. (Partial: run 9 added
+      `evaluateNextTokenAccuracy(model, heldOut)`; extend to full-sequence replay
+      fidelity + a held-out split generator.)
+- [ ] **Goal-conditioned movement generation** (run 9 idea): attach a goal token
+      per sequence (from `trajectory.outcome.summary`/skill title) and add
+      `generate({ goal, seed })` that biases toward transitions seen under that
+      goal — the bridge from "repeat recorded movements" to "perform a new but
+      related movement toward a stated goal." Drops into the same backend seam.
 
 ## Innovation backlog
+- [ ] **Fix 3 timing-flaky tests (regressed since run 8)** — `server.test.ts`
+      (remoteControl `resume` → `active` vs `degraded`) and `app.test.ts` (×2).
+      They stamp `Date.now()` for heartbeat `updatedAt`/`lastClientActivityAt`
+      and assert a staleness-derived control state, so they flake under vitest 4
+      parallelism. Fix by threading an injectable clock/`now()` into the
+      remote-control staleness check and pinning it in the tests (do NOT weaken
+      the assertions). Blocks the full-suite green gate.
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in
       project health over time.
