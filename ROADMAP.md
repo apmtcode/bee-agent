@@ -62,13 +62,40 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      for a real on-device small model. — DONE run 9 (`src/training/movement-model.ts`:
+      `MovementModelBackend` seam + `MarkovMovementBackend` order-k backoff policy
+      with train/predict/predictSequence/serialize round-trip).
+- [x] Synthetic event-stream generator to validate capture→dataset→replay
+      round-trips without real OS input. — DONE run 9
+      (`src/training/synthetic-movements.ts`: seeded LCG, grammar of UI patterns,
+      train/held-out split with disjoint target vocab).
+- [x] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories. — DONE run 9
+      (`src/training/generalization-eval.ts`: exact- vs gesture-match accuracy +
+      per-strategy histogram; test asserts >0.7 gesture-match on unseen targets).
+- [ ] **Cloud/CI inference mode**: wire `MarkovMovementBackend` as the default
+      backend behind `TrainingExecutionService` so "what movement comes next?" is
+      answerable from the serialized policy alone (no mlx/axolotl runtime), with
+      the on-device model as a drop-in upgrade.
+- [ ] Enrich replay manifests to retain gesture metadata (kind/direction/target)
+      so `buildMovementSequencesFromReplays` reads structured features instead of
+      re-parsing the human `summary` string.
+- [ ] Persist the serialized movement model into the training execution
+      artifact dir and add a replay-fidelity check that reloads it and compares
+      predicted vs recorded action sequences.
+
+## Known regressions (pre-existing, not caused by a self-evolve run)
+- [ ] **Background-task recovery tests fail on the cloud shell** (3 tests:
+      `operator-runtime`, `background-tasks`, `control-plane/server` — all the
+      background-task spawn/recover path). The spawned bash launch script writes
+      its state file via `printf '%s' <json> | sed ...`, which yields invalid
+      JSON on this environment (`SyntaxError` in `readJsonFile`). Fix: render the
+      state write with a here-doc python writer like the *training* runner
+      (`renderStateWriterPython`) already does, instead of `sed`. First observed
+      run 9 (base commit already red; run 8 recorded 174/174, so this regressed
+      in between — likely environment/shell drift). Additive, low-risk.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

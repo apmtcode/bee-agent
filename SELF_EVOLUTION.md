@@ -6,6 +6,62 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-03 (run 9) — Movement-model backend: in-process train / predict / generalize
+
+**Audited:** The local-movement learning subsystem (standing objective #2).
+`src/capture/` records trajectories and `src/training/` exports a reviewed
+dataset + *plans* an external on-device run (`runner.ts` → mlx/axolotl shell
+command). The gap: **nothing actually learns from the dataset or predicts
+movements in-process**, so pieces (c) post-train a model and (d) generalize were
+un-exercisable in the cloud, and three roadmap items sat open (pluggable backend
++ deterministic mock, synthetic generator, generalization eval).
+
+**Changed (additive, three new modules in `src/training/`):**
+- **`movement-model.ts`** — the pluggable model seam. `MovementModelBackend`
+  interface (`train(dataset) → TrainedMovementModel`) is what a real on-device
+  small model implements; `MarkovMovementBackend` is a dependency-free,
+  fully-deterministic reference: an order-k Markov policy with **backoff**.
+  Prediction tries the longest exact-feature context, then a **shape** context
+  (drops the variable `target` field) — this is the generalization mechanism:
+  an unseen target still predicts the right *kind* of next movement — then the
+  global unigram. `predictSequence()` autoregressively replays/continues a
+  movement. Models `serialize()`/`deserializeMovementModel()` round-trip
+  (sorted keys → reproducible JSON) so a trained policy is portable. Adapters
+  `buildMovementSequencesFromReplays()` + `parseMovementFeatureFromSummary()`
+  connect it to the existing replay-manifest pipeline.
+- **`synthetic-movements.ts`** — deterministic (seeded LCG, **no `Math.random`**)
+  event-stream generator over a small UI grammar (compose-and-send,
+  scroll-and-select, swipe-navigate). `generateSyntheticMovementSplit()` emits a
+  train/held-out split where held-out reuses the same *patterns* with a disjoint
+  target vocabulary — so evals measure shape generalization, not memorization.
+- **`generalization-eval.ts`** — `evaluateMovementGeneralization(model, heldOut)`
+  reports exact-match vs gesture-match (shape) accuracy under teacher forcing,
+  plus a per-backoff-strategy histogram.
+- Barrel exports added in `src/index.ts` for all three (values + types).
+
+**Test results:** 3 new test files, **+20 tests all green** (`movement-model` 12,
+`synthetic-movements` 6, `generalization-eval` 3 — incl. an eval asserting >0.7
+gesture-match on unseen targets). `typecheck:src` ✅ (source stays clean).
+Build ✅ (dist 553 kB). ⚠️ Full `npm test`: **191/194** — the **3 failures are
+pre-existing and unrelated** (`operator-runtime`, `background-tasks`,
+`control-plane/server` background-task recovery). Confirmed by stashing this
+run's changes and re-running: the same 3 fail on the untouched base commit.
+Root cause is a spawned bash launch script whose `printf | sed` state write
+yields invalid JSON on this cloud shell — environment/shell-dependent, in a
+subsystem this run does not touch. Logged as a blocker below; pushed to the
+designated feature branch rather than main. My change is green in isolation.
+
+**New idea:** make `MarkovMovementBackend` the default backend behind a
+`TrainingExecutionService` option so `getBackgroundTaskExecutionState`-style
+inference is available without the external mlx/axolotl runtime — i.e. a
+"cloud/CI inference mode" that answers "what movement comes next?" from the
+serialized policy alone, with the on-device model as a drop-in upgrade. Also:
+harden the background-task launch-script state write to emit JSON via a here-doc
+python writer (as the *training* runner already does) instead of `sed`, which
+would fix the pre-existing shell-dependent failures.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
