@@ -6,6 +6,62 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-03 (run 9) — Pluggable movement-model backend (train + repeat + generalize) + real state-write bug fix (suite fully green)
+
+**Audited:** The movement-learning subsystem (`src/training/`, standing objective
+#2). Runs 5–8 were all typecheck-debt paydown; this run advances an actual
+*capability*. Found that `src/training/` only produces on-device training
+*plans/launch scripts* (`LocalAppleSiliconTrainingRunner`) — there was **no
+backend that can actually train a model and run inference** to "repeat recorded
+movements and generalize" (objective #2d), and nothing testable in the cloud.
+
+**Changed — new capability (`src/training/model-backend.ts`, +tests):** a
+backend-agnostic seam plus a deterministic reference backend so the whole
+capture → dataset → train → replay/generalize round-trip runs and is asserted
+in-process (no real machine needed):
+- `MovementModelBackend` interface (`train(dataset)` → serializable artifact;
+  `predict(artifact, context)` → next-token distribution). A real on-device
+  backend (MLX/llama.cpp) satisfies the same contract — this is the documented
+  pluggable seam.
+- `MarkovMovementBackend`: deterministic order-k n-gram policy with graceful
+  backoff to the unigram. No RNG / no wall-clock — identical inputs → identical
+  outputs. **Repeats** recorded movements exactly and **generalizes** to unseen
+  prefixes via backoff.
+- `datasetFromReplayManifests` / `datasetFromTrajectories` (prefers reviewed
+  redacted actions, ts-ordered): turn the existing capture artifacts into a
+  `MovementDataset`.
+- `rolloutMovements` (greedy inference with seed / maxSteps / stopToken) and
+  `evaluateMovementFidelity` (next-token accuracy on train vs held-out
+  sequences) — the **generalization-eval harness** the roadmap called for.
+- Exported the full surface from `src/index.ts`.
+
+**Changed — real correctness bug fixed (unblocked the suite).** `npm test` was
+red before this run (3 pre-existing failures; the log's "174/174" was stale for
+this environment). Root cause: background-task **and** training launch scripts
+templated `state.json` with `printf | sed` and wrote it **non-atomically** — any
+command containing quotes/newlines (e.g. `printf 'line-1\nline-2\n'`) corrupted
+the JSON, and the `"$$"`→pid substitution failed, so `readState` threw
+`SyntaxError` mid-write. Fixed in `src/harness/background-tasks.ts` and
+`src/training/runner.ts`: write the base payload verbatim to a private `.base`
+temp (no sed), let python fill pid/timestamps, and **publish atomically via
+`os.replace`** so a concurrent reader only ever sees a complete file. Made the
+flaky breaker test (`server.test.ts`) hermetic by injecting a mock
+`backgroundTaskSpawnProcess` (it was racing a real `sleep 5` subprocess).
+
+**Test results:** `typecheck:src` ✅ (exit 0, source stays clean). Build ✅
+(tsdown, 5 files, ~545 kB). `npm test` ✅ **189/189** (was 171/174 with 3
+pre-existing failures; +15 new movement-backend tests, +3 fixed). Additive/
+reversible: the on-device plan path is unchanged; the model backend is new.
+
+**New idea:** wire the movement backend into the training runner as the *default
+cloud/CI eval step* — after a job is prepared, train a `MarkovMovementBackend`
+on the reviewed dataset and record `evaluateMovementFidelity` (train-fidelity +
+held-out generalization) into the job manifest. This gives every job a cheap,
+deterministic "did the recorded movement actually learn?" signal before the
+expensive on-device run, and a baseline the real small-model backend must beat.
+Second idea: a `verify` npm script (`typecheck:src && build && test`) now that
+the suite is green — lock the green gate in as the per-run pre-push self-check.
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

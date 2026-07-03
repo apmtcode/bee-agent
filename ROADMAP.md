@@ -38,8 +38,11 @@ unchecked items are queued. Keep this richer than you found it each run.
     `skills.executable.*`, `push.subscriptions.*`, `trajectories.*`, `replays.*`,
     `cron.runs`/misc — plus a few genuine test-only typings. Map the rest, then
     fix residual test-only typings.
-- [ ] Add a `verify` npm script (`typecheck && build && test`) and have the
-      engine run it as a pre-push self-check each cycle.
+- [ ] Add a `verify` npm script and have the engine run it as a pre-push
+      self-check each cycle. Now unblocked: `npm test` is **fully green (189/189)**
+      as of run 9 (run 9 fixed the 3 pre-existing failures — non-atomic,
+      sed-templated `state.json` writes corrupted JSON; now written verbatim +
+      published atomically via `os.replace`). Use `typecheck:src && build && test`.
 - [x] Interim **source-only typecheck gate** — DONE run 7. `tsconfig.src.json`
       (excludes `**/*.test.ts`) + `typecheck:src` script; passes (exit 0). Next:
       have the engine run it as a per-run pre-push self-check.
@@ -62,13 +65,31 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
+      for a real on-device small model. **DONE run 9** —
+      `src/training/model-backend.ts`: `MovementModelBackend` interface +
+      deterministic `MarkovMovementBackend` (order-k n-gram, unigram backoff),
+      `datasetFromReplayManifests`/`datasetFromTrajectories`, `rolloutMovements`
+      (inference), 15 tests. A real on-device backend implements the same
+      interface.
 - [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      round-trips without real OS input. (Partly served now: the model-backend
+      tests exercise dataset→train→rollout→fidelity on synthetic sequences; a
+      dedicated capture-side generator that emits mouse/keyboard/window events
+      through the recorder is still open.)
+- [x] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories. **DONE run 9** — `evaluateMovementFidelity`
+      scores next-token accuracy on train (memorization) vs held-out (generalize)
+      sequences.
+- [ ] **Wire the model backend into the training runner as a default cloud/CI
+      eval step** (run 9 idea): after `prepare`, train a `MarkovMovementBackend`
+      on the reviewed dataset and record `evaluateMovementFidelity` into the job
+      manifest — a cheap deterministic "did the recorded movement learn?" signal
+      + a baseline the real small-model backend must beat.
+- [ ] Richer movement tokenizer: fold a normalized target/summary keyword into
+      the token (currently `action.tool` only) so generalization keys on *what*
+      was acted on, not just the tool kind. Keep the `MovementTokenizer` seam.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

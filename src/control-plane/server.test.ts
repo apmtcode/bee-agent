@@ -1016,9 +1016,15 @@ describe("OperatorControlPlaneServer", () => {
     });
 
     const breakerRootDir = await makeTempDir();
+    let breakerPid = 42000;
     const breakerRuntime = new StandaloneOperatorRuntime({
       rootDir: breakerRootDir,
       backgroundTaskIsProcessRunning: () => false,
+      // Hermetic spawn: hand back a pid without running the launch script, so a
+      // task's execution state is only ever what the test writes explicitly.
+      // Otherwise a real detached script races the assertions (writing task 3's
+      // state mid-check flips the breaker failure count).
+      backgroundTaskSpawnProcess: () => ({ pid: (breakerPid += 1), unref() {} }),
     });
     const breakerServer = new OperatorControlPlaneServer({ runtime: breakerRuntime });
     const breakerOne = await breakerServer.handle({

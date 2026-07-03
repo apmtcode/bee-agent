@@ -734,15 +734,20 @@ function renderLaunchScript(task: BackgroundTaskRecord): string {
   const quotedOutputFile = shellQuote(task.execution.outputFile);
   const quotedCwd = shellQuote(task.cwd);
   const quotedCommand = shellQuote(task.command);
+  // Write the base state verbatim (no shell string-templating of JSON — a
+  // command containing quotes/newlines would otherwise corrupt the file), then
+  // let python fill in the live pid + timestamps. `printf '%s'` on a
+  // single-quoted argument emits arbitrary bytes safely; pid/startedAt/updatedAt
+  // are placeholders python overwrites.
   const quotedStatePayload = shellQuote(
     JSON.stringify({
       version: 1,
       taskId: task.id,
       kind: task.kind,
       status: "running",
-      pid: "$$",
-      startedAt: "__OPENCLAW_STARTED_AT__",
-      updatedAt: "__OPENCLAW_STARTED_AT__",
+      pid: 0,
+      startedAt: "",
+      updatedAt: "",
       outputFile: task.execution.outputFile,
       cwd: task.cwd,
       command: task.command,
@@ -752,19 +757,25 @@ function renderLaunchScript(task: BackgroundTaskRecord): string {
   return [
     "#!/usr/bin/env bash",
     "set -euo pipefail",
-    `mkdir -p $(dirname ${quotedStatePath}) $(dirname ${quotedOutputFile})`,
+    `state_path=${quotedStatePath}`,
+    `mkdir -p $(dirname "$state_path") $(dirname ${quotedOutputFile})`,
     "started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-    `printf '%s' ${quotedStatePayload} | sed "s/__OPENCLAW_STARTED_AT__/$started_at/g; s/\"\$\$\"/$$/g" > ${quotedStatePath}`,
+    // Base state to a private ".base" temp; python publishes atomically so a
+    // concurrent reader never observes a partially written state file.
+    `printf '%s' ${quotedStatePayload} > "$state_path.base"`,
+    `python3 - "$state_path" "$state_path.base" $$ "$started_at" <<'PY'`,
+    ...renderInitStateWriterPython(),
+    "PY",
     `printf '%s\n' "starting ${task.kind} ${task.id}" >> ${quotedOutputFile}`,
     `if cd ${quotedCwd} && bash -lc ${quotedCommand} >> ${quotedOutputFile} 2>&1; then`,
     "  completed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-    `  python3 - ${quotedStatePath} $$ "$completed_at" 0 <<'PY'`,
+    `  python3 - "$state_path" $$ "$completed_at" 0 <<'PY'`,
     ...renderStateWriterPython("completed"),
     "PY",
     "else",
     "  exit_code=$?",
     "  completed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-    `  python3 - ${quotedStatePath} $$ "$completed_at" "$exit_code" <<'PY'`,
+    `  python3 - "$state_path" $$ "$completed_at" "$exit_code" <<'PY'`,
     ...renderStateWriterPython("failed"),
     "PY",
     '  exit "$exit_code"',
@@ -773,23 +784,47 @@ function renderLaunchScript(task: BackgroundTaskRecord): string {
   ].join("\n");
 }
 
+function renderInitStateWriterPython(): string[] {
+  return [
+    "import json",
+    "import os",
+    "import pathlib",
+    "import sys",
+    "final_path = sys.argv[1]",
+    "base_path = pathlib.Path(sys.argv[2])",
+    "pid = int(sys.argv[3])",
+    "timestamp = sys.argv[4]",
+    "state = json.loads(base_path.read_text())",
+    "state['pid'] = pid",
+    "state['startedAt'] = timestamp",
+    "state['updatedAt'] = timestamp",
+    "tmp_path = final_path + '.tmp'",
+    "pathlib.Path(tmp_path).write_text(json.dumps(state, indent=2) + '\\n')",
+    "os.replace(tmp_path, final_path)",
+    "base_path.unlink(missing_ok=True)",
+  ];
+}
+
 function renderStateWriterPython(status: BackgroundTaskExecutionState["status"]): string[] {
   return [
     "import json",
+    "import os",
     "import pathlib",
     "import sys",
-    "state_path = pathlib.Path(sys.argv[1])",
+    "final_path = sys.argv[1]",
     "pid = int(sys.argv[2])",
     "timestamp = sys.argv[3]",
     "exit_code = int(sys.argv[4])",
-    "state = json.loads(state_path.read_text())",
+    "state = json.loads(pathlib.Path(final_path).read_text())",
     `state['status'] = '${status}'`,
     "state['pid'] = pid",
     "state['updatedAt'] = timestamp",
     "state['completedAt'] = timestamp",
     "state['exitCode'] = exit_code",
     `state['error'] = None if '${status}' == 'completed' else f'background task exited non-zero ({exit_code})'`,
-    "state_path.write_text(json.dumps(state, indent=2) + '\\n')",
+    "tmp_path = final_path + '.tmp'",
+    "pathlib.Path(tmp_path).write_text(json.dumps(state, indent=2) + '\\n')",
+    "os.replace(tmp_path, final_path)",
   ];
 }
 
