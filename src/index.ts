@@ -394,6 +394,27 @@ export type {
   TrainingExecutionState,
 } from "./training/execution-service.js";
 export {
+  MarkovMovementBackend,
+  buildMovementDatasetFromReplay,
+  buildMovementDatasetFromTrajectories,
+  evaluateMovementModel,
+  generateSyntheticMovementSessions,
+  tokenizeAction,
+} from "./training/movement-model.js";
+export type {
+  MovementDataset,
+  MovementEvalResult,
+  MovementGenerateOptions,
+  MovementModel,
+  MovementModelBackend,
+  MovementPrediction,
+  MovementSequence,
+  MovementToken,
+  MovementTrainConfig,
+  SerializedMovementModel,
+  SyntheticMovementOptions,
+} from "./training/movement-model.js";
+export {
   LocalAppleSiliconTrainingRunner,
 } from "./training/runner.js";
 export type {

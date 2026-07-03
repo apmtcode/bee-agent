@@ -6,6 +6,73 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-03 (run 9) — In-process pluggable movement-model backend (learn → repeat → generalize)
+
+**Audited:** Standing objective #2 (local-movement learning subsystem), which had
+been starved while runs 2–8 paid down typecheck debt. Inventoried
+`src/capture/` (schema, recorder, adapters, replay) and `src/training/`
+(exporter, job manifest/store, runner, execution-service). Found the **learn →
+repeat → generalize** loop (objective 2c/2d) had *no in-process implementation*:
+`runner.ts` only emits shell commands to launch an **external** mlx/axolotl
+trainer, so nothing could actually learn from a movement dataset or predict
+movements — and none of it was exercisable in the cloud. This is exactly the
+queued ROADMAP item "pluggable local-model backend … with a deterministic mock
+backend."
+
+**Changed (additive, new files):**
+- `src/training/movement-model.ts` — the missing seam and reference backend:
+  - `MovementModelBackend` interface (`train(dataset)`, `restore(json)`) so a real
+    on-device small model drops in behind the same seam; `MovementModel`
+    (`predictNext`, `generate`, `toJSON`).
+  - `MarkovMovementBackend`: a variable-order Markov model with stupid backoff —
+    **fully deterministic** (argmax with a stable lexical tie-break, no RNG at
+    inference), serializable. Repeats recorded single-path movements exactly and
+    generalizes to held-out-but-related sequences via backoff.
+  - `tokenizeAction` + `buildMovementDatasetFromTrajectories` /
+    `buildMovementDatasetFromReplay`: turn recorded `TrajectorySpan`s /
+    `ReplayManifest`s into learnable `MovementToken` sequences (prefers structured
+    gesture metadata, falls back to a summary slug).
+  - `generateSyntheticMovementSessions`: seeded (mulberry32, no `Math.random`)
+    synthetic movement generator with skill templates + recombination — validates
+    the capture→dataset→train→replay loop with **no real OS input**.
+  - `evaluateMovementModel`: generalization eval — held-out next-token top-1
+    accuracy + exact-sequence-reproduction rate.
+- `src/training/movement-model.test.ts` — 11 tests: tokenization, dataset
+  builders, exact-repeat, prefix prediction, serialize/restore round-trip,
+  deterministic tie-break, and a **generalization** test (train on 60 synthetic
+  sessions from 3 skills, held-out top-1 accuracy > 0.7 vs. sub-20% chance).
+- `src/index.ts` — barrel exports for the new surface.
+
+**Test results:** `typecheck:src` ✅ (exit 0, source stays clean). Build ✅
+(tsdown, 5 files, 545 kB). New module **11/11** ✅. Full suite **182 passed,
+3 failed** — the 3 failures are **pre-existing and clock-dependent**, NOT caused
+by this run (verified: with all my files removed, true baseline is `171 passed |
+3 failed` of 174). They fail in isolation too, so it isn't test-ordering
+flakiness.
+
+**⚠️ Inherited red suite — root-caused for next run:** the 3 failures are
+wall-clock/date bugs in the **test fixtures**, surfaced now that the run date
+(2026-07-03) has passed the fixtures' hardcoded future timestamps:
+- `server.test.ts:719` remote pairing control expects `state:"active"` but gets
+  `"degraded"` — the pairing ticket's hardcoded `expiresAt` is now in the past,
+  and `pairing-store.ts` expires tickets against `new Date()`, so redemption
+  degrades.
+- `app.test.ts` `control=active` (same pairing-expiry cause) and a background-task
+  recovery assertion (`[task …]` vs `No active run…`), also time-relative.
+The fix is to make these tests use an **injected/relative clock** (or
+`vi.useFakeTimers`) instead of literal dates — filed as the top ROADMAP item. I
+scoped it out of this run to keep the diff focused per the guardrails, and pushed
+to the designated feature branch (`claude/peaceful-dirac-0a7zlm`), not main.
+
+**New idea:** add a `MovementModel`-driven **replay-fidelity reward** to the RL
+training path in `runner.ts` — score a rollout by how closely its generated
+movement sequence matches the reviewed replay manifest (reuse
+`evaluateMovementModel`'s exact-match / next-token metrics as the reward signal),
+giving the on-device trainer a concrete, in-repo-defined objective instead of the
+opaque `--reward-model replay-manifest` string it passes today.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

@@ -4,6 +4,16 @@ Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
 ## Foundations / DX
+- [ ] **🔴 Fix inherited clock-dependent test failures (top priority).** 3 tests
+      fail on/after 2026-07-03 because fixtures hardcode future `expiresAt`/
+      timestamps that have now passed (run 9 root-caused them; NOT a source bug):
+  - `server.test.ts:719` — pairing control `state` expects `active`, gets
+    `degraded` (ticket `expiresAt` now in the past; `pairing-store.ts` expires
+    against `new Date()`).
+  - `app.test.ts` — `control=active` (same pairing-expiry cause) + a background-
+    task recovery assertion (`[task …]` vs `No active run…`), both time-relative.
+  - Fix: inject a clock or use `vi.useFakeTimers()` / relative `expiresAt` in the
+    fixtures so the suite is date-stable. Restores a green `npm test`.
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`
@@ -62,13 +72,28 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      for a real on-device small model. — DONE run 9 (`movement-model.ts`:
+      `MovementModelBackend` seam + `MarkovMovementBackend` deterministic
+      reference; `MovementModel.toJSON`/`restore` for the on-device persistence
+      seam).
+- [x] Synthetic event-stream generator to validate capture→dataset→replay
+      round-trips without real OS input. — DONE run 9
+      (`generateSyntheticMovementSessions`, seeded mulberry32, no `Math.random`;
+      skill templates + recombination for related-but-novel held-out data).
+- [x] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories. — DONE run 9 (`evaluateMovementModel`:
+      held-out next-token top-1 accuracy + exact-sequence-reproduction rate;
+      test proves >0.7 accuracy vs sub-20% chance).
+- [ ] Wire the movement model into the training runner: add a
+      `MovementModel`-driven replay-fidelity **reward** to the RL path in
+      `runner.ts` (score a rollout by `evaluateMovementModel` match against the
+      reviewed replay manifest) instead of the opaque `--reward-model
+      replay-manifest` string. Gives on-device training an in-repo objective.
+- [ ] Expose the movement model over the control plane (train/predict/generate
+      RPC methods) so a live session can learn from and replay captured
+      movements, and add it to `ControlPlaneResultMap`.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
