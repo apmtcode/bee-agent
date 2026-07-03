@@ -370,4 +370,37 @@ describe("BackgroundTaskExecutionService", () => {
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
   });
+
+  it("renders a launch script that writes valid JSON state for commands containing single quotes", async () => {
+    const rootDir = await makeTempDir();
+    // Use the real spawn/shell so the rendered launch script actually runs.
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"));
+    const task = await store.start({
+      title: "Quoted command",
+      // Single quotes here previously corrupted the rendered state.json via a
+      // broken POSIX single-quote escape in shellQuote.
+      command: "printf 'line-1\nline-2\n'",
+      cwd: rootDir,
+      kind: "task",
+    });
+
+    const statePath = path.join(rootDir, task.execution.stateFile);
+    // Poll for the detached script to write its terminal state.
+    let raw = "";
+    for (let attempt = 0; attempt < 50; attempt += 1) {
+      raw = await fs.readFile(statePath, "utf8").catch(() => "");
+      if (raw.trim()) {
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+
+    expect(raw.trim()).not.toBe("");
+    // The core regression: state.json must be parseable and the pid must be a
+    // number (the "$$" placeholder must have been substituted), never a string.
+    const parsed = JSON.parse(raw) as BackgroundTaskExecutionState;
+    expect(typeof parsed.pid).toBe("number");
+    expect(parsed.taskId).toBe(task.id);
+    expect(parsed.command).toBe("printf 'line-1\nline-2\n'");
+  });
 });

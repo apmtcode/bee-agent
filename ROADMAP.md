@@ -70,6 +70,24 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Generalization eval harness: measure replay fidelity on held-out but
       related synthetic trajectories.
 
+## Reliability / correctness
+- [x] **Fix background-task launch-script rendering bugs** (2026-07-03, run 9):
+      broken POSIX single-quote escape in `shellQuote`, the `$$`→pid sed
+      substitution collapsing to a no-op (backslashes eaten by the JS template
+      literal), and non-atomic state writes. Same sed/atomic fixes ported to
+      `training/runner.ts`. Suite 171/175 → 175/175, deterministic.
+- [ ] **Replace the sed/`$$` placeholder rendering with a here-doc + python
+      one-liner** that derives `pid`/`startedAt`/`status` from
+      `os.getpid()`/argv and writes atomically — eliminates the entire class of
+      JS↔bash↔sed↔python re-quoting bugs (three were found in one renderer in
+      run 9) and unifies the initial and completion state writes.
+- [ ] **Guard against real-spawn races in tests:** several suites inject
+      `backgroundTaskIsProcessRunning: () => false` but use the real spawn and
+      then assert as if no execution state exists. Run 9 added a no-op
+      `backgroundTaskSpawnProcess` at the four affected sites; consider a shared
+      test helper (`makeDeterministicRuntime`) so new tests don't reintroduce the
+      race.
+
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in

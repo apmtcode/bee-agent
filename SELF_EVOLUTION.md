@@ -6,6 +6,65 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-03 (run 9) — Background-task reliability: 3 real shell-rendering bugs fixed + flaky tests made deterministic
+
+**Audited:** Baseline project health. Found the suite was **not** green here — 3
+test files failed (`operator-runtime`, `server`, `app`), despite run 8 recording
+174/174. The prior count was from a different machine; these failures are
+timing/shell-behaviour-sensitive and this cloud env exposed them. Traced every
+failure to the background-task launch-script renderer.
+
+**Three genuine product bugs fixed** in `src/harness/background-tasks.ts` (the
+first two also latent in `src/training/runner.ts`, fixed there too):
+1. **Broken POSIX single-quote escaping in `shellQuote`.** It replaced `'` with
+   `"'"'"'` (leading `"`, doesn't close the open single quote) instead of the
+   correct `'"'"'`. Any state payload whose `command` contained a single quote
+   (e.g. `printf 'line-1\nline-2\n'`) had its rendered `printf '%s' '<payload>'`
+   line corrupted → the state.json written by the detached script was invalid
+   JSON → `readJsonFile` threw during `recover`/`reconcile`. (Only
+   background-tasks had the bug; runner.ts already had the correct form.)
+2. **`$$`→pid sed substitution was a silent no-op.** The source
+   `s/\"\$\$\"/$$/g` sits inside a JS template literal, so `\"`→`"` and `\$`→`$`
+   collapsed at compile time and the *rendered* script contained `s/"$$"/$$/g`.
+   Bash then read the bare `"` as quote delimiters and `$$` as its own PID, so
+   the program degenerated to `s/<PID>/<PID>/g` and the JSON pid stayed the
+   **string** `"$$"`. Long-running monitors (which never reach the python
+   completion writer that also sets pid) would keep a string pid forever, and
+   `isProcessRunning(state.pid)` on a string is always false → false
+   missing-process. Fixed by doubling the backslashes in source
+   (`s/\\"\\$\\$\\"/$$/g`) so the rendered script carries the intended escapes.
+3. **Non-atomic state writes.** Both the initial `sed … > state.json` and the
+   python completion writer wrote in place, so a concurrent `reconcile` read
+   could catch a truncated file. Made both atomic (`… > state.json.tmp && mv -f`
+   for sed; `write_text(tmp)` + `os.replace` for python), matching the Node-side
+   `writeJsonAtomic`.
+
+**Test determinism (test-only):** `server.test.ts` (×3 runtimes) and
+`operator-runtime.test.ts` (×1) injected `backgroundTaskIsProcessRunning: () =>
+false` but used the **real** spawn, then asserted as if no execution state
+exists (they `writeState`/`writeOutput` explicitly). Real detached processes
+raced those assertions (e.g. a `sleep 5` task's "running" state landing →
+`deriveRemoteDiagnostics` → "background task missing-process" → control
+`degraded` instead of `active`). Injected a no-op `backgroundTaskSpawnProcess`
+mock in all four sites. Added a regression test that runs the **real** launch
+script with a single-quote command and asserts the state file is valid JSON with
+a numeric pid and the exact command echoed back.
+
+**Test results:** **171/175 → 175/175**, verified **5× consecutively** with zero
+flakes (was 3 files failing). `typecheck:src` exit 0. Build ✅. Full `tsc` total
+**125** (unchanged — no new type debt). Pushed to `main`.
+
+**New idea:** the launch scripts are hand-rendered bash with fragile
+JS↔bash↔sed↔python quoting (this run found three separate escaping bugs in one
+renderer). Replace the sed/`$$` placeholder dance with a single here-doc that
+pipes the payload to a tiny python one-liner which sets `pid`, `startedAt`, and
+`status` from `os.getpid()`/argv and writes atomically — no sed, no shell
+re-quoting of JSON. That removes the entire class of "rendered-script escaping"
+bugs and makes the initial and completion writes share one code path. Logged to
+ROADMAP.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
