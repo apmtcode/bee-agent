@@ -70,6 +70,24 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Generalization eval harness: measure replay fidelity on held-out but
       related synthetic trajectories.
 
+## Reliability / correctness
+- [x] **Fix background-task launch-script generation bugs** (2026-07-03, run 9):
+      `shellQuote` used the wrong POSIX single-quote escape, and the `"$$"` pid
+      placeholder was never substituted (bash double-quote closed early) — both
+      corrupted `state.json`. Fixed in `background-tasks.ts` + `training/runner.ts`;
+      added a deterministic regression test that runs the real script.
+- [x] **De-flake background-task integration tests** (2026-07-03, run 9): inject
+      the existing no-op `backgroundTaskSpawnProcess` seam so tests stop spawning
+      real detached processes that race manual state writes. Suite now 175/175.
+- [ ] **Extract a shared `src/shared/launch-script.ts`** — `background-tasks.ts`
+      and `training/runner.ts` duplicate `renderLaunchScript` /
+      `renderStateWriterPython` / `shellQuote` and independently shipped the same
+      bug. Unify so a fix lands once and they can't drift. Add a launch-script
+      unit test that simulates the shell substitutions.
+- [ ] Add a `verify` script (`typecheck:src && build && test`) and run it as the
+      per-run pre-push gate so a red baseline is caught immediately (run 9 found
+      the suite red despite run 8 logging green).
+
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in

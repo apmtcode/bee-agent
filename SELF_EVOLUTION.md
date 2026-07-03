@@ -6,6 +6,60 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-03 (run 9) — 🐛 Fixed two launch-script generation bugs; suite deterministic 175/175
+
+**Audited:** Baseline health. Found the suite was **red** on this machine — 3 test
+files failing (`operator-runtime`, `control-plane/server`, `cli/app`) despite run
+8 logging 174/174 green. Root-caused to a genuine, timing-dependent defect in the
+background-task **launch-script generator** (`renderLaunchScript`), not the tests.
+
+**Two real bugs fixed in `src/harness/background-tasks.ts` (mirrored in
+`src/training/runner.ts`):**
+1. **`shellQuote` used the wrong POSIX single-quote escape** — `'` → `"'"'"'`
+   (6 chars, malformed) instead of `'"'"'` (5 chars). Any command containing a
+   single quote (e.g. `printf 'line-1\nline-2\n'`) corrupted the shell-embedded
+   state JSON → unparseable `state.json` → `JSON SyntaxError` on recovery.
+2. **The pid placeholder `"$$"` was never substituted.** In the JS template
+   literal `\"\$\$\"` collapses to `"$$"` in the emitted `run.sh`, so the literal
+   `"` prematurely closed bash's double-quoted `sed` program — the pid stayed the
+   *string* `"$$"`, making `isProcessRunning("$$")` always false and every fresh
+   task reconcile to `failed`. Replaced the fragile quoted-`$$`-placeholder +
+   `sed` with an **unquoted `__OPENCLAW_PID__` token** (mirroring the already-
+   working `__OPENCLAW_STARTED_AT__` date substitution) that yields a proper JSON
+   *number*. No bash/JS escaping hazards remain.
+
+**Made 3 flaky integration tests deterministic:** they injected
+`backgroundTaskIsProcessRunning: () => false` (to simulate dead processes) but
+forgot the **`backgroundTaskSpawnProcess`** seam — so real detached processes
+(`sleep 5`, `printf …`) spawned and their lingering "running" state writes raced
+the manual `writeState` / remote-status assertions. Injected a no-op spawner at
+the 4 sites (operator-runtime bg-task test; server.test main/drifting/breaker
+runtimes; app.test lifecycle test). This is what the seam is *for*.
+
+**Additive testability seam:** `OperatorCliApp` now forwards optional
+`backgroundTaskSpawnProcess` / `backgroundTaskIsProcessRunning` options to its
+runtime (production defaults unchanged) so app-level tests can be deterministic
+without touching production paths.
+
+**New deterministic regression test** (`background-tasks.test.ts`): executes the
+*real* generated launch script for a command with single quotes + newlines and
+asserts `state.json` parses, `pid` is a **number**, and `command` round-trips
+exactly. Verified it **fails** with the bugs reintroduced and **passes** with the
+fix.
+
+**Test results:** suite **174→175** (all green; +1 regression test). Build ✅.
+`typecheck:src` ✅ (source still clean). Full `tsc` **125** (unchanged — all in
+test files). The 3 previously-failing files now pass deterministically across
+repeated runs.
+
+**New idea:** `src/harness/background-tasks.ts` and `src/training/runner.ts`
+carry near-identical `renderLaunchScript` / `renderStateWriterPython` /
+`shellQuote` logic that **diverged and independently shipped the same two bugs**.
+Extract a shared `src/shared/launch-script.ts` (shellQuote + JSON state payload +
+sed substitution + python state-writer) so the two callers can't drift and a fix
+lands once. Bonus: add a `verify` script (`typecheck:src && build && test`) and
+run it as the per-run pre-push gate so a red baseline is caught immediately.
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

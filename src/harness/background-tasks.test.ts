@@ -370,4 +370,38 @@ describe("BackgroundTaskExecutionService", () => {
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
   });
+
+  it("launches a command containing single quotes and newlines and writes a valid, numeric-pid state file", async () => {
+    // Regression: the generated launch script embedded a JSON state payload and
+    // substituted the pid/started-at placeholders with sed. Two bugs corrupted
+    // that state file whenever the command contained a single quote or newline:
+    //   1. shellQuote used the wrong POSIX single-quote escape, and
+    //   2. the pid placeholder `"$$"` was escaped such that its JSON quote
+    //      prematurely closed bash's double-quoted sed program, so the pid was
+    //      never substituted (it stayed the literal string "$$").
+    // The result was an unparseable state file / a string pid, so recovery blew
+    // up with a JSON SyntaxError. This drives the real script end-to-end.
+    const rootDir = await makeTempDir();
+    // Real spawner (default) so the generated bash script actually executes.
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"));
+    const command = "printf 'line-1\nline-2\n'";
+    const task = await store.start({ title: "Quoted command", command, cwd: rootDir });
+    const service = new BackgroundTaskExecutionService(rootDir);
+
+    // Poll until the detached script has written its state file.
+    let state: BackgroundTaskExecutionState | undefined;
+    for (let attempt = 0; attempt < 100 && !state; attempt += 1) {
+      state = await service.readState(task);
+      if (!state) {
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+    }
+
+    expect(state).toBeDefined();
+    // Before the fix this was the literal string "$$"; it must now be a number.
+    expect(typeof state?.pid).toBe("number");
+    // The command must round-trip through the shell-embedded JSON untouched.
+    expect(state?.command).toBe(command);
+    expect(state?.taskId).toBe(task.id);
+  });
 });
