@@ -1,12 +1,16 @@
+import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   BackgroundTaskExecutionService,
   FileBackgroundTaskStore,
   type BackgroundTaskExecutionState,
 } from "./background-tasks.js";
+
+const execFileAsync = promisify(execFile);
 
 const tempDirs: string[] = [];
 
@@ -107,6 +111,47 @@ describe("FileBackgroundTaskStore", () => {
       status: "completed",
       execution: { exitCode: 0 },
     });
+  });
+
+  it("generates a launch script that writes valid JSON state with a numeric pid for a single-quoted command", async () => {
+    const rootDir = await makeTempDir();
+    const filePath = path.join(rootDir, "background-tasks.json");
+    // Capture the generated launch-script path but do not actually launch it via the
+    // detached spawn; we run it synchronously below so we can await completion.
+    let launchScriptPath: string | undefined;
+    const store = new FileBackgroundTaskStore(
+      filePath,
+      (command) => {
+        launchScriptPath = command;
+        return { pid: 1, unref() {} };
+      },
+      () => true,
+    );
+
+    // A command containing single quotes exercises the launch-script shell quoting;
+    // a fast, terminating command lets us await the whole running→completed flow.
+    const command = "printf 'hello world\\n'";
+    const task = await store.start({ sessionId: "sess-q", title: "quote-check", command, kind: "task" });
+    if (!launchScriptPath) {
+      throw new Error("expected a launch script to be generated");
+    }
+
+    await execFileAsync("bash", [launchScriptPath], { cwd: rootDir });
+
+    const raw = await fs.readFile(path.join(rootDir, task.execution.stateFile), "utf8");
+    // Must be valid JSON — the previous shell-quote bug corrupted commands with quotes.
+    const state = JSON.parse(raw) as BackgroundTaskExecutionState;
+    expect(state.status).toBe("completed");
+    // Must be a real numeric pid — the previous `sed "s/\"$$\"/$$/g"` left it as "$$".
+    expect(typeof state.pid).toBe("number");
+    expect(Number.isInteger(state.pid)).toBe(true);
+    expect(state.pid).toBeGreaterThan(0);
+    // The single-quoted command must round-trip intact.
+    expect(state.command).toBe(command);
+    expect(state.exitCode).toBe(0);
+
+    const output = await fs.readFile(path.join(rootDir, task.execution.outputFile), "utf8");
+    expect(output).toContain("hello world");
   });
 
   it("cancels running tasks and records cancelled state", async () => {

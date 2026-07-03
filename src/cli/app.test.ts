@@ -16,6 +16,16 @@ async function makeTempDir(): Promise<string> {
   return dir;
 }
 
+// Deterministic spawn stub: launches no real OS process so a background task's
+// launch script never asynchronously rewrites the execution state file. Combined
+// with a `backgroundTaskIsProcessRunning: () => true` probe the started task stays
+// "running" without any real process, and tests drive output/state explicitly.
+let stubSpawnCounter = 0;
+function stubSpawn(): { pid: number; unref(): void } {
+  stubSpawnCounter += 1;
+  return { pid: 500000 + stubSpawnCounter, unref() {} };
+}
+
 afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })));
 });
@@ -801,7 +811,17 @@ describe("OperatorCliApp", () => {
 
   it("supports session lifecycle, transcript, approvals, pairing, config, and prompt commands", async () => {
     const rootDir = await makeTempDir();
-    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    // Hermetic: stub the spawn so no real OS process runs. Stubbed pids are treated
+    // as live; the sentinel pid 999999 (written explicitly below to drive the
+    // degraded-remote scenario) is treated as dead so the "background task failed"
+    // diagnostics are produced deterministically instead of racing a real process.
+    const app = new OperatorCliApp({
+      rootDir,
+      cwd: rootDir,
+      currentDate: "2026-05-25",
+      backgroundTaskSpawnProcess: () => stubSpawn(),
+      backgroundTaskIsProcessRunning: (pid) => pid !== 999999,
+    });
     const firstSession = await app.runtime.startSession({ title: "first", cwd: rootDir, agentId: "operator-cli" });
     const secondSession = await app.runtime.startSession({ title: "second", cwd: rootDir, agentId: "operator-cli" });
 
@@ -1063,7 +1083,18 @@ describe("OperatorCliApp", () => {
 
   it("supports background and monitor task commands plus cron commands", async () => {
     const rootDir = await makeTempDir();
-    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    // Hermetic: stub the spawn so no real OS process runs, and treat the stubbed
+    // pid as live so the started task stays "running" for the watch/stop flow. The
+    // task's output is written explicitly below (mirroring the monitor section),
+    // making this test deterministic rather than dependent on a real short-lived
+    // process still being alive by the time we assert on it.
+    const app = new OperatorCliApp({
+      rootDir,
+      cwd: rootDir,
+      currentDate: "2026-05-25",
+      backgroundTaskSpawnProcess: () => stubSpawn(),
+      backgroundTaskIsProcessRunning: () => true,
+    });
     const session = await app.runtime.startSession({ title: "CLI ops", cwd: rootDir, agentId: "operator-cli" });
 
     const startOutput = await app.dispatchSlashCommand(
@@ -1078,6 +1109,7 @@ describe("OperatorCliApp", () => {
     if (!task) {
       throw new Error("expected background task");
     }
+    await app.runtime.backgroundTasks.executionService.writeOutput(task, "ok\n");
 
     const listOutput = await app.dispatchSlashCommand({ kind: "background-list" });
     expect(listOutput).toContain(task.id);

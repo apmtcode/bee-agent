@@ -4,6 +4,17 @@ Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
 ## Foundations / DX
+- [x] **Green + deterministic test suite** (2026-07-03, run 9). Baseline was RED
+      (3 files) due to two real launch-script bugs (`shellQuote` POSIX escaping +
+      a `sed` pid substitution that never substituted) and non-hermetic tests that
+      spawned real OS processes. Fixed both bugs in `background-tasks.ts` +
+      `runner.ts`, added injectable spawn to `OperatorCliApp`, made background-task
+      tests hermetic, and added a real-launch-script integration test. 175/175.
+- [ ] Extract a shared `src/shared/launch-script.ts` (shellQuote + python state
+      writers + the printf→python init pattern) used by both `background-tasks.ts`
+      and `training/runner.ts`, which are near-duplicates — run 9 had to fix the
+      SAME two bugs in both. Add a lint/test that flags the fragile
+      `sed "s/\"$$\"/…` substitution anti-pattern so it can't regress.
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`

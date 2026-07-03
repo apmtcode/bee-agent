@@ -6,6 +6,58 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-03 (run 9) — 🐛 Fix two real launch-script bugs + make background-task tests hermetic (suite RED→GREEN)
+
+**Audited:** Ran the suite fresh and found the baseline was **RED** — 3 test files
+failing (`operator-runtime.test.ts`, `control-plane/server.test.ts`,
+`cli/app.test.ts`), despite run 8 logging 174/174. Root-caused each; all three
+traced to the background-task launch subsystem and two genuine **production**
+bugs in `src/harness/background-tasks.ts` (mirrored in `src/training/runner.ts`):
+
+1. **Broken POSIX single-quote escaping** (`shellQuote`, background-tasks.ts:797).
+   It emitted `"'"'"'` to escape a `'`; the correct idiom (used correctly in
+   `runner.ts`) is `'"'"'`. A task command containing single quotes (e.g. the
+   test's `printf 'line-1\nline-2\n'`) corrupted the JSON state payload the launch
+   script writes → `JSON.parse` crashed in `reconcileTask` (the original failure).
+2. **`sed` pid substitution that never substitutes** — the launch script wrote
+   `"pid":"$$"` and tried `sed "s/\"$$\"/$$/g"`, but `$$` expands inside the
+   double-quoted sed script, so the *pattern* became `"<pid>"` and never matched
+   the literal `"$$"`. Every launched task's initial state therefore carried a
+   non-numeric pid (`"$$"`), breaking `isProcessRunning` / recovery. Replaced the
+   fragile printf|sed placeholder dance with a small `python3` injector (mirroring
+   the existing completion-state writer) that reads the base payload and stamps the
+   real `$$` pid + timestamp.
+
+**Also (test hermeticity):** the failing tests spawned *real, detached* OS
+processes (`sleep 5`, `printf …`) whose async state writes raced with the tests'
+own `writeState()` — deterministically clobbering them in the cloud container
+(slower fork/exec). This is why run 8's "174/174" didn't reproduce. Added
+injectable `backgroundTaskSpawnProcess` / `backgroundTaskIsProcessRunning` to
+`OperatorCliAppOptions` (threaded into the runtime; production default unchanged),
+and made the background-task tests hermetic with a deterministic spawn stub.
+`app.test.ts`'s degraded-remote scenario maps cleanly to
+`isProcessRunning: (pid) => pid !== 999999` (the sentinel dead pid it writes). The
+real `sleep 5` spawns were also the source of intermittent `Terminated`/timeout
+under repeated full-suite runs — now gone.
+
+**New test:** `background-tasks.test.ts` gains an integration test that executes
+the *real* generated launch script for a **single-quoted** command and asserts the
+state file is valid JSON, `pid` is a positive integer, `command` round-trips
+intact, and status reaches `completed` — directly guarding both source fixes.
+
+**Test results:** suite **RED (3 files failing) → GREEN 175/175** (174 + the new
+test), deterministic across 3 full runs. `typecheck:src` ✅ (source stays clean).
+Build ✅.
+
+**New idea:** the launch-script builders in `background-tasks.ts` and `runner.ts`
+are near-identical (shellQuote, python state writers, the printf→python init
+pattern). Extract a shared `src/shared/launch-script.ts` helper so a bug fixed in
+one can't linger in the other (this run had to fix the *same* two bugs in both
+files). Bonus: a tiny "launch-script lint" test that scans for the `sed
+"s/\"$$\"/…` anti-pattern would catch any regression to the fragile substitution.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

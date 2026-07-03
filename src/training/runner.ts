@@ -171,9 +171,9 @@ function renderLaunchScript(execution: LocalTrainingExecution, plan: TrainingJob
       version: 1,
       jobId: plan.jobId,
       status: "running",
-      pid: "$$",
-      startedAt: "__OPENCLAW_STARTED_AT__",
-      updatedAt: "__OPENCLAW_STARTED_AT__",
+      pid: 0,
+      startedAt: "",
+      updatedAt: "",
       logFile: execution.logFile,
       workingDirectory: execution.workingDirectory,
       command: plan.command,
@@ -185,7 +185,13 @@ function renderLaunchScript(execution: LocalTrainingExecution, plan: TrainingJob
     "set -euo pipefail",
     `mkdir -p ${shellQuote(execution.artifactDir)} $(dirname ${quotedLogFile}) $(dirname ${quotedStatePath})`,
     "started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-    `printf '%s' ${quotedStatePayload} | sed "s/__OPENCLAW_STARTED_AT__/$started_at/g; s/\"\$\$\"/$$/g" > ${quotedStatePath}`,
+    // Write the base payload verbatim then let python inject the real pid ($$) and
+    // timestamp. The previous `sed "s/\"$$\"/$$/g"` never substituted because `$$`
+    // expands inside the double-quoted sed script (pattern became "<pid>").
+    `printf '%s' ${quotedStatePayload} > ${quotedStatePath}`,
+    `python3 - ${quotedStatePath} $$ "$started_at" <<'PY'`,
+    ...renderInitStateWriterPython(),
+    "PY",
     `printf '%s\n' "starting ${plan.mode} training for ${plan.jobId}" >> ${quotedLogFile}`,
     `if ${quotedCommand} >> ${quotedLogFile} 2>&1; then`,
     "  completed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
@@ -202,6 +208,22 @@ function renderLaunchScript(execution: LocalTrainingExecution, plan: TrainingJob
     "fi",
     "",
   ].join("\n");
+}
+
+function renderInitStateWriterPython(): string[] {
+  return [
+    "import json",
+    "import pathlib",
+    "import sys",
+    "state_path = pathlib.Path(sys.argv[1])",
+    "pid = int(sys.argv[2])",
+    "timestamp = sys.argv[3]",
+    "state = json.loads(state_path.read_text())",
+    "state['pid'] = pid",
+    "state['startedAt'] = timestamp",
+    "state['updatedAt'] = timestamp",
+    "state_path.write_text(json.dumps(state, indent=2) + '\\n')",
+  ];
 }
 
 function renderStateWriterPython(status: TrainingExecutionState["status"]): string[] {
