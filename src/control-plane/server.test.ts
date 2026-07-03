@@ -84,6 +84,14 @@ describe("OperatorControlPlaneServer", () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir,
       backgroundTaskIsProcessRunning: () => false,
+      // Hermetic spawn: this is a control-plane RPC test, not a subprocess
+      // integration test. The default spawn launches a real bash wrapper that
+      // asynchronously writes a "running" execution-state file; combined with
+      // the `isProcessRunning: () => false` mock, that race would later flag the
+      // task as missing-process and skew the remote-control state to "degraded".
+      // A no-op spawn keeps the task record "running" (which is all this test
+      // asserts) without any timing-dependent state-file writes.
+      backgroundTaskSpawnProcess: () => ({ pid: 4321, unref() {} }),
       delivery: new OperatorDeliveryService(rootDir, {
         sendBrowserPush: async () => {},
       }),
@@ -953,6 +961,9 @@ describe("OperatorControlPlaneServer", () => {
     const driftingRuntime = new StandaloneOperatorRuntime({
       rootDir: driftingRootDir,
       backgroundTaskIsProcessRunning: () => false,
+      // Hermetic spawn — deterministic state comes from explicit writeState
+      // below, not from a racing real subprocess. See note on the runtime above.
+      backgroundTaskSpawnProcess: () => ({ pid: 4321, unref() {} }),
     });
     const driftingServer = new OperatorControlPlaneServer({ runtime: driftingRuntime });
     const driftingBootstrap = await driftingServer.handle({
@@ -1019,6 +1030,9 @@ describe("OperatorControlPlaneServer", () => {
     const breakerRuntime = new StandaloneOperatorRuntime({
       rootDir: breakerRootDir,
       backgroundTaskIsProcessRunning: () => false,
+      // Hermetic spawn — deterministic state comes from explicit writeState
+      // below, not from a racing real subprocess. See note on the runtime above.
+      backgroundTaskSpawnProcess: () => ({ pid: 4321, unref() {} }),
     });
     const breakerServer = new OperatorControlPlaneServer({ runtime: breakerRuntime });
     const breakerOne = await breakerServer.handle({

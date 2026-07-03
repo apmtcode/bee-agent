@@ -531,6 +531,12 @@ describe("StandaloneOperatorRuntime", () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
       backgroundTaskIsProcessRunning: () => false,
+      // Hermetic spawn: this test drives the execution state entirely through
+      // explicit writeState/writeOutput calls. The default spawn would launch a
+      // real bash wrapper that asynchronously overwrites that state, racing the
+      // assertions (e.g. reconciling a manually-"completed" task back to
+      // "failed" if the subprocess is still "running" under load).
+      backgroundTaskSpawnProcess: () => ({ pid: 4321, unref() {} }),
     });
     const session = await runtime.startSession({ title: "Tasks", agentId: "main" });
 

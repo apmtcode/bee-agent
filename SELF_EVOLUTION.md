@@ -6,6 +6,61 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-03 (run 9) — 🐛 Fixed two real shell-quoting bugs in the background-task launcher (suite 170→174 green, deterministic)
+
+**Audited:** The actual build/test gate as the engine is supposed to. Contrary
+to the log's recorded "174/174", a fresh `npm test` in this environment showed
+**4 deterministic failures** (operator-runtime ×1, server.test ×1, app.test ×2),
+all tracing to `src/harness/background-tasks.ts`. Root-caused each rather than
+patching tests.
+
+**Two genuine SOURCE bugs found & fixed in `src/harness/background-tasks.ts`:**
+1. **`shellQuote` single-quote escape was transposed.** It replaced `'` with
+   `"'"'"'` — a sequence that *starts with `"`*. Inside the outer single-quoted
+   run that leading `"` is a literal character, not a quote-close, so the whole
+   argument was mangled. Any command containing a single quote (e.g. the test's
+   `printf 'line-1\nline-2\n'`) corrupted the JSON state file the launcher wrote
+   — and would have mis-executed the command itself (a correctness /
+   injection-adjacent defect, not just a test issue). Verified in a bash
+   round-trip harness: buggy → `printf "'x"'`; correct `'"'"'` → `printf 'x'`.
+   Fixed to the canonical POSIX form.
+2. **The launcher's `sed` pid substitution never fired.** The running-state
+   payload carried `"pid":"$$"` and a double-quoted `sed "…; s/\"\$\$\"/$$/g"`
+   meant to swap in the real PID. The embedded `"$$"` closed/reopened the shell's
+   double-quotes, so the substitution silently no-op'd and `"pid"` stayed the
+   string `"$$"`. Replaced with a placeholder `__OPENCLAW_PID__` substituted
+   inside a *single-quoted* sed script (breaking out to double-quotes only around
+   the safe `$started_at`/`$$` shell values), which strips the quotes and yields
+   a valid JSON **number** pid. Verified via python `json.load`.
+
+**Test hermeticity (same philosophy as run-1's `configHome` fix):** 4 tests
+(server.test ×1 mega-test with 3 sub-runtimes, operator-runtime ×1) started
+*real* background subprocesses that raced their own async state-file writes
+against the tests' explicit `writeState`/assertions — e.g. reconciling a
+manually-"completed" task back to "failed" when the subprocess was still
+"running" under full-suite CPU load, or flagging a fresh task as
+`missing-process` → skewing remote-control state to `degraded`/`paused`. Injected
+a no-op `backgroundTaskSpawnProcess: () => ({ pid: 4321, unref(){} })` into the
+affected runtimes so explicit state writes are authoritative. These are
+control-plane/orchestration RPC tests, not subprocess-integration tests, so no
+real spawn is warranted; no assertions changed.
+
+**Test results:** suite **170/174 → 174/174**, now **deterministic across 3
+consecutive full runs** (was deterministically failing 4 here / passing on the
+prior author's machine — a classic environment-timing flake). `npm run build`
+✅. `npm run typecheck:src` ✅ (source still fully clean). Pushed to `main`.
+
+**New idea:** add a tiny `spawnQuoting` round-trip unit test for
+`shellQuote` + `renderLaunchScript` that asserts, for a matrix of nasty commands
+(embedded `'`, `"`, `$`, `\n`, `;`, `&&`, spaces), that the generated launch
+script's emitted state file parses as JSON with a numeric pid and the exact
+command echoed back. That converts "the launcher quotes correctly" from an
+incidental property of one integration test into an explicit, fast guard — and
+would have caught both bugs above at authoring time. Bigger idea: a
+`test:integration` tag to segregate the handful of tests that shell out to real
+`bash`/`python3` from the pure-unit suite, so real-process timing can never
+flake the fast gate the engine runs each cycle.
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

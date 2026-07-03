@@ -740,7 +740,7 @@ function renderLaunchScript(task: BackgroundTaskRecord): string {
       taskId: task.id,
       kind: task.kind,
       status: "running",
-      pid: "$$",
+      pid: "__OPENCLAW_PID__",
       startedAt: "__OPENCLAW_STARTED_AT__",
       updatedAt: "__OPENCLAW_STARTED_AT__",
       outputFile: task.execution.outputFile,
@@ -754,7 +754,12 @@ function renderLaunchScript(task: BackgroundTaskRecord): string {
     "set -euo pipefail",
     `mkdir -p $(dirname ${quotedStatePath}) $(dirname ${quotedOutputFile})`,
     "started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-    `printf '%s' ${quotedStatePayload} | sed "s/__OPENCLAW_STARTED_AT__/$started_at/g; s/\"\$\$\"/$$/g" > ${quotedStatePath}`,
+    // Substitute the placeholders inside a single-quoted sed script so the
+    // literal double-quotes around the pid sentinel are matched verbatim (and
+    // the quotes are stripped, turning "pid" into a JSON number). Breaking out
+    // to double-quotes only around the safe shell values ($started_at, $$)
+    // avoids the nested-quote mangling that previously left `"pid":"$$"`.
+    `printf '%s' ${quotedStatePayload} | sed 's/__OPENCLAW_STARTED_AT__/'"$started_at"'/g; s/"__OPENCLAW_PID__"/'"$$"'/g' > ${quotedStatePath}`,
     `printf '%s\n' "starting ${task.kind} ${task.id}" >> ${quotedOutputFile}`,
     `if cd ${quotedCwd} && bash -lc ${quotedCommand} >> ${quotedOutputFile} 2>&1; then`,
     "  completed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
@@ -794,5 +799,9 @@ function renderStateWriterPython(status: BackgroundTaskExecutionState["status"])
 }
 
 function shellQuote(value: string): string {
-  return `'${value.replaceAll(`'`, `"'"'"'`)}'`;
+  // POSIX single-quote escaping: end the quoted run, emit a literal quote via a
+  // double-quoted `'`, then reopen the single-quoted run. The escape MUST start
+  // by closing the outer quote (`'`), otherwise the leading `"` is treated as a
+  // literal character and the whole argument is mangled (see round-trip test).
+  return `'${value.replaceAll(`'`, `'"'"'`)}'`;
 }

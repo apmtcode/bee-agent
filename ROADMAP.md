@@ -6,6 +6,23 @@ unchecked items are queued. Keep this richer than you found it each run.
 ## Foundations / DX
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
+- [x] **Fix background-task launcher shell-quoting bugs** (2026-07-03, run 9):
+      `shellQuote` single-quote escape was transposed (`"'"'"'` → `'"'"'`) and
+      the `sed` pid substitution never fired (`"pid":"$$"` stayed a string).
+      Both corrupted the launcher's JSON state file for any quoted command.
+      Restored suite 170→174, now deterministic. See SELF_EVOLUTION run 9.
+- [x] **De-flake real-subprocess tests** (2026-07-03, run 9): injected a no-op
+      `backgroundTaskSpawnProcess` into the 4 control-plane/orchestration tests
+      that raced a real `bash` wrapper against explicit `writeState` — same
+      hermeticity philosophy as run-1's `configHome`.
+- [ ] `shellQuote`/`renderLaunchScript` round-trip unit test: for a matrix of
+      nasty commands (embedded `'` `"` `$` newline `;` `&&` spaces), assert the
+      emitted state file parses as JSON with a numeric pid and the exact command
+      echoed back. Fast guard that would have caught both run-9 bugs at authoring
+      time.
+- [ ] Segregate real-process integration tests (`test:integration` tag) from the
+      pure-unit suite so `bash`/`python3` timing can never flake the fast gate the
+      engine runs each cycle.
 - [x] Make config loading hermetic in tests via an injectable `configHome`
       (2026-06-22).
 - [ ] **Pay down typecheck debt** (surfaced by the `typecheck` script). Full
