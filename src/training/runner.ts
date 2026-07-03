@@ -166,26 +166,23 @@ function renderLaunchScript(execution: LocalTrainingExecution, plan: TrainingJob
   const quotedLogFile = shellQuote(execution.logFile);
   const quotedWorkingDirectory = shellQuote(execution.workingDirectory);
   const quotedCommand = `${shellQuote(plan.command[0] ?? "")}${plan.command.slice(1).map((arg) => ` ${shellQuote(arg)}`).join("")}`;
-  const quotedStatePayload = shellQuote(
-    JSON.stringify({
-      version: 1,
-      jobId: plan.jobId,
-      status: "running",
-      pid: "$$",
-      startedAt: "__OPENCLAW_STARTED_AT__",
-      updatedAt: "__OPENCLAW_STARTED_AT__",
-      logFile: execution.logFile,
-      workingDirectory: execution.workingDirectory,
-      command: plan.command,
-    }),
-  );
+  const initialState = {
+    version: 1,
+    jobId: plan.jobId,
+    status: "running",
+    logFile: execution.logFile,
+    workingDirectory: execution.workingDirectory,
+    command: plan.command,
+  };
 
   return [
     "#!/usr/bin/env bash",
     "set -euo pipefail",
     `mkdir -p ${shellQuote(execution.artifactDir)} $(dirname ${quotedLogFile}) $(dirname ${quotedStatePath})`,
     "started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-    `printf '%s' ${quotedStatePayload} | sed "s/__OPENCLAW_STARTED_AT__/$started_at/g; s/\"\$\$\"/$$/g" > ${quotedStatePath}`,
+    `python3 - ${quotedStatePath} "$started_at" $$ <<'PY'`,
+    ...renderInitialStateWriterPython(initialState),
+    "PY",
     `printf '%s\n' "starting ${plan.mode} training for ${plan.jobId}" >> ${quotedLogFile}`,
     `if ${quotedCommand} >> ${quotedLogFile} 2>&1; then`,
     "  completed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
@@ -204,12 +201,28 @@ function renderLaunchScript(execution: LocalTrainingExecution, plan: TrainingJob
   ].join("\n");
 }
 
+// Build the initial "running" state in Python from a pre-serialized JSON blob,
+// then write it atomically. Replaces the previous `printf | sed` construction,
+// which corrupted the JSON for commands containing quotes/newlines and failed
+// to substitute `pid` (`$` is a sed anchor). See the same fix in
+// src/harness/background-tasks.ts.
+function renderInitialStateWriterPython(baseState: Record<string, unknown>): string[] {
+  const encoded = JSON.stringify(JSON.stringify(baseState));
+  return [
+    ...ATOMIC_STATE_PRELUDE,
+    "started_at = sys.argv[2]",
+    "pid = int(sys.argv[3])",
+    `state = json.loads(${encoded})`,
+    "state['pid'] = pid",
+    "state['startedAt'] = started_at",
+    "state['updatedAt'] = started_at",
+    ...renderAtomicStateWrite(),
+  ];
+}
+
 function renderStateWriterPython(status: TrainingExecutionState["status"]): string[] {
   return [
-    "import json",
-    "import pathlib",
-    "import sys",
-    "state_path = pathlib.Path(sys.argv[1])",
+    ...ATOMIC_STATE_PRELUDE,
     "pid = int(sys.argv[2])",
     "timestamp = sys.argv[3]",
     "exit_code = int(sys.argv[4])",
@@ -220,7 +233,26 @@ function renderStateWriterPython(status: TrainingExecutionState["status"]): stri
     "state['completedAt'] = timestamp",
     "state['exitCode'] = exit_code",
     `state['error'] = None if '${status}' == 'completed' else 'training process exited non-zero'`,
-    "state_path.write_text(json.dumps(state, indent=2) + '\\n')",
+    ...renderAtomicStateWrite(),
+  ];
+}
+
+// Shared Python: imports + resolve the state path from argv[1].
+const ATOMIC_STATE_PRELUDE = [
+  "import json",
+  "import os",
+  "import pathlib",
+  "import sys",
+  "state_path = pathlib.Path(sys.argv[1])",
+];
+
+// Shared Python: write `state` to `state_path` atomically (temp + os.replace)
+// so a concurrent reader never observes an empty or partially-written file.
+function renderAtomicStateWrite(): string[] {
+  return [
+    "tmp_path = state_path.with_name(state_path.name + '.tmp.' + str(os.getpid()))",
+    "tmp_path.write_text(json.dumps(state, indent=2) + '\\n')",
+    "os.replace(str(tmp_path), str(state_path))",
   ];
 }
 

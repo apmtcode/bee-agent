@@ -6,6 +6,64 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-03 (run 9) — 🐛 Crash-safe background-task state: killed the flaky test gate
+
+**Audited:** The engine's own pre-push gate. `npm test` was *non-deterministic* —
+between runs 2–4 of `server.test.ts`, `app.test.ts`, and
+`operator-runtime.test.ts` failed with `Received: undefined` and
+`SyntaxError: Expected ',' or '}' … in JSON`. A flaky green gate is worse than a
+red one: it can let a real regression through or block a clean push at random. I
+treated this as the highest-value fix (nothing else the engine does is trustworthy
+if the gate lies).
+
+**Root cause (two genuine product bugs in the generated launch script,
+`renderLaunchScript` in `src/harness/background-tasks.ts` **and**
+`src/training/runner.ts`):**
+1. **Corrupt JSON.** The initial `running` state was built by embedding a
+   pre-serialized JSON blob into bash and mutating it with
+   `printf '%s' … | sed "…; s/\"$$\"/$$/g" > state.json`. Any command containing
+   quotes or newlines (e.g. the test's `printf 'line-1\nline-2\n'`) produced
+   *invalid JSON* — an unescaped `"` closed the string early. The `pid`
+   substitution was **also silently broken**: `$` is a sed end-of-line anchor, so
+   `s/"$$"/…/` never matched and `pid` stayed the literal string `"$$"`.
+2. **Non-atomic writes.** Both the `> state.json` redirect and the Python
+   completion writer's `write_text` truncate-in-place, so a concurrent reader
+   caught an **empty or half-written** file → the `undefined` / `SyntaxError`
+   failures.
+
+**Changed (additive, crash-safe on real machines — not just a test patch):**
+- Build the state JSON entirely in **Python** from a *double-JSON-encoded* literal
+  (a valid Python string literal, immune to all shell quoting), filling
+  `pid`/timestamps from argv. Eliminates bug #1 for any command content.
+- Write every state file **atomically** (`tmp + os.replace`) via a shared
+  `renderAtomicStateWrite()` helper used by the initial *and* completion writers.
+  Eliminates bug #2 — readers now always see a complete, valid JSON document.
+- New injection seam: `OperatorCliApp` now forwards
+  `backgroundTaskSpawnProcess` / `backgroundTaskIsProcessRunning` to its runtime,
+  so state-machine tests can run deterministically without a real detached script.
+- Made the three offending tests deterministic where they only assert on
+  *explicitly-written* state (operator-runtime, all three server runtimes, one app
+  test) by injecting a no-op spawn; left the app test that genuinely exercises real
+  `printf` output on the real launch script (now reliable thanks to the atomic fix).
+- New regression test: runs the generated launch script end-to-end with a command
+  full of quotes, newlines, and a literal `$$`, and asserts the state file is
+  valid JSON with the command preserved and a numeric pid.
+
+**Test results:** previously **2–4 failures per full run** (deterministic-in-
+isolation crash + parallel-race). Now **full suite 12/12 clean runs**, each file
+8/8 in isolation. Source typecheck (`typecheck:src`) ✅, build ✅, full `tsc`
+unchanged at **125** (all pre-existing, test-only). Tests **175 passed** (added 1).
+
+**New idea (queued):** the `writeJsonAtomic` helper in `src/shared/fs.ts` is the
+single most safety-critical primitive in the repo (every store persists through
+it), yet it has no direct test for the concurrent-writer / partial-read invariant.
+Add a focused stress test: fire N overlapping `writeJsonAtomic` + `readJsonFile`
+pairs at one path and assert every read yields either the prior or a complete new
+value — never empty/partial. Second idea: a tiny `verify` script
+(`typecheck:src && build && test`) plus a `test --retry=0 --repeat=3` "flake
+sentinel" the engine runs pre-push, so a *newly-introduced* flaky test is caught
+the same hour it lands rather than N runs later.
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

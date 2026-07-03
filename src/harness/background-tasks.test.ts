@@ -370,4 +370,35 @@ describe("BackgroundTaskExecutionService", () => {
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
   });
+
+  it("emits valid, atomically-written state for commands with quotes and newlines", async () => {
+    const { execFileSync } = await import("node:child_process");
+    const rootDir = await makeTempDir();
+    // Run the generated launch script to completion so we can assert on the
+    // state file it produces. Commands with embedded quotes, newlines, and a
+    // literal `$$` previously corrupted the hand-built JSON state.
+    const store = new FileBackgroundTaskStore(
+      path.join(rootDir, "background-tasks.json"),
+      (command, _args, options) => {
+        execFileSync("bash", [command], { cwd: options.cwd, stdio: "ignore" });
+        return { pid: 4242, unref() {} };
+      },
+      () => false,
+    );
+
+    const trickyCommand = `printf '%s\\n' "she said \\"hi\\"" 'a$$b' 'line-1\nline-2'`;
+    const task = await store.start({ title: "Tricky", command: trickyCommand, cwd: rootDir, kind: "task" });
+
+    const raw = await fs.readFile(path.join(rootDir, task.execution.stateFile), "utf8");
+    const state = JSON.parse(raw) as BackgroundTaskExecutionState; // must not throw
+    expect(state.status).toBe("completed");
+    expect(state.command).toBe(trickyCommand);
+    expect(typeof state.pid).toBe("number");
+    expect(state.exitCode).toBe(0);
+
+    await expect(store.executionService.readState(task)).resolves.toMatchObject({
+      status: "completed",
+      command: trickyCommand,
+    });
+  });
 });

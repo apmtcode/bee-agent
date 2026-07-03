@@ -38,8 +38,21 @@ unchecked items are queued. Keep this richer than you found it each run.
     `skills.executable.*`, `push.subscriptions.*`, `trajectories.*`, `replays.*`,
     `cron.runs`/misc — plus a few genuine test-only typings. Map the rest, then
     fix residual test-only typings.
-- [ ] Add a `verify` npm script (`typecheck && build && test`) and have the
-      engine run it as a pre-push self-check each cycle.
+- [x] **Kill the flaky test gate** (2026-07-03, run 9). Background-task launch
+      scripts wrote `state.json` with broken `sed` quoting (invalid JSON for
+      commands with quotes/newlines; `pid` never substituted) and non-atomic
+      writes (partial/empty reads). Fixed both in
+      `src/harness/background-tasks.ts` + `src/training/runner.ts`: build state in
+      Python from a double-JSON-encoded literal, write atomically via
+      `tmp + os.replace`. Full suite now 12/12 clean (was 2–4 failures/run).
+- [ ] Add a `verify` npm script (`typecheck:src && build && test`) and have the
+      engine run it as a pre-push self-check each cycle. Consider a "flake
+      sentinel" (`test --repeat=3`) so a newly-landed flaky test is caught the
+      same run.
+- [ ] **Concurrency test for `writeJsonAtomic`** (`src/shared/fs.ts`) — the repo's
+      most safety-critical primitive has no direct partial-read/overlapping-writer
+      test. Fire N overlapping write+read pairs at one path; assert every read is
+      the prior or a complete new value, never empty/partial.
 - [x] Interim **source-only typecheck gate** — DONE run 7. `tsconfig.src.json`
       (excludes `**/*.test.ts`) + `typecheck:src` script; passes (exit 0). Next:
       have the engine run it as a per-run pre-push self-check.
