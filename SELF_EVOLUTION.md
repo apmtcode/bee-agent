@@ -6,6 +6,62 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-03 (run 9) — 🧠 In-process movement-policy model: learn → repeat → generalize (objective 2c+2d)
+
+**Audited:** The local-movement learning subsystem (standing objective #2). The
+capture side (`src/capture/*`) and the export/plan side (`src/training/exporter`,
+`job-store`, `runner`) were mature, BUT the actual *learning + inference* — parts
+(c) "post-train a model to repeat the recorded movements" and (d) "generalize to
+new but related movements" — had **no in-process implementation**. `runner.ts`
+only emits a shell plan that hands off to external mlx/axolotl on Apple Silicon,
+which can never execute (or be tested) in the cloud. So nothing in the repo could
+actually turn a recorded dataset into a model that predicts the next movement.
+
+**Changed (additive — two new files, one barrel edit):**
+- **`src/training/movement-model.ts`** — a complete, deterministic, cloud-runnable
+  movement-policy pipeline:
+  - *Tokenizer* (`tokenizeAction/Trajectory/ReplayManifest`): canonicalizes a
+    recorded action into a stable discrete token (e.g. `device:swipe:left`),
+    preferring structured metadata (gesture/direction/target/event) over free
+    text so differently-phrased-but-identical movements collapse to one token.
+  - *Pluggable backend seam* (`MovementModelBackend` → `TrainedMovementModel`):
+    the interface a real on-device small model can implement later; tests use the
+    deterministic Markov backend today.
+  - *`MarkovMovementBackend`*: a back-off n-gram policy (order N, default 3) with
+    Katz-style back-off + deterministic argmax tie-break. It **repeats** a
+    recording (generate from the first token reproduces the whole sequence, and
+    stops exactly at the recorded end via `minMatchedOrder`) and **generalizes**
+    (a novel prefix ending in a shared motif predicts the learned continuation by
+    backing off to shorter matched context). Includes `serialize()` /
+    `fromSnapshot()` for artifact persistence.
+  - *Eval harness* (`evaluateMovementModel`): next-token accuracy + coverage +
+    per-matched-order buckets over held-out sequences — the generalization metric.
+  - *Synthetic stream generator* (`synthesizeMovementSequences`, seeded/deterministic)
+    + `splitMovementDataset` so the whole capture→dataset→train→infer→eval loop is
+    validated with no real OS input.
+- **`src/index.ts`**: barrel-exported the new API (8 values + 12 types).
+
+**Test results:** new `src/training/movement-model.test.ts` — **13/13 pass**
+(tokenization, repeat, generalize, snapshot round-trip, deterministic synth,
+held-out generalization beats a unigram baseline & >0.5 accuracy, empty-set
+guards). `npm run typecheck:src` ✅ (source stays green). `npm run build` ✅.
+Full `npm test`: my module is green; **3 pre-existing failures** in
+`app.test.ts` (2) + `server.test.ts` (1) are unrelated — confirmed by
+`git stash`: they fail identically without my changes. Root cause is a
+**test-isolation flake** in background-task recovery: under the full parallel run
+a concurrent test deletes a task state file, so `recoverBackgroundTasks` →
+`readJsonFile` ENOENTs and a platform-control status reads `control=degraded …
+background task missing-process` instead of `active`. Filesystem race in the test
+fixtures, not a source regression. Logged to ROADMAP.
+
+**New idea:** now that a token vocabulary + n-gram model exist, add a **movement
+anomaly/novelty score** — at inference, if `predictNext` falls back to
+`matchedOrder === 0` (pure unigram) the model is "off-distribution", a natural
+signal to (a) ask the user before auto-replaying an uncertain step and (b) flag
+that trajectory as high-value new training data. Cheap to compute from the
+existing `MovementPrediction.matchedOrder`, and it closes the active-learning
+loop between capture and training.
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

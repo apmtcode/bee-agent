@@ -59,18 +59,40 @@ unchecked items are queued. Keep this richer than you found it each run.
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
 (exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
-      objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
-      deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+- [x] Inventory what `src/capture` + `src/training` already implement vs. the
+      objective's five pieces (2026-07-03, run 9). Capture (recorder/adapters/
+      trajectory/replay) + export/plan (exporter/job-store/runner) were mature;
+      the **learn+infer** step (repeat/generalize) had NO in-process code — the
+      runner only emits an external mlx/axolotl shell plan. That gap is what run 9
+      filled.
+- [x] Pluggable local-model backend interface with a deterministic in-process
+      backend (2026-07-03, run 9) — `MovementModelBackend`/`TrainedMovementModel`
+      + `MarkovMovementBackend` in `src/training/movement-model.ts`. Documented
+      seam for a real on-device small model; the Markov backend runs in cloud CI.
+- [x] Synthetic event-stream generator (2026-07-03, run 9) —
+      `synthesizeMovementSequences` (seeded/deterministic) + `splitMovementDataset`
+      validate capture→dataset→train→infer→eval with no real OS input.
+- [x] Generalization eval harness (2026-07-03, run 9) — `evaluateMovementModel`
+      (next-token accuracy + coverage + per-matched-order buckets); test proves
+      held-out accuracy beats a unigram baseline.
+- [ ] **Movement novelty / active-learning signal** (new, run 9): expose an
+      off-distribution score from `MovementPrediction.matchedOrder === 0` so the
+      agent asks before auto-replaying an uncertain step and flags that trajectory
+      as high-value new training data — closes the capture↔train loop.
+- [ ] Wire the movement model into the training runner/execution-service so a
+      reviewed export can produce an in-process baseline model artifact (snapshot
+      via `serialize()`) alongside the mlx/axolotl plan — gives an immediately
+      usable policy without waiting for on-device training.
 
 ## Innovation backlog
+- [ ] **Fix background-task recovery test isolation** (surfaced run 9): under the
+      full parallel `npm test`, `app.test.ts` (2) + `server.test.ts` (1) flake —
+      `recoverBackgroundTasks` → `readJsonFile` ENOENTs on a task state file a
+      concurrent test deleted, so platform-control reports `control=degraded …
+      background task missing-process` instead of `active`. Give each test its own
+      task-store root / temp dir (or make recovery tolerate a missing state file
+      as "not-running" rather than a hard read error). Pre-existing; not a source
+      regression (confirmed via `git stash`).
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in
       project health over time.
