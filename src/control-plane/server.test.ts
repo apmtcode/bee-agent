@@ -84,6 +84,10 @@ describe("OperatorControlPlaneServer", () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir,
       backgroundTaskIsProcessRunning: () => false,
+      // Stub spawn so no real detached launch script runs; the test drives all
+      // execution state/output via writeState/writeOutput and a real script
+      // would race those writes (clobbering state or output files) under load.
+      backgroundTaskSpawnProcess: () => ({ pid: 424242, unref() {} }),
       delivery: new OperatorDeliveryService(rootDir, {
         sendBrowserPush: async () => {},
       }),
@@ -953,6 +957,7 @@ describe("OperatorControlPlaneServer", () => {
     const driftingRuntime = new StandaloneOperatorRuntime({
       rootDir: driftingRootDir,
       backgroundTaskIsProcessRunning: () => false,
+      backgroundTaskSpawnProcess: () => ({ pid: 424242, unref() {} }),
     });
     const driftingServer = new OperatorControlPlaneServer({ runtime: driftingRuntime });
     const driftingBootstrap = await driftingServer.handle({
@@ -1019,6 +1024,12 @@ describe("OperatorControlPlaneServer", () => {
     const breakerRuntime = new StandaloneOperatorRuntime({
       rootDir: breakerRootDir,
       backgroundTaskIsProcessRunning: () => false,
+      // Stub the spawn so no real detached launch script runs. Otherwise the
+      // launch script asynchronously writes a competing "running" state for
+      // every started task, which the reconcile loop counts as a missing-process
+      // failure at nondeterministic times (races the test's manual writeState),
+      // making the circuit-breaker failure counts flaky under concurrent runs.
+      backgroundTaskSpawnProcess: () => ({ pid: 424242, unref() {} }),
     });
     const breakerServer = new OperatorControlPlaneServer({ runtime: breakerRuntime });
     const breakerOne = await breakerServer.handle({

@@ -6,6 +6,66 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-03 (run 9) — 🔴→🟢 Restored the green baseline: fixed a real state-file corruption bug + test races
+
+**Audited:** The test baseline itself, per the standing "run build+test before you build
+on top" discipline. Found it **RED**: `npm test` reported **4 failing tests** across
+`operator-runtime.test.ts`, `cli/app.test.ts` (×2), and `control-plane/server.test.ts` —
+and flaky (count varied run-to-run). A red baseline silently **blocks every future run from
+pushing to `main`** (procedure step 5/7), so fixing it was the highest-value action.
+
+**Root cause — TWO coupled latent bugs**, both triggered by a **single quote** in the task
+`command` (extremely common: `printf 'line-1\nline-2\n'`, `grep '…'`, …):
+1. **`shellQuote` in `background-tasks.ts` was malformed.** It escaped `'` as `"'"'"'`
+   (leading `"`) instead of the standard `'"'"'`, so any single-quoted value round-tripped
+   wrong — corrupting BOTH the embedded JSON payload AND the actual `bash -lc <command>`
+   invocation (unbalanced quotes → `unexpected EOF` → the task itself failed to run). Verified
+   empirically that `printf '%s' <shellQuote(cmd)>` returned the mangled string; the fixed
+   escape round-trips exactly. (`training/runner.ts` already had the correct form.)
+2. **The initial `state.json` was built via `printf '%s' <json> | sed "…s/\"\$\$\"/$$/g"`**,
+   embedding `pid:"$$"` + a `__STARTED_AT__` placeholder. With the broken quoting the pipeline
+   emitted **invalid JSON** (`"command":"printf "'…'""`), so `readJsonFile` threw `SyntaxError`
+   during reconcile. Surfaced only now because process timing let the corrupt file exist
+   before it was read — a classic timing-dependent latent bug.
+
+**Changed (product, additive):**
+- `src/harness/background-tasks.ts`: **corrected `shellQuote`** (`"'"'"'` → `'"'"'`) — the deep
+  root cause; also fixes real command execution for any single-quoted command.
+- `src/harness/background-tasks.ts` + `src/training/runner.ts`: replaced the fragile
+  `printf | sed` initial-state writer with a Python writer that `base64.b64decode`s a
+  base64-encoded JSON template and fills `pid`/`startedAt`/`updatedAt` — immune to **all**
+  shell/JSON escaping (`encodeStatePayload` + `renderInitialStateWriterPython`). Defense in
+  depth: the initial state no longer round-trips JSON through the shell at all. Mirrors the
+  already-correct completion writer (`json.loads`/`json.dumps`).
+- **New regression test** (`background-tasks.test.ts`): renders the launch script and actually
+  executes it (synchronous spawn stub) with `printf 'line-1\nline-2\n'`, asserting the state
+  file is valid JSON, the command is preserved verbatim, the task completes (`exitCode 0`), and
+  the output contains the printed lines. Verified it PASSES on the fix and FAILS on `HEAD`
+  (`SyntaxError` at the same position as the original crash).
+
+**Changed (test reliability):** several tests spawn **real** detached background processes,
+then manually `writeState`/`writeOutput` and assert exact reconcile/output results. The real
+launch scripts asynchronously write competing state/output that **races** the manual writes;
+under concurrent file-parallel load the timing shifts and clobbers them (missing-process
+overcounts, `output` = "starting monitor …" instead of the test's line). Injected a no-op
+`backgroundTaskSpawnProcess` into the affected runtimes so those tests drive state
+deterministically without real processes: `server.test.ts` (main + drifting + breaker),
+`operator-runtime.test.ts` (recover test). Updated `runner.test.ts` to assert the new
+`python3 - '<stateFile>'` script shape.
+
+**Test results:** **175/175 passing** (174 prior + 1 new regression test), **stable across
+12+ consecutive full-suite runs** (was 4 failing + flaky). `typecheck:src` ✅ clean. Build ✅.
+Full `tsc` still **125** (test-only, unchanged — no regression).
+
+**New idea:** the real-spawn/manual-state race is a repeatable footgun. Add a shared
+`noopSpawnProcess()` test helper + a tiny lint/test that flags any `startBackgroundTask` in a
+test whose runtime doesn't stub `backgroundTaskSpawnProcess` (or `isProcessRunning`), so this
+class of flake is caught at authoring time. Bigger: make the launch scripts write state/output
+**only** via the atomic Python path everywhere (no shell redirection of JSON at all), and add
+a `verify` script (`typecheck:src && build && test`) the engine runs pre-push each cycle.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -21,6 +22,45 @@ afterEach(async () => {
 });
 
 describe("FileBackgroundTaskStore", () => {
+  it("writes valid JSON initial state when the command contains shell/JSON metacharacters", async () => {
+    // Regression for two coupled bugs, both triggered by single quotes in the
+    // command (e.g. `printf 'line-1\nline-2\n'`):
+    //   1. `shellQuote` used a malformed escape (`"'"'"'`), so the quoted value
+    //      round-tripped incorrectly — corrupting the JSON payload AND the
+    //      `bash -lc <command>` invocation (unbalanced quotes → the task failed).
+    //   2. the initial state was built via `printf | sed`, which emitted invalid
+    //      JSON, so reconcile's readState threw a SyntaxError.
+    // With both fixed, the state is valid JSON and the command runs to completion.
+    const rootDir = await makeTempDir();
+    const store = new FileBackgroundTaskStore(
+      path.join(rootDir, "background-tasks.json"),
+      // Run the rendered launch script synchronously so we can assert on the
+      // state it writes. A non-zero exit (e.g. corrupt JSON failing json.loads
+      // in the completion writer) would make execFileSync throw.
+      (command, _args, options) => {
+        execFileSync("bash", [command], { cwd: options.cwd, stdio: "ignore" });
+        return { pid: 4242, unref() {} };
+      },
+      () => false,
+    );
+
+    const command = "printf 'line-1\\nline-2\\n'";
+    const task = await store.start({ sessionId: "sess-meta", title: "Meta", command, kind: "task" });
+
+    // The state file must be valid JSON with the command preserved verbatim,
+    // and the command must actually have run (correct shell quoting).
+    const raw = await fs.readFile(path.join(rootDir, task.execution.stateFile), "utf8");
+    const state = JSON.parse(raw) as BackgroundTaskExecutionState;
+    expect(state.command).toBe(command);
+    expect(state.taskId).toBe(task.id);
+    expect(typeof state.pid).toBe("number");
+    expect(state.status).toBe("completed");
+    expect(state.exitCode).toBe(0);
+
+    const output = await fs.readFile(path.join(rootDir, task.execution.outputFile), "utf8");
+    expect(output).toContain("line-1\nline-2");
+  });
+
   it("starts tasks, persists output, syncs terminal state, and reloads", async () => {
     const rootDir = await makeTempDir();
     const filePath = path.join(rootDir, "background-tasks.json");

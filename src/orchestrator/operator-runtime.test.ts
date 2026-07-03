@@ -531,6 +531,10 @@ describe("StandaloneOperatorRuntime", () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
       backgroundTaskIsProcessRunning: () => false,
+      // Stub spawn: this test drives all execution state via writeState/writeOutput.
+      // A real detached launch script would asynchronously write competing state
+      // (racing the manual writes), making the reconcile outcomes flaky under load.
+      backgroundTaskSpawnProcess: () => ({ pid: 424242, unref() {} }),
     });
     const session = await runtime.startSession({ title: "Tasks", agentId: "main" });
 

@@ -4,6 +4,24 @@ Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
 ## Foundations / DX
+- [x] **Keep the test baseline green** (2026-07-03, run 9) — found the suite RED
+      (4 failing + flaky). Root cause: `shellQuote` in `background-tasks.ts` used a
+      malformed single-quote escape (`"'"'"'` vs `'"'"'`), corrupting both the
+      initial-state JSON and the `bash -lc` command for any single-quoted command.
+      Fixed `shellQuote`; also replaced the `printf | sed` initial-state writer
+      with a Python/base64 writer (defense in depth) in both `background-tasks.ts`
+      and `training/runner.ts`. Added a regression test that executes the launch
+      script end-to-end. De-flaked tests that spawn real processes then manually
+      write state by stubbing `backgroundTaskSpawnProcess`. 175/175 stable, 12+ runs.
+- [ ] Audit remaining `shellQuote`/shell-string-building sites for correctness and
+      consider a single shared, tested `shellQuote` helper in `src/shared/` instead
+      of per-file copies (the two copies had already diverged — one was buggy).
+- [ ] Shared `noopSpawnProcess()` test helper + a lint/test that flags any
+      `startBackgroundTask` in a test whose runtime doesn't stub
+      `backgroundTaskSpawnProcess`/`isProcessRunning`, so real-spawn/manual-state
+      races are caught at authoring time (surfaced by run 9's flake hunt).
+- [ ] Make launch scripts write state/output **only** via the atomic Python path
+      (no shell redirection of JSON anywhere) — the completion writer already does.
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`
