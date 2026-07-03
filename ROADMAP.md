@@ -62,13 +62,37 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
+      for a real on-device small model. **DONE run 9** —
+      `src/training/movement-model.ts`: `MovementModelBackend` interface +
+      `MarkovMovementBackend` (variable-order Markov w/ backoff) that memorizes
+      recorded movements (2c) and generalizes via backoff (2d); tokenizer bound
+      to the `ReplayTimelineEvent` schema; snapshot round-trip; 19 tests.
 - [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      round-trips without real OS input. (Partly seeded: the movement-model tests
+      construct synthetic token streams; still want a generator that emits full
+      `TrajectorySpan`/`ReplayManifest` fixtures end-to-end.)
+- [~] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories. **Seed landed run 9** —
+      `evaluateReplayFidelity` scores teacher-forced next-token accuracy against a
+      reference movement. Next: a driver that trains on a train-split and reports
+      aggregate fidelity over a held-out related split.
+- [ ] Wire the movement model into the operator surface: an
+      `inferMovementBackend` selector + `movement.train` / `movement.predict`
+      control-plane RPCs so a locally-trained model is queryable like any other
+      capability (idea from run 9).
+
+## Known blockers
+- [ ] **Training state-file JSON is malformed off Apple Silicon** (found run 9).
+      `runner.ts` `renderLaunchScript` writes the job state file via a bash
+      `sed`/`$$`/`date` substitution pipeline; in the cloud/CI (non-macOS) env the
+      result is invalid JSON, so `readJsonFile` throws `SyntaxError` and the
+      `operator-runtime` / `app` / `server` background-task tests fail on the
+      baseline (NOT a regression). Fix: make state serialization robust — write it
+      from a single `python3 -c`/node here-doc that `json.dumps` the whole object,
+      instead of `sed`-patching placeholders in a pre-rendered string. High value:
+      the real training-execution path is currently broken anywhere but macOS.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

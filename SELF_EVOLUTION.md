@@ -6,6 +6,68 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-03 (run 9) — 🎯 In-process movement model: train + infer + generalize (objective 2c/2d)
+
+**Audited:** The local-movement learning subsystem (standing objective #2).
+`src/training/runner.ts` + `execution-service.ts` only *plan* real MLX/axolotl
+launches (a bash launch-script that runs on the user's Apple-Silicon machine) —
+there was **no in-process model that could actually train or do inference**, even
+a mock one. So objectives 2(c) "repeat recorded movements" and 2(d) "generalize
+to new but related movements" were entirely unrealized and **untestable in the
+cloud**. The roadmap already queued a "pluggable local-model backend with a
+deterministic mock backend"; this run builds it.
+
+**Changed (additive):**
+- **New `src/training/movement-model.ts`** — the movement-model layer:
+  - `MovementModelBackend` interface (pluggable seam) + `TrainedMovementModel`
+    (`predictNext` / `generate` / `toJSON`). A real on-device backend can later
+    satisfy the same contract; the deterministic in-process one is the reference.
+  - `MarkovMovementBackend` — a **variable-order Markov model with Katz-style
+    backoff**. Counts, per recorded movement, how often each token follows each
+    suffix of length 0..maxOrder (a start marker is prepended so the *first* step
+    has a real context). Exact recorded prefix ⇒ reproduces the movement
+    (memorization, 2c); a *novel* prefix ending in a familiar sub-sequence ⇒ still
+    predicts a sensible next step via backoff (generalization, 2d). Fully
+    deterministic (argmax ties break by count desc then token asc).
+  - `movementTokensFromReplay` / `movementTokenForEvent` — deterministic
+    tokenizer tying the model to the existing `ReplayTimelineEvent` schema
+    (`action:<tool>`, `obs:<source>`, `msg:<role>`).
+  - `MovementModelSnapshot` + `restore` — portable serialize/round-trip.
+  - `evaluateReplayFidelity` — teacher-forced next-token accuracy on a held-out
+    reference movement: the seed of the queued **generalization eval harness**.
+- **`src/index.ts`** — barrel exports for the new surface.
+- **New `src/training/movement-model.test.ts`** — 19 tests: tokenizer, exact
+  repeat (2c), backoff generalization (2d), longest-context-wins, determinism &
+  tie-breaks, `maxOrder`/`maxSteps` bounds, snapshot round-trip, pluggability
+  (an alternative null backend implements the interface), and the fidelity eval.
+
+**Bug caught during TDD:** first cut used a leading-space end marker; the
+position-agnostic unigram then let the end marker win start-of-sequence ties, so
+`generate([])` returned `[]`. Fixed by (a) prepending a start marker so the first
+step is predicted from a real context and (b) choosing an end marker (`~~end`)
+that sorts *after* real tokens so it never wins a tie against a genuine step.
+
+**Test results:** new suite ✅ **19/19**. `npm run build` ✅. `npm run
+typecheck:src` ✅ (source stays clean). Full `npm test`: my additions are green;
+**3 pre-existing failures remain** in `operator-runtime` / `app` / `server`
+background-task tests — they fail **identically on the clean baseline** (verified
+via `git stash`), so they are NOT a regression from this run.
+
+**⚠️ Blocker discovered (pre-existing, logged to ROADMAP):** the failing tests
+trace to `readJsonFile` hitting a `SyntaxError` on the training-job **state file**
+that `runner.ts`'s bash launch-script writes via `sed`/`$$`/`date` substitution
+(`renderLaunchScript`). The generated JSON is malformed in this (non-macOS/cloud)
+environment — meaning the real training-execution path is broken off Apple
+Silicon. Out of scope for this focused hour; queued as a high-value fix.
+
+**New idea:** add an `inferMovementBackend` selector + a `movement.predict` /
+`movement.train` control-plane RPC family so a locally-trained movement model is
+queryable through the same operator surface as the rest of bee-agent — turning
+the recorded-movement dataset into a live "do this again / do the related thing"
+capability rather than an offline artifact.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
