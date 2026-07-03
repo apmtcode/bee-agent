@@ -59,16 +59,35 @@ unchecked items are queued. Keep this richer than you found it each run.
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
 (exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
-      objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Inventory what `src/capture` + `src/training` already implement vs. the
+      objective's five pieces (2026-07-03, run 9). capture ✅ / schema ✅ /
+      dataset ✅ / replay ✅ existed; the missing pieces were in-process
+      train/repeat/generalize — see below.
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      for a real on-device small model — DONE run 9: `MovementModelBackend` +
+      registry + deterministic `NGramMovementBackend`
+      (`src/training/movement-model.ts`).
+- [x] Synthetic event-stream generator to validate capture→dataset→replay
+      round-trips without real OS input — DONE run 9:
+      `generateSyntheticTrajectories` (`src/capture/synthetic.ts`), seeded &
+      deterministic, with a `variationRate` for related-but-novel variants.
+- [x] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories — DONE run 9: `evaluateMovementModel`
+      (teacher-forced next-token accuracy).
+- [ ] **Fix the pre-existing background-task recovery failure** (surfaced run 9):
+      3 suite tests fail because a real shell-spawned launch script
+      (`renderLaunchScript`'s `sed`/heredoc in `training/runner.ts`) writes a
+      **state file** that fails `JSON.parse` (`SyntaxError` at ~position 311).
+      Environment-dependent quoting bug; unrelated to the movement model. Fails on
+      branch HEAD independently of run 9's diff. High value — it blocks a fully
+      green `npm test`.
+- [ ] Closed-loop replay-fidelity gate: record `evaluateMovementModel` accuracy
+      into the training job manifest and refuse to promote a model below a
+      threshold in the reviewed-export step (run-9 idea).
+- [ ] Wire `movement-model` into the training runner / exporter so a reviewed
+      export can ship a trained `SerializedMovementModel` alongside the external
+      launch plan (bridges the in-process model to the on-device pipeline).
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

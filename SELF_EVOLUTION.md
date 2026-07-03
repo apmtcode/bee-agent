@@ -6,6 +6,63 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-03 (run 9) — Movement-model backend: in-process train → repeat → generalize
+
+**Audited:** Standing objective #2 (local-movement learning), which had seen no
+work since the scaffolding runs. Inventoried `src/capture/` + `src/training/`
+against the objective's five pieces: capture (recorder/adapters) ✅, event schema
+(`TrajectorySpan`) ✅, dataset export (`exporter.ts`) ✅, replay manifest
+(`replay.ts`) ✅ — but pieces **(c) post-train a local model to repeat movements**
+and **(d) generalize to related movements** had **no cloud-testable
+implementation**. The `runner.ts` only emits an *external* mlx/axolotl launch
+plan + shell script, which cannot run in Anthropic's cloud, so there was no way
+to validate that a trained model actually repeats or generalizes movements.
+
+**Changed (additive, two new modules + barrel exports):**
+- **`src/training/movement-model.ts`** — the missing in-process model layer:
+  - A **tokenizer** (`tokenizeAction`/`tokenizeTrajectory`) that canonicalises
+    recorded actions into stable movement tokens (e.g. `device:tap:send-button`),
+    preferring the structured gesture metadata the capture adapters write and
+    falling back to a slugged summary.
+  - A **pluggable `MovementModelBackend` seam** with a registry
+    (`registerMovementBackend`/`createMovementBackend`) so a real on-device small
+    model can be swapped in without touching call sites.
+  - A default **`NGramMovementBackend`** — a deterministic stupid-backoff Markov
+    model. It **repeats** recorded movements (exact context → recorded next
+    token) and **generalizes** (unseen context backs off to the longest seen
+    suffix). Fully deterministic (argmax + lexical tie-break), JSON-serializable
+    (`serialize`/`deserializeMovementModel`), zero native deps.
+  - An **eval harness** (`evaluateMovementModel`) measuring teacher-forced
+    next-token accuracy on held-out sequences — the generalization-fidelity
+    metric the roadmap asked for.
+- **`src/capture/synthetic.ts`** — a **seeded, deterministic synthetic
+  event-stream generator** (`generateSyntheticTrajectories`) emitting real
+  `TrajectorySpan`s from workflow templates, with a `variationRate` that produces
+  related-but-novel variants for held-out generalization tests. Validates the
+  capture→dataset→model path with no real OS input.
+
+**Test results:** new `movement-model.test.ts` — **18/18 passing** (repeat,
+end-sentinel stop, deterministic ties, back-off generalization, serialization
+round-trip, registry/pluggability, eval fidelity, synthetic determinism &
+vocabulary). Build ✅. `typecheck:src` ✅ (exit 0). Full suite **189/192**.
+
+**⚠️ Known pre-existing failures (NOT introduced this run):** 3 tests fail on the
+branch HEAD *with this run's changes stashed too* —
+`operator-runtime.test.ts` "starts, syncs, recovers…", plus the `server.test.ts`
+and `app.test.ts` orchestration cases that depend on the same path. Root cause: a
+`SyntaxError` parsing a background-task **state file** that a real shell-spawned
+launch script (`renderLaunchScript`'s `sed`/heredoc in `training/runner.ts`)
+writes — an environment-dependent JSON-quoting bug in the recovery path,
+orthogonal to the movement subsystem. Filed to ROADMAP as the next high-value fix.
+
+**New idea:** a *closed-loop replay-fidelity gate* — wire `evaluateMovementModel`
+into the training runner so a job records its held-out generalization accuracy
+into the job manifest, and the reviewed-export step can refuse to promote a model
+that scores below a threshold. Turns "did training help?" into a tracked,
+regression-guarded number instead of an unverified external artifact.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
