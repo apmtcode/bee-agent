@@ -6,6 +6,63 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-03 (run 9) — In-process movement-model pipeline + real bug fix (JSON-corrupting shellQuote) + test hermeticity
+
+**Audited:** Standing objective #2 (local-movement learning). `src/capture/`
+already had capture→schema→dataset→replay scaffolding, and `src/training/` had
+an Apple-Silicon runner — but that runner only *emits MLX/axolotl launch
+scripts*; there was **no in-process train/infer** anywhere the engine actually
+runs (cloud/CI). So objective 2(c) "post-train a local model to repeat
+movements" and 2(d) "generalize to new but related movements" had zero exercised
+implementation.
+
+**Changed (additive):**
+- **New `src/training/movement-model.ts`** — the missing seam:
+  - `LocalModelBackend` interface (`train`/`predict`) + `MovementBackendRegistry`
+    so a real on-device small model can be swapped in for the mock without
+    touching call sites (the pluggable-backend ROADMAP item).
+  - `DeterministicMarkovBackend`: a k-order Markov model over movement tokens
+    with **stupid-backoff** — when the exact k-token context was never observed
+    it falls back to shorter contexts, which *is* the generalization mechanism
+    (marks predictions `generalized: true`). Fully deterministic (ties broken
+    lexically) so CI can assert on it; JSON-serializable model artifact.
+  - Dataset builders from the existing capture types: `tokenizeMovementAction`,
+    `movementSequenceFromTrajectory`, `movementSequenceFromReplay`,
+    `buildMovementDataset`.
+  - `evaluateGeneralization` — held-out eval scoring exact-match next-token
+    accuracy and crediting backed-off (generalized) hits vs. memorized ones.
+  - Barrel exports in `src/index.ts`. **14 new tests**, all green.
+- **Real bug fixed in `src/harness/background-tasks.ts`:** `shellQuote`'s POSIX
+  single-quote escape was `"'"'"'` (starts with a double quote) instead of the
+  correct `'"'"'`. Any background-task command containing a single quote (e.g.
+  `printf 'ok'`) produced **invalid state JSON**, so recovery crashed on
+  `JSON.parse`. Verified the corruption and the fix in isolation.
+- **Test hermeticity:** the bug fix exposed that several tests
+  (`server`/`app`/`operator-runtime`) drive execution state via manual
+  `writeState`/`writeOutput` but never stubbed the **real** detached launch
+  script — previously the corrupted JSON silently masked the race; correct JSON
+  now races the manual writes. Injected a no-op `backgroundTaskSpawnProcess` at
+  those sites, and **threaded that injection through `OperatorCliApp`** (new
+  optional `backgroundTaskSpawnProcess` / `backgroundTaskIsProcessRunning`
+  options, production behaviour unchanged).
+
+**Test results:** `npm test` **188/188** (was 174 + 14 new), **stable across 3
+consecutive full runs** (previously 3 tests were red on the clean tree due to
+the shellQuote race). `typecheck:src` ✅ exit 0. `npm run build` ✅. Full `tsc`
+debt unchanged at **125** (all in test files; the new module + its tests are
+clean).
+
+**New idea:** a "movement-model self-training smoke" that, each engine run,
+generates a synthetic `DeviceCaptureInput` stream, runs the full
+capture→dataset→train→`evaluateGeneralization` loop, and appends the accuracy +
+generalization-rate to a small metrics file — turning objective #2 into a
+measurable, regression-tracked capability rather than untested scaffolding. Also:
+a lint that flags any test calling `startBackgroundTask` on a runtime that
+didn't stub `backgroundTaskSpawnProcess`, to prevent the real-spawn race class
+from recurring.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

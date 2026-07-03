@@ -794,5 +794,10 @@ function renderStateWriterPython(status: BackgroundTaskExecutionState["status"])
 }
 
 function shellQuote(value: string): string {
-  return `'${value.replaceAll(`'`, `"'"'"'`)}'`;
+  // POSIX single-quote escape: close the quote, insert an escaped quote via a
+  // double-quoted section, then reopen — i.e. each `'` becomes `'"'"'`. The
+  // earlier `"'"'"'` form was mangled (it started with a double quote), which
+  // corrupted any command containing a single quote and produced invalid state
+  // JSON on recovery. Keep this in sync with training/runner.ts::shellQuote.
+  return `'${value.replaceAll(`'`, `'"'"'`)}'`;
 }

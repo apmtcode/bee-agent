@@ -62,13 +62,38 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      for a real on-device small model. **DONE run 9** —
+      `src/training/movement-model.ts`: `LocalModelBackend` interface +
+      `DeterministicMarkovBackend` (k-order Markov w/ stupid-backoff = the
+      generalization mechanism) + `MovementBackendRegistry` for swapping in a
+      real on-device model. Trains & infers fully in-process (no GPU, no OS
+      input). 14 tests.
+- [ ] Real on-device backend implementing `LocalModelBackend` (e.g. a tiny
+      on-device transformer / MLX adapter) registered alongside the mock, plus a
+      bridge that feeds `buildPlan`'s reviewed dataset into `train()`.
+- [~] Synthetic event-stream generator to validate capture→dataset→replay
+      round-trips without real OS input. Partial: `buildMovementDataset` /
+      `movementSequenceFromTrajectory` / `movementSequenceFromReplay` derive
+      datasets from captured spans/replays and are round-tripped in tests. Still
+      want a richer generator that emits full `DeviceCaptureInput` streams.
+- [x] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories. **DONE run 9** — `evaluateGeneralization`
+      scores exact-match next-token accuracy and credits backed-off
+      (generalized) hits vs. memorized ones.
+
+## Reliability / test hermeticity
+- [x] Fix `shellQuote` in `src/harness/background-tasks.ts` — the POSIX
+      single-quote escape was mangled (`"'"'"'` instead of `'"'"'`), corrupting
+      the state JSON for any command containing a single quote. **DONE run 9.**
+- [x] Make the background-task tests hermetic — inject a no-op
+      `backgroundTaskSpawnProcess` so real detached launch scripts can't race the
+      tests' manual `writeState`/`writeOutput`. Threaded the injection through
+      `OperatorCliApp` too. **DONE run 9** (server/app/operator-runtime tests).
+- [ ] Audit for any remaining tests that spawn real OS processes and depend on
+      timing; prefer injected stubs. Consider a lint that flags a
+      `startBackgroundTask` in a test whose runtime didn't stub the spawn.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
