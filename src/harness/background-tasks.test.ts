@@ -1,7 +1,20 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
+
+const execFileAsync = promisify(execFile);
+const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function hasLaunchScriptTools(): Promise<boolean> {
+  const [bashOk, pythonOk] = await Promise.all([
+    execFileAsync("bash", ["-c", "true"]).then(() => true, () => false),
+    execFileAsync("python3", ["-c", ""]).then(() => true, () => false),
+  ]);
+  return bashOk && pythonOk;
+}
 import {
   BackgroundTaskExecutionService,
   FileBackgroundTaskStore,
@@ -369,5 +382,38 @@ describe("BackgroundTaskExecutionService", () => {
     await expect(fs.readFile(path.join(rootDir, task.execution.launchScript), "utf8")).resolves.toContain("bash -lc");
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
+  });
+
+  it("records a numeric pid (not the literal '$$') in the launch script's initial running state", async () => {
+    // Regression: the launch script previously injected the pid via a fragile
+    // `sed` substitution that expanded `$$` on both sides of the pattern, so it
+    // never matched the `"$$"` placeholder and left the running-state pid as the
+    // string "$$" until the process completed. Reconcile mis-read that string as
+    // a dead process, spuriously flipping healthy tasks to "missing-process".
+    if (!(await hasLaunchScriptTools())) {
+      return; // Environment lacks bash/python3; the launch script cannot run here.
+    }
+    const rootDir = await makeTempDir();
+    // Real default spawn + launch script (no injected fake).
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"));
+    // A long-lived command keeps the state in "running" long enough to observe
+    // the initial write; the completion writer always sets a numeric pid and
+    // would otherwise mask a bad initial pid.
+    const task = await store.start({ title: "sleeper", command: "sleep 3", cwd: rootDir, kind: "monitor" });
+    try {
+      let state: BackgroundTaskExecutionState | undefined;
+      for (let attempt = 0; attempt < 150; attempt += 1) {
+        state = await store.executionService.readState(task);
+        if (state?.status === "running") {
+          break;
+        }
+        await delay(20);
+      }
+      expect(state?.status).toBe("running");
+      expect(typeof state?.pid).toBe("number");
+      expect(Number.isFinite(state?.pid ?? Number.NaN)).toBe(true);
+    } finally {
+      await store.cancel(task.id).catch(() => {});
+    }
   });
 });

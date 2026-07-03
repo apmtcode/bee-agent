@@ -4,6 +4,19 @@ Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
 ## Foundations / DX
+- [x] **Fix the flaky green gate** (2026-07-03, run 9). Suite was 3–4
+      nondeterministic failures/run. Root cause: real bugs in the background-task
+      launch script — a `sed` pid injection that recorded the *string* `"$$"`
+      instead of a number, plus non-atomic (torn-read) state writes. Fixed the
+      launch script (python argv pid + atomic temp-then-rename), added a
+      spawn-injection seam to `OperatorCliApp`, made the affected integration
+      tests deterministic, and added a real-launch-script regression test. Now
+      175/175 green across 6 consecutive runs.
+- [ ] **Flake sentinel in the self-check** — run the suite N× (or a CI matrix)
+      each cycle and fail if any run diverges, so nondeterminism is a gate, not a
+      surprise the next run rediscovers.
+- [ ] **Generated-script safety lint** — forbid `> $file` state redirection in
+      `renderLaunchScript`-style generators; require the atomic temp+rename idiom.
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`

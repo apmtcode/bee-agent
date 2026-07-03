@@ -6,6 +6,61 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-03 (run 9) — Fix flaky green gate: real launch-script pid bug + atomic state writes
+
+**Audited:** The green gate itself. On a fresh `npm test` the suite was **RED** —
+3–4 nondeterministic failures per run (`operator-runtime`, `app.test` ×2,
+`server.test`) — even though the log claimed 174/174. A flaky suite silently
+breaks the procedure's pre-push self-check, so this was the highest-value fix.
+
+**Root cause — two real production bugs in the background-task launch script
+(`src/harness/background-tasks.ts`), not test bugs:**
+1. **String-pid corruption.** The generated launch script injected the process
+   id into the initial "running" state via `sed "s/\"$$\"/$$/g"`. The shell
+   expands `$$` on *both* sides, so the match pattern became `"<pid>"` and never
+   matched the literal `"$$"` placeholder — the recorded pid stayed the **string
+   `"$$"`**. `reconcile`/`isProcessRunning` then read `"$$"` as a dead process,
+   spuriously flipping healthy tasks to `missing-process`. That poisoned
+   `stop()` (`Background task … is not running`), the platform breaker's
+   `failureCount`, and remote `control` state — surfacing as different failures
+   depending on subprocess timing (hence the flakiness).
+2. **Torn reads.** Both the bash (`… > file`) and python (`write_text`) state
+   writes truncate-then-write, so a concurrent reader could parse a half-written
+   document → `SyntaxError: Expected ',' or '}'`.
+
+**Changed (additive, reversible):**
+- **`src/harness/background-tasks.ts`** — the initial running-state write now
+  goes through **python passing `$$` as an int argv** (mirroring the completion
+  writer), so the pid is *always* the real number; the fragile `sed` is gone.
+  Both the initial and completion writes are now **atomic** (write to a sibling
+  `.tmp` then `os.replace`/`mv`).
+- **`src/cli/app.ts`** — added an injection seam:
+  `backgroundTaskSpawnProcess` / `backgroundTaskIsProcessRunning` on
+  `OperatorCliAppOptions`, threaded into `StandaloneOperatorRuntime` (which
+  already accepted them). Production leaves them undefined (real spawn).
+- **Tests made deterministic** by injecting a fake spawn (no real detached
+  process writing state) into every background-task-spawning integration test:
+  `operator-runtime.test.ts`, `app.test.ts` (×2 cases), `server.test.ts` (main +
+  drifting + breaker runtimes). State is now driven purely by each test's
+  explicit `writeState` calls instead of racing an OS subprocess.
+- **New regression test** (`background-tasks.test.ts`) runs the **real** launch
+  script and asserts the initial running state records a **numeric** pid (guarded
+  to skip if `bash`/`python3` are absent). The completion writer always sets a
+  numeric pid, so the test observes the *running* state, which is where the bug
+  lived.
+
+**Test results:** suite went from 3–4 failing/run → **175/175 green across 6
+consecutive full runs** (and each affected test 8–15× in isolation). `+1` new
+regression test. `typecheck:src` exit 0. Build ✅. Full `tsc` unchanged at **125**
+(all in test files).
+
+**New idea:** add a **flake sentinel** to the per-run self-check — run the suite
+N× (or a small CI matrix) and fail the gate if any run diverges, so
+nondeterminism is caught as a gate rather than rediscovered by the next engine
+run. Complementary: a tiny lint over generated shell scripts (`renderLaunchScript`
+and friends) that forbids `> $file` state redirection and requires the atomic
+temp-then-rename idiom, so this class of torn-write can't silently reappear.
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
