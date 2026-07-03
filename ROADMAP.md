@@ -59,16 +59,40 @@ unchecked items are queued. Keep this richer than you found it each run.
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
 (exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
-      objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
-      deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+- [x] Inventory what `src/capture` + `src/training` already implement vs. the
+      objective's five pieces (run 9): capture/schema/dataset/replay all exist;
+      `training/runner.ts` only emits an external mlx/axolotl *launch plan* —
+      there was no in-process train→infer loop. Filled by run 9.
+- [x] Pluggable local-model backend interface + deterministic mock backend
+      (2026-07-03, run 9) — `src/training/movement-model.ts`:
+      `MovementModelBackend` interface + `MarkovMovementBackend` (order-k n-gram,
+      stupid-backoff + class backoff, deterministic). Repeats recorded movements
+      exactly and generalizes to unseen targets. Documented seam for a real
+      on-device small model.
+- [x] Synthetic event-stream generator (run 9) — `synthesizeMovementTrajectory`
+      (seeded LCG, workflow-grammar trajectories with per-seed target variation).
+- [~] Generalization eval harness (run 9): `evaluateSequence`/`evaluateDataset`
+      give teacher-forced replay fidelity + `generalizedShare`. Next: a
+      leave-one-out **movement-model readiness scorecard** the exporter emits per
+      reviewed export (mean fidelity + generalized-hit share) so a reviewer sees
+      whether captured movements are learnable before an on-device training job.
+- [ ] Wire the Markov backend into `LocalTrainingExecutionService` as the
+      `runtime: "mock"` path so `training/runner.ts` can actually train+eval
+      in-process (cloud) in addition to emitting the Apple-Silicon launch plan.
+
+## Reliability (pre-existing blockers)
+- [ ] **Hermetic integration tests / idempotent status reads** (surfaced run 9,
+      HIGH priority — currently 2–3 fluctuating full-suite failures).
+      `deriveRemoteDiagnostics` (`src/control-plane/server.ts:2170`) records
+      *automatic platform-breaker failures* during a read-only status
+      derivation, gated on live OS subprocess detection (`isProcessRunning`).
+      The big `OperatorCliApp`/server/operator-runtime tests spawn real
+      subprocesses (`sleep 5`, `printf`) that this cloud sandbox doesn't detect
+      as running → status flips `active → degraded`. Two fixes: (a) a status
+      *read* must not mutate persistent breaker state; (b) give the
+      app/server/runtime a hermetic test factory that injects a mock
+      `isProcessRunning` (`() => true`) + mock `spawnProcess`. Do (b) first
+      (unblocks the suite additively); consider (a) as a follow-up design change.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

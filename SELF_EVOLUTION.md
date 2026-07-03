@@ -6,6 +6,78 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-03 (run 9) — Movement model: pluggable local-model backend + deterministic Markov reference (objective #2 c+d)
+
+**Audited:** The local-movement learning subsystem (standing objective #2).
+`src/capture/` covers capture→schema→dataset→replay and `src/training/`
+(exporter, job-store/manifest, runner, execution-service) covers *external*
+training-job orchestration — but `runner.ts` only **emits an mlx/axolotl launch
+plan** for a real Apple-Silicon box. There was **no in-process, cloud-runnable
+model** that learns from a recorded dataset and performs inference, so pieces
+(c) "post-train a local model to repeat the recorded movements" and (d)
+"generalize to new but related movements" were unvalidated. This was also the
+top queued item under "Local-movement learning subsystem" in ROADMAP.
+
+**Changed (additive):** new `src/training/movement-model.ts` — a
+backend-pluggable movement-learning core:
+- **`MovementModelBackend` interface** (`train(dataset) → artifact`,
+  `predict(model, context) → prediction`) — the seam a real on-device small
+  model implements later.
+- **`MarkovMovementBackend`** — a fully deterministic, dependency-free order-k
+  n-gram reference backend with **stupid-backoff** (repeat recorded movements
+  exactly via high-order exact match) **plus a class-level backoff table**
+  (generalize: a novel target that shares the learned gesture *shape* still
+  predicts sensibly). `START`/`END` sentinels make sequence starts learnable and
+  generation-from-scratch work. Deterministic argmax (count, then lexicographic
+  tie-break) so it's reproducible; `trainedAt` only from an injected clock.
+- **Tokenizer** (`tokenizeTrajectory`, `tokenizeReplayEvents`) mapping the
+  existing `TrajectorySpan`/`ReplayTimelineEvent` schema into fine-grained
+  `symbol` + coarse `klass` movement tokens; `buildMovementDataset` /
+  `buildDatasetFromTrajectories`.
+- **Rollout + eval harness**: `generateMovements` (greedy multi-step rollout),
+  `evaluateSequence`/`evaluateDataset` (teacher-forced next-token replay
+  fidelity, incl. a `generalizedShare` metric).
+- **Synthetic event-stream generator** `synthesizeMovementTrajectory` (seeded
+  LCG → reproducible device trajectories following a workflow grammar with
+  per-seed target variation) so the whole loop is validated without real OS
+  input. Exported the surface from `src/index.ts`.
+
+**Test results:** new `movement-model.test.ts` **12/12 green** — proves exact
+repeat (accuracy 1.0 + rollout reproduces the trained sequence), determinism,
+hermetic clock, empty-dataset END fallback, and **generalization to unseen
+targets** (held-out accuracy >0.5 with genuine class-backoff hits).
+`typecheck:src` ✅ CLEAN. `npm run build` ✅. Full suite: **184 passed**, 2–3
+fail.
+
+**⚠️ Pre-existing blocker (NOT introduced this run):** the 2–3 failures
+(`app.test` control=active, `server.test` degraded, `operator-runtime.test`
+background tasks) were red on the untouched baseline and their exact set
+*fluctuates run-to-run*. Root cause: `deriveRemoteDiagnostics`
+(`src/control-plane/server.ts:2170`) records **automatic platform-breaker
+failures during a read-only status derivation**, gated on live OS subprocess
+detection (`isProcessRunning`). These integration tests spawn *real*
+subprocesses (`sleep 5`, `printf`) and in this cloud sandbox they aren't
+detected as running, so status reads flip `active → degraded`. Two distinct
+problems: (a) a status *read* mutates persistent breaker state (non-idempotent),
+and (b) the big `OperatorCliApp`/server tests aren't hermetic — they use the
+real `spawnProcess`/`isProcessRunning` instead of an injected mock. Logged to
+ROADMAP as the next high-priority reliability item. My change is green in
+isolation and adds zero new failures; pushing to the designated feature branch
+`claude/peaceful-dirac-0jbvz7`.
+
+**New idea:** now that there's a real train→predict loop, add a **generalization
+scorecard** the exporter can emit alongside a reviewed export: train the Markov
+backend on the approved trajectories, hold out one at a time (leave-one-out),
+and record mean replay fidelity + generalized-hit share as a machine-trackable
+"movement-model readiness" number per dataset — so a human reviewing an export
+sees whether the captured movements are actually learnable before kicking off an
+expensive on-device training job. Second idea: a `SessionStart`-style hermetic
+runtime factory so the app/server integration tests inject a mock
+`isProcessRunning` (`() => true`) and a mock `spawnProcess`, killing the
+subprocess-timing flakiness at the source.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
