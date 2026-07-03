@@ -40,6 +40,18 @@ unchecked items are queued. Keep this richer than you found it each run.
     fix residual test-only typings.
 - [ ] Add a `verify` npm script (`typecheck && build && test`) and have the
       engine run it as a pre-push self-check each cycle.
+- [ ] **Flake gate** (run 9): the engine's pre-push self-check should run the
+      suite N× (e.g. 3) and require *all* green before pushing to main. Run 9
+      found the "174/174" recorded by runs 2–8 was actually a flaky/red suite
+      (3–4 nondeterministic failures/run in the cloud sandbox); a single lucky
+      pass hid it. Suite is ~6s, so 3× is cheap.
+- [x] **Reliability: atomic detached-process state writes** (run 9). Background-
+      task + training launch scripts wrote state via a non-atomic `> file`
+      redirect / `write_text`, so a concurrent reader could catch a truncated
+      mid-write and `readState` crashed batch recovery. Fixed with `.tmp` + `mv`
+      / `os.replace` and a `SyntaxError`-tolerant `readState`; added an
+      injection seam on `OperatorCliApp` + hermetic tests + a corrupt-read
+      regression test. Suite now deterministically 175/175 (5× green).
 - [x] Interim **source-only typecheck gate** — DONE run 7. `tsconfig.src.json`
       (excludes `**/*.test.ts`) + `typecheck:src` script; passes (exit 0). Next:
       have the engine run it as a per-run pre-push self-check.

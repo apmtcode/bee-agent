@@ -353,6 +353,58 @@ describe("FileBackgroundTaskStore", () => {
     ]);
     await expect(reloaded.get(other.id)).resolves.toMatchObject({ id: other.id, status: "running" });
   });
+
+  it("tolerates a truncated state file mid-write during batch recovery", async () => {
+    const rootDir = await makeTempDir();
+    const filePath = path.join(rootDir, "background-tasks.json");
+    const store = new FileBackgroundTaskStore(filePath, () => ({ pid: 7777, unref() {} }), () => false);
+
+    const corrupt = await store.start({
+      sessionId: "sess-corrupt",
+      title: "Being written",
+      command: "tail -f app.log",
+      cwd: rootDir,
+      kind: "monitor",
+    });
+    const healthy = await store.start({
+      sessionId: "sess-corrupt",
+      title: "Already done",
+      command: "printf done",
+      cwd: rootDir,
+      kind: "task",
+    });
+    await store.executionService.writeState(healthy, {
+      version: 1,
+      taskId: healthy.id,
+      kind: "task",
+      status: "completed",
+      pid: 7777,
+      startedAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      completedAt: "2026-01-01T00:00:00.000Z",
+      exitCode: 0,
+      outputFile: healthy.execution.outputFile,
+      cwd: rootDir,
+      command: healthy.command,
+    });
+
+    // Simulate the detached launch process being caught mid-write: the state
+    // file exists but holds a truncated JSON fragment. A single corrupt read
+    // must not throw and abort recovery for the sibling task in the batch.
+    const corruptStatePath = path.join(rootDir, corrupt.execution.stateFile);
+    await fs.mkdir(path.dirname(corruptStatePath), { recursive: true });
+    await fs.writeFile(corruptStatePath, '{"version":1,"taskId":"' + corrupt.id + '","status":"run', "utf8");
+
+    await expect(store.executionService.readState(corrupt)).resolves.toBeUndefined();
+
+    const recovered = await store.recoverBySession("sess-corrupt");
+    expect(recovered).toHaveLength(2);
+    const byId = new Map(recovered.map((entry) => [entry.task.id, entry]));
+    // Corrupt (unreadable) state → treated as missing state → running task with
+    // a dead pid is failed rather than crashing the whole batch.
+    expect(byId.get(corrupt.id)?.reason).toBe("missing-process");
+    expect(byId.get(healthy.id)?.task.status).toBe("completed");
+  });
 });
 
 describe("BackgroundTaskExecutionService", () => {

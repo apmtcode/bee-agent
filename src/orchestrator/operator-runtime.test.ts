@@ -15,6 +15,18 @@ async function makeTempDir(): Promise<string> {
   return dir;
 }
 
+/**
+ * A deterministic replacement for `child_process.spawn` in background-task
+ * tests. It returns a stable fake pid without actually running the launch
+ * script, so the detached process never races the test's own `writeState`
+ * calls (which fully control the on-disk state) and no real OS process leaks.
+ */
+let fakeBackgroundPid = 40000;
+function fakeBackgroundSpawn(): { pid: number; unref(): void } {
+  fakeBackgroundPid += 1;
+  return { pid: fakeBackgroundPid, unref() {} };
+}
+
 function buildHookCaptureCommand(outputFile: string): string {
   const script = [
     "import fs from 'node:fs';",
@@ -530,6 +542,7 @@ describe("StandaloneOperatorRuntime", () => {
   it("starts, syncs, recovers, lists, and cancels background tasks", async () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
+      backgroundTaskSpawnProcess: fakeBackgroundSpawn,
       backgroundTaskIsProcessRunning: () => false,
     });
     const session = await runtime.startSession({ title: "Tasks", agentId: "main" });

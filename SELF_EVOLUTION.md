@@ -6,6 +6,63 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-03 (run 9) — 🔧 Reliability: atomic background-task/training state writes + resilient reads; flaky suite restored to deterministic green
+
+**Audited:** The green gate itself. The baseline suite — recorded "174/174" by
+runs 2–8 — was in fact **flaky and red** in this cloud sandbox: 3–4 failures per
+run, non-deterministically, all in the background-task subsystem
+(`operator-runtime`, `control-plane/server`, `cli/app`). Root-caused to a genuine
+**product reliability bug**, not a test artifact:
+
+- The detached launch scripts (`src/harness/background-tasks.ts` and
+  `src/training/runner.ts`) wrote the task **state file via a non-atomic
+  redirect** (`printf … | sed … > state.json`) and a plain `write_text`. A
+  concurrent reader (`reconcileTask` → `readState`, fired by every
+  sync/recover/platform-status) could observe a **truncated mid-write file**.
+- `readState` then let the resulting `SyntaxError` propagate, so **one corrupt
+  read aborted batch recovery for every sibling task** (the observed
+  `SyntaxError: Expected ',' or '}' … position 311`).
+- The affected tests span **real OS processes** (`spawn` of `tail -f`/`sleep`/
+  `printf`) and asserted on health that depends on real process-liveness timing.
+
+**Changed (additive, reversible):**
+- **Atomic state writes** in both launch scripts: write to `${state}.tmp` then
+  `mv -f` (shell) / `os.replace` (python). Readers now see either the old or the
+  complete new file — never a partial one. Applied to `background-tasks.ts` and
+  `training/runner.ts` (shell redirect + `renderStateWriterPython`).
+- **Resilient `readState`** (`background-tasks.ts`): a `SyntaxError` (transient
+  truncation / corruption) is treated as *no readable state yet* → returns
+  `undefined` so reconciliation falls back gracefully instead of crashing the
+  whole batch. Genuine defence-in-depth for real users (a dashboard polling
+  state while a task writes it no longer throws).
+- **App-level injection seam** (`src/cli/app.ts`): `OperatorCliAppOptions` now
+  forwards optional `backgroundTaskSpawnProcess` / `backgroundTaskIsProcessRunning`
+  to the runtime (the runtime + control-plane server already supported these),
+  so the CLI app can be constructed hermetically in tests.
+- **Hermetic tests:** injected a deterministic fake `spawn` (stable fake pids, no
+  detached process) into the four flaky tests. `operator-runtime`/`server` tests
+  pair it with `isProcessRunning: () => false`; the `app` lifecycle test uses a
+  shared **live-pid set** so tasks it spawns read as running while a synthetic
+  dead pid (999999, written to force the degraded path) reads as dead — exactly
+  the intent, now deterministic. The monitor/task CLI test writes its command
+  output explicitly (fake spawn does not run `printf`).
+- **New regression test** (`background-tasks.test.ts`): writes a truncated JSON
+  fragment as one task's state and asserts batch `recoverBySession` does **not**
+  throw — the corrupt task becomes `missing-process` while its healthy sibling
+  still reconciles to `completed`.
+
+**Test results:** `typecheck:src` ✅, build ✅. Full suite **175/175** (174 + the
+new regression test), **green 5× consecutively** (was 3–4 nondeterministic
+failures/run before). Reference codebases untouched.
+
+**New idea:** the "174/174" recorded by prior runs was measured once per run and
+masked real flakiness. Add a **flake gate** to the engine's pre-push self-check:
+run the suite N× (e.g. 3) and require *all* green before pushing to main, so a
+nondeterministic regression can't slip through a single lucky pass. Cheap
+insurance now that the suite is fast (~6s) and finally deterministic.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

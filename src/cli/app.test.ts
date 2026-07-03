@@ -16,6 +16,32 @@ async function makeTempDir(): Promise<string> {
   return dir;
 }
 
+/**
+ * Deterministic stand-in for `child_process.spawn` used by tests that assert on
+ * background-task health/state rather than on a task's real command output.
+ *
+ * The returned `spawn` hands out stable fake pids without running the detached
+ * launch script, and records them as "live". The paired `isProcessRunning`
+ * reports those pids as alive and any other pid (e.g. a synthetic dead pid a
+ * test writes into a state file to force the missing-process path) as dead. This
+ * models real process liveness deterministically, with no OS process to race.
+ */
+function makeFakeBackgroundSpawn(): {
+  spawn: () => { pid: number; unref(): void };
+  isProcessRunning: (pid: number) => boolean;
+} {
+  const live = new Set<number>();
+  let nextPid = 40000;
+  return {
+    spawn: () => {
+      nextPid += 1;
+      live.add(nextPid);
+      return { pid: nextPid, unref() {} };
+    },
+    isProcessRunning: (pid: number) => live.has(pid),
+  };
+}
+
 afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })));
 });
@@ -801,7 +827,19 @@ describe("OperatorCliApp", () => {
 
   it("supports session lifecycle, transcript, approvals, pairing, config, and prompt commands", async () => {
     const rootDir = await makeTempDir();
-    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    // Background-task health here is asserted via state (running → explicitly
+    // failed via writeState with a dead pid), not via real command output. Use a
+    // deterministic spawn + liveness probe: tasks this app spawns stay "running",
+    // while the synthetic dead pid (999999) the test writes to force the
+    // missing-process/degraded path reads as not running.
+    const fakeBackground = makeFakeBackgroundSpawn();
+    const app = new OperatorCliApp({
+      rootDir,
+      cwd: rootDir,
+      currentDate: "2026-05-25",
+      backgroundTaskSpawnProcess: fakeBackground.spawn,
+      backgroundTaskIsProcessRunning: fakeBackground.isProcessRunning,
+    });
     const firstSession = await app.runtime.startSession({ title: "first", cwd: rootDir, agentId: "operator-cli" });
     const secondSession = await app.runtime.startSession({ title: "second", cwd: rootDir, agentId: "operator-cli" });
 
@@ -1063,7 +1101,17 @@ describe("OperatorCliApp", () => {
 
   it("supports background and monitor task commands plus cron commands", async () => {
     const rootDir = await makeTempDir();
-    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    // Deterministic spawn/liveness so the task stays "running" and its state is
+    // never raced by a real detached process. Command output is written
+    // explicitly below (the fake spawn does not run `printf`).
+    const fakeBackground = makeFakeBackgroundSpawn();
+    const app = new OperatorCliApp({
+      rootDir,
+      cwd: rootDir,
+      currentDate: "2026-05-25",
+      backgroundTaskSpawnProcess: fakeBackground.spawn,
+      backgroundTaskIsProcessRunning: fakeBackground.isProcessRunning,
+    });
     const session = await app.runtime.startSession({ title: "CLI ops", cwd: rootDir, agentId: "operator-cli" });
 
     const startOutput = await app.dispatchSlashCommand(
@@ -1078,6 +1126,7 @@ describe("OperatorCliApp", () => {
     if (!task) {
       throw new Error("expected background task");
     }
+    await app.runtime.backgroundTasks.executionService.writeOutput(task, "ok\n");
 
     const listOutput = await app.dispatchSlashCommand({ kind: "background-list" });
     expect(listOutput).toContain(task.id);
