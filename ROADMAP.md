@@ -4,6 +4,28 @@ Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
 ## Foundations / DX
+- [x] **Fix background-task launcher `shellQuote` + make its tests hermetic**
+      (2026-07-03, run 9). Root-cause single-quote escaping bug (`"'"'"'` →
+      `'"'"'`) that mangled any command/path with a single quote — broke
+      execution and produced invalid `state.json`. Also replaced the fragile
+      `printf | sed` initial-state generation (never substituted the pid) with a
+      Python writer, hardened the completion writer, mocked spawn in 3 racy
+      tests, and added an end-to-end test that actually runs the generated
+      `run.sh` (with teeth verified against the pre-fix code).
+- [ ] **Artifact-execution smoke tests** (new, run 9): for any code that emits a
+      script to be run later (launch scripts, hooks, generated shell), add a test
+      that executes it once in a temp dir. The `shellQuote` bug survived because
+      *every* test mocked `spawn`, so the generated shell/Python never ran.
+- [ ] **Hermeticity guard** (new, run 9): flag tests that build a runtime capable
+      of spawning real processes without supplying a mock `spawnProcess`, so
+      timing-dependent flakes can't re-enter the suite.
+- [ ] **Launcher relative-path consistency** (pre-existing, spotted run 9): in
+      `renderLaunchScript`, the initial state writer runs before `cd
+      ${quotedCwd}` (relative `state.json` resolves against the launch cwd =
+      rootDir) while the completion writer runs after the `cd` (resolves against
+      `task.cwd`). If a task sets a `cwd` other than rootDir the two writers
+      target different paths and completion state is lost. Make the script use
+      an absolute state path (or write state before the `cd`).
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`

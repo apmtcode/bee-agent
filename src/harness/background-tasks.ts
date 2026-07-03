@@ -734,27 +734,22 @@ function renderLaunchScript(task: BackgroundTaskRecord): string {
   const quotedOutputFile = shellQuote(task.execution.outputFile);
   const quotedCwd = shellQuote(task.cwd);
   const quotedCommand = shellQuote(task.command);
-  const quotedStatePayload = shellQuote(
-    JSON.stringify({
-      version: 1,
-      taskId: task.id,
-      kind: task.kind,
-      status: "running",
-      pid: "$$",
-      startedAt: "__OPENCLAW_STARTED_AT__",
-      updatedAt: "__OPENCLAW_STARTED_AT__",
-      outputFile: task.execution.outputFile,
-      cwd: task.cwd,
-      command: task.command,
-    }),
-  );
+  const quotedTaskId = shellQuote(task.id);
+  const quotedKind = shellQuote(task.kind);
 
+  // Both the initial "running" state and the terminal completed/failed state are
+  // written by Python, which json.dumps a dict built from values passed as
+  // shell-quoted argv. This is robust to commands containing quotes/newlines —
+  // the earlier `printf | sed` approach produced invalid JSON for such commands
+  // and never substituted the pid (sed treated `$` as a regex anchor).
   return [
     "#!/usr/bin/env bash",
     "set -euo pipefail",
     `mkdir -p $(dirname ${quotedStatePath}) $(dirname ${quotedOutputFile})`,
     "started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-    `printf '%s' ${quotedStatePayload} | sed "s/__OPENCLAW_STARTED_AT__/$started_at/g; s/\"\$\$\"/$$/g" > ${quotedStatePath}`,
+    `python3 - ${quotedStatePath} $$ "$started_at" ${quotedTaskId} ${quotedKind} ${quotedOutputFile} ${quotedCwd} ${quotedCommand} <<'PY'`,
+    ...renderInitialStateWriterPython(),
+    "PY",
     `printf '%s\n' "starting ${task.kind} ${task.id}" >> ${quotedOutputFile}`,
     `if cd ${quotedCwd} && bash -lc ${quotedCommand} >> ${quotedOutputFile} 2>&1; then`,
     "  completed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
@@ -773,16 +768,53 @@ function renderLaunchScript(task: BackgroundTaskRecord): string {
   ].join("\n");
 }
 
+function renderInitialStateWriterPython(): string[] {
+  // argv: 1=state_path 2=pid($$) 3=started_at 4=taskId 5=kind 6=outputFile 7=cwd 8=command
+  return [
+    "import json",
+    "import pathlib",
+    "import sys",
+    "state_path = pathlib.Path(sys.argv[1])",
+    "state = {",
+    '    "version": 1,',
+    '    "taskId": sys.argv[4],',
+    '    "kind": sys.argv[5],',
+    '    "status": "running",',
+    '    "pid": int(sys.argv[2]),',
+    '    "startedAt": sys.argv[3],',
+    '    "updatedAt": sys.argv[3],',
+    '    "outputFile": sys.argv[6],',
+    '    "cwd": sys.argv[7],',
+    '    "command": sys.argv[8],',
+    "}",
+    "state_path.parent.mkdir(parents=True, exist_ok=True)",
+    'state_path.write_text(json.dumps(state, indent=2) + "\\n")',
+  ];
+}
+
 function renderStateWriterPython(status: BackgroundTaskExecutionState["status"]): string[] {
   return [
     "import json",
+    "import os",
     "import pathlib",
     "import sys",
     "state_path = pathlib.Path(sys.argv[1])",
     "pid = int(sys.argv[2])",
     "timestamp = sys.argv[3]",
     "exit_code = int(sys.argv[4])",
-    "state = json.loads(state_path.read_text())",
+    "try:",
+    "    state = json.loads(state_path.read_text())",
+    "    if not isinstance(state, dict):",
+    "        state = {}",
+    "except Exception:",
+    "    state = {}",
+    "state.setdefault('version', 1)",
+    "state.setdefault('taskId', os.environ.get('OPENCLAW_BACKGROUND_TASK_ID', ''))",
+    "state.setdefault('kind', os.environ.get('OPENCLAW_BACKGROUND_TASK_KIND', 'task'))",
+    "state.setdefault('startedAt', timestamp)",
+    "state.setdefault('outputFile', '')",
+    "state.setdefault('cwd', '')",
+    "state.setdefault('command', '')",
     `state['status'] = '${status}'`,
     "state['pid'] = pid",
     "state['updatedAt'] = timestamp",
@@ -794,5 +826,10 @@ function renderStateWriterPython(status: BackgroundTaskExecutionState["status"])
 }
 
 function shellQuote(value: string): string {
-  return `'${value.replaceAll(`'`, `"'"'"'`)}'`;
+  // POSIX-safe single-quote escaping: close the quote, emit a double-quoted
+  // single quote, reopen. The correct sequence is `'"'"'` — the previous value
+  // (`"'"'"'`, with a leading double quote) mis-quoted any command or path that
+  // itself contained a single quote, both breaking execution and corrupting the
+  // state JSON payload.
+  return `'${value.replaceAll(`'`, `'"'"'`)}'`;
 }

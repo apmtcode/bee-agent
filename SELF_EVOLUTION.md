@@ -6,6 +6,62 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-03 (run 9) — 🐛 Root-cause fix: `shellQuote` single-quote escaping + hermetic background-task tests
+
+**Audited:** The full suite in *this* cloud environment — and found **3 tests
+failing** that run 8 recorded as 174/174 green. Not a regression in committed
+code; an **environment-dependent flake** the previous machine's timing hid.
+Traced all three to the background-task launcher (`src/harness/background-tasks.ts`).
+
+**Root cause (a real production bug):** `shellQuote()` escaped embedded single
+quotes with the sequence `"'"'"'` (six chars, leading `"`) instead of the
+correct POSIX `'"'"'` (five chars). Any task **command or path containing a
+single quote** was therefore mis-quoted, which (a) made the launched command
+itself fail (`bash -lc <mangled>` → exit 2) and (b) corrupted the
+shell-generated `state.json` into **invalid JSON** — which then crashed the
+Python completion writer's `json.loads`, leaving the corrupt state on disk.
+`recoverBySession` later `JSON.parse`d it and threw (`SyntaxError: Expected ','
+or '}'`). Captured the actual corrupt file to confirm. A *second* latent bug:
+the initial-state `printf | sed` pipeline never substituted the pid — sed
+treated `$` in `"$$"` as a regex end-anchor, so `state.pid` stayed the literal
+string `"$$"`.
+
+**Why no test caught it:** every existing test **mocks `spawn`**, so the
+launcher's generated shell/Python was *never actually executed*. The three
+failing tests happened to use a **real** spawn and then raced the detached
+process by hand-writing state/output files — passing only when the real process
+was slow enough to not interfere.
+
+**Changed (`src/harness/background-tasks.ts`):**
+- **Fixed `shellQuote`** — the root cause. `"'"'"'` → `'"'"'`.
+- Replaced the fragile `printf | sed` initial-state generation with a **Python
+  writer** that `json.dumps` a dict built from shell-quoted **argv** (always
+  valid JSON; correct numeric pid from `$$`).
+- Hardened the completion Python writer (`try/except` + `setdefault`s) so a
+  missing/corrupt state file can never crash it — defense in depth.
+
+**Changed (tests):**
+- Made the 3 non-hermetic tests **inject a mock spawn**
+  (`operator-runtime.test.ts`; `server.test.ts` first/`drifting`/`breaker`
+  runtimes) so they drive execution state via `writeState` deterministically
+  instead of racing a real launcher.
+- **New end-to-end test** (`background-tasks.test.ts`) that *actually runs* the
+  generated `run.sh` with a single-quoted command and asserts valid state JSON,
+  a numeric pid, verbatim command round-trip, and `completed` status. Verified
+  it **fails against the pre-fix launcher** (git HEAD) and passes after — real
+  teeth on the previously-unexercised shell/Python path.
+
+**Test results:** **175/175** (was 174; +1 e2e), stable across 3 runs (races
+removed). Build ✅. `typecheck:src` ✅ (clean). Full `tsc` unchanged at **125**
+(test-file debt only).
+
+**New idea:** the miss here was *generated shell artifacts that no test ever
+executes*. Add a tiny "artifact smoke" layer — for any code that emits a script
+to run later (launch scripts, hooks), a test that executes it once in a temp
+dir. And a hermeticity guard: flag tests that construct a runtime which can
+`spawn` real processes without supplying a mock `spawnProcess`, so timing flakes
+can't re-enter the suite.
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
