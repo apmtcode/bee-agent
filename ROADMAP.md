@@ -3,6 +3,22 @@
 Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
+## Test health / determinism
+- [x] **Fix 3 deterministic test failures + suite flakiness** (2026-07-03, run 9).
+      Real bugs: `shellQuote` injected a spurious `"` (corrupted launch-script
+      `state.json` into invalid JSON) and a brittle `printf | sed` pid-injection
+      (broke on commands containing `"$$"`) — both in
+      `src/harness/background-tasks.ts`. Plus de-flaked the suite by mocking
+      `backgroundTaskSpawnProcess` in the tests that were spawning real
+      `sleep`/`tail` launchers (async state-write races + process leaks under
+      parallel workers). Added an `OperatorCliApp` spawn-injection seam and a
+      regression test that runs the real launcher on a shell-hostile command.
+- [ ] Lint/guard: flag any test that starts a background task on a
+      `StandaloneOperatorRuntime`/`OperatorCliApp` without injecting a mock
+      `backgroundTaskSpawnProcess` (real launchers in unit tests are always a
+      race or a leak). Consider a spawn-free default runtime mode with real-spawn
+      behavior confined to one tagged integration test.
+
 ## Foundations / DX
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.

@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -369,5 +370,35 @@ describe("BackgroundTaskExecutionService", () => {
     await expect(fs.readFile(path.join(rootDir, task.execution.launchScript), "utf8")).resolves.toContain("bash -lc");
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
+  });
+
+  it("writes valid, recoverable JSON state for shell-hostile commands", async () => {
+    // Regression: the initial state.json used to be templated with `printf | sed`,
+    // which mangled commands containing single quotes, double quotes, or the
+    // literal `"$$"` sentinel into invalid JSON — later crashing readState/recovery.
+    // The launcher now serializes via python3, so arbitrary command text is safe.
+    const rootDir = await makeTempDir();
+    const filePath = path.join(rootDir, "background-tasks.json");
+    // Executed via `bash -lc`; the `#` comments out the adversarial payload so the
+    // command exits cleanly, but the full string must still round-trip in the JSON.
+    const command = `printf 'ok' # "$$" 'single' "double" newline`;
+    const store = new FileBackgroundTaskStore(filePath, () => ({ pid: 4242, unref() {} }));
+    const task = await store.start({ title: "Nasty command", command, cwd: rootDir, kind: "task" });
+
+    // Run the generated launch script for real (not the mocked spawn) so we
+    // exercise the initial-state writer end to end.
+    const scriptPath = path.join(rootDir, task.execution.launchScript);
+    execFileSync("bash", [scriptPath], { cwd: rootDir });
+
+    const raw = await fs.readFile(path.join(rootDir, task.execution.stateFile), "utf8");
+    const parsed = JSON.parse(raw) as { status: string; command: string; pid: number };
+    // Task ran to completion (printf ok), and the command survived verbatim.
+    expect(parsed.command).toBe(command);
+    expect(parsed.status).toBe("completed");
+    expect(typeof parsed.pid).toBe("number");
+
+    // And the store can reconcile it without throwing on parse.
+    const reloaded = new FileBackgroundTaskStore(filePath, () => ({ pid: 4242, unref() {} }), () => true);
+    await expect(reloaded.get(task.id)).resolves.toMatchObject({ id: task.id });
   });
 });

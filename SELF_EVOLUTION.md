@@ -6,6 +6,67 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-03 (run 9) — Two real background-task bugs fixed + suite de-flaked
+
+**Audited:** Test health. The suite was NOT green as the prior entry claimed —
+`npm test` failed **3 tests** deterministically (operator-runtime, control-plane
+server, app). Root-caused each instead of papering over.
+
+**Bug 1 — `shellQuote` injected a spurious `"` (real correctness bug).**
+`src/harness/background-tasks.ts` escaped single quotes for the background-task
+launch script with the sequence `"'"'"'` (leading `"`), instead of the POSIX
+idiom `'"'"'` (leading `'` to close the span). Every single quote in a task
+`command` therefore round-tripped through bash as `"'`, injecting an extra
+double-quote. For commands like `printf 'line-1\nline-2\n'` this corrupted the
+launcher's `state.json` into **invalid JSON**, which later crashed
+`readState`/`recoverBackgroundTasks` with a `JSON.parse` SyntaxError. Fixed the
+escape sequence; verified round-trip for adversarial inputs (nested quotes,
+`"$$"`, newlines).
+
+**Bug 2 — brittle `printf | sed` templating of the initial state.** The launch
+script wrote the initial `running` state by `printf`-ing pre-serialized JSON and
+`sed`-substituting the pid via `s/"$$"/PID/`. Any command containing the literal
+`"$$"` would be corrupted by that sed. Replaced the whole `printf | sed` block
+with a `python3` heredoc that reads the static state from an env var and injects
+pid/timestamps via `json.dumps` — the same safe pattern the completion writer
+already used. Arbitrary command text now serializes correctly.
+
+**Bug 3 — suite flakiness from real process spawning.** Several tests injected a
+deterministic `backgroundTaskIsProcessRunning` but still let tasks spawn **real**
+launchers (`sleep 5`, `tail -f app.log`, `printf …`). Those launchers (a) write
+`state.json` asynchronously, racing the tests' own `writeState()` calls (one test
+even asserts state is `NOT_FOUND` *before* it writes — a real correctness race,
+not just perf), and (b) leak long-lived processes that pile up under vitest's
+parallel workers. Full-suite runs failed ~30% of the time; serial runs always
+passed — confirming pure parallelism contention. Made the affected runtimes
+deterministic by injecting a mock `backgroundTaskSpawnProcess` (state driven
+solely by explicit `writeState`), in `server.test.ts` (main/drifting/breaker/
+events runtimes), `operator-runtime.test.ts`, and `app.test.ts`. To reach
+`app.test.ts` cleanly, added an additive **testability seam**:
+`OperatorCliAppOptions.backgroundTaskSpawnProcess` /
+`backgroundTaskIsProcessRunning`, forwarded to the runtime (defaults unchanged =
+real spawning).
+
+**New regression test** (`background-tasks.test.ts`): runs the *real* generated
+launch script for a shell-hostile command (`printf 'ok' # "$$" 'single'
+"double"`) and asserts the on-disk state is valid JSON with the command preserved
+— the existing tests all mocked spawn, which is exactly why the corruption
+slipped through.
+
+**Test results:** `npm test` **175/175** (added 1). Verified **16 consecutive**
+full-suite *parallel* runs green + 4 serial runs green (was ~30% flake before).
+`typecheck:src` ✅ (exit 0). Build ✅.
+
+**New idea:** add a lightweight lint/test that flags any test constructing a
+`StandaloneOperatorRuntime`/`OperatorCliApp` which starts a background task
+*without* injecting `backgroundTaskSpawnProcess` — real launchers in unit tests
+are always either a race or a leak. Longer term, consider a
+`SIMULATED`/`--no-real-spawn` runtime mode so the whole suite is spawn-free by
+default and real-spawn behavior is exercised only by a small, explicitly-tagged
+integration test.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

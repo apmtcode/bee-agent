@@ -531,6 +531,11 @@ describe("StandaloneOperatorRuntime", () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
       backgroundTaskIsProcessRunning: () => false,
+      // Deterministic launch. This test drives every task's state explicitly via
+      // writeState(); a real launcher would (a) write its own "running" state
+      // asynchronously and race those calls under parallel load, and (b) leave
+      // `tail -f` processes running. The mock keeps state fully test-controlled.
+      backgroundTaskSpawnProcess: () => ({ pid: 4242, unref() {} }),
     });
     const session = await runtime.startSession({ title: "Tasks", agentId: "main" });
 
