@@ -62,13 +62,39 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      for a real on-device small model. DONE run 9 —
+      `src/training/movement-model.ts`: `MovementModelBackend` interface +
+      registry + deterministic `MarkovMovementBackend` (n-gram + backoff),
+      dataset builder/adapters, serialize/deserialize, 16 tests.
+- [x] Synthetic event-stream generator to validate capture→dataset→replay
+      round-trips without real OS input. DONE run 9 —
+      `generateSyntheticMovementSequences` + seeded `createSeededRng`.
+- [x] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories. DONE run 9 — `evaluateMovementModel`
+      (top-1 accuracy + perplexity); test proves related < unrelated perplexity.
+- [ ] **Closed-loop replay-fidelity gate** (new, run 9): after mock training,
+      generate from each recorded seed, diff vs ground-truth trajectory, score
+      fidelity, and feed the score into reviewed-export selection so only
+      faithfully-reproducible trajectories are promoted for real on-device
+      training.
+- [ ] Register a real on-device small-model backend (MLX/llama.cpp) behind the
+      `MovementModelBackend` seam; keep Markov as the CI default.
+
+## Test-suite health (surfaced run 9)
+Suite regressed from run-8's green to 3 failures on a fresh `npm install`
+(newer deps / date drift). Run 9 fixed 2 launch-script bugs (shellQuote escape
++ pid placeholder) → 3 remaining down to 2. Remaining, pre-existing:
+- [ ] `operator-runtime.test.ts` "starts, syncs, recovers…": spawn-timing race
+      — the async launch script's initial state write can land after the test's
+      synchronous `recoverBackgroundTask`, overwriting the "failed" state. Fix
+      option: have `startBackgroundTask` await the launch script's first state
+      write (behavior change — needs care), or make the launch script refuse to
+      overwrite an already-terminal state.
+- [ ] `server.test.ts` "handles session…": platform breaker stays `degraded`
+      after `sessions.remoteControl: resume`; test expects `active`. Determine
+      whether `resume` should clear the automatic platform breaker.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

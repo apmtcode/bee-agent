@@ -6,6 +6,79 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-03 (run 9) — 🧠 Pluggable local-movement model backend + 2 latent launch-script bugs fixed
+
+**Audited:** The local-movement learning subsystem (standing objective #2) and
+the pre-existing test suite health. Found `src/training/` builds real
+Apple-Silicon training *plans/launch scripts* (MLX/axolotl) but had **no
+in-process, cloud-testable model backend** that can actually fit a movement
+dataset and predict/generalize — the top queued roadmap item and the missing
+piece of objective #2(c)/(d). Also found the suite was **not green** on this
+environment (3 failures on base HEAD; run 8 committed green, so a fresh
+`npm install` / newer deps / date drift surfaced latent issues).
+
+**Changed — new capability (`src/training/movement-model.ts`, +tests):**
+- **Dataset pipeline:** `MovementEvent` schema, `defaultActionTokenizer`
+  (structure-preserving `tool:gesture:direction:target` tokens so related
+  movements share prefixes and generalize), `buildMovementDataset` with an
+  `<end>` terminator, and adapters `movementSourcesFromTrajectories` /
+  `movementSourcesFromReplays` that plug straight into the existing capture
+  types (`TrajectoryAction`, `ReplayTimelineEvent`).
+- **Pluggable backend seam:** `MovementModelBackend` interface +
+  `registerMovementBackend` / `createMovementModelBackend` / `listMovementBackends`
+  registry, so a real on-device small model swaps in behind the same API.
+- **Deterministic reference backend:** `MarkovMovementBackend` — an n-gram model
+  with Katz-style backoff. **Repeats** recorded movements via argmax
+  `generate()`, and **generalizes** to new-but-related movements: a novel
+  higher-order context backs off to a known suffix and still predicts the
+  learned next action. Includes serialize/deserialize (round-trippable),
+  `sequenceLogLikelihood`/`perplexity`, and `evaluateMovementModel` (top-1
+  accuracy + perplexity) as a generalization eval harness.
+- **Reproducible synthetics:** `createSeededRng` (mulberry32) +
+  `generateSyntheticMovementSequences` validate the whole
+  capture→dataset→train→generalize loop with zero real OS access.
+- Exported the surface from `src/index.ts`.
+
+**Changed — 2 genuine reliability bug fixes (surfaced by the failing suite):**
+The `bash` launch scripts that record background-task / training state to disk
+had two latent quoting bugs that corrupted the state JSON:
+1. `src/harness/background-tasks.ts` `shellQuote` used the escape sequence
+   `"'"'"'` (6 chars) instead of the correct POSIX `'"'"'` (5 chars) — so **any
+   command containing a single quote** (e.g. `printf 'line-1\n'`) produced a
+   *malformed* state file, and the recovery reader crashed with
+   `SyntaxError: … JSON at position 311`. `runner.ts` already had it right.
+2. The pid substitution `sed "s/\"\$\$\"/$$/g"` never fired: inside the
+   double-quoted sed arg the pattern's `$$` **also** expanded to the shell PID,
+   yielding `s/<PID>/<PID>/g`, so `"pid":"$$"` was written verbatim and recovery
+   mis-classified live tasks. Fixed by using a `$`-free placeholder
+   `__OPENCLAW_PID__` and matching `s/\"__OPENCLAW_PID__\"/$$/g` (verified in a
+   shell repro). Applied to both `background-tasks.ts` and `runner.ts`.
+3. Hardened both state writes to be **atomic** (temp file + `mv` / `os.replace`)
+   so a concurrent reconcile read never observes a torn/partial file.
+
+**Test results:** movement-model **16/16** ✅. `typecheck:src` CLEAN ✅. Build ✅.
+Full suite **188/190** — the two bug fixes took the suite from **3 → 2**
+pre-existing failures (`app.test.ts`'s `control=active` now passes). The
+remaining 2 are pre-existing and unrelated to this run's deliverable:
+- `operator-runtime.test.ts` "starts, syncs, recovers…": now a *spawn-timing
+  race* (the async launch script's initial state write lands after the test's
+  synchronous `recoverBackgroundTask`, overwriting the "failed" state). This is
+  a test-design/spawn-ordering issue; fixing it means `startBackgroundTask`
+  awaiting the initial state write — deferred to avoid a risky behavior change.
+- `server.test.ts` "handles session…": a platform-breaker stays `degraded`
+  after a `remoteControl: resume` that the test expects to return to `active`.
+  Separate control-plane concern; queued in ROADMAP.
+
+**New idea:** the movement dataset/model is now the natural home for a
+**closed-loop replay-fidelity gate**: after (mock) training, generate from each
+recorded seed and diff against the ground-truth trajectory, emitting a
+per-trajectory fidelity score. Wire that score back into the reviewed-export
+selection so only trajectories the model can faithfully reproduce are promoted
+for real on-device training — turning the eval harness into a data-quality
+filter, not just a metric.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
