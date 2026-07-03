@@ -801,7 +801,19 @@ describe("OperatorCliApp", () => {
 
   it("supports session lifecycle, transcript, approvals, pairing, config, and prompt commands", async () => {
     const rootDir = await makeTempDir();
-    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    // Deterministic background-task seams: this suite drives platform/remote
+    // control status which recovers background tasks. Without a stubbed spawn
+    // the real detached launcher's async state writes race the assertions.
+    const app = new OperatorCliApp({
+      rootDir,
+      cwd: rootDir,
+      currentDate: "2026-05-25",
+      backgroundTaskSpawnProcess: () => ({ pid: 1234, unref() {} }),
+      // Healthy stub tasks (pid 1234) are alive; 999999 is the sentinel dead pid
+      // the degraded-remote scenario below writes to force a failed task. This
+      // keeps both the control=active and control=degraded paths deterministic.
+      backgroundTaskIsProcessRunning: (pid) => pid !== 999999,
+    });
     const firstSession = await app.runtime.startSession({ title: "first", cwd: rootDir, agentId: "operator-cli" });
     const secondSession = await app.runtime.startSession({ title: "second", cwd: rootDir, agentId: "operator-cli" });
 

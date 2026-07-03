@@ -531,6 +531,9 @@ describe("StandaloneOperatorRuntime", () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
       backgroundTaskIsProcessRunning: () => false,
+      // Deterministic no-op spawn so the real detached launcher's async state
+      // writes don't race the manual writeState() calls below (see server.test).
+      backgroundTaskSpawnProcess: () => ({ pid: 1234, unref() {} }),
     });
     const session = await runtime.startSession({ title: "Tasks", agentId: "main" });
 

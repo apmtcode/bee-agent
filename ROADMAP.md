@@ -39,7 +39,24 @@ unchecked items are queued. Keep this richer than you found it each run.
     `cron.runs`/misc — plus a few genuine test-only typings. Map the rest, then
     fix residual test-only typings.
 - [ ] Add a `verify` npm script (`typecheck && build && test`) and have the
-      engine run it as a pre-push self-check each cycle.
+      engine run it as a pre-push self-check each cycle. **(run 9: reinforced —
+      the run-8 log claimed 174/174 but the suite was actually red + flaky;
+      `verify` should run the full suite twice / `--repeat` to catch flakiness
+      that passes 2-of-3 and gets misreported as green.)**
+- [x] **Fix background-task launch-script quoting bugs** (run 9): `shellQuote`
+      POSIX escape was off-by-one (`"'"'"'`→`'"'"'`) corrupting any
+      single-quoted command/JSON; the `sed` pid-substitution was un-escaped and
+      silently no-op'd — replaced with a `python3` argv writer. Regression test
+      runs the real generated script with a quote-heavy command.
+- [x] **Make background-task suites hermetic** (run 9): inject a deterministic
+      no-op `backgroundTaskSpawnProcess` where the suites already mock
+      `isProcessRunning`, so the real detached launcher's async state writes stop
+      racing assertions (was flaky ~1-in-3). Added an additive
+      `backgroundTaskSpawnProcess`/`backgroundTaskIsProcessRunning` pass-through
+      to `OperatorCliAppOptions`.
+- [ ] **Lint/guard against real-process spawns in tests**: flag any test that
+      constructs a runtime/`OperatorCliApp` which starts background tasks without
+      injecting `backgroundTaskSpawnProcess`, so flakiness can't silently return.
 - [x] Interim **source-only typecheck gate** — DONE run 7. `tsconfig.src.json`
       (excludes `**/*.test.ts`) + `typecheck:src` script; passes (exit 0). Next:
       have the engine run it as a per-run pre-push self-check.

@@ -6,6 +6,68 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-03 (run 9) — 🐛 Two real launch-script bugs fixed + background-task tests made hermetic (green + deterministic)
+
+**Audited:** The baseline test suite — and found it **red**, not the 174/174 the
+run-8 log claimed. Three tests failed *deterministically* in isolation
+(`operator-runtime` "starts, syncs, recovers…", `app` "supports session
+lifecycle…", `server` "handles session…"), all tracing to the background-task
+**launch script** (`src/harness/background-tasks.ts`). The earlier green runs were
+on a different machine/date; these are genuine environment-independent bugs the
+prior runs never actually exercised (the JSON corruption reproduced every run).
+
+**Two real production bugs found & fixed (both in `renderLaunchScript`):**
+1. **`shellQuote` escape was off by one.** It emitted each `'` as `"'"'"'`
+   (6 chars) instead of the correct POSIX `'"'"'` (5 chars), so *any* command or
+   JSON payload containing a single quote round-tripped corrupted —
+   `printf 'hi'` became `printf "'hi"'`. This mangled the running-state JSON,
+   which then crashed the completed/failed state writer (it
+   `json.loads(state.read_text())` the running state), leaving tasks stuck.
+   Fixed the replacement string; verified faithful round-trip for plain,
+   single-quote, double-quote, and mixed inputs via bash `eval`.
+2. **`sed` placeholder swap was un-escaped.** The line
+   `sed "s/…/g; s/\"\$\$\"/$$/g"` had its backslashes consumed by the JS template
+   literal, so the shell received `s/"$$"/$$/g` — the embedded quotes broke the
+   double-quoting and the `"$$"`→pid substitution silently no-op'd, leaving
+   `"pid":"$$"`. **Replaced the whole `sed` hack** with a `python3` writer that
+   takes the base JSON as an argv value (immune to shell-quoting), mirroring the
+   existing completed/failed writers.
+
+**Test hermeticity (root-cause fix for pre-existing flakiness):** with the
+deterministic bugs fixed, the three suites were still *flaky* (~1 in 3 full runs)
+because they spawn the **real detached bash launcher**, whose async state writes
+race the assertions (e.g. a `printf drift` task completing before the
+`task=running` / `background.tasks.state`→NOT_FOUND checks). Fixed at the source
+by injecting a deterministic no-op spawn where the suites already mock
+`isProcessRunning`:
+- `server.test.ts` (×3) + `operator-runtime.test.ts` (×1): added
+  `backgroundTaskSpawnProcess: () => ({ pid: 1234, unref() {} })`.
+- `app.test.ts`: added an additive `backgroundTaskSpawnProcess` /
+  `backgroundTaskIsProcessRunning` pass-through to `OperatorCliAppOptions`
+  (forwarded to the runtime; production default unchanged), and stubbed the flaky
+  test with `isProcessRunning: (pid) => pid !== 999999` so healthy stub tasks read
+  alive while the scenario's sentinel dead pid (999999) reads failed — both the
+  `control=active` and `control=degraded` paths now deterministic.
+
+**Regression test:** new `background-tasks.test.ts` case actually *runs* the
+generated launch script (via `spawnSync`) with a quote-heavy command
+(`printf '%s' "a'b"`) and asserts the resulting state is valid JSON, `completed`,
+`exitCode:0`, with the command preserved — this fails on either old bug.
+
+**Test results:** **175/175 green, deterministic** — full `npm test` ×5 with
+file parallelism *on* all passed (a mid-run `fileParallelism:false` experiment was
+reverted once hermeticity made it unnecessary). Build ✅. `typecheck:src` ✅
+(exit 0). Net +1 test.
+
+**New idea:** add a tiny **`npm run verify`** script (`typecheck:src && build &&
+test`) *and* a lightweight suite-health assertion that runs the full test suite
+**twice** in CI (or a `--repeat` flag) so newly-introduced flakiness — like the
+real-process races just fixed — fails loudly instead of passing 2-of-3 and being
+misreported as green in the evolution log. Longer term: an ESLint/unit guard that
+flags any test constructing a runtime/`OperatorCliApp` that starts background
+tasks **without** injecting `backgroundTaskSpawnProcess`, so real-process spawns
+can't silently re-enter the suite.
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

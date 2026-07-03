@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -369,5 +370,34 @@ describe("BackgroundTaskExecutionService", () => {
     await expect(fs.readFile(path.join(rootDir, task.execution.launchScript), "utf8")).resolves.toContain("bash -lc");
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
+  });
+
+  it("generates a launch script that records valid running state for quote-heavy commands", async () => {
+    const rootDir = await makeTempDir();
+    const store = new FileBackgroundTaskStore(
+      path.join(rootDir, "background-tasks.json"),
+      () => ({ pid: 1, unref() {} }),
+    );
+    // A command mixing single and double quotes previously corrupted the
+    // shell-substituted running-state JSON. Because the completed-state writer
+    // does `json.loads(state.read_text())`, that corruption crashed the whole
+    // launch script and left the task stuck in a broken "running" state. Run the
+    // generated script for real and assert both writers produced valid JSON.
+    const task = await store.start({
+      title: "Quote stress",
+      command: `printf '%s' "a'b"`,
+      cwd: rootDir,
+    });
+    const scriptPath = path.join(rootDir, task.execution.launchScript);
+    const result = spawnSync("bash", [scriptPath], { cwd: rootDir, encoding: "utf8" });
+    expect(result.status).toBe(0);
+
+    const raw = await fs.readFile(path.join(rootDir, task.execution.stateFile), "utf8");
+    const state = JSON.parse(raw) as BackgroundTaskExecutionState;
+    expect(state.taskId).toBe(task.id);
+    expect(state.status).toBe("completed");
+    expect(state.command).toBe(task.command);
+    expect(typeof state.pid).toBe("number");
+    expect(state.exitCode).toBe(0);
   });
 });

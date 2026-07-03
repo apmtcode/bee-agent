@@ -84,6 +84,11 @@ describe("OperatorControlPlaneServer", () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir,
       backgroundTaskIsProcessRunning: () => false,
+      // Deterministic no-op spawn: these suites exercise process-recovery logic
+      // (via the mocked isProcessRunning above), so they must not launch the
+      // real detached bash launcher, whose asynchronous state writes race the
+      // assertions and make failure/recovery counts flaky.
+      backgroundTaskSpawnProcess: () => ({ pid: 1234, unref() {} }),
       delivery: new OperatorDeliveryService(rootDir, {
         sendBrowserPush: async () => {},
       }),
@@ -953,6 +958,11 @@ describe("OperatorControlPlaneServer", () => {
     const driftingRuntime = new StandaloneOperatorRuntime({
       rootDir: driftingRootDir,
       backgroundTaskIsProcessRunning: () => false,
+      // Deterministic no-op spawn: these suites exercise process-recovery logic
+      // (via the mocked isProcessRunning above), so they must not launch the
+      // real detached bash launcher, whose asynchronous state writes race the
+      // assertions and make failure/recovery counts flaky.
+      backgroundTaskSpawnProcess: () => ({ pid: 1234, unref() {} }),
     });
     const driftingServer = new OperatorControlPlaneServer({ runtime: driftingRuntime });
     const driftingBootstrap = await driftingServer.handle({
@@ -1019,6 +1029,11 @@ describe("OperatorControlPlaneServer", () => {
     const breakerRuntime = new StandaloneOperatorRuntime({
       rootDir: breakerRootDir,
       backgroundTaskIsProcessRunning: () => false,
+      // Deterministic no-op spawn: these suites exercise process-recovery logic
+      // (via the mocked isProcessRunning above), so they must not launch the
+      // real detached bash launcher, whose asynchronous state writes race the
+      // assertions and make failure/recovery counts flaky.
+      backgroundTaskSpawnProcess: () => ({ pid: 1234, unref() {} }),
     });
     const breakerServer = new OperatorControlPlaneServer({ runtime: breakerRuntime });
     const breakerOne = await breakerServer.handle({
