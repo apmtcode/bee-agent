@@ -6,6 +6,59 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-03 (run 9) — 🐛 Fix real launch-script corruption bug + make 4 non-hermetic tests deterministic
+
+**Audited:** Baseline health. Found the suite was **RED on arrival** — 3
+deterministic failures (`operator-runtime.test.ts`, `server.test.ts`,
+`app.test.ts`), not the 174/174 the run-8 log claimed. Root-caused each instead
+of assuming flakiness.
+
+**Genuine production bug found & fixed (`src/harness/background-tasks.ts`):**
+`shellQuote()` used a **malformed POSIX single-quote escape** — `"'"'"'`
+(6 chars, starts with a `"`) instead of the correct `'"'"'`. The background-task
+launch script embeds the JSON state payload (and the task command) into a bash
+`printf '%s' '<payload>' | sed …` pipeline via this helper, so **any command
+containing a single quote produced unparseable state JSON on disk** — e.g.
+`printf 'x'` corrupted to `"command":"printf "'x'""`. That broke
+`readState`/recovery/sync at runtime (a `SyntaxError` bubbling out of
+`recoverBackgroundTasks`), and was the deterministic cause of the
+operator-runtime failure. Reproduced the corruption end-to-end through real
+`bash`+`sed` before and after the fix. The sibling `training/runner.ts`
+`shellQuote` was already correct — this was a divergent copy. Exported the fixed
+helper as `posixSingleQuote` and added a **bash round-trip regression suite**
+(6 adversarial strings incl. `'''`, embedded JSON, newlines) so the escape can't
+silently regress.
+
+**Test hermeticity (the other two failures + one latent flake):** three tests
+constructed the runtime/app but forgot to inject a mock `backgroundTaskSpawnProcess`,
+so they launched **real detached OS processes** that raced the tests' manual
+`writeState` and produced half-written reads under load. Made them deterministic:
+- `operator-runtime.test.ts` + `server.test.ts` (×3): inject a no-op
+  `() => ({ pid, unref })` spawn (the pattern already used in
+  `background-tasks.test.ts`).
+- Threaded `backgroundTaskSpawnProcess` / `backgroundTaskIsProcessRunning`
+  **through `OperatorCliApp`** (additive `OperatorCliAppOptions` fields) so CLI
+  tests can be hermetic too; used it to fix the `app.ts` remote-control test.
+- Fixed a *fourth*, order/timing-dependent flake (`supports background and
+  monitor task commands…`) that only failed under full-suite load, via a
+  `hermeticRunningSpawn` helper that runs the launch script synchronously then
+  pins state to `running` (so output is present *and* the task stays active).
+
+**Test results:** suite **RED (3 failed / 174) → GREEN 181/181** (+7 new tests),
+stable across **3 consecutive full runs**. `typecheck:src` ✅. Build ✅
+(532 kB). Only one production file changed (`background-tasks.ts`); the rest are
+additive test/opt-in plumbing.
+
+**New idea:** the launch-script generators in `background-tasks.ts` and
+`training/runner.ts` are near-duplicate (shell-quoting, sed-substitution,
+python state-writer). They already **drifted** once (this bug). Extract a single
+`shared/launch-script.ts` with the escaping + state-writer primitives and a
+property-based bash round-trip test, so both call sites share one audited
+implementation. Bigger: add a tiny `vitest run --sequence.shuffle` smoke pass to
+the pre-push self-check to surface order/timing-dependent flakes (like the 4th
+one here) *before* they reach `main`, and forbid tests from spawning real
+processes by default (a `spawnProcess` that throws unless explicitly overridden).
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

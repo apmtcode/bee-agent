@@ -1,4 +1,5 @@
-import { execFile } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
+import { readFileSync, writeFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -9,6 +10,47 @@ import { OperatorCliApp, parseSlashCommand } from "./app.js";
 
 const tempDirs: string[] = [];
 const execFileAsync = promisify(execFile);
+
+/**
+ * Hermetic background-task spawn for tests that assert on a task's output while
+ * it is still "active". It runs the launch script synchronously (so output.log
+ * is populated deterministically) then pins the execution state back to
+ * `running`, avoiding the race where a real detached process completes — or is
+ * reaped — before the assertions run. Pair with `backgroundTaskIsProcessRunning:
+ * () => true` so the task keeps reading as alive.
+ */
+function hermeticRunningSpawn(
+  command: string,
+  _args: string[],
+  options: { cwd: string },
+): { pid: number; unref(): void } {
+  const stateFile = path.join(path.dirname(command), "state.json");
+  try {
+    execFileSync("bash", [command], { cwd: options.cwd, stdio: "ignore" });
+  } catch {
+    // The launch script may exit non-zero (e.g. missing python3); output.log is
+    // still written by the command itself, which is all these tests read.
+  }
+  let pid = 4242;
+  try {
+    const state = JSON.parse(readFileSync(stateFile, "utf8")) as {
+      pid?: number;
+      status?: string;
+      completedAt?: unknown;
+      exitCode?: unknown;
+      error?: unknown;
+    };
+    pid = typeof state.pid === "number" ? state.pid : pid;
+    state.status = "running";
+    delete state.completedAt;
+    delete state.exitCode;
+    delete state.error;
+    writeFileSync(stateFile, `${JSON.stringify(state, null, 2)}\n`);
+  } catch {
+    // No state file yet — the caller's isProcessRunning stub keeps it active.
+  }
+  return { pid, unref() {} };
+}
 
 async function makeTempDir(): Promise<string> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "operator-cli-app-"));
@@ -801,7 +843,16 @@ describe("OperatorCliApp", () => {
 
   it("supports session lifecycle, transcript, approvals, pairing, config, and prompt commands", async () => {
     const rootDir = await makeTempDir();
-    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    const app = new OperatorCliApp({
+      rootDir,
+      cwd: rootDir,
+      currentDate: "2026-05-25",
+      // Hermetic: no real detached processes racing the assertions. Launched
+      // tasks write no state file (so they read as `active`); liveness is driven
+      // explicitly — the test later persists a dead pid to force a failure.
+      backgroundTaskSpawnProcess: () => ({ pid: 4242, unref() {} }),
+      backgroundTaskIsProcessRunning: () => false,
+    });
     const firstSession = await app.runtime.startSession({ title: "first", cwd: rootDir, agentId: "operator-cli" });
     const secondSession = await app.runtime.startSession({ title: "second", cwd: rootDir, agentId: "operator-cli" });
 
@@ -1063,7 +1114,13 @@ describe("OperatorCliApp", () => {
 
   it("supports background and monitor task commands plus cron commands", async () => {
     const rootDir = await makeTempDir();
-    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    const app = new OperatorCliApp({
+      rootDir,
+      cwd: rootDir,
+      currentDate: "2026-05-25",
+      backgroundTaskSpawnProcess: hermeticRunningSpawn,
+      backgroundTaskIsProcessRunning: () => true,
+    });
     const session = await app.runtime.startSession({ title: "CLI ops", cwd: rootDir, agentId: "operator-cli" });
 
     const startOutput = await app.dispatchSlashCommand(

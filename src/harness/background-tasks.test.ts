@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -5,6 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   BackgroundTaskExecutionService,
   FileBackgroundTaskStore,
+  posixSingleQuote,
   type BackgroundTaskExecutionState,
 } from "./background-tasks.js";
 
@@ -369,5 +371,34 @@ describe("BackgroundTaskExecutionService", () => {
     await expect(fs.readFile(path.join(rootDir, task.execution.launchScript), "utf8")).resolves.toContain("bash -lc");
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
+  });
+});
+
+describe("posixSingleQuote", () => {
+  // Regression guard: the launch script embeds the state payload (and the task
+  // command) into a bash `printf` via single-quote escaping. A malformed escape
+  // silently corrupts the on-disk state JSON for any command containing a quote.
+  const samples = [
+    `printf 'line-1\nline-2\n'`,
+    `echo "he said 'hi'"`,
+    `a'b'c`,
+    `'''`,
+    `no-quotes-here`,
+    `{"json":"with 'quote'"}`,
+  ];
+
+  for (const value of samples) {
+    it(`round-trips through bash unchanged: ${JSON.stringify(value)}`, () => {
+      // `printf %s <quoted>` must reproduce the original bytes exactly.
+      const out = execFileSync("bash", ["-c", `printf '%s' ${posixSingleQuote(value)}`]).toString();
+      expect(out).toBe(value);
+    });
+  }
+
+  it("preserves JSON validity when a quoted payload is emitted by bash", () => {
+    const payload = JSON.stringify({ command: `printf 'line-1\nline-2\n'`, pid: 42 });
+    const out = execFileSync("bash", ["-c", `printf '%s' ${posixSingleQuote(payload)}`]).toString();
+    expect(() => JSON.parse(out)).not.toThrow();
+    expect(JSON.parse(out)).toEqual({ command: `printf 'line-1\nline-2\n'`, pid: 42 });
   });
 });

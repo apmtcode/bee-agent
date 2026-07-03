@@ -4,6 +4,23 @@ Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
 ## Foundations / DX
+- [x] **Fix launch-script single-quote corruption bug** (2026-07-03, run 9) —
+      `background-tasks.ts` `shellQuote` used a malformed POSIX escape that
+      corrupted on-disk state JSON for any command containing a `'`. Fixed,
+      exported as `posixSingleQuote`, added a bash round-trip regression suite.
+- [x] **Restore a green suite + make background-task tests hermetic**
+      (2026-07-03, run 9) — 4 tests were launching real detached processes that
+      raced manual `writeState`; injected mock spawns (incl. threading
+      `backgroundTaskSpawnProcess` through `OperatorCliApp`). 181/181 stable.
+- [ ] **De-duplicate launch-script generators** — `background-tasks.ts` and
+      `training/runner.ts` share near-identical shell-quoting + sed-substitution
+      + python state-writer logic that already drifted once (the run-9 bug).
+      Extract `src/shared/launch-script.ts` with one audited implementation +
+      property-based bash round-trip test.
+- [ ] **Flake guard in the pre-push self-check** — run `vitest` with shuffled
+      order once, and/or make the default `spawnProcess` throw unless explicitly
+      overridden, so order/timing-dependent flakes (like run 9's 4th one) are
+      caught before `main` instead of under CI load.
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`

@@ -793,6 +793,17 @@ function renderStateWriterPython(status: BackgroundTaskExecutionState["status"])
   ];
 }
 
+/**
+ * POSIX-safe single-quote escaping for embedding an arbitrary string into a
+ * shell command: close the quote, emit an escaped quote (`'"'"'`), then reopen.
+ * The previous escape (`"'"'"'`) was malformed and corrupted the launch-script
+ * state payload for any command containing a single quote, producing
+ * unparseable state JSON on disk. Exported so the escaping is regression-tested.
+ */
+export function posixSingleQuote(value: string): string {
+  return `'${value.replaceAll(`'`, `'"'"'`)}'`;
+}
+
 function shellQuote(value: string): string {
-  return `'${value.replaceAll(`'`, `"'"'"'`)}'`;
+  return posixSingleQuote(value);
 }
