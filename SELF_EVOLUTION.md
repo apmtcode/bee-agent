@@ -6,6 +6,72 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-03 (run 9) — 🧠 Trainable+inferable movement model (obj #2c/#2d) + fixed a latent shell-JSON corruption bug
+
+**Audited:** The movement-learning subsystem (`src/capture` + `src/training`).
+Finding: the pipeline produced training *plans/manifests* (shell commands that
+launch mlx/axolotl on the user's Mac) but had **no actual model that trains and
+infers** — so objective #2 parts (c) "post-train a local model to repeat
+movements" and (d) "generalize to new but related movements" were unrealized and
+**untestable in the cloud**. Also discovered the full suite had silently gone
+**red (174→171)**: 3 pre-existing failures unrelated to any of my work.
+
+**Changed (additive):**
+- **`src/training/model-backend.ts` (new):** the pluggable model seam.
+  - `MovementModelBackend` interface (`train(dataset) → TrainedMovementModel`);
+    a real on-device small model drops in without caller changes.
+  - `MarkovMovementBackend` — a genuinely local, deterministic small model: an
+    order-k Markov policy with **stupid-backoff** smoothing. Trains on recorded
+    action-token sequences, `predictNext`/`generate` reproduce recorded
+    movements, and **backoff gives generalization** — a novel high-order context
+    composed of known sub-contexts still yields sensible predictions.
+    `sequenceLogProb` is always finite (add-1 unigram floor) for eval.
+  - Dataset helpers: `movementTokenFromAction` (tool + direction/gesture hint),
+    `trajectoryToSequence`, `buildMovementDataset` — bridge `TrajectorySpan`s
+    (the existing capture schema) into training sequences.
+- **`src/training/movement-eval.ts` (new):** cloud-safe validation harness.
+  - `createSeededRng` (mulberry32) + `generateSyntheticMovementSequences` over a
+    weighted `MovementGrammar` (default models a "locate → select → act → finish"
+    desktop interaction) — deterministic simulated event streams, since we have
+    no real mouse/keyboard in the cloud.
+  - `evaluateGeneralization` → `{ nextTokenAccuracy, meanLogProb, perplexity }`.
+    The **operational test of generalization** (#2d): train on one seeded draw,
+    measure on a *held-out* draw from the same grammar.
+- Exported all of the above from `src/index.ts`.
+- **Fixed a real latent bug in `src/harness/background-tasks.ts`** (root cause of
+  the 3 red tests). The background-task launch script built its `state.json`
+  **inside bash** via `printf '<json>' | sed "…s/\"\$\$\"/$$/g"`. When
+  `task.command` contained quotes or newlines (e.g. `printf 'line-1\nline-2\n'`),
+  the interpolated JSON was corrupted (invalid file → `readState` threw), and the
+  broken bash double-quoting meant `"$$"` was never substituted either. Replaced
+  the `printf|sed` surgery with a **python `json.loads`/`json.dumps` writer**
+  (the same trusted mechanism the completion/failure writer already uses): Node
+  serializes the base state with correct escaping, passes it as one shell-quoted
+  argv, python injects pid + timestamps. Robust to arbitrary command content.
+- **De-flaked two tests** the fix unmasked (`operator-runtime.test.ts`,
+  `server.test.ts` ×3 runtimes): they spawned *real* detached shells whose async
+  state writes raced the tests' explicit `writeState` assertions. Injected the
+  already-supported `backgroundTaskSpawnProcess` mock (`() => ({ pid, unref(){} })`)
+  so the tests are hermetic — no real OS process, full control of state. Same
+  spirit as run 1's `configHome` isolation fix.
+
+**Test results:** 24 new tests (15 model-backend + 9 movement-eval), all pass.
+Full suite **171 → 189/189** (174 originally claimed green, but 3 had regressed;
+now +15 new). Verified **stable across 6 consecutive full-suite runs** (was flaky
+~50% before the de-flake). `typecheck:src` ✅ clean. Build ✅.
+
+**New idea:** now that a trained model exposes `generate()`, close the loop with
+the existing `ReplayRuntimeService` — add a `MovementReplayPlanner` that takes a
+goal/prompt, asks the model to `generate` an action sequence, and emits a
+`ReplayManifest` the replay engine already knows how to execute. That turns
+"learned policy" into "executed movements" end-to-end (still mock-executed in the
+cloud), and lets `evaluateGeneralization` score *executed* fidelity, not just
+next-token accuracy. Second idea: an `OperatorCliApp` seam for
+`backgroundTaskSpawnProcess`/`IsProcessRunning` (currently only the runtime
+exposes it) so `app.test.ts`'s real `sleep 5` spawn can also be made hermetic.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

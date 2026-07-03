@@ -62,15 +62,43 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      for a real on-device small model. **DONE run 9** — `MovementModelBackend`
+      interface + `MarkovMovementBackend` (order-k, stupid-backoff) in
+      `src/training/model-backend.ts`. Trains, predicts, generates, generalizes
+      via backoff; 15 tests.
+- [x] Synthetic event-stream generator to validate capture→dataset→replay
+      round-trips without real OS input. **DONE run 9** — `createSeededRng` +
+      `generateSyntheticMovementSequences` over a weighted `MovementGrammar` in
+      `src/training/movement-eval.ts`.
+- [x] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories. **DONE run 9** — `evaluateGeneralization`
+      (`nextTokenAccuracy` / `meanLogProb` / `perplexity`); tested train-draw
+      fidelity + held-out generalization above chance; 9 tests.
+- [ ] **Close the learned-policy → execution loop:** `MovementReplayPlanner` that
+      calls `TrainedMovementModel.generate()` for a goal and emits a
+      `ReplayManifest` the existing `ReplayRuntimeService` executes (mock in
+      cloud), so generalization can be scored on *executed* fidelity, not just
+      next-token accuracy.
+- [ ] Wire the trained backend into the runtime/RPC surface: a
+      `trajectories.trainModel` / `movement.predict` method backed by
+      `MarkovMovementBackend`, so the capture→train→infer loop is reachable
+      through the control plane (currently library-only via `src/index.ts`).
+- [ ] Richer movement tokenizer: discretize pointer coordinates / key chords
+      from `TrajectoryAction.metadata` into stable buckets (the default
+      tokenizer currently uses tool + a direction/gesture hint only).
 
 ## Innovation backlog
+- [ ] `OperatorCliApp` spawn/process-detection seam: thread optional
+      `backgroundTaskSpawnProcess` + `backgroundTaskIsProcessRunning` through
+      `OperatorCliAppOptions` into its internal runtime (the runtime already
+      accepts them) so `app.test.ts`'s real `sleep 5` background spawn can be
+      made hermetic like `operator-runtime`/`server` were in run 9.
+- [ ] Mirror run 9's `printf|sed`→python-json state-writer fix in
+      `src/training/runner.ts` (`renderLaunchScript`) — it has the identical
+      latent shell-JSON-corruption bug (currently unexercised by a quote/newline
+      command, but the same failure mode).
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in
       project health over time.
