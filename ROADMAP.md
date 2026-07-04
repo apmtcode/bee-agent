@@ -4,6 +4,16 @@ Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
 ## Foundations / DX
+- [ ] **🔴 PRIORITY — pre-existing test regression (found run 9).** 3 integration
+      tests fail on a clean tree (`operator-runtime.test.ts` background-task
+      recover, `server.test.ts`, `app.test.ts`), all via a JSON `SyntaxError` in
+      `readJsonFile` while parsing a background-task **state file** during recovery
+      (`src/harness/background-tasks.ts:234`, ~pos 311). Green at run 8 (174/174),
+      so time/data/env-dependent. `writeState`→`writeJsonAtomic` stringifies clean
+      JSON, so the on-disk corruption points at a write race, stale `.tmp`, or a
+      `stateFile`-path collision between tasks sharing a `rootDir`. Repro:
+      `npx vitest run src/orchestrator/operator-runtime.test.ts`. Fix before the
+      full suite can gate `main`.
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`
@@ -59,16 +69,28 @@ unchecked items are queued. Keep this richer than you found it each run.
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
 (exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
-      objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
-      deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+- [x] Inventory what `src/capture` + `src/training` already implement vs. the
+      objective's five pieces — DONE run 9 (a–c existed; the in-process
+      learn/predict/generalize layer was the gap, now filled).
+- [x] Pluggable local-model backend interface with a deterministic mock backend
+      (so cloud/CI tests pass) and a documented seam for a real on-device model —
+      DONE run 9: `MovementModelBackend<S>` + `MarkovMovementBackend`
+      (variable-order Markov w/ stupid backoff) in `src/training/movement-model.ts`.
+- [x] Synthetic event-stream generator to validate capture→dataset→replay/repeat
+      round-trips without real OS input — DONE run 9 (synthetic gesture flows +
+      `buildMovementDataset` + `rolloutMovements` reproduce recorded flows in test).
+- [x] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories — DONE run 9: `evaluateMovementModel`
+      (top-1 accuracy + informedFraction + mean confidence).
+- [ ] **Neural movement backend** implementing the same `MovementModelBackend`
+      seam (tiny token LSTM or n-gram mixture), benchmarked vs the Markov baseline
+      on shared synthetic held-out sets via `evaluateMovementModel`.
+- [ ] **Imitation-quality gate:** run `evaluateMovementModel` (mock backend) on a
+      held-out split of the reviewed export before emitting a training launch plan;
+      refuse to export datasets the model provably can't learn from.
+- [ ] Wire `movement-model` into the control-plane RPC surface + CLI (train a mock
+      model from stored trajectories, predict/rollout, report eval) so the
+      subsystem is reachable end-to-end, not just library-level.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

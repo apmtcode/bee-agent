@@ -6,6 +6,75 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-04 (run 9) — 🧠 In-process learnable movement model (objective #2c+#2d)
+
+**Audited:** The local-movement learning subsystem (`src/capture/` + `src/training/`)
+against objective #2's five pieces (capture → schema → dataset → replay →
+train/infer). Finding: pieces (a)–(c) exist (recorder, device/os/browser adapters,
+trajectory schema, replay manifest, reviewed-export dataset), and `runner.ts`
+emits **launch scripts** for external on-device trainers (mlx/axolotl) — but there
+was **no in-process model** that actually *learns* from recorded movements and
+*predicts/generalizes*. So objective #2(c) "post-train … to repeat" and #2(d)
+"generalize to new but related movements" were unvalidated in the cloud, and the
+"pluggable backend + deterministic mock + generalization eval" roadmap items were
+open.
+
+**Changed (additive) — new `src/training/movement-model.ts`:**
+- **Movement token schema.** `tokenizeAction` deterministically maps a captured
+  `TrajectoryAction` (device-adapter gesture metadata) to a discrete, learnable
+  token (`tool + gesture + /direction + @target`, slugified; summary-slug
+  fallback). `trajectoryToMovementTokens` orders a trajectory's actions by ts.
+- **Dataset format.** `buildMovementDataset` / `buildSamplesFromSequences` emit
+  sliding-window `(context → next)` `MovementSample[]` from trajectories or raw
+  token sequences.
+- **Pluggable backend seam.** `MovementModelBackend<S>` interface —
+  `train(dataset) → serializable snapshot` + pure `predict(snapshot, context)`.
+  The real on-device backend (mlx/axolotl) plugs into the same seam; snapshots
+  are JSON-serializable so they persist/reload.
+- **Deterministic mock backend.** `MarkovMovementBackend` — variable-order Markov
+  model with **stupid backoff** (Brants-style 0.4 discount per dropped order).
+  *Repeats* recorded flows at their highest matching order; *generalizes* to
+  unseen full contexts by backing off to shared sub-movements. No `Math.random`,
+  no clock → byte-identical snapshots for identical datasets (asserted in test).
+- **Replay/repeat engine.** `rolloutMovements` autoregressively continues a seed
+  context — reproducing a recorded flow move-for-move.
+- **Generalization eval harness.** `evaluateMovementModel` scores held-out
+  next-movement top-1 accuracy + `informedFraction` (context-matched vs unigram
+  fallback) + mean confidence.
+- Exported all of the above from `src/index.ts`.
+
+**Tests:** new `src/training/movement-model.test.ts` — 9 tests, synthetic gesture
+flows only (no real OS input): tokenization determinism, dataset windowing,
+exact-repeat rollout, **generalization via backoff to a shared suffix**, empty
+model, snapshot determinism, held-out eval accuracy=1.0. **9/9 ✅.** Build ✅
+(tsdown, 5 files). `typecheck:src` ✅ (source stays green). New module adds **0**
+new typecheck errors.
+
+**⚠️ Pre-existing blocker discovered (NOT introduced this run — verified by
+`git stash`):** 3 large integration tests now fail on a clean tree —
+`operator-runtime.test.ts` (background-task recover), `server.test.ts`,
+`app.test.ts` — all with a `SyntaxError` from `readJsonFile` parsing a
+background-task **state file** during recovery (`background-tasks.ts:234`, JSON
+"Expected ',' or '}'" ~pos 311). These were green at run 8 (174/174); the corruption
+appears environment/data-dependent (writes go through `writeJsonAtomic`, which
+JSON.stringifies cleanly, so the on-disk corruption implies a race or a
+stale-temp/rootDir-collision path worth a dedicated investigation). Because they
+are **pre-existing and unrelated** to this additive change, and the movement-model
+work is fully green with zero regressions, this run pushes to the designated
+branch and files the blocker as a ROADMAP priority rather than chasing it into a
+risky rewrite this hour.
+
+**New idea:** add an **imitation-quality gate** to the reviewed-export/training
+pipeline — before emitting a training launch plan, run `evaluateMovementModel`
+(mock backend) on a held-out split of the reviewed trajectories and refuse to
+export if `informedFraction`/accuracy fall below a threshold, so we never ship a
+dataset the model provably can't learn from. Second idea: a **higher-order neural
+backend** (tiny char/token LSTM or n-gram-mixture) implementing the same
+`MovementModelBackend` seam, benchmarked against the Markov baseline via the eval
+harness on the same synthetic held-out sets.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
