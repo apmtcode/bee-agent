@@ -59,16 +59,38 @@ unchecked items are queued. Keep this richer than you found it each run.
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
 (exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
-      objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
-      deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+- [x] Inventory what `src/capture` + `src/training` already implement vs. the
+      objective's five pieces — DONE run 9. Gap found: capture→schema→dataset→
+      replay covered; `training/runner.ts` only emits *plans/scripts* for
+      external tools; no in-process train+infer. Filled below.
+- [x] Pluggable local-model backend interface with a deterministic backend —
+      DONE run 9. `src/movement/movement-model.ts`: `MovementModelBackend`
+      interface (seam for a real on-device model) + `MarkovMovementBackend`
+      (order-k, stupid-backoff, no clock/RNG). Trains → repeats recorded
+      sequences (2c) → generalizes via backoff (2d). Serializable.
+- [x] Synthetic event-stream generator — DONE run 9.
+      `generateSyntheticMovementDataset` (integer-seeded, deterministic) +
+      dataset builders from `ReplayManifest`/`TrajectorySpan`. Drives a full
+      capture→dataset→train→replay round-trip test with no OS input.
+- [x] Generalization eval harness — DONE run 9. `evaluateReplayFidelity`
+      (token-level step accuracy + exact-sequence rate on held-out sequences).
+- [ ] `FileMovementModelStore`: persist a trained model (`toJSON` →
+      `writeJsonAtomic`) next to training-job artifacts; load via
+      `deserializeMovementModel`. Wire into `src/training/` execution.
+- [ ] Intent-conditioned movement head: key learned flows by a goal/context
+      token (active app + task label) so the backend selects which flow to
+      replay for a new goal — generalization beyond pure n-gram backoff.
+
+## Reliability / test-suite health
+- [ ] **Fix pre-existing flaky background-task tests** (diagnosed run 9). The
+      spawned bash launch script writes the execution state file
+      **non-atomically** (`printf … | sed … > state_path`), so a concurrent
+      `BackgroundTaskExecutionService.readState` → `readJsonFile` → `JSON.parse`
+      can land mid-write on a truncated file and throw. Affects
+      `operator-runtime`/`server`/`app` background-task suites (fail 2–4 of them
+      per full run, reproducible on a clean tree). Fix: have the script write to
+      a temp path + `mv` (atomic rename), and/or make `readState` tolerant of a
+      transient parse error (retry once). Deterministic once atomic.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

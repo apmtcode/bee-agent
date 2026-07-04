@@ -6,6 +6,65 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-04 (run 9) — 🧠 In-process movement model: train → repeat → generalize (objective 2c+2d)
+
+**Audited:** The local-movement learning subsystem (`src/capture/` + `src/training/`)
+against objective #2's five pieces. Found capture→schema→dataset→replay well
+covered, and `src/training/runner.ts` generates *plans/launch-scripts* for real
+on-device tools (`mlx_lm.lora`, `axolotl`) — but there was **no in-process model
+that actually trains and infers**. Pieces (c) "post-train a model to repeat the
+recorded movements" and (d) "generalize to related movements" had no runnable,
+cloud-testable implementation. That was the highest-value gap.
+
+**Changed (new module `src/movement/`, fully additive):**
+- `movement-model.ts` — the pluggable learning core:
+  - `MovementStep`/`MovementSequence`/`MovementDataset` schema (normalized
+    mouse/keyboard/gesture/tool steps) + stable `tokenizeStep` vocabulary.
+  - `MovementModelBackend` interface — the seam a real on-device small model
+    implements — plus `MarkovMovementBackend`, a dependency-free deterministic
+    order-k Markov model with **stupid-backoff** smoothing. No clock, no RNG, no
+    OS access → reproducible in the cloud.
+  - `TrainedMovementModel`: `predictNext` (greedy argmax + backoff, EOS-aware),
+    `generate` (bounded rollout that terminates at end-of-sequence), and
+    `toJSON`/`deserializeMovementModel` for persistence.
+  - `evaluateReplayFidelity` — the roadmap's **generalization eval harness**:
+    token-level step accuracy + exact-sequence rate on held-out sequences.
+- `movement-dataset.ts` — builders converting `ReplayManifest` / `TrajectorySpan`
+  (and structured device-gesture metadata) into `MovementDataset`, plus a
+  **deterministic synthetic event-stream generator** (`generateSyntheticMovementDataset`,
+  integer-seeded, no RNG) so the capture→dataset→train→replay round-trip runs
+  with zero real OS input.
+- Exported all of it from `src/index.ts`.
+
+**How this satisfies the objective:** (c) training on a dataset then
+`generate([firstStep])` reproduces the recorded tail **exactly** (test); (d) a
+novel-but-related prefix whose full context was never seen still yields a valid
+in-vocabulary next step via backoff (test asserts `backoff===true` and the step
+is drawn from the learned vocabulary). Backend is pluggable for a real model.
+
+**Test results:** 13 new tests (`movement-model.test.ts` 8, `movement-dataset.test.ts`
+5) — all ✅. `npm run build` ✅. `npm run typecheck:src` ✅ (exit 0, source stays
+clean). Full suite **184/187**; the **3 failures are pre-existing flaky
+subprocess tests** (`operator-runtime`/`server`/`app` background-task suites) —
+**verified by `git stash`: they fail 2/2 on the clean tree without my changes**,
+and the failing set varies run-to-run (2↔4). None are movement tests.
+
+**Root cause of the flakiness (newly diagnosed, logged to ROADMAP):**
+`BackgroundTaskExecutionService.readState` → `readJsonFile` → `JSON.parse` races
+the spawned bash launch script, which writes the state file **non-atomically**
+(`printf … | sed … > state_path` in `runner.ts`/`background-tasks`). A reconcile
+read landing mid-write hits a truncated file and throws. Real, fixable, but out
+of scope for this focused diff — queued.
+
+**New idea:** add an *intent-conditioned* movement head — key sequences by a
+short goal/context token (e.g. the active app + a task label) so the backend can
+select which learned flow to replay for a new goal, a concrete step toward true
+generalization beyond n-gram backoff. Also: a `FileMovementModelStore`
+(train → `toJSON` → `writeJsonAtomic`, load → `deserializeMovementModel`) to
+persist trained models next to the training job artifacts.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
