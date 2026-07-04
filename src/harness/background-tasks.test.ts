@@ -1,3 +1,4 @@
+import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -7,6 +8,23 @@ import {
   FileBackgroundTaskStore,
   type BackgroundTaskExecutionState,
 } from "./background-tasks.js";
+
+// The generated launch script shells out to bash + python3. Skip the
+// execute-for-real regression when either is unavailable rather than failing on
+// environments that lack them.
+const hasLaunchToolchain =
+  spawnSync("bash", ["-lc", "true"], { stdio: "ignore" }).status === 0 &&
+  spawnSync("python3", ["--version"], { stdio: "ignore" }).status === 0;
+
+function runLaunchScript(scriptPath: string, cwd: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const child = spawn("bash", [scriptPath], { cwd, stdio: "ignore" });
+    child.on("error", reject);
+    child.on("exit", (code) =>
+      code === 0 ? resolve() : reject(new Error(`launch script exited with ${code}`)),
+    );
+  });
+}
 
 const tempDirs: string[] = [];
 
@@ -370,4 +388,38 @@ describe("BackgroundTaskExecutionService", () => {
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
   });
+
+  it.skipIf(!hasLaunchToolchain)(
+    "executes the launch script for a single-quoted command, writing valid state with the real pid",
+    async () => {
+      const rootDir = await makeTempDir();
+      // Use a fake spawn so start() only *renders* the launch script; we then
+      // execute it ourselves and wait for completion (deterministic, no race).
+      const store = new FileBackgroundTaskStore(
+        path.join(rootDir, "background-tasks.json"),
+        () => ({ pid: 4242, unref() {} }),
+      );
+      // A command containing a single quote — the exact case that previously
+      // corrupted the state JSON (shellQuote) and left processId as "$$".
+      const command = `printf "%s" "it's a launch test"`;
+      const task = await store.start({ title: "Quoted", command, cwd: rootDir, kind: "task" });
+
+      await runLaunchScript(path.join(rootDir, task.execution.launchScript), rootDir);
+
+      // State file must be valid JSON (regression: unescaped quote broke it).
+      const raw = await fs.readFile(path.join(rootDir, task.execution.stateFile), "utf8");
+      const state = JSON.parse(raw) as BackgroundTaskExecutionState;
+      expect(state.status).toBe("completed");
+      expect(state.exitCode).toBe(0);
+      expect(state.command).toBe(command);
+      // Regression: the launch script must resolve the real numeric pid, not
+      // leave the literal placeholder "$$".
+      expect(typeof state.pid).toBe("number");
+      expect(Number.isFinite(state.pid)).toBe(true);
+      expect(state.pid).toBeGreaterThan(0);
+
+      const output = await fs.readFile(path.join(rootDir, task.execution.outputFile), "utf8");
+      expect(output).toContain("it's a launch test");
+    },
+  );
 });

@@ -6,6 +6,66 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-04 (run 9) — Fix two real bugs in the background-task launch script (state corruption + pid never resolved); deterministic tests
+
+**Audited:** Ran the suite in this cloud environment for the first time in a
+while and found **3 tests failing** (not the "174/174" the log claimed — the
+prior counts were recorded in a different environment where these real-process
+tests happened to pass by timing luck). Traced the failures to the generated
+background-task launch script in `src/harness/background-tasks.ts`.
+
+**Two genuine production bugs found & fixed** (both affect *every* real
+background task, not just tests):
+1. **State-JSON corruption on quoted commands.** `shellQuote` used the wrong
+   POSIX single-quote escape — `"'"'"'` (6 chars, leading `"`) instead of the
+   correct `'"'"'` (5 chars). Any command containing a `'` (e.g.
+   `printf 'line-1\nline-2\n'`) produced a malformed `state.json`
+   (`SyntaxError … in JSON at position 311`), so `readState` threw and recovery
+   blew up. Fixed to match the correct escape already used in
+   `training/runner.ts`.
+2. **PID never substituted.** The initial state was written via
+   `printf '%s' <payload> | sed "…; s/\"\$\$\"/$$/g"`. The `\"` renders to a
+   literal `"` that *terminates the shell-double-quoted sed program*, so the
+   `"$$"` → real-pid substitution silently became a no-op and `processId`
+   stayed the literal string `"$$"`. Downstream `isProcessRunning("$$")` (a
+   NaN pid) always reported dead → healthy tasks were misreported as
+   `missing-process`/degraded (this is what broke `app.test.ts` +
+   `server.test.ts`). **Fix:** replaced the fragile `printf`+`sed` with a
+   base64-carried payload written by `python3` (already a hard dependency of the
+   script's completion writer), resolving the real `$$` and `started_at`. Base64
+   is quote-safe, so no field value can ever break the JSON again.
+
+**Test determinism:** the state-machine tests (`operator-runtime`, `server`)
+spawned *real* detached processes and then wrote state manually — an inherent
+race (`sleep 5` liveness vs. wall-clock; async state writes vs. assertions).
+Injected a deterministic no-op `backgroundTaskSpawnProcess` so those tests
+control state explicitly; the suite went from flaky (0–3 failures/run) to
+**stable green across 5 consecutive runs**.
+
+**New regression test** (`background-tasks.test.ts`): renders a launch script
+for a single-quoted command (`printf "%s" "it's a launch test"`), *actually
+executes it* via bash, and asserts the resulting `state.json` parses, is
+`completed`, preserves the command verbatim, and carries a **finite numeric
+pid** — locking in both fixes. Guarded with `it.skipIf` when bash/python3 are
+absent so it stays portable.
+
+**Test results:** **175/175 passing** (was 171/174 failing on entry; +1 new
+test). `npm run build` ✅. `npm run typecheck:src` ✅ (exit 0). Full `tsc`
+test-file debt unchanged (untouched this run).
+
+**New idea / follow-up:** `src/training/runner.ts` `renderLaunchScript` has the
+**identical** broken `sed "…; s/\"\$\$\"/$$/g"` substitution (its `shellQuote`
+is already correct). Real Apple-Silicon training launches would therefore also
+persist `processId: "$$"`. It's latent because its test only checks script
+*content*, never executes it. Queued as a high-priority roadmap item with the
+same base64+python fix pattern (plus updating the `> '<stateFile>'`
+content-assertion in `runner.test.ts`). Bigger idea: a shared
+`renderStateInitScript(payload)` helper in `src/shared/` so both launchers use
+one audited implementation and this class of shell-quoting bug can't diverge
+again.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

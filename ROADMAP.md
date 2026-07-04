@@ -45,6 +45,26 @@ unchecked items are queued. Keep this richer than you found it each run.
       have the engine run it as a per-run pre-push self-check.
 - [ ] Add a minimal CI workflow mirroring `verify` for human-opened PRs.
 
+## Reliability / correctness
+- [x] **Background-task launch script: fix state-JSON corruption + unresolved
+      pid** (2026-07-04, run 9). `shellQuote` used the wrong single-quote escape
+      (`"'"'"'` → `'"'"'`) and the `sed` pid substitution was broken by a
+      literal `"` terminating the shell-quoted program, leaving
+      `processId: "$$"`. Replaced `printf`+`sed` with a base64+python initial
+      state writer; added an execute-for-real regression test.
+- [ ] **HIGH: `src/training/runner.ts` has the identical broken `sed` pid
+      substitution** (`s/\"\$\$\"/$$/g`). Its `shellQuote` is already correct,
+      but real training launches would persist `processId: "$$"`. Apply the same
+      base64+python fix; its test only checks script *content*, so update the
+      `> '<stateFile>'` assertion in `runner.test.ts` accordingly.
+- [ ] Extract a shared `renderStateInitScript(payload)` (in `src/shared/`) used
+      by both the background-task and training launchers, so shell-quoting/pid
+      handling lives in one audited place and can't diverge again.
+- [ ] Consider forwarding `backgroundTaskSpawnProcess`/`…IsProcessRunning`
+      through `OperatorCliAppOptions` so `app.test.ts` (which still spawns a real
+      `sleep 5`) can also be made race-free; it is green today but relies on
+      real-process timing.
+
 ## Capability parity (audit reference agents → port gaps)
 - [ ] Build a "capability inventory" generator: enumerate bee-agent's exported
       RPC/tool surface (`src/index.ts`) and diff it against `openclaw`,
