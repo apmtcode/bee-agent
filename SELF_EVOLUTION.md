@@ -6,6 +6,63 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-04 (run 9) — 🐛 Real bug: `shellQuote` corrupted every quoted background-task command; suite made hermetic (174→175, now deterministic)
+
+**Audited:** Baseline suite health. Found **3 tests failing non-deterministically**
+in the cloud env (run-to-run: sometimes 174/174, sometimes 1–3 red) — a
+regression from the "174/174" recorded last run. Traced every failure to the
+background-task launcher.
+
+**Root cause (two real product bugs + a test-hermeticity bug):**
+1. **`shellQuote` broke on single quotes.** It escaped `'` as `"'"'"'` (a
+   spurious leading `"`) instead of the POSIX-correct `'"'"'`. So any command
+   containing single quotes — e.g. `printf '%s' 'hello world'` — was corrupted
+   *both* in the recorded `state.json` (→ malformed JSON, `readState` throws
+   `SyntaxError`) *and* in the actually-executed `bash -lc <cmd>` (→ the task
+   ran a garbled command and exited non-zero). This is a genuine production
+   defect, not a test artifact.
+2. **Fragile running-state writer.** The initial `running` state was written via
+   `printf '%s' <json> | sed "…; s/"$$"/$$/g"`. The inner `"$$"` double quotes
+   were unescaped *inside* the double-quoted sed argument, so bash closed/reopened
+   the quote and the substitution silently no-op'd — `pid` stayed the literal
+   string `"$$"` and the timestamp placeholder was blanked.
+3. **Non-hermetic tests.** Three integration tests spawned **real detached OS
+   processes** (bash+python3) that raced with the tests' explicit
+   `writeState`/`writeOutput` fixtures and, via the platform circuit breaker,
+   added phantom failure counts (`failureCount 2→3`, `degraded→paused`).
+
+**Changed (all additive/reversible):**
+- **`src/harness/background-tasks.ts`:**
+  - Fixed `shellQuote` to emit `'"'"'` (correct POSIX single-quote escaping).
+  - Replaced the `printf|sed` running-state writer with a python argv-based
+    writer (`renderRunningStateWriterPython`) — valid JSON, real numeric `pid`
+    (`$$`), correct `startedAt`/`updatedAt`. Reuses the python interpreter the
+    completed/failed writers already depend on (no new dependency).
+- **`src/cli/app.ts`:** added a `backgroundTaskSpawnProcess` /
+  `backgroundTaskIsProcessRunning` injection seam to `OperatorCliAppOptions`
+  (mirrors the runtime's existing options + the `configHome` test-seam pattern)
+  and forwarded it to the runtime.
+- **Tests:** injected a no-op `noopSpawn` into the 3 flaky tests
+  (`operator-runtime.test.ts`, `server.test.ts` ×3 runtimes incl.
+  drift/breaker, `app.test.ts`) so no real process launches — state is fully
+  controlled by fixtures. Added a **regression test** that executes the *real*
+  generated launch script (`bash` via `execFileSync`, synchronous) with a
+  single-quoted command and asserts `state.json` is valid JSON, `command` is
+  preserved verbatim, `pid` is a `number`, and `exitCode === 0`.
+
+**Test results:** **3 flaky failures → 175/175 passing, stable across 6+ full
+runs** (was 174; +1 regression test). `npm run build` ✅. `npm run typecheck:src`
+✅ (exit 0). Full `tsc` **125** (unchanged — no new type debt). 🎯 The suite is
+green *and deterministic* again — the per-run pre-push gate is unblocked.
+
+**New idea:** add a lightweight **flake sentinel** to the engine's pre-push
+self-check — run `vitest run` 3× and fail the push if results differ, so
+nondeterminism is caught the run it's introduced rather than silently eroding
+the green baseline. Related: audit the *other* real-spawn test sites (the
+remaining `new StandaloneOperatorRuntime` constructions that still use the
+default spawn) — several leak real `sleep`/`tail -f` processes per run; a shared
+`noopSpawn` test helper (exported once) would make hermeticity the default.
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

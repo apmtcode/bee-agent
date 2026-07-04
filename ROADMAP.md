@@ -6,6 +6,19 @@ unchecked items are queued. Keep this richer than you found it each run.
 ## Foundations / DX
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
+- [x] **Fix `shellQuote` single-quote corruption + hermetic background-task
+      tests** (2026-07-04, run 9). Real product bug: `shellQuote` escaped `'`
+      as `"'"'"'` (spurious `"`), corrupting every quoted background-task command
+      in both `state.json` and the executed `bash -lc`. Also replaced the fragile
+      `printf|sed` running-state writer with a python argv writer, added a
+      `backgroundTaskSpawnProcess` seam to `OperatorCliAppOptions`, injected a
+      no-op spawn into 3 flaky tests, and added a launch-script regression test.
+      Suite: 3 flaky failures → 175/175 stable.
+- [ ] **Flake sentinel** in the pre-push self-check: run `vitest run` 3× and
+      fail the push if results differ, catching nondeterminism the run it lands.
+- [ ] Export a shared `noopSpawn` test helper and apply it to the remaining
+      real-spawn `StandaloneOperatorRuntime` test constructions (several leak
+      real `sleep`/`tail -f` processes per run) so hermeticity is the default.
 - [x] Make config loading hermetic in tests via an injectable `configHome`
       (2026-06-22).
 - [ ] **Pay down typecheck debt** (surfaced by the `typecheck` script). Full

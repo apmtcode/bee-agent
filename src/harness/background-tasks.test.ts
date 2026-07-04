@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -369,5 +370,40 @@ describe("BackgroundTaskExecutionService", () => {
     await expect(fs.readFile(path.join(rootDir, task.execution.launchScript), "utf8")).resolves.toContain("bash -lc");
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
+  });
+
+  it("generates a launch script whose state.json is always valid JSON, even for commands containing quotes", async () => {
+    const rootDir = await makeTempDir();
+    const filePath = path.join(rootDir, "background-tasks.json");
+    // Execute the real generated launch script synchronously so state.json is
+    // fully written by the time start() resolves — no race, no real detached
+    // process leak. This exercises the actual shell/python state-writer path.
+    const store = new FileBackgroundTaskStore(
+      filePath,
+      (command, _args, options) => {
+        execFileSync("bash", [command], { cwd: options.cwd, stdio: "ignore" });
+        return { pid: 1234, unref() {} };
+      },
+      () => true,
+    );
+
+    // A command with single quotes broke the old printf|sed state writer,
+    // corrupting the JSON and leaving pid/timestamps unsubstituted.
+    const task = await store.start({
+      sessionId: "sess-quote",
+      title: "Quoted command",
+      command: "printf '%s' 'hello world'",
+      cwd: rootDir,
+      kind: "task",
+    });
+
+    const state = await store.executionService.readState(task);
+    expect(state).toBeDefined();
+    expect(state?.status).toBe("completed");
+    expect(state?.command).toBe("printf '%s' 'hello world'");
+    // pid must be a real number, not the literal "$$" placeholder the old sed
+    // substitution silently failed to replace.
+    expect(typeof state?.pid).toBe("number");
+    expect(state?.exitCode).toBe(0);
   });
 });

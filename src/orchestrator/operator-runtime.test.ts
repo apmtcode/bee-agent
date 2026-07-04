@@ -15,6 +15,16 @@ async function makeTempDir(): Promise<string> {
   return dir;
 }
 
+// Hermetic background-task launcher: returns a fake pid and never spawns a real
+// OS process, so the recorded execution state is fully controlled by the test's
+// explicit writeState/writeOutput fixtures (a real detached process would race
+// with those and make assertions non-deterministic).
+let noopSpawnPid = 100000;
+function noopSpawn(): { pid: number; unref(): void } {
+  noopSpawnPid += 1;
+  return { pid: noopSpawnPid, unref() {} };
+}
+
 function buildHookCaptureCommand(outputFile: string): string {
   const script = [
     "import fs from 'node:fs';",
@@ -530,6 +540,7 @@ describe("StandaloneOperatorRuntime", () => {
   it("starts, syncs, recovers, lists, and cancels background tasks", async () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
+      backgroundTaskSpawnProcess: noopSpawn,
       backgroundTaskIsProcessRunning: () => false,
     });
     const session = await runtime.startSession({ title: "Tasks", agentId: "main" });
