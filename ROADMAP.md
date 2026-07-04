@@ -4,6 +4,23 @@ Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
 ## Foundations / DX
+- [x] **Reliability: launch scripts corrupted state JSON** (2026-07-04, run 9).
+      Background-task + training launch scripts hand-templated JSON and mutated it
+      with `sed`, so a command containing quotes/newlines/backslashes wrote invalid
+      JSON that crashed `readJsonFile`. Replaced with a Python here-doc writer
+      (argv → `json.dumps`). Also made 2 test files hermetic (no-op
+      `backgroundTaskSpawnProcess`) so they stop spawning real processes that raced
+      the suite → **174/174 green, 8/8 consecutive** (was 2–4 flaky/run).
+- [ ] **Adversarial launch-script round-trip test:** feed `renderLaunchScript`
+      commands with embedded `"` `'` `\` newlines `$(…)` `%s` unicode, run the
+      script in a sandbox tmpdir, assert `state.json` parses + round-trips. Catches
+      shell-quoting/JSON bugs structurally instead of by timing luck.
+- [ ] **Unify state writers:** route running *and* terminal state writes through one
+      shared Python state-writer helper so `background-tasks.ts` and `runner.ts`
+      can't drift.
+- [ ] **Pre-push self-check should run the suite twice** (or `--sequence.shuffle`)
+      to catch order/timing-dependent failures before they land (this run's bug was
+      invisible to a single pass on some machines).
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`

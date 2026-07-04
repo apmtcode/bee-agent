@@ -531,6 +531,10 @@ describe("StandaloneOperatorRuntime", () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
       backgroundTaskIsProcessRunning: () => false,
+      // Use a no-op spawner: this test drives the state-file reconciliation
+      // logic directly via writeState(), so launching a real detached process
+      // would race the async launch-script state writes against those writes.
+      backgroundTaskSpawnProcess: () => ({ pid: 999999, unref() {} }),
     });
     const session = await runtime.startSession({ title: "Tasks", agentId: "main" });
 

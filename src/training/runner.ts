@@ -166,26 +166,20 @@ function renderLaunchScript(execution: LocalTrainingExecution, plan: TrainingJob
   const quotedLogFile = shellQuote(execution.logFile);
   const quotedWorkingDirectory = shellQuote(execution.workingDirectory);
   const quotedCommand = `${shellQuote(plan.command[0] ?? "")}${plan.command.slice(1).map((arg) => ` ${shellQuote(arg)}`).join("")}`;
-  const quotedStatePayload = shellQuote(
-    JSON.stringify({
-      version: 1,
-      jobId: plan.jobId,
-      status: "running",
-      pid: "$$",
-      startedAt: "__OPENCLAW_STARTED_AT__",
-      updatedAt: "__OPENCLAW_STARTED_AT__",
-      logFile: execution.logFile,
-      workingDirectory: execution.workingDirectory,
-      command: plan.command,
-    }),
-  );
+  const quotedJobId = shellQuote(plan.jobId);
+  const quotedCommandJson = shellQuote(JSON.stringify(plan.command));
 
   return [
     "#!/usr/bin/env bash",
     "set -euo pipefail",
     `mkdir -p ${shellQuote(execution.artifactDir)} $(dirname ${quotedLogFile}) $(dirname ${quotedStatePath})`,
     "started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-    `printf '%s' ${quotedStatePayload} | sed "s/__OPENCLAW_STARTED_AT__/$started_at/g; s/\"\$\$\"/$$/g" > ${quotedStatePath}`,
+    // Write the initial "running" state via python's json.dumps rather than
+    // sed-templating a hand-built string: paths and command args may contain
+    // quotes, backslashes or sed metacharacters that would corrupt the JSON.
+    `python3 - ${quotedStatePath} $$ "$started_at" ${quotedJobId} ${quotedLogFile} ${quotedWorkingDirectory} ${quotedCommandJson} <<'PY'`,
+    ...renderRunningStateWriterPython(),
+    "PY",
     `printf '%s\n' "starting ${plan.mode} training for ${plan.jobId}" >> ${quotedLogFile}`,
     `if ${quotedCommand} >> ${quotedLogFile} 2>&1; then`,
     "  completed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
@@ -202,6 +196,27 @@ function renderLaunchScript(execution: LocalTrainingExecution, plan: TrainingJob
     "fi",
     "",
   ].join("\n");
+}
+
+function renderRunningStateWriterPython(): string[] {
+  return [
+    "import json",
+    "import pathlib",
+    "import sys",
+    "state_path = pathlib.Path(sys.argv[1])",
+    "state = {",
+    "  'version': 1,",
+    "  'jobId': sys.argv[4],",
+    "  'status': 'running',",
+    "  'pid': int(sys.argv[2]),",
+    "  'startedAt': sys.argv[3],",
+    "  'updatedAt': sys.argv[3],",
+    "  'logFile': sys.argv[5],",
+    "  'workingDirectory': sys.argv[6],",
+    "  'command': json.loads(sys.argv[7]),",
+    "}",
+    "state_path.write_text(json.dumps(state, indent=2) + '\\n')",
+  ];
 }
 
 function renderStateWriterPython(status: TrainingExecutionState["status"]): string[] {

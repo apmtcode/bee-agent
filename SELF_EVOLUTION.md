@@ -6,6 +6,60 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-04 (run 9) — 🐛 Reliability: launch scripts wrote corrupt JSON; test suite made deterministic
+
+**Audited:** The test suite's actual pass/fail state on a real run — the standing
+gate the engine relies on (step 5). Prior logs claimed **174/174**, but the suite
+was in fact **non-deterministically failing** (2–4 tests per run) and, when
+`operator-runtime.test.ts` ran in isolation, it failed **5/5** with a hard
+`SyntaxError: Expected ',' or '}' after property value in JSON`.
+
+**Root cause (a real product bug, not a test bug):** both background-task and
+training launch scripts built the initial `running` state file by *hand-templating
+a JSON string and mutating it with `sed`*
+(`printf '%s' '<json>' | sed "s/__OPENCLAW_STARTED_AT__/…/; s/\"\$\$\"/\$\$/"`).
+That is only valid when every embedded value is free of quotes, backslashes,
+newlines and sed metacharacters. A task whose command was `printf 'line-1\nline-2\n'`
+(literal newlines + single quotes) produced **invalid JSON on disk**; any concurrent
+`readJsonFile` (e.g. `recoverBackgroundTasks`) then threw and crashed the call. It
+surfaced now (not on 2026-06-23) because it is timing-dependent on the spawned bash
+script's write landing during a read.
+
+**Changed (additive, robust):**
+- `src/harness/background-tasks.ts` + `src/training/runner.ts`: replaced the
+  `sed`-templated running-state write with a **Python here-doc writer**
+  (`renderRunningStateWriterPython`) that receives every dynamic value as `argv`
+  and emits the file via `json.dumps` — identical to the already-correct
+  *completion* writer. No hand-built JSON, no `sed`, so arbitrary command/cwd/path
+  strings can no longer corrupt the state file.
+- **Test hermeticity** (`operator-runtime.test.ts`, `server.test.ts` ×3 runtimes):
+  these tests drive state-file reconciliation directly via `writeState()` and
+  assert `background.tasks.state` is `NOT_FOUND` until they write it — but they
+  spawned a **real** detached process (`sleep 5`, `printf …`) whose async launch
+  script raced those writes. Injected the already-supported
+  `backgroundTaskSpawnProcess: () => ({ pid: 999999, unref() {} })` no-op spawner
+  so the tests are deterministic and stop leaking real processes that slowed/raced
+  the whole suite under parallel load.
+- `src/training/runner.test.ts`: updated the launch-script assertion from the old
+  `> '<stateFile>'` sed-redirect to the new `python3 - '<stateFile>'` form.
+
+**Test results:** full `npm test` now **174/174, green 8/8 consecutive runs**
+(was 2–4 failing per run, and 5/5 hard-failing in isolation). `typecheck:src` ✅
+(exit 0). Build ✅. Pure reliability fix — behaviour of a *correct* command is
+unchanged; previously-*corrupting* commands now persist valid state.
+
+**New idea:** add a tiny property/round-trip test that feeds `renderLaunchScript`
+a battery of adversarial commands (embedded `"`, `'`, `\`, newlines, `$(…)`,
+`%s`, unicode), executes the generated script in a sandbox tmpdir, and asserts the
+resulting `state.json` parses and round-trips — so this class of shell-quoting/JSON
+bug is caught structurally rather than by luck of timing. Longer term: route ALL
+state writes (running *and* terminal) through a single shared Python state-writer
+helper so the two files can't drift, and consider having the engine's pre-push
+self-check run the suite **twice** (or with `--sequence.shuffle`) to catch
+order/timing-dependent failures like this one before they land.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
