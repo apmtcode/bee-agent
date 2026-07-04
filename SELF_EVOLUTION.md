@@ -6,6 +6,67 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-04 (run 9) — Movement-model backend: in-process train → infer → generalize (objective #2d)
+
+**Audited:** The local-movement learning subsystem (`src/capture/` + `src/training/`)
+against objective #2's five pieces (capture → schema → dataset → replay →
+train/infer). Found the crux gap: `src/training/runner.ts` only **emits a plan +
+shell launch script** that shells out to MLX/axolotl — which **cannot run in
+Anthropic's cloud**, so nothing turned a movement dataset into a *runnable policy*
+that predicts/generalizes movements. Objective #2(d) ("post-train a local model to
+repeat recorded movements" and "generalize to new but related movements") had no
+cloud-exercisable path and no pluggable backend seam.
+
+**Changed (additive) — new `src/training/movement-model.ts` (+ tests):**
+- **Tokenizers** `tokenizeReplays` / `tokenizeTrajectories`: turn
+  `ReplayTimelineEvent[]` / `TrajectorySpan[]` (the canonical exported movement
+  formats) into ordered movement-token sequences (`action:<tool>`, `obs:<source>`,
+  optional `msg:<role>`), timestamp-ordered. `buildMovementDataset` collects a
+  sorted vocabulary.
+- **`MovementModelBackend` interface** — the pluggable seam. Real on-device small
+  models implement the same `train(dataset) → MovementModel` shape; the MLX/axolotl
+  runner remains the production path behind it.
+- **`NGramMovementBackend`** — deterministic in-process backend. Learns next-token
+  transition counts for every context length 0..order-1, so `predictNext` uses the
+  longest seen context and **backs off** (Katz-style) to shorter/unigram contexts —
+  this is the *generalization* to unseen-but-related movements. Deterministic argmax
+  (count, then lexicographic) → reproducible in cloud/CI. `rollout()` replays a
+  sequence forward to an `<end>` sentinel; `serialize()`/`fromSnapshot()` make the
+  policy persistable/replayable.
+- **`evaluateNextTokenAccuracy`** — a generalization/replay-fidelity eval: next-token
+  accuracy over a (possibly held-out) sequence, plus the share of correct
+  predictions that required backoff.
+- Barrel exports added to `src/index.ts`.
+
+**Test results:** new `movement-model.test.ts` **13/13 green** (tokenization,
+dataset, exact-rollout replay fidelity, generalization via backoff on a held-out
+related trajectory, unigram fallback, determinism, snapshot round-trip, empty
+model). `npm run build` ✅. `npm run typecheck:src` ✅ (source stays clean).
+
+**⚠️ Pre-existing blocker surfaced (NOT caused by this run):** `npm test` now shows
+**3 failures** in `operator-runtime.test.ts` background-task recovery —
+`readJsonFile` throws `SyntaxError: Expected ',' or '}' after property value` while
+`recoverBackgroundTasks` reads a background-task **state file**. Confirmed by
+`git stash` that this reproduces on base HEAD `3c7b7236` **without** my changes, and
+consistently in isolation. Run 8 recorded 174/174 green at this same commit, so the
+freshly-installed newer toolchain (`@types/node ^26`, `typescript ^6`,
+`vitest ^4.1.9`; package-lock refreshed) appears to surface a latent
+atomicity/concurrency issue in `writeJsonAtomic`/`readJsonFile` under the container
+overlay fs (concurrent read during a rename), or a genuine race in the reconcile
+path. My change is additive and isolated (its own module + tests, all green), so I
+pushed to the designated feature branch and queued this as the **top** roadmap
+priority for next run.
+
+**New idea:** an **online/streaming movement backend** — instead of batch
+retraining, update the transition counts incrementally as each new reviewed
+trajectory lands (`model.observe(sequence)`), enabling continual on-device
+adaptation between full training jobs. Pairs naturally with a *confidence-gated
+autonomy* signal: only auto-execute a predicted movement when `predictNext`'s
+probability and matched-context-length exceed a threshold, else defer to the
+operator — turning the eval metric into a runtime safety gate.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

@@ -55,20 +55,45 @@ unchecked items are queued. Keep this richer than you found it each run.
       gaps.
 - [ ] Audit `claude-code` reference for slash-command / hook coverage gaps.
 
+## 🔴 Top priority (blocker) — restore green test suite
+- [ ] **Fix pre-existing background-task recovery failure** (surfaced run 9).
+      `npm test` shows 3 failures in `operator-runtime.test.ts`:
+      `readJsonFile` throws `SyntaxError: Expected ',' or '}' after property value`
+      when `recoverBackgroundTasks` reads a background-task state file. Reproduces
+      on base HEAD `3c7b7236` **without** run 9's changes; consistent in isolation.
+      Run 8 was 174/174 green at this commit, so the freshly-installed toolchain
+      (`@types/node ^26`, `typescript ^6`, `vitest ^4.1.9`) likely exposed a latent
+      atomicity race in `writeJsonAtomic`/`readJsonFile` (concurrent read during
+      rename on the container overlay fs) or in the reconcile write path. Start by
+      dumping the corrupt state file's bytes around offset ~311, then make
+      `writeJsonAtomic` fsync+rename fully durable and/or serialize per-file writes.
+
 ## Local-movement learning subsystem
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
-(exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
-      objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
-      deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+(exporter, job store/manifest, runner, execution service, **movement-model**).
+Next increments:
+- [x] Inventory `src/capture` + `src/training` vs the objective's five pieces —
+      DONE run 9 (capture/schema/dataset/replay were scaffolded; the missing piece
+      was an in-process train→infer→generalize path).
+- [x] Pluggable local-model backend interface + deterministic mock backend —
+      DONE run 9 (`MovementModelBackend` seam + `NGramMovementBackend` with
+      Katz-style context backoff for generalization; `src/training/movement-model.ts`).
+- [x] Generalization / replay-fidelity eval harness — DONE run 9
+      (`evaluateNextTokenAccuracy`: next-token accuracy + generalized share on
+      held-out related trajectories).
+- [ ] Synthetic event-stream generator: a helper that emits realistic randomized
+      (but seeded/deterministic) `ReplayTimelineEvent[]` streams so capture→dataset
+      →train→replay round-trips can be stress-tested at scale without real OS input.
+- [ ] Online/streaming backend: `model.observe(sequence)` to update transition
+      counts incrementally as reviewed trajectories land (continual adaptation
+      between full training jobs).
+- [ ] Confidence-gated autonomy: only auto-execute a predicted movement when
+      `predictNext` probability + matched-context-length exceed a threshold; else
+      defer to the operator. Turns the eval metric into a runtime safety gate.
+- [ ] Wire the movement-model into the training runner/job so a job can produce a
+      real (non-MLX) policy artifact in the cloud path, and add an RPC to
+      predict/rollout from a stored snapshot.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
