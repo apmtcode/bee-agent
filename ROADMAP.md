@@ -4,6 +4,26 @@ Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
 ## Foundations / DX
+- [x] **Fix background-task shell-quoting bug + make process tests hermetic**
+      (2026-07-04, run 9). `shellQuote()` in `harness/background-tasks.ts` used a
+      malformed POSIX escape (`"'"'"'` → should be `'"'"'`), corrupting the state
+      JSON for any command containing a `'`. Also plumbed
+      `backgroundTaskSpawnProcess`/`…IsProcessRunning` through `OperatorCliApp`
+      and added a shared fake-spawn to the 4 flaky tests so assertions no longer
+      race real detached OS processes. Suite **red→green: 175/175 deterministic**.
+- [ ] **Harden the non-atomic background/training state writer for production.**
+      The launch scripts write `state.json` via `printf … > file` (truncate) and
+      python `write_text` (in-place) — a concurrent reader can observe an
+      empty/partial file. Fix in the *reader* (`readState` retry-on-transient-
+      empty, distinguishing ENOENT from a mid-write empty) rather than the shell
+      writer (an atomic `> tmp; mv` variant was tried in run 9 and unexpectedly
+      broke a test — investigate why before retrying the writer approach). Guard
+      with a unit test that hammers concurrent write/read.
+- [ ] **`createSimulatedBackgroundProcess()` test helper.** A reusable
+      well-behaved fake process (writes running state + declared output on spawn;
+      `complete()/fail()/stayAlive()`; alive-pids registry) so the mega app/server
+      tests express task lifecycles declaratively, and the movement-subsystem
+      replay tests reuse the same deterministic model.
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`

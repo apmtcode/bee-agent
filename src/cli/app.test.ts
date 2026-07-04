@@ -16,6 +16,26 @@ async function makeTempDir(): Promise<string> {
   return dir;
 }
 
+/**
+ * Deterministic background-task process controls for tests. The fake spawn
+ * launches no real OS process (so assertions never race a detached process
+ * writing state/output), and hands back a high pid. `isProcessRunning` then
+ * treats those fake pids as alive while treating the low sentinel pids that
+ * tests write by hand (e.g. 999999) as dead — letting a test deliberately drive
+ * a task to "missing-process" without depending on real process lifetimes.
+ */
+const FAKE_BACKGROUND_PID_FLOOR = 2_000_000;
+let fakeBackgroundPid = FAKE_BACKGROUND_PID_FLOOR;
+function fakeBackgroundTaskControls() {
+  return {
+    backgroundTaskSpawnProcess: () => {
+      fakeBackgroundPid += 1;
+      return { pid: fakeBackgroundPid, unref: () => {} };
+    },
+    backgroundTaskIsProcessRunning: (pid: number) => pid >= FAKE_BACKGROUND_PID_FLOOR,
+  };
+}
+
 afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })));
 });
@@ -801,7 +821,7 @@ describe("OperatorCliApp", () => {
 
   it("supports session lifecycle, transcript, approvals, pairing, config, and prompt commands", async () => {
     const rootDir = await makeTempDir();
-    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25", ...fakeBackgroundTaskControls() });
     const firstSession = await app.runtime.startSession({ title: "first", cwd: rootDir, agentId: "operator-cli" });
     const secondSession = await app.runtime.startSession({ title: "second", cwd: rootDir, agentId: "operator-cli" });
 
@@ -1063,7 +1083,7 @@ describe("OperatorCliApp", () => {
 
   it("supports background and monitor task commands plus cron commands", async () => {
     const rootDir = await makeTempDir();
-    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25", ...fakeBackgroundTaskControls() });
     const session = await app.runtime.startSession({ title: "CLI ops", cwd: rootDir, agentId: "operator-cli" });
 
     const startOutput = await app.dispatchSlashCommand(
@@ -1078,6 +1098,10 @@ describe("OperatorCliApp", () => {
     if (!task) {
       throw new Error("expected background task");
     }
+    // The fake spawn runs no real process, so seed the output the command would
+    // have produced. This keeps the task "running" (deterministic) while still
+    // exercising the output-view commands below.
+    await app.runtime.backgroundTasks.executionService.writeOutput(task, "ok\n");
 
     const listOutput = await app.dispatchSlashCommand({ kind: "background-list" });
     expect(listOutput).toContain(task.id);

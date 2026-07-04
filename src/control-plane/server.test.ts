@@ -18,6 +18,22 @@ async function makeTempDir(): Promise<string> {
   return dir;
 }
 
+/**
+ * Deterministic background-task spawn for tests: launches no real OS process, so
+ * assertions never race a detached process writing state asynchronously. Each
+ * call returns a fresh high pid. Pair it with an `isProcessRunning` predicate
+ * (an explicit "alive pids" set, or `() => false`) to control liveness per task.
+ */
+let fakeBackgroundPid = 2_000_000;
+function fakeBackgroundSpawn(): ConstructorParameters<
+  typeof StandaloneOperatorRuntime
+>[0]["backgroundTaskSpawnProcess"] {
+  return () => {
+    fakeBackgroundPid += 1;
+    return { pid: fakeBackgroundPid, unref: () => {} };
+  };
+}
+
 afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })));
 });
@@ -81,9 +97,13 @@ const exportManifest: ReviewedExportManifest = {
 describe("OperatorControlPlaneServer", () => {
   it("handles session, transcript, approval, trajectory, memory, and orchestration methods", async () => {
     const rootDir = await makeTempDir();
+    // Tasks whose fake process should read as "alive"; others read as dead so a
+    // task deliberately left un-marked reconciles to missing-process.
+    const aliveBackgroundPids = new Set<number>();
     const runtime = new StandaloneOperatorRuntime({
       rootDir,
-      backgroundTaskIsProcessRunning: () => false,
+      backgroundTaskSpawnProcess: fakeBackgroundSpawn(),
+      backgroundTaskIsProcessRunning: (pid) => aliveBackgroundPids.has(pid),
       delivery: new OperatorDeliveryService(rootDir, {
         sendBrowserPush: async () => {},
       }),
@@ -626,6 +646,11 @@ describe("OperatorControlPlaneServer", () => {
       command: "sleep 5",
       kind: "task",
     });
+    // Keep this task's simulated process alive so remote-control health reads it
+    // as running (active), not reconciled to missing-process.
+    if (typeof remoteTask.execution.processId === "number") {
+      aliveBackgroundPids.add(remoteTask.execution.processId);
+    }
     await expect(server.handle({ method: "pairing.list", params: { status: "redeemed" } })).resolves.toMatchObject({
       ok: true,
       result: [expect.objectContaining({ id: pairingCreate.result.id, status: "redeemed" })],
@@ -952,6 +977,7 @@ describe("OperatorControlPlaneServer", () => {
     const driftingRootDir = await makeTempDir();
     const driftingRuntime = new StandaloneOperatorRuntime({
       rootDir: driftingRootDir,
+      backgroundTaskSpawnProcess: fakeBackgroundSpawn(),
       backgroundTaskIsProcessRunning: () => false,
     });
     const driftingServer = new OperatorControlPlaneServer({ runtime: driftingRuntime });
@@ -1018,6 +1044,7 @@ describe("OperatorControlPlaneServer", () => {
     const breakerRootDir = await makeTempDir();
     const breakerRuntime = new StandaloneOperatorRuntime({
       rootDir: breakerRootDir,
+      backgroundTaskSpawnProcess: fakeBackgroundSpawn(),
       backgroundTaskIsProcessRunning: () => false,
     });
     const breakerServer = new OperatorControlPlaneServer({ runtime: breakerRuntime });

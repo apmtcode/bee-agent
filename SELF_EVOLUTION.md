@@ -6,6 +6,76 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-04 (run 9) — 🐛 Fix background-task shell-quoting bug + hermetic process tests (suite red→green)
+
+**Audited:** The actual `npm test` result on this Linux cloud env — **not the
+logged "174/174"**. Baseline was **RED**: 4 tests failed
+(`operator-runtime`, `server`, `app`×2), all in the background-task subsystem.
+The log's green counts were from a different (slower/macOS) environment; the
+suite had latent bugs + timing races that only surface here.
+
+**Root causes found (two distinct):**
+1. **Real correctness bug** in `src/harness/background-tasks.ts` `shellQuote()`:
+   the POSIX single-quote escape was written `"'"'"'` (leading `"`) instead of
+   the correct `'"'"'` (the sibling `training/runner.ts` had it right). The
+   launch script embeds the task **command** in a shell-single-quoted JSON
+   payload, so **any command containing a `'`** (e.g. `printf 'line-1\n…'`) was
+   corrupted into invalid JSON — the state file then failed to parse and the
+   task could never be synced/recovered. This was surfacing as a
+   `SyntaxError … in JSON at position 311` from `readState`.
+2. **Non-hermetic tests**: several integration tests call `startBackgroundTask`,
+   which spawns a **real detached** process (`sleep 5`, `printf …`, `tail -f`)
+   whose async state/output writes race the test's assertions. Whether a task
+   read as "running" vs "completed/missing" depended on OS process timing, so
+   the tests were inherently flaky here (measured 1/8 flake even after the
+   quoting fix; some assertions deterministically wrong).
+
+**Changed:**
+- **`src/harness/background-tasks.ts`** (1 line): corrected the `shellQuote`
+  escape sequence. This is the whole product fix.
+- **`src/cli/app.ts`** (additive): plumbed `backgroundTaskSpawnProcess` +
+  `backgroundTaskIsProcessRunning` through `OperatorCliAppOptions` into the
+  runtime (the runtime already exposed these; the CLI app didn't forward them).
+  Production leaves them undefined → unchanged behaviour.
+- **Hermetic test infra** (test-only): added a shared *fake spawn* to
+  `operator-runtime.test.ts`, `app.test.ts`, and `server.test.ts` that launches
+  no OS process and returns a high fake pid. Paired with an `isProcessRunning`
+  predicate (an explicit **alive-pids Set** in the mega server test, so one task
+  reads alive→active and another reads dead→missing-process; a pid-floor
+  discriminator in app tests; `() => false` where a test drives failure). Where
+  a test relied on real command *output* (`printf ok`), the output is now seeded
+  explicitly via `writeOutput`.
+- **Regression test** (`background-tasks.test.ts`): "emits valid state JSON for
+  commands containing single quotes" — runs the generated launch script
+  **synchronously** (no reader race) and asserts the state round-trips (valid
+  JSON, command preserved, completed/exit 0). Verified it **fails** with the old
+  `"'"'"'` escape and **passes** with the fix.
+
+**Test results:** `npm test` **175/175 passing, deterministic across 4 full
+runs** (was 174 with 4 flaky failures; +1 new regression test). `typecheck:src`
+✅ clean. Full `tsc` unchanged at **125** (all pre-existing, test-only; my
+test additions used typed `ConstructorParameters<…>` seams). Build ✅.
+
+**Deliberately NOT shipped (investigated, reverted):** I tried (a) making the
+launch script write state **atomically** (`> tmp; mv`) and (b) a
+`readJsonFileResilient` retry-reader. Both are *theoretically* correct hardening
+for the non-atomic `> state.json` writer, but (a) deterministically broke a test
+(8/8) via an interaction I couldn't fully explain and (b) shifted which timing
+assertion failed. Per the "no clever change that breaks things" guardrail I
+reverted both and fixed the tests hermetically instead — the robust,
+understood fix. The production hardening is now a ROADMAP item.
+
+**New idea:** Now that `backgroundTaskSpawnProcess` is a first-class injection
+seam, add a small reusable **`createSimulatedBackgroundProcess()`** test helper
+(shared across suites) that models a well-behaved process: writes a `running`
+state + declared output on "spawn", exposes `complete()/fail()/stayAlive()`
+transitions, and integrates with an alive-pids registry. That would let the
+mega server/app tests express task lifecycles declaratively instead of each
+re-deriving fake-spawn + pid bookkeeping — and make the *movement-subsystem*
+replay tests (objective #2) reuse the exact same deterministic process model.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
