@@ -4,6 +4,17 @@ Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
 ## Foundations / DX
+- [ ] **🔴 Fix 3 date/environment-sensitive test failures** (surfaced 2026-07-04,
+      run 9). `server.test.ts`, `app.test.ts`, `operator-runtime.test.ts` were
+      green on 2026-06-23 but fail after the calendar rolled to 2026-07-04 — they
+      reproduce on a clean tree, independent of the movement-model change. Known
+      symptom: `operator-runtime` `recoverBackgroundTasks` reads a state file the
+      shell state-writer emitted as invalid JSON (`Expected ',' or '}' … position
+      311`). Likely a `$$`/date interpolation bug in the background-task launch
+      script's state writer (`src/harness/background-tasks.ts` +
+      `src/training/runner.ts` `renderStateWriterPython`/`renderLaunchScript`).
+      Investigate the sed substitution `s/"\$\$"/$$/g` and any hard-coded 2026-01
+      fixtures. Blocks a green full suite.
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`
@@ -62,13 +73,23 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
+      for a real on-device small model. — DONE run 9 (`src/training/movement-model.ts`:
+      `MovementModelBackend` seam + `NearestContextMovementBackend` reference
+      backend + `buildMovementDataset` from replays). Repeats recorded movements
+      verbatim (2c) and generalizes via slot substitution (2d).
 - [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      round-trips without real OS input. (`buildMovementDataset` round-trip test
+      exists; still want a generator that emits full replay manifests.)
+- [ ] Generalization eval harness: hold out one trajectory, train on the rest,
+      query with a paraphrased/parameter-swapped context, score replay fidelity
+      (step-kind + tool match + post-substitution summary edit distance). Turns
+      generalization into a tracked number and a baseline for a learned backend
+      to beat. (Backend now exists to measure — run 9.)
+- [ ] Real on-device backend implementing `MovementModelBackend` that loads the
+      trained `model.gguf` produced by `LocalAppleSiliconTrainingRunner`, wired
+      behind the same seam so cloud tests keep using the deterministic backend.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

@@ -6,6 +6,57 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-04 (run 9) — 🎯 Movement-model backend: capture→dataset→train→infer loop closes (objective #2 c+d)
+
+**Audited:** The local-movement learning subsystem (standing objective #2).
+`src/capture/` records trajectories and `src/training/runner.ts` prepares a real
+on-device fine-tune (MLX/axolotl launch script) — but that path only runs on the
+user's machine, and there was **no inference half at all**: nothing takes recorded
+movements and either *repeats* them (2c) or *generalizes* to new-but-related ones
+(2d), and no pluggable model backend existed (an open ROADMAP item). Eight prior
+runs were all typecheck-debt grinding; this run adds a real capability.
+
+**Changed (additive):**
+- **New `src/training/movement-model.ts`** — the pluggable model seam:
+  - `MovementModelBackend` interface (`train(dataset) → MovementModel`), and
+    `MovementModel.predict(context) → MovementPrediction`. A real on-device
+    backend loading a trained `model.gguf` implements the same interface and is
+    swapped in locally; the seam keeps the pipeline runnable in the cloud.
+  - `NearestContextMovementBackend` — a deterministic, dependency-free reference
+    backend. Indexes examples by context token-set; a query finds the nearest
+    recorded context (Jaccard). An exact match **replays verbatim** (2c); a
+    partial match is **generalized** by pairing the differing "slot" tokens
+    (e.g. `report.txt` → `invoice.txt`) and substituting them into the recorded
+    step summaries (2d). No randomness/I/O: same dataset+query ⇒ same output.
+  - `buildMovementDataset(replays)` — derives the dataset from reviewed replay
+    manifests (user transcript = context; obs/action events per trajectory =
+    steps), so it plugs directly into the existing export pipeline.
+- Exported the new surface from `src/index.ts`.
+- **New `src/training/movement-model.test.ts`** (8 tests): verbatim replay,
+  slot-substitution generalization, nearest-trajectory selection, determinism,
+  empty-dataset + unrelated-context handling, and a replay→dataset→backend
+  round-trip.
+
+**Test results:** `typecheck:src` ✅ (clean). Build ✅. New module **8/8** green;
+full suite **179 passed**. ⚠️ **3 pre-existing failures remain** (server.test.ts,
+app.test.ts, operator-runtime.test.ts) — these reproduce on a clean
+`git stash` of my change, so they are NOT this run's regression. Root cause is
+date/environment-sensitive: e.g. operator-runtime's `recoverBackgroundTasks`
+reads a state file the shell state-writer produced with invalid JSON
+(`Expected ',' or '}' … position 311`). They were green on 2026-06-23 and broke
+with the calendar rollover to 2026-07-04. Logged as top-priority ROADMAP item.
+Push is to the designated feature branch (not main), so no green-`main` invariant
+is violated and progress is preserved.
+
+**New idea:** add a **generalization eval harness** — hold out one recorded
+trajectory, train on the rest, query with a paraphrased/parameter-swapped
+context, and score replay fidelity (step-kind match + tool match + summary edit
+distance after slot substitution). That turns "does it generalize?" into a
+regression-tracked number and gives a target for a future learned backend to beat
+the nearest-context baseline.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
