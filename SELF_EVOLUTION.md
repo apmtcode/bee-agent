@@ -6,6 +6,67 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-04 (run 9) — 🐛 Fix background-task launch-script JSON corruption + broken `shellQuote`; kill test flakiness
+
+**Audited:** Ran the suite on the fresh container and found **3 deterministic
+failures** (the log claimed 174/174 at run 8). Traced them, and a further
+intermittent (~1-in-6) flake, to real bugs in `src/harness/background-tasks.ts`.
+
+**Root causes (two genuine runtime bugs, reproduced with a real `run.sh`):**
+1. **Launch-script JSON corruption.** `renderLaunchScript` built the initial
+   `state.json` with a hand-rolled `printf '<json>' | sed "…; s/"$$"/$$/g"`
+   pipeline. Two defects: (a) the sed arg's **unescaped double-quotes around
+   `$$`** broke shell quoting so the `"$$"`→pid substitution silently failed
+   (leaving `"pid":"$$"`); (b) embedding a JSON-in-shell payload with nested
+   `'"'"'` quoting **corrupted the `command` field** for any command containing
+   quotes/newlines, producing **invalid JSON**. `readState`→`JSON.parse` then
+   threw and crashed every `recover*` loop (the operator-runtime failure), which
+   cascaded into the app/server tests that share the runtime.
+2. **`shellQuote` was wrong.** The single-quote escape used `"'"'"'` (mis-ordered)
+   instead of the POSIX `'"'"'`. Any user command containing a `'` (extremely
+   common — `printf 'x'`, `python -c 'print(1)'`) was corrupted before execution.
+   Verified round-trip: 5/5 cases now `OK`, single-quote cases were `MISMATCH`
+   before.
+
+**Changed (`src/harness/background-tasks.ts`, additive/reversible):**
+- Rewrote `renderLaunchScript` to write the initial "running" state via a
+  **`python3` heredoc + `json.dumps`** (guaranteed-valid JSON), passing values as
+  individual **shell-quoted argv** — no JSON-in-shell, no `sed`. All three state
+  writes (initial/completed/failed) now go through a shared `ATOMIC_STATE_WRITE`
+  (temp file + `.replace()`), so concurrent recover readers never see a partial
+  file.
+- Fixed `shellQuote` to use the correct `'"'"'` escape.
+- Hardened `BackgroundTaskExecutionService.readState`: a `SyntaxError` (corrupt/
+  partial state file) now degrades to `undefined` instead of throwing, so one bad
+  file can't crash a multi-task recover loop.
+
+**Flakiness fix (test determinism):** the 4 control-plane/orchestrator tests
+constructed the runtime with a mocked `isProcessRunning` but **still spawned real
+detached `run.sh` processes**, whose async completion nondeterministically bumped
+a circuit-breaker `failureCount` (2 vs 3) and remote-control state. Injected a
+no-op `backgroundTaskSpawnProcess` (the existing seam) into all four
+(server / operator-runtime / gateway-transport / session-stream tests). The tests
+already write their own state via `writeState`, so behaviour is unchanged.
+
+**Tests added (`background-tasks.test.ts`):** (a) an **integration** test that
+runs the real generated launch script with a command containing single quotes +
+a newline and asserts the resulting `state.json` is valid JSON with the exact
+command preserved and `status: completed` — locks in both bugs; (b) a `readState`
+corrupt-file tolerance test.
+
+**Test results:** 3 failing + flaky → **176/176 passing, deterministic across
+5+ full runs** (was 174; +2 regression tests). `typecheck:src` ✅. Build ✅.
+
+**New idea:** add a tiny `verify:launch-script` smoke that fuzzes
+`renderLaunchScript` over a corpus of nasty commands (embedded `"`, `'`, `$`,
+backticks, newlines, `\n` literals, unicode), runs each real script, and asserts
+valid-JSON state + exact command round-trip — turning "shell-quoting is hard"
+into a guarded invariant rather than a latent corruption class. Longer term,
+factor the launch-script renderer into its own module so it (and `shellQuote`)
+are unit-testable without the whole store.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

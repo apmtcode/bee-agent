@@ -370,4 +370,54 @@ describe("BackgroundTaskExecutionService", () => {
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
   });
+
+  it("returns undefined instead of throwing when a state file is corrupt", async () => {
+    const rootDir = await makeTempDir();
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"), () => ({ pid: 1212, unref() {} }));
+    const task = await store.start({ title: "Corrupt state", command: "printf 'x'", cwd: rootDir });
+
+    // Simulate a partially written / malformed state file — a recover loop
+    // reconciling many tasks must not crash on one bad file.
+    const statePath = path.join(rootDir, task.execution.stateFile);
+    await fs.mkdir(path.dirname(statePath), { recursive: true });
+    await fs.writeFile(statePath, '{"version":1,"taskId":"broken","command":"printf "oops', "utf8");
+
+    await expect(store.executionService.readState(task)).resolves.toBeUndefined();
+  });
+
+  it("generates a launch script that writes valid JSON state for commands with quotes and newlines", async () => {
+    const rootDir = await makeTempDir();
+    // The command deliberately contains single quotes and a newline — the exact
+    // shape that the old printf|sed launch pipeline (and the mis-ordered
+    // shellQuote escape) corrupted into invalid JSON.
+    const command = "printf '%s\\n' 'it'\\''s a test'";
+    // Use the real spawn so the generated bash/python launch script actually runs.
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"));
+    const task = await store.start({ title: "Quoted command", command, cwd: rootDir, kind: "task" });
+
+    const statePath = path.join(rootDir, task.execution.stateFile);
+    const deadline = Date.now() + 5000;
+    let raw: string | undefined;
+    while (Date.now() < deadline) {
+      try {
+        const content = await fs.readFile(statePath, "utf8");
+        const parsed = JSON.parse(content) as BackgroundTaskExecutionState;
+        if (parsed.status === "completed" || parsed.status === "failed") {
+          raw = content;
+          break;
+        }
+      } catch {
+        // File may be mid-write or not present yet — the atomic replace + valid
+        // JSON guarantee means a successful read is always parseable.
+      }
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+
+    expect(raw, "launch script did not produce a terminal state in time").toBeDefined();
+    const state = JSON.parse(raw as string) as BackgroundTaskExecutionState;
+    expect(state.taskId).toBe(task.id);
+    expect(state.command).toBe(command);
+    expect(state.status).toBe("completed");
+    expect(typeof state.pid).toBe("number");
+  });
 });

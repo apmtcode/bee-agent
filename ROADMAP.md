@@ -70,6 +70,22 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Generalization eval harness: measure replay fidelity on held-out but
       related synthetic trajectories.
 
+## Reliability / correctness
+- [x] **Background-task launch script + `shellQuote` corruption** (2026-07-04,
+      run 9). The generated `run.sh` built the initial `state.json` with a
+      `printf|sed` pipeline that produced invalid JSON for commands containing
+      quotes/newlines, and `shellQuote` used a mis-ordered single-quote escape —
+      corrupting any command with a `'`. Rewrote initial-state writing via a
+      `python3`/`json.dumps` heredoc with atomic temp+replace, fixed `shellQuote`,
+      and made `readState` tolerant of corrupt/partial files. Killed the real-
+      process test flakiness by injecting a no-op spawn into the 4 affected tests.
+- [ ] **Launch-script fuzz smoke** (`verify:launch-script`): fuzz
+      `renderLaunchScript` over a corpus of nasty commands (embedded `"`, `'`,
+      `$`, backticks, literal + real newlines, unicode), run each real script,
+      assert valid-JSON state and exact-command round-trip.
+- [ ] Factor the launch-script renderer + `shellQuote` into their own module so
+      they are unit-testable without constructing the whole store.
+
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in
