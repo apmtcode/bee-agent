@@ -370,4 +370,48 @@ describe("BackgroundTaskExecutionService", () => {
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
   });
+
+  // Regression for the launch-script quoting/state-write bugs: (1) shellQuote
+  // used `"'"'"'` (spurious leading `"`) instead of the canonical `'"'"'` POSIX
+  // sequence, corrupting any command containing a single quote; (2) the initial
+  // "running" state was written with `printf | sed`, and `s/"$$"/pid/` never
+  // matched because `$` is a sed end-of-line anchor, so the literal string
+  // `"$$"` leaked into the state file. Both produced JSON that later crashed
+  // json parsing during recovery. Executes the REAL bash+python launch script.
+  it("writes a valid running-state file with a substituted pid and single-quoted command", async () => {
+    const rootDir = await makeTempDir();
+    // Real spawn (default) so the rendered launch script actually runs.
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"));
+    const command = "printf 'line-1\nline-2\n'";
+    const task = await store.start({ title: "Quoted command", command, cwd: rootDir, kind: "task" });
+
+    // Poll until the launch script's python writer produces a terminal state.
+    const statePath = path.join(rootDir, task.execution.stateFile);
+    let raw = "";
+    let state: BackgroundTaskExecutionState | undefined;
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      try {
+        raw = await fs.readFile(statePath, "utf8");
+        // Must always be parseable — the old bug produced corrupt JSON here.
+        state = JSON.parse(raw) as BackgroundTaskExecutionState;
+        if (state.status === "completed" || state.status === "failed") {
+          break;
+        }
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+          throw new Error(`state file was not valid JSON: ${(error as Error).message}\n${raw}`);
+        }
+      }
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+
+    expect(state).toBeDefined();
+    expect(state?.status).toBe("completed");
+    // pid must be the real numeric shell pid, never the literal string "$$".
+    expect(typeof state?.pid).toBe("number");
+    expect(state?.pid).toBeGreaterThan(0);
+    // The single-quoted command must round-trip exactly.
+    expect(state?.command).toBe(command);
+    expect(state?.startedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+  });
 });

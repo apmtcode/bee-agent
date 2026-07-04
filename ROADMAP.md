@@ -4,6 +4,20 @@ Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
 ## Foundations / DX
+- [x] **Fix background-task launch-script corruption** (2026-07-04, run 9).
+      `shellQuote` used a malformed POSIX escape (`"'"'"'` vs `'"'"'`) and the
+      initial state was written via `printf | sed` where `s/"$$"/pid/` never
+      matched (`$` is a sed anchor). Both corrupted the state file → recovery
+      crashes. Fixed `shellQuote`, moved the initial-state write to python, added
+      a real-launch-script regression test, and made 3 integration tests hermetic
+      via an injected no-op spawn. Suite 172/175 flaky → **175/175 stable**.
+- [ ] `renderLaunchScript` golden/snapshot test: export it (or a thin wrapper)
+      and snapshot the generated bash so quoting regressions are caught without a
+      live shell. (queued run 9)
+- [ ] Emit the background-task runner as a single `python3` process (spawn python
+      directly rather than bash-that-calls-python) to remove the shell-quoting
+      surface entirely and make it portable to non-POSIX-shell platforms.
+      (queued run 9)
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`
@@ -80,6 +94,12 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Barrel-collision lint: scan `src/index.ts` re-exports for names exported
       from more than one module and flag them, so duplicate-identifier debt is
       caught at authoring time instead of accumulating silently.
+- [ ] Test hermeticity sweep: several suites construct `StandaloneOperatorRuntime`
+      without injecting `backgroundTaskSpawnProcess`, so they launch real
+      `sleep`/`printf` processes whose async state writes race the assertions
+      (root cause of the run-9 breaker flake). Audit every runtime construction in
+      tests and default background-task tests to a deterministic injected spawn;
+      reserve real-spawn only for the one dedicated launch-script regression test.
 - [ ] Per-module typecheck ratchet: record each module's current `tsc` error
       count to a baseline file and fail if a module regresses above it. Lets the
       engine pay debt down module-by-module without one green-gate blocking

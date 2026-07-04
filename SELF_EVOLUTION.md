@@ -6,6 +6,66 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-04 (run 9) — 🐛 Fix background-task launch-script corruption: suite 172→175 green
+
+**Audited:** Ran the suite first (baseline) and found **3 failing tests** that
+the run-8 log had recorded as green — `operator-runtime.test.ts`,
+`server.test.ts`, `app.test.ts`, all in the background-task path. Confirmed the
+failures reproduce on a clean HEAD (`git stash`), so they are pre-existing
+regressions, not test flakiness I introduced. Root-caused two **real bugs** in
+`src/harness/background-tasks.ts`'s `renderLaunchScript`:
+
+1. **`shellQuote` used the wrong POSIX single-quote escape.** It replaced each
+   `'` with `` "'"'"' `` (6 chars, spurious leading `"`) instead of the
+   canonical `'"'"'` (= `'\''`, 5 chars). Any command containing a single quote
+   (e.g. `printf 'line-1\nline-2\n'`) was corrupted in the state file, producing
+   invalid JSON that later crashed `JSON.parse` in `readState` during recovery
+   (`SyntaxError: Expected ',' or '}'…`).
+2. **The initial "running" state was written with `printf | sed`**, and the pid
+   substitution `s/"$$"/pid/g` **never matched** — `$` is an end-of-line anchor
+   in a sed BRE, so the literal string `"$$"` leaked into the state file as the
+   pid. Recovery then read a "running" state whose `pid` was `"$$"` (a string),
+   `isProcessRunning` returned false, and the task was falsely reconciled as
+   `missing-process` instead of `unchanged`.
+
+**Changed (additive, `src/harness/background-tasks.ts`):**
+- Fixed `shellQuote` to emit `'\''` — the textbook POSIX escape. Documented why.
+- Replaced the fragile `printf | sed` initial-state write with a python writer
+  (`renderRunningStateWriterPython`) — consistent with the existing
+  completion/failure writers. The JSON payload is now passed to python as a
+  **safely-quoted argv** (via the fixed `shellQuote`) and python injects the
+  real `$$` pid + `started_at` via `json.loads`/`json.dumps`. No shell string
+  munging of JSON anywhere in the launch script now.
+
+**Test hardening (no behavior masked):**
+- New regression test in `background-tasks.test.ts` that executes the **real**
+  bash+python launch script and asserts the state file is always valid JSON, the
+  command round-trips exactly, and the pid is a real number (never `"$$"`).
+- Made three integration tests hermetic by injecting a deterministic no-op
+  `backgroundTaskSpawnProcess` (`operator-runtime.test.ts` background-task test;
+  `server.test.ts` drifting + breaker runtimes). These tests drive control-state
+  scenarios via explicit `writeState`, but were *also* spawning real
+  `sleep 5`/`printf` processes whose async initial-state writes raced the
+  assertions — the fixed (faster, reliable) initial write exposed the latent
+  race as an order/parallelism-dependent `failureCount 2→3` breaker flake. The
+  no-op spawn removes the confound without hiding any product bug.
+
+**Test results:** full suite **172/175 → 175/175**, green across **3 back-to-back
+full runs** (was flaky 1-fail before). `npm run build` ✅. `npm run
+typecheck:src` ✅ (exit 0). Fix verified end-to-end with a standalone repro that
+runs the actual generated launch script.
+
+**New idea:** the launch script is generated bash executed via real
+`spawn`/`python3`, yet nothing tests the *generated script text* directly — add
+a `renderLaunchScript` golden/snapshot unit test (export it or test via a thin
+wrapper) so quoting regressions are caught at authoring time without needing a
+live shell. Longer term, consider emitting the whole runner as a single
+`python3` process (spawn python directly instead of bash-that-calls-python):
+it eliminates the bash-quoting attack surface entirely and makes the runner
+portable to platforms without a POSIX shell.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
