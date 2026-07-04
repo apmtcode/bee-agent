@@ -6,6 +6,70 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-04 (run 9) — 🧠 In-process movement model: train → predict → generalize → eval (objective #2 c/d)
+
+**Audited:** The local-movement learning subsystem (`src/capture/` +
+`src/training/`) against standing objective #2. Runs 5–8 were all typecheck /
+result-map work; the movement subsystem hadn't advanced since run 2. Found the
+core gap: capture → dataset → replay existed, and the training **runner** only
+emits *external* launch plans (`mlx_lm.lora` / `axolotl`) for on-device
+runtimes — there was **no in-process model that can actually train, predict, or
+generalize**, so objective #2(c) "repeat recorded movements" and #2(d)
+"generalize to new-but-related movements" were entirely untestable in the cloud.
+
+**Changed (additive):** new module `src/training/movement-model.ts` — a
+deterministic, cloud-runnable movement-learning backend:
+- **Schema/dataset:** `MovementToken` (channel/action/target/direction),
+  `MovementSequence`, `MovementDataset`.
+- **Pluggable backend seam:** `MovementModelBackend` interface + a
+  `MOVEMENT_BACKENDS` registry (`createMovementBackend`/`registerMovementBackend`)
+  so a real on-device small model can drop in without changing callers — the
+  documented seam next to the existing MLX/Axolotl runner.
+- **Shipped backend:** `NGramMovementBackend` — an order-N n-gram with
+  **Katz-style backoff**. Trains transition counts at every backoff level with
+  START/END padding; predicts the next movement by longest-matching context,
+  backing off to shorter contexts (and finally the global unigram) so **unseen
+  contexts still generalize**. Deterministic argmax (count desc, key asc) — no
+  `Date`/`Math.random`, fully reproducible.
+- **Inference/replay:** `predictNext` (reports `contextOrderUsed` = backoff
+  depth) and `rollout` (autoregressive continuation, stops at learned END,
+  capped by `maxSteps`). `snapshot()`/`movementPolicyFromSnapshot()` for
+  JSON-persistable trained policies.
+- **Capture bridges:** `movementDatasetFromTrajectories` /
+  `movementSequenceFromReplayManifest` turn recorded `TrajectorySpan`s and
+  replay manifests into training data (reads gesture/target/direction from
+  action metadata, falls back to the summary verb).
+- **Generalization eval harness:** `evaluateMovementPolicy` prompts the policy
+  with a prefix of each *held-out* sequence and scores its rollout against the
+  true continuation (per-sequence + average fidelity, exact-match count) —
+  directly implements the ROADMAP "generalization eval harness" item.
+- Exported the full surface from `src/index.ts`.
+
+**Test results:** new `src/training/movement-model.test.ts` — **19/19 passing**
+(exact reproduction, backoff generalization, END-termination, maxSteps cap,
+snapshot round-trip through `JSON.parse(JSON.stringify(...))`, all three capture
+bridges, and the eval harness at perfect/partial/empty fidelity). Full suite
+**190/193** (was 174 tests → +19 new, all green). `typecheck:src` ✅ (exit 0).
+Build ✅. The **3 remaining failures are pre-existing environmental flakes**,
+not from this change: they live in `control-plane/server.test.ts`,
+`cli/app.test.ts`, and `orchestrator/operator-runtime.test.ts` and all trace to
+real background-process semantics in the cloud sandbox — a spawned task's
+process isn't found alive (`control=degraded … missing-process`) and a
+shell/`sed`-generated state file fails to parse (`SyntaxError … position 311`).
+Baseline before this run was already 4 such failures (one flipped green this
+run, confirming flakiness). None touch `src/training/`.
+
+**New idea:** add a **synthetic movement-stream generator** — a small grammar
+sampler (weighted Markov over a few named "task flows" like login/search/compose
+with jitter and occasional noise) that emits `TrajectorySpan`s. It would let the
+eval harness measure fidelity vs. *dataset size* and *model order* on demand
+(a learning-curve check), and give a realistic cloud stand-in for real OS input
+to exercise capture → dataset → train → replay end-to-end. Pairs naturally with
+a **`MovementPolicyStore`** (file-backed, mirroring `FileTrainingJobStore`) so a
+trained policy snapshot becomes a first-class, resumable training artifact.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

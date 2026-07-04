@@ -44,6 +44,16 @@ unchecked items are queued. Keep this richer than you found it each run.
       (excludes `**/*.test.ts`) + `typecheck:src` script; passes (exit 0). Next:
       have the engine run it as a per-run pre-push self-check.
 - [ ] Add a minimal CI workflow mirroring `verify` for human-opened PRs.
+- [ ] **Known environmental flakes (cloud sandbox):** 3 tests depend on real
+      spawned-process semantics that differ in the cloud runner and fail there
+      (green on the original dev machine): `control-plane/server.test.ts` +
+      `cli/app.test.ts` (`control=degraded … background task missing-process` —
+      a spawned task's process isn't found alive) and
+      `orchestrator/operator-runtime.test.ts` (`SyntaxError … position 311` — a
+      `sed`/`printf`-generated launch-script state file parses on macOS but not
+      here). Make these hermetic: inject a mock process-liveness probe + write
+      state via `writeJsonAtomic` in tests instead of the shell launch script,
+      so `npm test` is green in any environment.
 
 ## Capability parity (audit reference agents → port gaps)
 - [ ] Build a "capability inventory" generator: enumerate bee-agent's exported
@@ -58,17 +68,34 @@ unchecked items are queued. Keep this richer than you found it each run.
 ## Local-movement learning subsystem
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
-(exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
-      objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
-      deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+(exporter, job store/manifest, runner, execution service, **movement-model**).
+Next increments:
+- [x] Inventory `src/capture` + `src/training` vs. the objective's five pieces
+      (capture → schema → dataset → replay → train/infer) — DONE run 9. Gap
+      found: everything existed *except* an in-process trainable/inferable model
+      (the runner only emits external MLX/Axolotl launch plans).
+- [x] Pluggable local-model backend interface with a deterministic in-process
+      backend (cloud/CI-runnable) + documented seam for a real on-device model —
+      DONE run 9. `src/training/movement-model.ts`: `MovementModelBackend` +
+      `MOVEMENT_BACKENDS` registry; shipped `NGramMovementBackend` (n-gram with
+      Katz backoff) trains, `predictNext`, `rollout`, snapshot round-trip.
+- [x] Generalization eval harness: measure replay fidelity on held-out but
+      related sequences — DONE run 9 (`evaluateMovementPolicy`: prefix-prompt →
+      rollout → positional fidelity vs. true continuation).
+- [ ] **Synthetic movement-stream generator**: a weighted-Markov grammar sampler
+      over named task flows (login/search/compose) with jitter + noise that emits
+      `TrajectorySpan`s, so the eval harness can chart fidelity vs. dataset size
+      and model order (learning curve) and exercise capture→dataset→train→replay
+      end-to-end without real OS input.
+- [ ] **`MovementPolicyStore`** (file-backed, mirroring `FileTrainingJobStore`):
+      persist a trained `MovementPolicySnapshot` as a first-class, resumable
+      training artifact; wire it into the training execution service.
+- [ ] Richer capture bridge: preserve mouse *coordinates* / key codes as
+      quantized token buckets so the model can learn spatial movement, not just
+      coarse gesture verbs (needs a coordinate field on the capture schema).
+- [ ] Expose the movement model over the control-plane RPC surface
+      (`movement.train` / `movement.predict` / `movement.evaluate`) once the
+      policy store lands.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
