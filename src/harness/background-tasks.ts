@@ -231,10 +231,20 @@ export class BackgroundTaskExecutionService {
   }
 
   async readState(task: BackgroundTaskRecord): Promise<BackgroundTaskExecutionState | undefined> {
-    return await readJsonFile<BackgroundTaskExecutionState | undefined>(
-      path.join(this.rootDir, task.execution.stateFile),
-      undefined,
-    );
+    const stateFile = path.join(this.rootDir, task.execution.stateFile);
+    try {
+      return await readJsonFile<BackgroundTaskExecutionState | undefined>(stateFile, undefined);
+    } catch (error) {
+      if (error instanceof SyntaxError) {
+        // The state file is written by an external launch script (shell/sed),
+        // so it can be observed mid-write or with a command field whose quotes
+        // or newlines produced invalid JSON. Treat an unparseable state file as
+        // "no readable state yet" so a recovery sweep degrades gracefully to the
+        // process-liveness check instead of throwing and aborting every task.
+        return undefined;
+      }
+      throw error;
+    }
   }
 
   async writeOutput(task: BackgroundTaskRecord, content: string): Promise<void> {
@@ -734,19 +744,27 @@ function renderLaunchScript(task: BackgroundTaskRecord): string {
   const quotedOutputFile = shellQuote(task.execution.outputFile);
   const quotedCwd = shellQuote(task.cwd);
   const quotedCommand = shellQuote(task.command);
-  const quotedStatePayload = shellQuote(
-    JSON.stringify({
-      version: 1,
-      taskId: task.id,
-      kind: task.kind,
-      status: "running",
-      pid: "$$",
-      startedAt: "__OPENCLAW_STARTED_AT__",
-      updatedAt: "__OPENCLAW_STARTED_AT__",
-      outputFile: task.execution.outputFile,
-      cwd: task.cwd,
-      command: task.command,
-    }),
+  // Base state written by the initial-state Python writer. The dynamic pid,
+  // startedAt and updatedAt are filled in at runtime. Base64-encode it so the
+  // payload — which can contain arbitrary quotes/newlines from `task.command` —
+  // crosses the shell boundary intact and is rebuilt with json.dumps rather than
+  // hand-assembled with printf/sed (which corrupts multi-line commands).
+  const quotedStateBase64 = shellQuote(
+    Buffer.from(
+      JSON.stringify({
+        version: 1,
+        taskId: task.id,
+        kind: task.kind,
+        status: "running",
+        pid: 0,
+        startedAt: "",
+        updatedAt: "",
+        outputFile: task.execution.outputFile,
+        cwd: task.cwd,
+        command: task.command,
+      }),
+      "utf8",
+    ).toString("base64"),
   );
 
   return [
@@ -754,7 +772,9 @@ function renderLaunchScript(task: BackgroundTaskRecord): string {
     "set -euo pipefail",
     `mkdir -p $(dirname ${quotedStatePath}) $(dirname ${quotedOutputFile})`,
     "started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-    `printf '%s' ${quotedStatePayload} | sed "s/__OPENCLAW_STARTED_AT__/$started_at/g; s/\"\$\$\"/$$/g" > ${quotedStatePath}`,
+    `python3 - ${quotedStatePath} $$ "$started_at" ${quotedStateBase64} <<'PY'`,
+    ...renderInitialStateWriterPython(),
+    "PY",
     `printf '%s\n' "starting ${task.kind} ${task.id}" >> ${quotedOutputFile}`,
     `if cd ${quotedCwd} && bash -lc ${quotedCommand} >> ${quotedOutputFile} 2>&1; then`,
     "  completed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
@@ -771,6 +791,23 @@ function renderLaunchScript(task: BackgroundTaskRecord): string {
     "fi",
     "",
   ].join("\n");
+}
+
+function renderInitialStateWriterPython(): string[] {
+  return [
+    "import base64",
+    "import json",
+    "import pathlib",
+    "import sys",
+    "state_path = pathlib.Path(sys.argv[1])",
+    "pid = int(sys.argv[2])",
+    "timestamp = sys.argv[3]",
+    "state = json.loads(base64.b64decode(sys.argv[4]).decode('utf-8'))",
+    "state['pid'] = pid",
+    "state['startedAt'] = timestamp",
+    "state['updatedAt'] = timestamp",
+    "state_path.write_text(json.dumps(state, indent=2) + '\\n')",
+  ];
 }
 
 function renderStateWriterPython(status: BackgroundTaskExecutionState["status"]): string[] {

@@ -6,6 +6,75 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-04 (run 9) — Movement-model backend + dataset/synthetic/eval; fixed a real launch-script JSON-corruption bug
+
+**Audited:** The local-movement learning subsystem (standing objective #2). Runs
+2–8 were all typecheck-debt paydown; source is now fully green
+(`typecheck:src` exit 0), so this run advanced the actual capability. Read
+`src/training/{runner,exporter}.ts` and `src/capture/{replay,trajectory}.ts`.
+Gap found: the training subsystem only emits *command plans* for external
+tools (mlx/axolotl launch scripts) — there was **no pluggable model backend
+that can learn recorded movements and generalize**, i.e. objective 2(c)+(d)
+had no runnable implementation and no cloud-testable seam.
+
+**Changed (additive):**
+- **`src/training/movement-model.ts`** — the pluggable backend seam.
+  `MovementModelBackend` (`train(dataset) → artifact`, `predict(model, context)
+  → prediction`), JSON-serialisable `MovementModelArtifact`, and
+  `MarkovMovementBackend`: a deterministic order-N back-off n-gram reference
+  backend. Back-off is what gives *generalization* — an unseen full context
+  falls back to the longest seen suffix rather than only echoing exact recorded
+  prefixes. Ties break by token string so evals are reproducible across
+  machines. Plus `evaluateMovementModel` — the generalization eval harness
+  (accuracy, mean confidence, and a `generalizedCorrect` counter for hits that
+  required backing off below full context).
+- **`src/training/movement-dataset.ts`** — `tokenizeAction`/`buildMovementDataset`
+  turn recorded `TrajectorySpan`s into a token-stream dataset;
+  `splitTrajectories` holds out whole movements (not examples) so the eval
+  measures real generalization; `generateSyntheticTrajectories` is a seeded
+  (mulberry32, no wall clock) generator that samples weighted walks through a
+  `MovementGrammar` graph — the synthetic event-stream generator that validates
+  the capture→dataset→train→eval round-trip with zero OS access.
+- Exported the whole surface from `src/index.ts`.
+- **Real bug fixed — background-task launch-script JSON corruption**
+  (`src/harness/background-tasks.ts`): the launch script built the initial
+  `state.json` with `printf '%s' … | sed …`, which produced **invalid JSON**
+  whenever `task.command` contained quotes or newlines (a literal newline landed
+  inside a JSON string), and a recovery sweep then threw and aborted every task.
+  Root-caused via a probe (a real `printf "line-1\nline-2\n"` task wrote a
+  broken state file). Replaced the hand-assembled JSON with a base64-encoded
+  payload (shell/Python-safe) decoded by a Python `json.dumps` writer, so the
+  state file is always valid regardless of command content. Also hardened
+  `readState` to treat an unparseable/partially-written state file as absent
+  (`undefined`) instead of throwing — defense-in-depth for the mid-write race.
+  End-to-end verified: generated a launch script for a multi-line command,
+  executed it, confirmed `state.json` parses.
+
+**Test results:** +20 new tests. Full `tsc` still 125 (all pre-existing, in
+test files). `typecheck:src` ✅. Build ✅. **`npm test` 192/192 ✅** (was
+174/174 baseline; this run also *fixed 3 pre-existing consistent failures* in
+the background-task recovery / control-plane tests that were caused by the
+launch-script bug). My own domain (movement-model, movement-dataset,
+background-tasks) is deterministic — 25/25 on every repeat.
+
+**Known residual (logged to ROADMAP):** `server.test.ts` and
+`operator-runtime.test.ts` still flake intermittently (~1 in 4 full runs) on a
+platform-breaker `failureCount`/`threshold` accumulation and real-process
+liveness timing — a *pre-existing* test-isolation issue in the integration
+tests that spawn real processes (clean main failed these consistently before
+this run). Not caused by the movement work; needs its own de-flake pass
+(inject a mock clock/spawn + reset breaker state per case).
+
+**New idea:** add a second movement backend behind the same interface — a
+weighted **prefix-tree / suffix-automaton** that returns *multi-step* action
+plans (not just the next token), so bee-agent can propose a whole
+"replay-and-generalize" sequence toward a goal state and score candidate plans
+by the eval harness. That turns the backend seam into an A/B bench: same
+dataset, compare Markov vs prefix-tree vs (later) a real on-device small model
+on held-out generalization accuracy.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

@@ -370,4 +370,23 @@ describe("BackgroundTaskExecutionService", () => {
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
   });
+
+  it("treats a corrupt/partially-written state file as absent instead of throwing", async () => {
+    const rootDir = await makeTempDir();
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"), () => ({ pid: 2222, unref() {} }));
+    const task = await store.start({
+      title: "Watch logs",
+      command: 'printf "line-1\nline-2\n"',
+      cwd: rootDir,
+    });
+
+    // Simulate the external launch script emitting invalid JSON — e.g. a literal
+    // newline inside the "command" string, exactly as a shell/sed state writer
+    // produces when the command contains quotes/newlines.
+    const stateFile = path.join(rootDir, task.execution.stateFile);
+    await fs.mkdir(path.dirname(stateFile), { recursive: true });
+    await fs.writeFile(stateFile, '{"version":1,"command":"printf "line-1\nline-2\n"}', "utf8");
+
+    await expect(store.executionService.readState(task)).resolves.toBeUndefined();
+  });
 });

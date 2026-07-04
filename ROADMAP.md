@@ -62,13 +62,40 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      for a real on-device small model. — DONE run 9
+      (`src/training/movement-model.ts`: `MovementModelBackend` +
+      `MarkovMovementBackend` back-off n-gram). Real on-device backend still
+      slots in behind the same interface.
+- [x] Synthetic event-stream generator to validate capture→dataset→replay
+      round-trips without real OS input. — DONE run 9
+      (`generateSyntheticTrajectories` — seeded mulberry32 walks over a
+      `MovementGrammar` graph, in `src/training/movement-dataset.ts`).
+- [x] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories. — DONE run 9 (`evaluateMovementModel` +
+      `splitTrajectories`; reports accuracy, mean confidence, and a
+      `generalizedCorrect` count for back-off hits).
+- [ ] Second movement backend behind `MovementModelBackend` — a weighted
+      prefix-tree/suffix-automaton that returns *multi-step* plans (not just the
+      next token), plus an A/B bench comparing backends on held-out
+      generalization accuracy via the eval harness.
+- [ ] Wire the movement backend into a real on-device small model
+      (llama.cpp/MLX) as the production `MovementModelBackend`, keeping the
+      Markov backend as the cloud/CI default.
+
+## Reliability / test hygiene
+- [x] Fix background-task launch-script JSON corruption: initial `state.json`
+      was hand-built with `printf|sed` and became invalid for commands with
+      quotes/newlines, crashing recovery. Now base64+`json.dumps`; `readState`
+      also tolerates a corrupt/partial state file. — DONE run 9.
+- [ ] De-flake the real-process integration tests
+      (`control-plane/server.test.ts`, `orchestrator/operator-runtime.test.ts`).
+      They intermittently fail (~1 in 4 full runs) on platform-breaker
+      `failureCount`/`threshold` accumulation and spawned-process liveness
+      timing. Pre-existing (clean main failed them consistently before run 9).
+      Fix by injecting a mock clock + mock spawn and resetting breaker state per
+      case so status is deterministic, independent of real process timing.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
