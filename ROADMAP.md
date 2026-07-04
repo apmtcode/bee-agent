@@ -62,15 +62,32 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
+      for a real on-device small model — DONE run 9. `MovementModelBackend`
+      interface + deterministic `MarkovMovementBackend` (n-gram + stupid-backoff)
+      in `src/training/movement-model.ts`; tokenizer in `movement-dataset.ts`.
 - [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      round-trips without real OS input. (Run 9 unblocked the *model* half; still
+      want a grammar-driven `MovementDataset` generator to benchmark fidelity vs.
+      model order / training-set size as a tracked metric.)
+- [x] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories — DONE run 9. `evaluateMovementModel`
+      (next-token accuracy + `replayFidelity`) in `src/training/movement-eval.ts`.
+- [ ] `HybridMovementBackend`: blend the n-gram prior with an embedding-similarity
+      retriever for generalization to paraphrased movements, same interface.
+- [ ] Wire the movement model into the runtime: an RPC/CLI path to train a
+      `MarkovMovementBackend` from the reviewed export and preview generated
+      movements (closes capture → dataset → train → replay in one operator flow).
 
 ## Innovation backlog
+- [ ] **Fix flaky background-task tests** (surfaced run 9): `operator-runtime`,
+      `background-tasks`, `cli/app`, and `control-plane/server` tests spawn a real
+      state-writing shell script and `readJsonFile` (`src/shared/fs.ts`) races a
+      partially-written state file → `SyntaxError: Expected ',' or '}'`. Make the
+      state read tolerant of in-flight writes (atomic write + retry-on-parse-error,
+      or read via a temp+rename the script already does) so the suite is
+      deterministic. These fail on clean `main`, independent of feature work.
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in
       project health over time.

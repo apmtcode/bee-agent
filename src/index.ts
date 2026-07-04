@@ -423,6 +423,34 @@ export type {
   SftTrainingConfig,
 } from "./training/job-manifest.js";
 export {
+  MarkovMovementBackend,
+  MarkovMovementModel,
+  MOVEMENT_END_TOKEN,
+  MOVEMENT_START_TOKEN,
+  type GenerateMovementOptions,
+  type MovementDataset,
+  type MovementModel,
+  type MovementModelBackend,
+  type MovementPrediction,
+  type MovementSequence,
+  type MovementToken,
+  type SerializedMovementModel,
+  type TrainMovementModelOptions,
+} from "./training/movement-model.js";
+export {
+  defaultMovementTokenizer,
+  movementDatasetFromReplays,
+  movementDatasetFromTrajectories,
+  movementSequenceFromTrajectory,
+  tokenizeAction,
+  type MovementTokenizer,
+  type MovementTokenSource,
+} from "./training/movement-dataset.js";
+export {
+  evaluateMovementModel,
+  type MovementEvalResult,
+} from "./training/movement-eval.js";
+export {
   FileTrainingJobStore,
 } from "./training/job-store.js";
 export type {

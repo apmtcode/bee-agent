@@ -6,6 +6,57 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-04 (run 9) — 🧠 Pluggable in-process movement model: train → predict → generalize loop
+
+**Audited:** The local-movement learning subsystem (standing objective #2) end
+to end. Capture (`recorder`/`os-observer`/`device-adapter`/`browser-adapter`),
+schema (`trajectory.ts`), dataset/replay (`replay.ts` → `ReplayManifest`), and
+training (`exporter`, `runner`, `job-store`) were all present — **but the entire
+"train a local model + infer" half (#2d) only existed as `LocalAppleSilicon
+TrainingRunner`, which just emits mlx/axolotl *launch scripts* to run externally
+on the user's Mac.** There was no in-process model, so the train → infer →
+generalize loop could not be exercised or tested in the cloud at all.
+
+**Changed (additive, three new modules + barrel exports):**
+- `src/training/movement-model.ts` — the pluggable seam. `MovementModelBackend`
+  interface (`train(dataset) → MovementModel`) that a real on-device backend
+  (mlx/torch/llama.cpp) implements, plus a shipped **deterministic, dependency-
+  free `MarkovMovementBackend`**: an order-N n-gram over movement tokens with
+  **stupid-backoff generalization** (unseen context → drop oldest token → …→
+  unigram), START/END boundary sentinels, greedy `predict`/`predictNext`/
+  `generate`, and `serialize`/`deserialize` for a persistable model artifact.
+  `predict` left-pads short contexts with START so an empty seed correctly means
+  "start of sequence" and reproduces recorded movements.
+- `src/training/movement-dataset.ts` — tokenizes capture artifacts into
+  `MovementDataset`s. `defaultMovementTokenizer` (overridable) reduces a movement
+  to low-cardinality `<tool>:<descriptor>` (prefers gesture+direction metadata,
+  else the summary's leading verb). Builders for both `TrajectorySpan[]` and
+  post-review `ReplayManifest[]` sources.
+- `src/training/movement-eval.ts` — generalization harness. `evaluateMovementModel`
+  reports next-token top-1 accuracy + whole-sequence greedy `replayFidelity` on
+  held-out sequences (roadmap "generalization eval" item).
+- `src/index.ts` — exported all three modules.
+
+**Test results:** 3 new test files, **15/15 new tests pass** (memorized replay,
+deterministic ranked prediction, backoff generalization to an unseen context,
+stop-token/sentinel handling, serialize round-trip, held-out eval). `npm run
+build` ✅. `npm run typecheck:src` ✅ (source stays green). Full suite: **186/189**;
+the **3 failures are pre-existing and flaky** — verified by `git stash` that they
+fail identically on clean `main`. Root cause: `operator-runtime`/`background-
+tasks`/`app`/`server` tests spawn a real state-writing shell script and
+`readJsonFile` races a partially-written state file (`SyntaxError: Expected ','
+or '}'`). Not caused by this change; out of scope this run.
+
+**New idea:** add a **synthetic movement-stream generator** (a small grammar of
+app workflows → randomized-but-structured `MovementDataset`s) so we can benchmark
+`replayFidelity` as a function of model order and training-set size, and turn
+"the model generalizes" into a tracked regression metric rather than a single
+assertion. Follow-on: a `HybridMovementBackend` that blends the n-gram prior
+with an embedding-similarity retriever for better generalization to paraphrased
+movements, keeping the same `MovementModelBackend` interface.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
