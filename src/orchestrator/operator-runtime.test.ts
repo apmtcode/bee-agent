@@ -9,6 +9,17 @@ import type { ReviewedExportManifest } from "../training/export-manifest.js";
 
 const tempDirs: string[] = [];
 
+/**
+ * Deterministic background-task spawn for tests: returns a fixed fake PID and
+ * never launches a real OS process. Without this, `startBackgroundTask` spawns
+ * a real detached process whose launch script writes the task state file
+ * concurrently, racing the test's own `writeState` and producing torn JSON
+ * reads (non-deterministic failures). Pair with an explicit
+ * `backgroundTaskIsProcessRunning` so liveness is deterministic too.
+ */
+const MOCK_BACKGROUND_TASK_PID = 424242;
+const mockBackgroundTaskSpawn = () => ({ pid: MOCK_BACKGROUND_TASK_PID, unref() {} });
+
 async function makeTempDir(): Promise<string> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "operator-runtime-"));
   tempDirs.push(dir);
@@ -530,6 +541,7 @@ describe("StandaloneOperatorRuntime", () => {
   it("starts, syncs, recovers, lists, and cancels background tasks", async () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
+      backgroundTaskSpawnProcess: mockBackgroundTaskSpawn,
       backgroundTaskIsProcessRunning: () => false,
     });
     const session = await runtime.startSession({ title: "Tasks", agentId: "main" });

@@ -10,6 +10,18 @@ import { OperatorCliApp, parseSlashCommand } from "./app.js";
 const tempDirs: string[] = [];
 const execFileAsync = promisify(execFile);
 
+/**
+ * Deterministic background-task injection for the app's internal runtime.
+ * The mock spawn returns a fixed fake PID and launches no real OS process, so
+ * no launch script races the test's own state writes. The liveness probe
+ * treats that fixed PID as alive (tasks stay `running`/`control=active`) while
+ * any other PID (e.g. the bogus `999999` a test writes to force the degraded
+ * path) is treated as dead.
+ */
+const MOCK_BACKGROUND_TASK_PID = 424242;
+const mockBackgroundTaskSpawn = () => ({ pid: MOCK_BACKGROUND_TASK_PID, unref() {} });
+const mockBackgroundTaskIsProcessRunning = (pid: number) => pid === MOCK_BACKGROUND_TASK_PID;
+
 async function makeTempDir(): Promise<string> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "operator-cli-app-"));
   tempDirs.push(dir);
@@ -801,7 +813,13 @@ describe("OperatorCliApp", () => {
 
   it("supports session lifecycle, transcript, approvals, pairing, config, and prompt commands", async () => {
     const rootDir = await makeTempDir();
-    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    const app = new OperatorCliApp({
+      rootDir,
+      cwd: rootDir,
+      currentDate: "2026-05-25",
+      backgroundTaskSpawnProcess: mockBackgroundTaskSpawn,
+      backgroundTaskIsProcessRunning: mockBackgroundTaskIsProcessRunning,
+    });
     const firstSession = await app.runtime.startSession({ title: "first", cwd: rootDir, agentId: "operator-cli" });
     const secondSession = await app.runtime.startSession({ title: "second", cwd: rootDir, agentId: "operator-cli" });
 
@@ -1063,7 +1081,13 @@ describe("OperatorCliApp", () => {
 
   it("supports background and monitor task commands plus cron commands", async () => {
     const rootDir = await makeTempDir();
-    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    const app = new OperatorCliApp({
+      rootDir,
+      cwd: rootDir,
+      currentDate: "2026-05-25",
+      backgroundTaskSpawnProcess: mockBackgroundTaskSpawn,
+      backgroundTaskIsProcessRunning: mockBackgroundTaskIsProcessRunning,
+    });
     const session = await app.runtime.startSession({ title: "CLI ops", cwd: rootDir, agentId: "operator-cli" });
 
     const startOutput = await app.dispatchSlashCommand(
@@ -1078,6 +1102,11 @@ describe("OperatorCliApp", () => {
     if (!task) {
       throw new Error("expected background task");
     }
+    // The mock spawn launches no real process, so seed the output the command
+    // ("printf ok") would have produced. This keeps the task in a deterministic
+    // "running" state (via the mock liveness probe) while still exposing the
+    // expected output to the view/watch commands below.
+    await app.runtime.backgroundTasks.executionService.writeOutput(task, "ok\n");
 
     const listOutput = await app.dispatchSlashCommand({ kind: "background-list" });
     expect(listOutput).toContain(task.id);

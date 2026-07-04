@@ -4,6 +4,17 @@ Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
 ## Foundations / DX
+- [x] **Fix flaky test suite** (2026-07-04, run 9) — `npm test` was
+      non-deterministic (3/2/4 failures across runs) because tests spawned real
+      OS processes whose async state writes + PID-liveness probes raced. Added
+      injectable `backgroundTaskSpawnProcess`/`backgroundTaskIsProcessRunning`
+      passthrough on `OperatorCliApp` and mocked them at every task-starting test
+      site. Now 174/174, six runs, zero variance.
+- [ ] **Guard against reintroduced flakiness**: a shared `createTestRuntime()`
+      factory (mock spawn by default) or a lint that flags a runtime built
+      without an injected spawn in tests, so no new test can spawn a real
+      process. Run the suite **twice** in the pre-push gate (one green run can't
+      tell "deterministic" from "lucky").
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`

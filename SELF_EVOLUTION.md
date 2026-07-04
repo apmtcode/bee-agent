@@ -6,6 +6,57 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-04 (run 9) — 🔴→🟢 Fixed a non-deterministic test suite (the engine's own green gate was unreliable)
+
+**Audited:** The very first step — run the baseline suite the procedure depends
+on. Found `npm test` was **flaky, not green**: three consecutive runs reported
+**3, 2, then 4 failures** out of 174, i.e. a different result each time. This
+silently invalidates the whole self-evolution loop: prior runs recorded
+"174/174" but were passing on luck, and the "do not push if tests fail" guardrail
+can't be honored when the suite is non-deterministic. Making the gate trustworthy
+was therefore the highest-value action this hour.
+
+**Root cause (single mechanism, three symptoms):** several tests call
+`startBackgroundTask`, which by default spawns a **real detached OS process**
+running the generated bash launch script. That script writes the task's state
+JSON and output file *asynchronously*, racing the test's own `writeState`/reads:
+- **Torn JSON** — `readJsonFile` hit a half-written state file →
+  `SyntaxError: Expected ',' or '}'` (operator-runtime recover test).
+- **Racy PID liveness** — reconciliation probes `process.kill(pid, 0)`; whether
+  an arbitrary real PID is alive at probe time is nondeterministic, flipping
+  `control=active` ⇄ `control=degraded:…missing-process` (app + server tests).
+- A fourth latent one surfaced once determinism let me run the files repeatedly:
+  a task test that depended on a fast `printf` still being "running" at
+  `watch-active` time — load-bearing luck.
+
+**Fix (additive, injection-based — no production behavior change):**
+- `src/cli/app.ts`: `OperatorCliApp` built its runtime with `rootDir` only,
+  giving tests no way to inject deterministic OS behavior. Added two optional
+  passthrough options — `backgroundTaskSpawnProcess` and
+  `backgroundTaskIsProcessRunning` — forwarded to `StandaloneOperatorRuntime`
+  (which already accepted them). Production default (real spawn / real
+  `process.kill`) is unchanged.
+- Tests only: injected a deterministic mock spawn (`{ pid: 424242, unref(){} }`,
+  no real process → no racing writes) plus an explicit liveness probe at each
+  site that starts background tasks (operator-runtime, control-plane/server ×4,
+  cli/app ×2). One task test now seeds the `"ok"` output the mocked command
+  would have produced, keeping it deterministically "running".
+
+**Test results:** `npm test` now **174/174, six full runs in a row, zero
+variance** (was 3/2/4 flapping). `typecheck:src` ✅ (exit 0). Build ✅ (tsdown, 5
+files, 532 kB). The three originally-failing files run 50/50 across 6 repeats.
+
+**New idea:** the deeper smell is *tests reaching real OS side effects at all*.
+Add a lightweight lint/guard (or a shared test harness factory
+`createTestRuntime()`) that constructs runtimes with the mock spawn by default,
+so a newly-written test can't accidentally spawn a real process and reintroduce
+flakiness. Longer term, wire the `verify` script (`typecheck:src && build &&
+test`) as the engine's mandatory pre-push gate, and run the suite **twice** in
+that gate — a single green run can't distinguish "deterministic" from "got
+lucky," which is exactly the trap this run walked into.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
