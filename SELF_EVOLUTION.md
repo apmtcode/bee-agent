@@ -6,6 +6,76 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-04 (run 9) — 🧠 Movement-policy inference layer (repeat + generalize) + a real `shellQuote` bug fix
+
+**Audited:** The local-movement learning subsystem (standing objective #2) vs.
+the five required pieces (capture → schema → dataset → replay → train/infer).
+Runs 5–8 had all been typecheck-debt cleanup; the *inference* half of objective
+#2 was entirely missing. `src/capture/**` records movements and
+`src/training/{exporter,runner,job-store}` produces on-device training
+*plans/artifacts*, but **nothing consumed a learned model to (c) repeat or (d)
+generalize movements**, and there was **no pluggable model backend** (the top
+movement-subsystem roadmap item).
+
+**Changed (additive, new modules in `src/training/`):**
+- `movement-policy.ts` — the inference layer. Types (`MovementStep`,
+  `MovementTrajectory`, `MovementContext`, `MovementPrediction`), the pluggable
+  `MovementPolicyBackend` / `MovementPolicyModel` interfaces, a
+  `trajectoryToMovement()` projector (captured `TrajectorySpan` device-actions →
+  movement steps), and a backend-agnostic `MovementPolicyEngine`
+  (`fit` / `fitFromTrajectories` / `predict`). This is the documented seam for a
+  real on-device small model.
+- `mock-policy-backend.ts` — `MockMovementPolicyBackend`: a deterministic,
+  dependency-free reference backend. Nearest-neighbour retrieval over goal
+  tokens (Jaccard, id tie-break so it's order-independent) to **repeat** a
+  recorded movement, plus `context.parameters` substitution to **generalize** to
+  a new-but-related target/value/direction. Runs fully in cloud/CI — no OS.
+- `movement-eval.ts` — synthetic-data + fidelity harness:
+  `generateSyntheticMovementFamily()` (deterministic, index-based ts, no RNG),
+  `heldOutGeneralizationCases()` (train/test split), `evaluateMovementPolicy()`
+  (ordered step fidelity, exact-match rate). Validates the
+  capture→dataset→policy→replay loop and the generalization requirement without
+  real input.
+- Barrel exports for all of the above in `src/index.ts`.
+- **Bonus — real correctness bug fixed:** `shellQuote()` in
+  `src/harness/background-tasks.ts` used the transposed sequence `"'"'"'` where
+  correct POSIX single-quote escaping is `'"'"'`. Empirically reproduced: any
+  background-task **command containing a single quote** (e.g. `printf 'x'`)
+  round-tripped incorrectly through the launch script and produced an **invalid
+  `state.json`**, which threw in `readJsonFile` and **crashed recovery of every
+  sibling task in the session**. Fixed the escape; added a defensive guard in
+  `BackgroundTaskExecutionService.readState` so a partially/badly-written state
+  file degrades to "state unavailable" (handled as missing-process) instead of
+  crashing session recovery.
+
+**Test results:** new movement suite ✅ **14/14** (`movement-policy.test.ts`,
+`movement-eval.test.ts`); full `src/training/**` + `src/capture/**` ✅ **41/41**.
+Build ✅. `typecheck:src` ✅ (source stays 100% clean). Full suite: **185 passing,
+3 failing**. ⚠️ The 3 failures are **pre-existing in this cloud environment and
+unrelated to this change** — see blocker below.
+
+**⚠️ Blocker discovered (documented for next run):** `app.test.ts`,
+`server.test.ts`, `operator-runtime.test.ts` each have one failing case, all in
+the **background-task** subsystem. Root cause: `startBackgroundTask` →
+`BackgroundTaskExecutionService.launch()` spawns a **real detached OS process**
+(default `spawnProcess = spawn`) that executes the launch script and writes real
+state, which **races the tests' manual `writeState`** and depends on real
+pid/timing. In this environment the scripts run; the tests were written assuming
+they don't. (My `shellQuote` fix removed the *earlier* JSON-crash failure mode,
+so the remaining failure is now a clean assertion mismatch, not a parse crash.)
+The fix is **test hermeticity**: thread the existing injectable
+`spawnProcess` / `isProcessRunning` seams up through `StandaloneOperatorRuntime`
+/ `OperatorCliApp` / control-plane server and inject no-op mocks in these three
+tests. Deferred — it's a cross-cutting constructor/test change, not this run's
+movement scope.
+
+**New idea:** an **online movement policy** that treats each successful replay as
+a fresh labelled example and re-fits incrementally (append to dataset →
+`engine.fit`), plus a *confidence-gated* mode where predictions below a
+similarity floor escalate to the LLM planner instead of blindly replaying the
+nearest match — turning the mock backend into a real fallback controller the
+on-device model can sit behind.
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

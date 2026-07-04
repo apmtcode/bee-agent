@@ -400,6 +400,38 @@ export type {
   LocalTrainingRuntime,
   TrainingJobPlan,
 } from "./training/runner.js";
+export {
+  MovementPolicyEngine,
+  trajectoryToMovement,
+} from "./training/movement-policy.js";
+export type {
+  MovementContext,
+  MovementDirection,
+  MovementPolicyBackend,
+  MovementPolicyModel,
+  MovementPrediction,
+  MovementStep,
+  MovementTrajectory,
+  TrajectoryToMovementOptions,
+} from "./training/movement-policy.js";
+export {
+  MockMovementPolicyBackend,
+} from "./training/mock-policy-backend.js";
+export type {
+  MockMovementBackendOptions,
+} from "./training/mock-policy-backend.js";
+export {
+  evaluateMovementPolicy,
+  generateSyntheticMovementFamily,
+  heldOutGeneralizationCases,
+  stepSequenceFidelity,
+} from "./training/movement-eval.js";
+export type {
+  MovementEvalCase,
+  MovementEvalCaseResult,
+  MovementEvalReport,
+  SyntheticMovementSpec,
+} from "./training/movement-eval.js";
 export type {
   ExportedMemoryReference,
   ExportedPromotedSkill,

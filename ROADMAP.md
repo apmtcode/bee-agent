@@ -58,17 +58,45 @@ unchecked items are queued. Keep this richer than you found it each run.
 ## Local-movement learning subsystem
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
-(exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
-      objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
-      deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+(exporter, job store/manifest, runner, execution service, **movement-policy /
+mock-policy-backend / movement-eval** — run 9). Next increments:
+- [x] Inventory `src/capture` + `src/training` vs. the objective's five pieces
+      (run 9): capture ✅, schema ✅, dataset/export ✅, replay ✅, *train-plan* ✅,
+      but **infer/repeat/generalize was missing** — now built.
+- [x] Pluggable local-model backend interface + deterministic mock backend
+      (run 9) — `MovementPolicyBackend`/`MovementPolicyModel` +
+      `MockMovementPolicyBackend` (nearest-neighbour repeat + parameter-substitution
+      generalize), served via `MovementPolicyEngine`. Documented seam for a real
+      on-device small model.
+- [x] Synthetic event-stream generator (run 9) — `generateSyntheticMovementFamily`
+      (deterministic), plus `trajectoryToMovement` to project real captured spans.
+- [x] Generalization eval harness (run 9) — `heldOutGeneralizationCases` +
+      `evaluateMovementPolicy` (ordered step fidelity, exact-match rate).
+- [ ] Wire a **real on-device small-model backend** behind `MovementPolicyBackend`
+      (e.g. an MLX/gguf policy loaded from the runner's artifact) with the mock as
+      the deterministic cloud/CI double.
+- [ ] Online/incremental policy: append each successful replay as a labelled
+      example and re-fit; confidence-gated fallback (below a similarity floor,
+      escalate to the LLM planner instead of replaying the nearest match).
+- [ ] Connect the policy to the replay engine: turn a `MovementPrediction` into a
+      `ReplayTimelineEvent` stream / device-adapter calls so predictions can
+      actually drive (simulated) execution end-to-end.
+
+## Reliability / correctness (found while auditing)
+- [x] **`shellQuote` POSIX-escaping bug** in `src/harness/background-tasks.ts`
+      (run 9): `"'"'"'` → `'"'"'`. A command containing a single quote produced
+      an invalid `state.json` that crashed session recovery. Fixed + defensive
+      `readState` guard for partial/corrupt state files.
+- [ ] **⚠️ TOP PRIORITY — background-task test hermeticity.** `app.test.ts`,
+      `server.test.ts`, `operator-runtime.test.ts` each fail one case in *this*
+      cloud environment because `startBackgroundTask` spawns a **real detached OS
+      process** (default `spawnProcess = spawn`) whose launch script writes real
+      state, racing the tests' manual `writeState`. Thread the injectable
+      `spawnProcess` / `isProcessRunning` seams (already on
+      `BackgroundTaskExecutionService`) up through `StandaloneOperatorRuntime` /
+      `OperatorCliApp` / control-plane server and inject no-op mocks in these
+      three tests so they are deterministic regardless of host OS. This is what
+      currently keeps the full suite from being green.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

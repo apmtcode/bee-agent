@@ -231,10 +231,21 @@ export class BackgroundTaskExecutionService {
   }
 
   async readState(task: BackgroundTaskRecord): Promise<BackgroundTaskExecutionState | undefined> {
-    return await readJsonFile<BackgroundTaskExecutionState | undefined>(
-      path.join(this.rootDir, task.execution.stateFile),
-      undefined,
-    );
+    try {
+      return await readJsonFile<BackgroundTaskExecutionState | undefined>(
+        path.join(this.rootDir, task.execution.stateFile),
+        undefined,
+      );
+    } catch (error) {
+      // A launch script may still be mid-write, or an external writer may have
+      // produced a partially/badly-serialized state file. Treat an unparseable
+      // state as "state unavailable" rather than crashing recovery of every
+      // sibling task in the session — recovery then handles it as missing.
+      if (error instanceof SyntaxError) {
+        return undefined;
+      }
+      throw error;
+    }
   }
 
   async writeOutput(task: BackgroundTaskRecord, content: string): Promise<void> {
@@ -794,5 +805,10 @@ function renderStateWriterPython(status: BackgroundTaskExecutionState["status"])
 }
 
 function shellQuote(value: string): string {
-  return `'${value.replaceAll(`'`, `"'"'"'`)}'`;
+  // POSIX single-quote escaping: close the quote, emit an escaped quote inside
+  // double quotes, reopen — i.e. `'` becomes `'"'"'`. The previous sequence
+  // (`"'"'"'`) had the fragments transposed, so any command/payload containing
+  // a single quote round-tripped incorrectly through the launch script and
+  // produced an invalid state.json (crashing task recovery).
+  return `'${value.replaceAll(`'`, `'"'"'`)}'`;
 }
