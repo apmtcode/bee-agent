@@ -6,6 +6,70 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-04 (run 9) — Movement-model backend (learn→predict loop) + shellQuote corruption fix
+
+**Audited:** The local-movement learning subsystem (standing objective #2). Prior
+runs built capture (`src/capture/*`), the reviewed-export dataset
+(`src/training/exporter.ts`), and a training *runner* that emits mlx/axolotl
+launch scripts (`src/training/runner.ts`) — but there was **no in-process
+learn→predict loop**: nothing that trains a model on recorded movements and
+predicts/repeats them without an external GPU runtime. That is objective #2(c)/(d)
+and a queued ROADMAP item ("pluggable local-model backend … with a deterministic
+mock backend so cloud/CI tests pass").
+
+**Changed (additive):**
+- **New `src/training/movement-model.ts`** — the pluggable movement-model layer:
+  - `MovementModelBackend` interface (`train(dataset) → TrainedMovementModel`) and
+    `TrainedMovementModel` (`predict` / `generate` / `toSnapshot`) — the seam a
+    real on-device small model implements later without changing callers.
+  - `NGramMovementBackend`: a **deterministic** Katz-style backoff n-gram over
+    movement tokens (no RNG, no wall-clock) — the shipped mock backend. *Repeat*:
+    seeding a recorded prefix reproduces its recorded continuation exactly;
+    *generalize*: an unseen high-order context backs off to lower-order
+    regularities learned from related sequences.
+  - Tokenization (`encodeMovementEvent`, `tokenizeReplayEvents`,
+    `buildMovementDataset`) turning `ReplayTimelineEvent[]` (the existing export
+    format) into training sequences — closes capture→dataset→train→infer→replay
+    end-to-end.
+  - Serialization (`toSnapshot` / `loadMovementModel`) so a trained policy is
+    persistable/shippable, and `evaluateMovementModel` — a generalization eval
+    harness (next-token accuracy, rollout fidelity, exact-match rate on held-out
+    but related trajectories).
+  - Exported the surface from `src/index.ts`.
+- **Real bug fixed — `src/harness/background-tasks.ts` `shellQuote`:** used the
+  replacement `"'"'"'` for embedded single quotes, but the correct POSIX escape is
+  `'"'"'` (which `src/training/runner.ts` already uses). The buggy version mangled
+  any task `command` containing a single quote — e.g. `printf 'line-1\nline-2\n'` —
+  producing invalid JSON in the spawned launch script's `state.json`
+  (`SyntaxError … position 311`). Root cause of the operator-runtime background-task
+  test's JSON crash and one app.test failure.
+- **Reliability hardening:** made both Python state-writers (background-tasks +
+  training runner) write atomically (temp file + `os.replace`) instead of a
+  non-atomic `write_text`, so a concurrent recover/sync reader can never observe a
+  half-written state file.
+
+**Test results:** `typecheck:src` ✅ (exit 0). Build ✅. Full suite **182/185
+passing** (11 new movement-model tests, all green; up from 174 passing). **3
+pre-existing failures remain** and are unrelated to this feature — verified by
+stashing all changes and reproducing them on the clean baseline:
+`server.test` orchestration object-match (10 vs 2), `app.test` `control=active`
+(gateway/remote-control state), and the `operator-runtime` recover test. That
+last one previously *crashed* on the shellQuote JSON corruption; the fix turned it
+into an assertion failure that surfaces an **inherent test-design raciness** — the
+test manually `writeState`s a task while *also* spawning a real `tail -f`
+subprocess that writes the same `state.json`. In isolation my changes reduced the
+failing count from 4→3 (fixed one app.test failure). Left the racy test untouched
+this run to avoid disturbing the sibling assertions that intentionally rely on
+real subprocess spawning; logged a hermeticity fix to ROADMAP.
+
+**New idea:** a *feature-backoff* movement backend — instead of treating each
+movement token as atomic, decompose it into (verb, target, app) features so an
+unseen `field:zipcode` still generalizes from `field:*→type` regularities the pure
+n-gram can't reach. The `MovementModelBackend` interface already accommodates it;
+it would measurably raise held-out next-token accuracy in the eval harness.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

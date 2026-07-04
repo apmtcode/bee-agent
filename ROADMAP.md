@@ -62,13 +62,28 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      for a real on-device small model. — DONE run 9 (`src/training/movement-model.ts`:
+      `MovementModelBackend`/`TrainedMovementModel` interfaces + deterministic
+      `NGramMovementBackend` backoff policy; repeat + generalize; snapshot
+      serialization).
+- [~] Synthetic event-stream generator to validate capture→dataset→replay
+      round-trips without real OS input. — partial run 9 (movement-model tests
+      use a deterministic synthetic "form fill" replay generator); promote it to
+      a reusable exported helper next.
+- [x] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories. — DONE run 9 (`evaluateMovementModel`:
+      next-token accuracy, rollout fidelity, exact-match rate).
+- [ ] **Feature-backoff movement backend** (run 9 idea): decompose each movement
+      token into (verb, target, app) features so unseen targets still generalize
+      from `field:*→type`-style regularities a pure token n-gram can't reach.
+      Implement behind the existing `MovementModelBackend` interface; measure the
+      held-out next-token-accuracy lift via `evaluateMovementModel`.
+- [ ] **Wire the movement model into the training runner**: after a reviewed
+      export, train an `NGramMovementBackend` on its replay events and persist the
+      snapshot alongside the launch plan, so a cloud run produces a usable
+      baseline policy even before on-device training.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
@@ -84,3 +99,13 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
       count to a baseline file and fail if a module regresses above it. Lets the
       engine pay debt down module-by-module without one green-gate blocking
       progress, and prevents backsliding while the total is still > 0.
+- [ ] **Make spawn-based tests hermetic** (run 9): the `operator-runtime` recover
+      test and some `app.test`/`server.test` cases spawn real subprocesses that
+      write `state.json` while the test also `writeState`s the same file — an
+      inherent race that fails non-deterministically on this environment. Inject a
+      mock `spawnProcess` for the recovery-path assertions (keep real spawn only
+      where output-capture is under test) so the suite is deterministic in CI.
+- [ ] **Guard against POSIX-escaping regressions** (run 9): a tiny unit test over
+      `shellQuote` (single quotes, newlines, `$`, `%`) in both `background-tasks.ts`
+      and `runner.ts` — the two copies drifted (one was buggy), corrupting spawned
+      state files. Better: extract a single shared `shellQuote` in `src/shared/`.
