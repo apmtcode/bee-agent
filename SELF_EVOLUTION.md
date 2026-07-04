@@ -6,6 +6,65 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-04 (run 9) — 🎯 In-process movement model (train→repeat→generalize) + suite made deterministically green
+
+**Audited:** The local-movement learning subsystem (standing objective #2) and
+the actual `npm test` state in this cloud environment. Two findings:
+
+1. **Capability gap:** `src/capture/*` records movements and
+   `src/training/exporter.ts` + `runner.ts` produce *reviewed exports* and
+   *launch scripts* for real on-device training (mlx/axolotl) — but **nothing
+   in the codebase could actually learn from a movement sequence and predict
+   the next movement in-process.** Objective #2's core (train a local model to
+   *repeat* recorded movements and *generalize* to related ones) had no code,
+   and thus no way to be validated in the cloud.
+2. **Suite was red here:** despite prior logs claiming 174/174, **3 tests fail
+   in this environment** (`server.test` "handles session", `app.test` "session
+   lifecycle", `operator-runtime.test` "starts, syncs, recovers") — all because
+   they `spawn` **real detached subprocesses** that asynchronously truncate-write
+   the same `state.json` the test reads/writes, so reconcile sees a torn/early
+   state and mis-marks tasks. Prior runs "passed" only by winning that race.
+
+**Changed:**
+- **New capability — `src/training/movement-model.ts`:** a pluggable
+  `MovementModelBackend` interface (`train → TrainedMovementModel` with
+  `predictNext`/`generate`/`serialize`) plus a deterministic reference backend
+  `MarkovMovementModelBackend` — a variable-order Markov model with Katz-style
+  back-off. Back-off *is* the generalization mechanism: an unseen context still
+  predicts sensibly by matching its longest *seen* suffix. Also: `tokenizeAction`
+  (stable movement tokens), `buildMovementDataset` (trajectories→sequences),
+  `splitMovementDataset`, and `evaluateMovementGeneralization` (teacher-forced
+  replay-fidelity vs. held-out generalization accuracy). Interface leaves a clean
+  seam for a real on-device small model (`load(snapshot)` already implemented).
+- **New — `src/training/movement-simulation.ts`:** `generateSyntheticTrajectories`
+  — deterministic (no `Date.now`/`random`) workflow-grammar streams with
+  bounded variation, so capture→dataset→replay→train round-trips are validated
+  without real OS input (mandate requires simulation in the cloud).
+- **Reliability/test-hardening:** added a `backgroundTaskSpawnProcess` /
+  `backgroundTaskIsProcessRunning` **test seam** to `OperatorCliApp` (mirrors
+  the existing `configHome` seam) and injected a no-op spawn mock into the four
+  flaky integration sub-scenarios (operator-runtime, app ×2, server's main +
+  drifting + breaker runtimes). This drives the task lifecycle deterministically
+  from the tests' own state writes instead of racing a real detached process —
+  no production behavior change.
+
+**Test results:** **189/189 passing, deterministic across 5 consecutive full
+runs** (was 3 flaky failures at baseline; +15 new movement tests). `npm run
+build` ✅. `npm run typecheck:src` ✅ (source stays green). The movement eval on
+30 synthetic trajectories: replay fidelity ~0.83, generalization ~0.75 (shared
+cross-template prefixes leave irreducible early-step ambiguity — realistic).
+
+**New idea:** now that a movement model can *predict* the next action, wire a
+`MovementReplayPolicy` into the replay engine so a recorded trajectory can be
+*resumed/continued* by the model when the exact recorded step is unavailable
+(e.g. a moved UI target) — the first concrete "generalize to new but related
+movements" behavior end-to-end. Second idea: an RL-style reward that scores a
+generated movement path against the replay manifest (the `runner.ts` RL mode
+already references a `replay-manifest` reward model — this module could compute
+it in-process for a mock RL backend).
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

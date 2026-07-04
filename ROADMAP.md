@@ -58,19 +58,43 @@ unchecked items are queued. Keep this richer than you found it each run.
 ## Local-movement learning subsystem
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
-(exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
-      objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
-      deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+(exporter, job store/manifest, runner, execution service, **movement-model**,
+**movement-simulation**). Gap map (capture → schema → dataset → replay →
+train/infer): capture/schema/dataset/replay existed; **train/infer landed run 9**.
+Next increments:
+- [x] Pluggable local-model backend interface with a deterministic mock backend
+      — DONE run 9 (`movement-model.ts`: `MovementModelBackend` +
+      `MarkovMovementModelBackend`, `serialize`/`load` seam for a real on-device
+      model). The exporter/`runner.ts` still target mlx/axolotl for *real*
+      training; this is the in-process learn+infer path for cloud validation.
+- [x] Synthetic event-stream generator — DONE run 9
+      (`movement-simulation.ts`: deterministic workflow-grammar trajectories).
+- [x] Generalization eval harness — DONE run 9
+      (`evaluateMovementGeneralization`: replay-fidelity vs held-out accuracy).
+- [ ] `MovementReplayPolicy`: let the replay engine *continue* a trajectory via
+      the model when the exact recorded step is unavailable (moved UI target) —
+      the first end-to-end "generalize to new but related movements" behavior.
+- [ ] In-process replay-manifest reward for a mock RL backend (the RL mode in
+      `runner.ts` references a `replay-manifest` reward model — compute it here).
+- [ ] Wire the movement model + dataset builder into a control-plane RPC /
+      training-job step so a reviewed export can be trained + evaluated on-device.
 
 ## Innovation backlog
+- [x] Deterministic test seams for background-task spawning — DONE run 9. Real
+      detached subprocesses were racing the store's `state.json` writes, making
+      3 integration tests flaky (they only "passed" by winning the race).
+      `OperatorCliApp` now exposes `backgroundTaskSpawnProcess`/`…IsProcessRunning`
+      seams; the flaky tests inject a no-op spawn. Suite is deterministically
+      green (189/189 × 5 runs).
+- [ ] **Production reliability follow-up (deferred from run 9):** the detached
+      launch scripts in `background-tasks.ts` / `runner.ts` write `state.json`
+      *non-atomically* (shell `>` truncate + python `write_text`). A concurrent
+      reader (the reconcile loop) can observe a torn/empty file and mis-mark a
+      live task. Fix = write to `state.json.tmp` then `mv`/`os.replace` (atomic).
+      NOTE: this fix *exposes* tests that rely on `isProcessRunning: () => false`
+      while a real process runs — land it **together** with converting those
+      tests to injected no-op spawns (run 9 already did the test-side seam), or
+      the intricate `server.test` "handles session" scenario will flip states.
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in
       project health over time.
