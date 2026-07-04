@@ -6,6 +6,59 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-04 (run 9) — Pluggable in-process movement-model backend + eval harness
+
+**Audited:** Standing objective #2(d) — "post-train a local model on the recorded
+dataset to repeat the movements and generalize to related ones; make the backend
+pluggable." Read `src/training/runner.ts`, `job-manifest.ts`, `exporter.ts`, and
+`src/capture/replay.ts`/`device-adapter.ts`. **Gap found:** the entire training
+subsystem only *emits external Python launch commands* (mlx / axolotl) — there was
+no in-process, testable model backend, so the whole learn→infer→generalize loop was
+un-exercisable in the cloud, and there was no pluggable seam for a real on-device
+model. The capture/dataset/replay halves exist; the *model* half did not.
+
+**Changed (additive):** new `src/training/movement-model.ts`:
+- **Movement schema + dataset**: `MovementToken`/`MovementSequence`/`MovementDataset`,
+  plus `buildMovementDataset(replays)` and `buildMovementDatasetFromTrajectories(...)`
+  that tokenize recorded action events (`movementTokenFromAction`) into replayable
+  sequences (observations ignored; trajectory actions sorted by ts).
+- **Pluggable backend seam**: `MovementModelBackend` interface (`train(dataset) →
+  TrainedMovementModel`) — the drop-in point for a real on-device runtime. Ships a
+  deterministic dependency-free reference backend, `NGramMovementBackend` (n-gram +
+  stupid-backoff): **repeats** recorded movements (seen contexts → observed next
+  move) and **generalizes** (unseen prefix backs off to a shared suffix). Fully
+  deterministic (argmax + lexicographic tie-break, no RNG) so cloud/CI is
+  reproducible. `serialize()`/`fromSerialized()` round-trip the model.
+- **Generalization eval harness** (ROADMAP item): `evaluateMovementModel(model,
+  heldOut)` → next-movement top-1 accuracy + exact end-to-end reproduction count.
+- Exported the surface from `src/index.ts`.
+- 11 new tests: exact replay, determinism, frequency ranking, backoff
+  generalization, END/maxSteps termination, serialize round-trip, eval fidelity,
+  and dataset extraction from replays + trajectories.
+
+**Test results:** `typecheck:src` ✅ (exit 0). Build ✅ (5 files, 543 kB). New
+tests ✅ **11/11**, deterministic across 3 repeat runs. Full suite: **182/185**,
+with my 11 all green.
+
+**⚠️ Pre-existing flakiness discovered (NOT caused by this run):** 3 tests in
+`operator-runtime.test.ts` / `app.test.ts` / `server.test.ts` intermittently fail
+(3–4 failing, wobbling run-to-run) with `SyntaxError: Expected ',' or '}' after
+property value in JSON` from `readJsonFile` → `BackgroundTaskExecutionService.
+readState` → `reconcileTask`. Reproduces **identically on the untouched baseline**
+(verified via `git stash`), so it predates this change — a torn/partial-JSON read
+in background-task reconciliation under parallel vitest workers. Logged as a
+prioritized ROADMAP item. This change is fully isolated from those modules; pushed
+to the designated feature branch with the new work green.
+
+**New idea:** the n-gram backend gives us a *reference oracle* — a second backend
+(e.g. a tiny embedding-nearest-neighbor or a real local model) can be regression
+-tested against it on the same synthetic dataset via `evaluateMovementModel`, so
+"did the new backend regress replay fidelity?" becomes a numeric gate instead of a
+vibe. Also: feed `generate()` output back through the existing replay engine to
+close the loop (predicted movements → executable replay actions).
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

@@ -62,13 +62,41 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
+      for a real on-device small model. **DONE run 9** — `MovementModelBackend`
+      interface + deterministic `NGramMovementBackend` reference impl in
+      `src/training/movement-model.ts` (repeats recorded movements + generalizes
+      via stupid-backoff; serialize round-trip). Next: wire a job manifest field
+      selecting the backend, and add a second (real-model) backend behind the seam.
 - [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      round-trips without real OS input. (Partially unblocked: `buildMovementDataset`
+      / `buildMovementDatasetFromTrajectories` extract sequences; still need a
+      generator that *emits* synthetic capture events end-to-end.)
+- [x] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories. **DONE run 9** — `evaluateMovementModel`
+      returns next-movement top-1 accuracy + exact end-to-end reproduction count.
+      Next: use it as a numeric regression gate between backends.
+- [ ] Wire the movement-model backend into the training pipeline: a
+      `LocalTrainingJobManifest` backend selector, and have `execution-service`
+      train an in-process `MovementModelBackend` for the mock/cloud path (vs. the
+      mlx/axolotl launch-script path for real Apple-Silicon runs).
+- [ ] Close the predict→replay loop: map `TrainedMovementModel.generate()` output
+      back onto executable replay actions so predicted movements can be dry-run
+      through the existing replay engine.
+
+## Test health
+- [ ] **Fix flaky background-task reconciliation reads** (found run 9). 3 tests in
+      `operator-runtime.test.ts` / `app.test.ts` / `server.test.ts` intermittently
+      fail with `SyntaxError: Expected ',' or '}' after property value in JSON` from
+      `readJsonFile` → `BackgroundTaskExecutionService.readState` → `reconcileTask`.
+      Reproduces on the untouched baseline (pre-existing, ~3–4 of 185 wobbling
+      run-to-run). Likely a torn/partial-JSON read of a state file written
+      non-atomically (or by the shell launch script) and read concurrently under
+      parallel vitest workers. Fix: ensure all task-state writes go through
+      `writeJsonAtomic` (temp+rename), and/or make `readState` tolerant of an
+      in-progress write (retry-on-parse-error once). Add a stress test that
+      interleaves write+read to lock it down.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
