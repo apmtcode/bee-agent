@@ -6,6 +6,69 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-04 (run 9) — Movement-learning: pluggable local-model backend + deterministic trainer
+
+**Audited:** The local-movement learning subsystem (standing objective #2) —
+`src/capture/` (recorder, trajectory schema, replay manifest, store) and
+`src/training/` (exporter, job manifest/store, runner, execution service). The
+existing `runner.ts` only *builds shell-command plans* for on-device runtimes
+(mlx/axolotl); there was **no way to actually train + infer a model in the
+cloud**, so objective #2 parts (c) "post-train a local model to repeat recorded
+movements" and (d) "generalize to new but related movements" were unvalidated.
+This matched the queued ROADMAP item "Pluggable local-model backend interface
+for the training runner with a deterministic mock backend."
+
+**Changed (additive, two new modules + tests):**
+- `src/training/movement-backend.ts` — the backend **seam**: `MovementStep`/
+  `MovementSequence`/`TrainedMovementModel`/`MovementPrediction` types, the
+  `MovementTrainingBackend` interface (`train` → serializable model,
+  `predictNext` → next movement), `deriveMovementSequence(ReplayManifest)` to
+  bridge recorded trajectories into training data, `canonicalMovementToken`
+  (collapses free-text summaries to a leading keyword so related movements share
+  a token — the generalization lever), and `rolloutMovements(...)` — a
+  model-driven replay engine that greedily rolls a model forward from a seed.
+- `src/training/markov-movement-backend.ts` — `MarkovMovementBackend`, the
+  deterministic, dependency-free default for cloud/CI. A variable-order Markov
+  chain with **stupid-backoff**: training counts next-token frequencies for
+  every context length `0..order`; prediction tries the longest context and
+  backs off to shorter ones (down to unigram). Seed with a recorded prefix →
+  reproduces the recorded sequence (replay); seed with an unseen-but-related
+  prefix → still predicts a sensible next movement via backoff, and the reported
+  `contextOrderUsed` proves generalization happened. Fully deterministic
+  (lexicographic tie-break, no clock/RNG). The real on-device small model plugs
+  in behind the same interface.
+- Exported both from `src/index.ts` (barrel).
+- `src/training/movement-backend.test.ts` — 10 tests covering tokenization,
+  sequence derivation (drops transcript/observation events, ts-orders actions),
+  replay reproduction, generalization-via-backoff, deterministic tie-breaking,
+  unigram fallback, JSON-artifact round-trip, and empty-model handling.
+
+**Test results:** new suite **10/10 green**. `npm run build` ✅ (tsdown, 5
+files, 544 kB). `typecheck:src` ✅ exit 0 (source stays clean). Full `npm test`
+**181/184**; the **3 failures pre-exist on the clean tree** (verified via
+`git stash`) and are unrelated to this additive change — they live in
+`cli/app.test.ts`, `control-plane/server.test.ts`, and
+`orchestrator/operator-runtime.test.ts` (the ongoing control-plane test debt).
+Pushing to the designated branch `claude/peaceful-dirac-8yiua1` per branch
+policy.
+
+**Concrete bug pinpointed (logged to ROADMAP):** the operator-runtime failure is
+a real runtime bug, not a typing issue — `recoverBackgroundTasks` →
+`BackgroundTaskExecutionService.readState` calls `readJsonFile` on a background-
+task state file that is **invalid JSON** (`SyntaxError: Expected ',' or '}' after
+property value … position 311`), likely an unsubstituted placeholder (`$$` /
+`__…__`) in the state-writer template. This is now a specific, addressable
+target rather than a vague "test debt" line.
+
+**New idea (logged to ROADMAP):** a **generalization eval harness** built on
+`rolloutMovements` — train on N-1 synthetic trajectories, hold one out, seed the
+rollout with its prefix, and score replay fidelity (token-level match + average
+`contextOrderUsed` as a generalization-vs-memorization ratio). This turns "does
+the model generalize?" into a measurable metric the engine can track across runs
+and use to compare pluggable backends.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

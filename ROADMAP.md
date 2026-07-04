@@ -62,13 +62,35 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
+      for a real on-device small model. **DONE run 9** —
+      `src/training/movement-backend.ts` (the `MovementTrainingBackend` seam,
+      `deriveMovementSequence`, `rolloutMovements` replay engine) +
+      `markov-movement-backend.ts` (deterministic variable-order Markov backend
+      with stupid-backoff → replay + generalization). 10 tests green.
 - [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
+      round-trips without real OS input. (Partly seeded by run 9's test fixtures;
+      next: a reusable generator that emits `TrajectorySpan`s / `ReplayManifest`s
+      with parametrized routines + noise, so multiple modules share it.)
 - [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      related synthetic trajectories. **Concrete design (run 9):** build on
+      `rolloutMovements` — train on N-1 synthetic trajectories, hold one out,
+      seed the rollout with its prefix, score token-level match and average
+      `contextOrderUsed` (generalization-vs-memorization ratio). Makes backend
+      comparison a tracked metric.
+
+## Known bugs (pre-existing, addressable)
+- [ ] **Background-task state JSON corruption.** `recoverBackgroundTasks` →
+      `BackgroundTaskExecutionService.readState` (`src/harness/background-tasks.ts:234`)
+      calls `readJsonFile` on a state file that is invalid JSON
+      (`SyntaxError: Expected ',' or '}' … position 311`), failing
+      `operator-runtime.test.ts > "starts, syncs, recovers, lists, and cancels
+      background tasks"`. Pinpointed run 9. Likely an unsubstituted placeholder
+      (`$$` / `__…__`) in the state-writer template (cf. `runner.ts`
+      `renderLaunchScript`). Fix: quote/escape the payload or write state via
+      `writeJsonAtomic` instead of shell `printf`+`sed`. Two more pre-existing
+      failures live in `cli/app.test.ts` and `control-plane/server.test.ts`.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
