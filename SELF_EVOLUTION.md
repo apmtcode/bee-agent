@@ -6,6 +6,61 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-04 (run 9) — 🎯 Movement subsystem: in-process pluggable train/infer/generalize model
+
+**Audited:** The local-movement learning subsystem (standing objective #2) vs.
+what `src/capture/` + `src/training/` already implement. Found the pipeline had
+capture → schema → dataset → *plan* but **no piece that actually trains a model
+and infers/generalizes in the cloud**: `LocalAppleSiliconTrainingRunner` only
+emits a shell command to launch mlx/axolotl on the user's real machine, so parts
+(c) "post-train a model to repeat recorded movements" and (d) "generalize to new
+but related movements" were unvalidated — the top queued movement-subsystem item.
+
+**Changed (additive):** new `src/training/movement-model.ts` — a self-contained,
+deterministic, cloud-runnable movement-learning pipeline behind a **pluggable
+backend interface** (`MovementModelBackend`), so a real on-device small model can
+drop in later without touching dataset/rollout/eval code:
+- **Schema + dataset builders:** `MovementEvent`/`MovementSequence`/
+  `MovementDataset`; `buildMovementDatasetFromReplays` /
+  `…FromTrajectories` / `…FromExport` derive coarse `kind:channel` tokens from
+  the existing replay/trajectory/export types (transcript turns excluded; coarse
+  tokens by design so the model generalizes past paraphrased summaries).
+- **Backend:** `DeterministicMarkovMovementBackend` — a variable-order Markov
+  chain with stupid-backoff. Memorizes transitions up to `maxOrder` (faithful
+  replay) and backs off to shorter contexts for unseen prefixes (generalization).
+  Fully deterministic (no `Math.random`/`Date`), JSON round-trips. Sequences are
+  framed with `#start`/`#stop` sentinels so the model learns starts *and* when to
+  stop; the framing tokens can't collide with real `kind:channel` tokens.
+- **Replay engine:** `rolloutMovements` deterministically regenerates a movement
+  sequence from a seed (empty seed ⇒ generate from scratch via `#start`).
+- **Generalization eval:** `evaluateMovementModel` reports teacher-forced
+  next-token accuracy on held-out sequences.
+- **Pipeline service:** `MovementModelTrainingService.trainAndEvaluate` ties
+  dataset → train → fidelity + held-out generalization → serialized snapshot;
+  backend injectable, defaults to the Markov backend. Exported from `src/index.ts`.
+
+**Test results:** new `movement-model.test.ts` — **13/13 pass**, incl. a
+synthetic movement-stream generator (a "focus→click→type→save→confirm" workflow
+grammar, no real OS input), perfect single-workflow replay, seeded continuation,
+backoff generalization to an unseen prefix, held-out accuracy >0.8, serialization
+round-trip, and a stub custom backend proving pluggability. `npm run
+typecheck:src` ✅ (source stays clean). Build ✅ (dist 548 kB). Full suite:
+**184/187**, with the **3–4 failing tests PRE-EXISTING and FLAKY** — verified by
+stashing this run's changes and re-running the clean baseline (also 4 failed),
+and by the count varying 3↔4 across back-to-back runs. They live in unrelated,
+time-dependent code (`background-tasks` recovery, control-plane breaker
+`control=active` state, operator-runtime task recovery) — not touched here. Logged
+as a new roadmap item.
+
+**New idea:** an **on-device generalization curriculum** — instead of one flat
+dataset, bucket recorded trajectories by outcome reward and app context, then
+train/eval per-bucket so the engine can report *where* the movement model
+generalizes well vs. poorly (e.g. strong on "editor save" flows, weak on
+"browser form-fill") and target new capture there. Pairs naturally with the
+existing `outcome.reward` field on `TrajectorySpan`. Second idea (logged to
+ROADMAP): fix the flaky time-dependent tests by injecting a clock, which would
+also unblock a real green `verify` gate.
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

@@ -40,6 +40,12 @@ unchecked items are queued. Keep this richer than you found it each run.
     fix residual test-only typings.
 - [ ] Add a `verify` npm script (`typecheck && build && test`) and have the
       engine run it as a pre-push self-check each cycle.
+- [ ] **Fix pre-existing flaky time-dependent tests** (surfaced run 9): 3–4
+      tests fail non-deterministically on a clean baseline (count varies 3↔4) —
+      `background-tasks` recovery, control-plane breaker `control=active` state,
+      `operator-runtime` task recovery. They read real wall-clock/`Date`. Inject a
+      clock so they're deterministic; this also unblocks a genuinely green
+      `verify` gate (today `test` can't be a hard gate because of them).
 - [x] Interim **source-only typecheck gate** — DONE run 7. `tsconfig.src.json`
       (excludes `**/*.test.ts`) + `typecheck:src` script; passes (exit 0). Next:
       have the engine run it as a per-run pre-push self-check.
@@ -59,16 +65,31 @@ unchecked items are queued. Keep this richer than you found it each run.
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
 (exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
-      objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
-      deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+- [x] Inventory what `src/capture` + `src/training` already implement vs. the
+      objective's five pieces (2026-07-04, run 9). Gap found: capture → schema →
+      dataset → *plan* existed, but no in-process train/infer/generalize — the
+      runner only emits an external mlx/axolotl shell command. Closed below.
+- [x] Pluggable local-model backend interface with a deterministic backend
+      (2026-07-04, run 9) — `src/training/movement-model.ts`:
+      `MovementModelBackend` + `DeterministicMarkovMovementBackend` (variable-
+      order Markov w/ backoff), `MovementModelTrainingService`. Backend injectable
+      (documented seam for a real on-device small model).
+- [x] Synthetic event-stream generator to validate capture→dataset→replay
+      round-trips (2026-07-04, run 9) — workflow-grammar generator in
+      `movement-model.test.ts`, no real OS input.
+- [x] Generalization eval harness (2026-07-04, run 9) —
+      `evaluateMovementModel` (teacher-forced next-token accuracy on held-out
+      related sequences) + `MovementTrainingReport.generalization`.
+- [ ] **On-device generalization curriculum** (new, run 9): bucket recorded
+      trajectories by `outcome.reward` + app context and train/eval per bucket, so
+      the engine reports where the movement model generalizes well vs. poorly and
+      targets new capture at the weak buckets.
+- [ ] Wire the movement model into a real on-device backend behind
+      `MovementModelBackend` (e.g. an MLX policy) and connect it to the reviewed-
+      export → job-manifest flow so a trained snapshot is a first-class artifact.
+- [ ] Persist trained movement models + reports via a `FileMovementModelStore`
+      (mirrors the other `File*Store`s) and expose train/rollout over the RPC
+      surface so the CLI can drive local training end-to-end.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
