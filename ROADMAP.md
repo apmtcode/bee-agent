@@ -62,13 +62,42 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      for a real on-device small model. **DONE run 9** —
+      `src/training/movement-model.ts`: `MovementModelBackend` interface +
+      `NgramMovementBackend` (Markov + stupid-backoff, deterministic) +
+      `MovementBackendRegistry` + snapshot round-trip. Repeats recorded
+      movements (2c) and generalizes (2d).
+- [x] Synthetic event-stream generator to validate capture→dataset→replay
+      round-trips without real OS input. **DONE run 9** —
+      `generateSyntheticMovementDataset({motifs, repeats, interleave})`,
+      deterministic; plus `datasetFromTrajectories` / `datasetFromReplayManifests`
+      adapters over the real capture schema.
+- [x] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories. **DONE run 9** —
+      `evaluateGeneralization(model, heldOut)` returns next-token accuracy +
+      mean log-prob; test proves >0.6 accuracy on unseen compound movements from
+      motif-only training vs. 0.0 for an empty-training baseline.
+- [ ] Wire `NgramMovementBackend` into the training **runner** as the default
+      in-process backend for `runtime: "mock"`, so `buildPlan` yields a
+      cloud-runnable train→snapshot→replay-eval plan (end-to-end
+      capture→train→generalize smoke test each run), not just an external script.
+- [ ] Add a `transformer` movement backend behind the same interface for real
+      on-device fine-tuning (documented seam; still deterministic mock in CI).
+
+## Reliability (top priority — blocks the per-run verification gate)
+- [ ] **Fix flaky real-subprocess background-task tests.** `app.test.ts`,
+      `server.test.ts`, `operator-runtime.test.ts` fail 3–4 tests in the full
+      `vitest run` (varies run-to-run) but PASS in isolation. Discovered run 9;
+      fails identically on clean HEAD (not a regression). Root cause: tests spawn
+      real child processes (`printf …` background tasks) whose own state-file
+      writes race the test's manual `writeState` under CPU contention →
+      `readJsonFile ENOENT` (e.g. operator-runtime.test.ts:569). Fix options:
+      (a) make `startBackgroundTask` injectable with a deterministic fake process
+      spawner in tests (no real child), or (b) have the test await real-process
+      completion before asserting/overwriting state. Blocks a green `npm test`
+      and thus the `verify` pre-push gate for every future run.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

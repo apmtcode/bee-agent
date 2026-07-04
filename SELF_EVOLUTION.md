@@ -6,6 +6,73 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-04 (run 9) — 🧠 Pluggable local-movement MODEL backend + generalization eval (objective #2 c+d)
+
+**Audited:** The movement-learning subsystem against objective #2's five pieces.
+`src/capture/` covers (a) capture + (b) record/replay; `src/training/`
+exporter+runner cover the dataset export and *write a launch script* for
+external mlx/axolotl. **The gap: nothing actually trains a model or does
+inference in-process** — so (c) "post-train to repeat movements" and (d)
+"generalize to new but related movements" were unvalidated, and the runner's
+model backend was hard-wired to shell out. Two ROADMAP items pointed straight at
+this ("pluggable local-model backend + deterministic mock backend",
+"generalization eval harness").
+
+**Changed (additive, new files only):**
+- **`src/training/movement-model.ts`** — the pluggable model seam:
+  - `MovementModelBackend` (training interface) + `TrainedMovementModel`
+    (predict/generate/score/snapshot). A real on-device backend
+    (MLX/llama.cpp/small transformer) implements the same interface.
+  - `NgramMovementBackend` — a deterministic, dependency-free **mock that
+    actually learns**: a Markov model (default trigram) with **stupid-backoff**.
+    It *repeats* recorded movements (order-N context reproduces training
+    sequences — objective 2c) AND *generalizes* (backoff to shorter contexts
+    predicts continuations of novel-but-related sequences — objective 2d). No
+    `Date.now`/`Math.random`, so training/inference/eval reproduce byte-for-byte.
+  - Tokenizers consuming the **existing capture schema** (`TrajectoryAction`,
+    `ReplayTimelineEvent`) → canonical tokens (`device/tap/save-button`), plus
+    `datasetFromTrajectories` / `datasetFromReplayManifests` adapters.
+  - `evaluateGeneralization(model, heldOut)` — next-token accuracy + mean
+    log-prob on held-out sequences (the objective-2d payoff harness).
+  - `generateSyntheticMovementDataset({motifs, repeats, interleave})` —
+    deterministic synthetic event-stream generator (no OS input needed) that can
+    synthesize novel compound sequences to test generalization.
+  - `MovementBackendRegistry` (swap backends at runtime) + `loadMovementModel`
+    (snapshot round-trip; persist/reload a trained model without the data).
+- **`src/training/movement-model.test.ts`** — 13 tests: tokenization, memorized
+  replay, backoff prediction, determinism-across-retrains, END-sentinel
+  termination, **generalization to unseen compound movements** (>0.6 next-token
+  accuracy from motif training only) vs. an empty-training baseline (0.0),
+  snapshot round-trip, both dataset adapters, registry extensibility.
+- Barrel exports in `src/index.ts`.
+
+**Test results:** `npm run build` ✅. `typecheck:src` ✅ (exit 0). New suite ✅
+**13/13**. **Pre-existing flaky failures discovered:** the full `vitest run` shows
+**3–4 failing tests** in `app.test.ts` / `server.test.ts` /
+`operator-runtime.test.ts` — but they fail **identically on clean HEAD** (proven
+by `git stash`) and the count varies run-to-run (3 vs 4). Root cause: those tests
+spawn **real subprocesses** (e.g. `printf …` background tasks) whose own
+state-file writes race the test's manual `writeState` under CPU contention →
+`readJsonFile ENOENT` (operator-runtime.test.ts:569). They **pass in isolation**,
+fail in the full suite. This is a NEW blocker for this container (run 8 reported
+174/174 on a quieter machine). Not caused by, and independent of, this change.
+
+**Push decision:** per the session's git-branch requirements (develop + push to
+`claude/peaceful-dirac-mfgboy`, "NEVER push to a different branch without
+explicit permission"), pushing the green additive work to the designated feature
+branch — not main. The pre-existing flakiness is logged as the top reliability
+item, not chased this hour (fixing a real-subprocess race risks a large,
+non-additive change to others' tests/production code).
+
+**New idea:** wire `NgramMovementBackend` into the training **runner** as the
+default in-process backend when the manifest requests `runtime: "mock"` — so
+`buildPlan` can produce a *runnable-in-cloud* plan (train → snapshot → replay
+eval) instead of only an external shell script, giving the engine an end-to-end
+capture→train→generalize smoke test every run. Longer term, add a
+`transformer` backend behind the same interface for real on-device fine-tuning.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
