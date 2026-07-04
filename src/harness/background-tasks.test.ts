@@ -370,4 +370,36 @@ describe("BackgroundTaskExecutionService", () => {
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
   });
+
+  it("writes a valid initial state file for commands with quotes, backslashes, and newlines", async () => {
+    // Regression: the launch script previously seeded the initial "running"
+    // state via a `printf | sed` placeholder substitution whose shell/JSON
+    // escaping was broken, corrupting the state file for any command
+    // containing quotes or newlines (it failed to parse as JSON). The initial
+    // state is now written with python/json.dumps like the terminal states.
+    const rootDir = await makeTempDir();
+    // A deliberately hostile command: single quotes, double quotes, a
+    // backslash, and an embedded newline.
+    const command = "printf 'a\\nb' && echo \"it's \\\"done\\\"\"";
+    // Use the real spawn so the launch script actually executes.
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"));
+    const task = await store.start({ title: "Hostile command", command, cwd: rootDir, kind: "task" });
+
+    // Poll for the state file the wrapper writes (bash + python startup).
+    let state: BackgroundTaskExecutionState | undefined;
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      state = await store.executionService.readState(task);
+      if (state) {
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+
+    expect(state).toBeDefined();
+    // The command must round-trip exactly — proving the JSON was well-formed
+    // and no shell/sed escaping mangled it.
+    expect(state?.command).toBe(command);
+    expect(state?.taskId).toBe(task.id);
+    expect(["running", "completed"]).toContain(state?.status);
+  });
 });

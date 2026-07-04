@@ -6,6 +6,63 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-04 (run 9) — 🔴→🟢 Suite was red: fixed a real `shellQuote` bug + flaky spawn tests
+
+**Audited:** The actual test/build state (step 5 gate). Run 8 logged "174/174",
+but in this environment the suite was **deterministically RED — 4 failures**
+across `operator-runtime`, `control-plane/server`, and `cli/app`. The green
+claim did not hold here (subprocess-timing-dependent tests that only passed by
+accident on the run-8 machine). Restoring a truly-green, stable suite was the
+highest-value work this hour, and it surfaced a **genuine product bug**.
+
+**Root causes found & fixed (all in `src/harness/background-tasks.ts`):**
+1. **`shellQuote` was broken for single quotes (real capability bug).** It
+   escaped `'` as `"'"'"'` (a *leading double quote*) instead of the correct
+   POSIX `'"'"'` (close-quote → `"'"` → reopen-quote). Any background-task
+   **command containing a single quote** (e.g. `printf 'x'`) was corrupted —
+   both when executed via `bash -lc` and when serialized into the execution
+   state file. Paths rarely contain quotes so it hid; commands frequently do.
+2. **Fragile `printf | sed` initial-state writer.** The launch script seeded the
+   initial `running` state via a placeholder-substitution `sed` whose escaping
+   was written as `\"`/`\$` **inside a JS template literal** — which collapse to
+   `"`/`$`, so the emitted bash `sed` program was `s/"$$"/$$/g` with unbalanced
+   quotes. Bash mis-parsed it and mangled the state JSON. Under `set -euo
+   pipefail` this often killed the wrapper before any state was written.
+   Replaced with a `python3`/`json.dumps` writer (`renderInitialStateWriterPython`)
+   consistent with the existing completed/failed writers — robust to any
+   characters in the command.
+
+**Test determinism (matches the tests' clear intent, no behaviour change):**
+- Gave the three `server.test.ts` runtimes and the `operator-runtime.test.ts`
+  background-task test a **no-op `backgroundTaskSpawnProcess` mock**
+  (`() => ({ pid: 4242, unref() {} })`, the pattern already used throughout
+  `background-tasks.test.ts`). These tests drive execution state purely via
+  manual `writeState`; the real detached `sleep 5`/`tail -f` spawns were
+  incidental noise that (a) raced temp-dir teardown → `ENOTEMPTY` flake, and
+  (b) made the circuit-breaker failure counts timing-dependent (the breaker
+  test expects incremental 1→2→3, only satisfiable when real spawns don't write
+  competing state).
+
+**New regression test** (`background-tasks.test.ts`): starts a task via the
+**real** spawn with a hostile command (single + double quotes, a backslash, an
+embedded newline) and asserts the wrapper-written state file parses as JSON and
+the command **round-trips byte-for-byte**. Fails on the old `shellQuote`; passes
+now.
+
+**Test results:** **175/175** passing (174 + 1 new), **0 failures across 6
+full-suite runs** and 8 isolated runs of the previously-flaky files. Build ✅
+(531.87 kB). `typecheck:src` ✅ (exit 0). Full `tsc` debt **unchanged at 125**
+(entirely test-file, untouched by this run).
+
+**New idea:** extract `renderLaunchScript` into an exported pure function and
+unit-test the generated bash directly (execute it with `execFileSync` in a temp
+dir), so the shell/JSON escaping is covered *without* any detached-spawn timing
+— catching quoting regressions deterministically. Also worth a tiny property
+test over `shellQuote` (round-trip through `bash -c 'printf %s'`) for a spread
+of adversarial strings.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

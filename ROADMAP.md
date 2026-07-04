@@ -6,6 +6,17 @@ unchecked items are queued. Keep this richer than you found it each run.
 ## Foundations / DX
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
+- [x] **Suite restored to green + deterministic** (2026-07-04, run 9). The
+      suite was silently RED (4 failures) in this environment. Fixed a real
+      `shellQuote` single-quote-escaping bug (`"'"'"'` → `'"'"'`) that corrupted
+      any background-task command containing a single quote; replaced the
+      fragile `printf|sed` initial-state writer with a `python3`/`json.dumps`
+      writer; and de-flaked the spawn-timing-dependent tests with no-op spawn
+      mocks. Added a byte-for-byte round-trip regression test. 175/175, stable.
+- [ ] **Extract & unit-test `renderLaunchScript`** — export it as a pure
+      function and execute the generated bash directly (temp dir + `execFileSync`)
+      so shell/JSON escaping is covered without detached-spawn timing. Add a
+      `shellQuote` round-trip property test over adversarial strings.
 - [x] Make config loading hermetic in tests via an injectable `configHome`
       (2026-06-22).
 - [ ] **Pay down typecheck debt** (surfaced by the `typecheck` script). Full
