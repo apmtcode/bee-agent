@@ -44,6 +44,14 @@ unchecked items are queued. Keep this richer than you found it each run.
       (excludes `**/*.test.ts`) + `typecheck:src` script; passes (exit 0). Next:
       have the engine run it as a per-run pre-push self-check.
 - [ ] Add a minimal CI workflow mirroring `verify` for human-opened PRs.
+- [ ] **De-flake the real-OS-process integration tests.** 3–4 tests spawn real
+      processes (`tail -f`) and assert on live `pid`/`isProcessRunning` state,
+      which is nondeterministic in the cloud sandbox (failures vary run-to-run,
+      red at HEAD): `operator-runtime` background-tasks, `server.test`
+      orchestration, `app.test` session-lifecycle. Inject a mockable process
+      layer (spawn + `isProcessRunning`) so recovery logic is tested
+      deterministically without a real OS. Run 9 already hardened `readState`
+      to not crash on a corrupt state file.
 
 ## Capability parity (audit reference agents → port gaps)
 - [ ] Build a "capability inventory" generator: enumerate bee-agent's exported
@@ -59,16 +67,29 @@ unchecked items are queued. Keep this richer than you found it each run.
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
 (exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
-      objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
-      deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+- [x] Inventory what `src/capture` + `src/training` already implement vs. the
+      objective's five pieces (2026-07-04, run 9): capture ✅, schema ✅
+      (`trajectory.ts`), dataset export ✅ (`exporter.ts`), replay ✅
+      (`buildReplayManifest`), train/infer — was **only a plan/launcher emitter**
+      (`runner.ts`); the actual learnable in-process policy was the gap, now
+      filled by `movement-model.ts`.
+- [x] Pluggable local-model backend interface with a deterministic mock backend
+      (so cloud/CI tests pass) and a documented seam for a real on-device small
+      model — DONE run 9 (`MovementModelBackend` + `NgramMovementBackend`).
+- [x] Synthetic event-stream generator to validate capture→dataset→replay
+      round-trips without real OS input — DONE run 9
+      (`generateSyntheticMovementDataset`, seeded LCG).
+- [x] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories — DONE run 9 (`evaluateMovementPolicy`:
+      teacher-forced next-step accuracy + exact-rollout match rate).
+- [ ] `MovementModelBackend` registry + `trainMovementPolicy` convenience wired
+      into `execution-service` so each reviewed SFT export yields a *real learned*
+      n-gram snapshot artifact with a measured generalization score in its
+      manifest (a runnable baseline before on-device mlx training).
+- [ ] Second backend behind the seam (e.g. a small on-device transformer or a
+      prefix-tree/RL variant) to exercise pluggability + compare eval scores.
+- [ ] Wire the movement policy into replay: let `replay-service` optionally use a
+      trained policy to *infer* missing/next steps, not just replay recorded ones.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

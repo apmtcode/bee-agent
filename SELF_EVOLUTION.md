@@ -6,6 +6,69 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-04 (run 9) — 🧠 Movement-policy model: pluggable backend that learns + generalizes (objective #2 c/d)
+
+**Audited:** Standing objective #2 (local-movement learning). The subsystem
+already had capture → schema (`src/capture/`) → dataset export
+(`src/training/exporter.ts`) → replay (`buildReplayManifest`) and a training
+*plan/launcher* emitter (`runner.ts`, mlx/axolotl shell scripts). The gap: there
+was **no in-process model that actually learns a movement policy** and can (c)
+repeat recorded movements or (d) generalize to new-but-related ones — `runner.ts`
+only emits a script that would run *if* on real Apple-Silicon hardware, so
+nothing was learnable or testable in the cloud.
+
+**Changed (additive):** new `src/training/movement-model.ts` (+ tests):
+- **Tokenizer**: `movementTokenFromAction` normalizes captured summaries into
+  stable tokens; `movementSequenceFromTrajectory` / `movementSequenceFromReplay`
+  turn existing `TrajectorySpan`/`ReplayManifest` action events into ordered
+  `MovementSequence`s. Reuses the existing schema — no new capture format.
+- **Pluggable backend seam**: `MovementModelBackend` interface +
+  `TrainedMovementPolicy` (`predictNext` / `rollout` / `toJSON`). A real
+  on-device small-model backend implements the same interface and drops in
+  without touching callers.
+- **Deterministic in-process backend** `NgramMovementBackend`: a variable-order
+  Markov policy with **backoff** — learns `context→next` counts for orders
+  0..N, argmax with lexicographic tie-break (fully reproducible, no RNG/OS).
+  Backoff is what delivers (d) generalization: an unseen full prefix still
+  resolves via shorter sub-patterns shared with related trajectories.
+  `MOVEMENT_END` sentinel gives learned sequence termination for `rollout`.
+- **Snapshot round-trip** (`toJSON` / `loadMovementPolicy`) so a trained policy
+  persists as an artifact alongside the runner's plan output.
+- **Synthetic generator** `generateSyntheticMovementDataset` (seeded LCG, no
+  `Math.random`) + `splitMovementDataset` + **generalization eval harness**
+  `evaluateMovementPolicy` (teacher-forced next-step accuracy conditioned on a
+  non-empty prefix, plus exact-rollout match rate). Validates the
+  capture→dataset→train→replay loop with zero real OS input. Exported all from
+  `src/index.ts`.
+
+**Also (safe robustness fix)** `src/harness/background-tasks.ts`: `readState`
+now degrades gracefully on a corrupt/half-written state file (catch `SyntaxError`
+→ `undefined`, so recovery reconciles the task as missing instead of crashing).
+This cleared the JSON-parse crash path in the recovery integration test.
+
+**Test results:** new module **11/11** green; hardened `background-tasks` module
+**7/7** green. `typecheck:src` ✅ (exit 0). Build ✅ (tsdown, 5 files).
+
+**⚠️ Pre-existing flaky failures (NOT introduced here):** the full suite is red
+at **HEAD** too — 3–4 failures that **vary run-to-run** (I observed 4-failed,
+then 3-failed, then 4-failed on the *unchanged* tree). They are all large
+integration tests that spawn **real OS processes** (`tail -f`) and assert on
+live `pid`/`isProcessRunning` state, which is nondeterministic in this cloud
+sandbox: `operator-runtime` "starts, syncs, recovers… background tasks",
+`server.test` orchestration, `app.test` session-lifecycle. My change *reduces*
+the failure surface (removed the JSON crash) and touches none of the OS-process
+assertions. Fixing them properly means mocking the process layer in those tests
+— queued in ROADMAP, deliberately out of this focused diff (guardrail: don't
+rewrite working OS-interaction code to chase parity).
+
+**New idea:** add a `MovementModelBackend` registry + a `trainMovementPolicy`
+convenience that the training `execution-service` can call to produce a *real
+learned artifact* (the n-gram snapshot) as part of the SFT job — so even before
+on-device mlx training runs, every reviewed export yields a runnable,
+evaluatable baseline policy with a measured generalization score in its manifest.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
