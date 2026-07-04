@@ -6,6 +6,67 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-04 (run 9) — 🧠 In-process movement model: train → repeat → generalize (objective #2 c+d)
+
+**Audited:** `src/training/*` vs objective #2. Found the training subsystem only
+emits *external* launch plans (`runner.ts` → MLX/axolotl scripts for the user's
+Apple Silicon box) and reviewed-export manifests (`exporter.ts`). **Nothing ran
+in-process**, so the core of objective #2 — (c) post-train a local model to
+*repeat* recorded movements and (d) *generalize* to new-but-related ones — had no
+cloud-testable implementation. That was the highest-value gap.
+
+**Changed (additive):** new `src/training/movement-model.ts` — an in-process,
+deterministic movement-learning layer with a **pluggable backend** seam so a real
+on-device small model drops in behind the same interface:
+- **Event schema → token:** `MovementToken {tool, verb, target?, direction?}` with
+  `movementTokenFromAction()` deriving tokens from captured device/browser/os
+  actions (prefers structured metadata written by the adapters, falls back to the
+  summary's leading verb; normalizes verb aliases e.g. "tapped"→"tap").
+- **Dataset bridge:** `buildMovementDatasetFromTrajectories()` and
+  `buildMovementDatasetFromReplays()` (groups replay-manifest action events by
+  trajectory, sorts by ts) → a replayable `MovementDataset`.
+- **Default local backend** `NgramMovementBackend` — a variable-order Markov model
+  with **two-level backoff**: (1) *concrete* backoff (high order → unigram)
+  reproduces recorded movements exactly [objective 2c]; (2) *abstract* backoff over
+  target-agnostic **signatures** (`tool|verb|direction`) transfers a learned
+  workflow structure onto a **novel target** the concrete model never saw
+  [objective 2d]. Deterministic argmax (lexicographic tie-break — no RNG, cloud-safe).
+- **Inference format:** `snapshot()` → JSON-persistable `MovementModelSnapshot`;
+  `restoreMovementModel()` rebuilds a runnable model for inference without retraining.
+- **Pluggability:** `MovementModelBackend` interface + `MovementModelRegistry` /
+  `createDefaultMovementModelRegistry()`.
+- **Generalization eval harness:** `evaluateMovementModel()` scores next-movement
+  prediction on held-out demos, reporting exact-token vs **signature** accuracy and
+  how many hits came from the generalized (abstract) path.
+- Barrel-exported the surface from `src/index.ts`.
+
+**Tests:** new `movement-model.test.ts` (11 cases) drives a synthetic
+`open → scroll-down → tap` workflow over multiple items: proves exact replay (2c),
+proves generalization to an unseen `billing` target via the abstract path (2d),
+snapshot round-trip determinism, both dataset bridges, and the eval harness. All
+**11 pass**. `npm run build` ✅. `typecheck:src` ✅ (source stays green).
+
+**⚠️ Pre-existing blocker (NOT introduced this run — reproduces on clean HEAD via
+`git stash`):** 3 tests fail deterministically —
+`operator-runtime.test.ts` (background-task recovery), `server.test.ts`,
+`app.test.ts`. Root symptom: `readJsonFile` throws `SyntaxError: Expected ',' or
+'}' ... at position 311` reading a background-task **state file** during
+`recoverBySession` (`background-tasks.ts:440`). State files are only ever written
+via `writeJsonAtomic` (`JSON.stringify`), so a malformed read points at a
+write/rename race or a fixture/Node-26 interaction. Full suite: **182 passed / 3
+failed (185)**; the 3 failures are entirely outside this run's diff. Logged as the
+#1 ROADMAP item. Pushed to the designated feature branch (not main) given the red
+pre-existing suite.
+
+**New idea:** add a *movement policy service* that wires this model into the live
+runtime — given the current capture context, call `predictNext()` to **suggest**
+the next action (behind an approval gate, reusing the existing plan-approval
+workflow), and record whether the operator accepted it as a reward signal that
+feeds the next reviewed export. That closes the loop: capture → train → suggest →
+feedback → retrain, entirely with the pluggable local backend.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
