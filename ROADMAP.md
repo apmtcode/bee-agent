@@ -62,15 +62,42 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      for a real on-device small model. DONE run 9 — `src/training/movement-model.ts`:
+      `MovementModelBackend` interface + `MarkovMovementBackend` (variable-order
+      back-off; verbatim replay + generalization), dataset builders from
+      trajectories/replays, model persistence. 14 tests green.
+- [x] Synthetic event-stream generator to validate capture→dataset→replay
+      round-trips without real OS input. DONE run 9 (in movement-model.test.ts:
+      `syntheticSequence`/`actionsToTrajectory` drive the full train→generate
+      loop).
+- [x] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories. DONE run 9 — `evaluateNextTokenAccuracy`
+      (next-token accuracy on held-out sequences; scores memorized traces at 1.0,
+      related-but-unseen above chance).
+- [ ] **Wire the movement model into the RPC/tool surface.** The backend exists
+      but isn't reachable via `handle()`. Add `movement.train`/`movement.predict`/
+      `movement.generate`/`movement.evaluate` methods (mapped in
+      `ControlPlaneResultMap`) that operate on approved trajectories, so the agent
+      can learn-and-replay movements end-to-end.
+- [ ] **Higher-fidelity movement tokens.** Current `movementTokenFromAction`
+      discretizes on `tool:summary`. Add structured movement primitives (mouse
+      deltas, key chords, window focus) with a numeric feature channel so the
+      backend can interpolate coordinates, not just repeat discrete tokens.
 
 ## Innovation backlog
+- [ ] **Pure-Node background-task state writer (fixes 3 pre-existing failures).**
+      `startBackgroundTask`/`launch` spawn a real bash launch script whose
+      `sed`/`printf`/`date`-templated running-state write (`renderLaunchScript`,
+      `src/harness/background-tasks.ts`; mirrored in `training/runner.ts`) emits
+      malformed JSON on this cloud shell → `readJsonFile` throws `SyntaxError …
+      position 311`, failing `app.test.ts` / `server.test.ts` /
+      `operator-runtime.test.ts` background-task *recovery* cases (reproducible on
+      clean HEAD 3c7b7236). Fix: inject the state writer as a pluggable strategy
+      with a pure-Node default that writes the running-state JSON from TypeScript
+      via `writeJsonAtomic` before spawning the shell, removing the dependency on
+      host shell-util behavior. Hardens the launch path across platforms.
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in
       project health over time.

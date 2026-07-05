@@ -6,6 +6,63 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-05 (run 9) — Movement subsystem: pluggable local-model backend + deterministic Markov model
+
+**Audited:** Standing objective #2 (local-movement learning). Recent runs (2–8)
+were all typecheck-debt paydown; the *movement learning* pipeline had capture →
+schema → dataset → export → external-runner scaffolding (`src/capture`,
+`src/training`) but **no in-process model that actually trains on movements and
+predicts/generates new ones** — `runner.ts` only emits MLX/axolotl launch
+scripts, which can't run or be validated in the cloud. That is objective #2
+pieces (d) *post-train a local model to repeat movements* and (e) *generalize* —
+the biggest untouched gap, and a queued ROADMAP item ("Pluggable local-model
+backend interface … with a deterministic mock backend").
+
+**Changed (additive):** new `src/training/movement-model.ts`:
+- `MovementModelBackend` interface (`train`/`predict`/`generate`) — the pluggable
+  seam; a real on-device gguf/MLX policy can implement the same contract and drop
+  in without touching callers.
+- `MarkovMovementBackend`: a deterministic variable-order **back-off Markov
+  model**. Long shared prefixes reproduce recorded movements *verbatim* (replay);
+  unseen high-order contexts back off to shorter contexts → unigram, yielding
+  related-but-new continuations (generalize). START/END sentinels give clean
+  sequence boundaries so `generate` terminates instead of looping. Ties break by
+  count desc then token asc → fully reproducible.
+- Dataset builders `datasetFromTrajectories` / `datasetFromReplayManifest` +
+  `movementTokenFromAction` (discretizes captured actions into stable tokens) —
+  wires the existing capture/replay data straight into training.
+- `evaluateNextTokenAccuracy` — the generalization/replay-fidelity eval harness
+  (another queued ROADMAP item): scores next-token accuracy on held-out
+  sequences.
+- `saveMovementModel`/`loadMovementModel` — JSON model persistence.
+- Barrel exports in `src/index.ts`.
+- 14 tests using a **synthetic movement-stream generator** (no real OS input):
+  verbatim replay, END-termination, back-off generalization, determinism,
+  unigram fallback, empty-model safety, dataset builders, eval accuracy,
+  disk round-trip.
+
+**Test results:** `typecheck:src` ✅ (exit 0, source stays clean). Build ✅.
+New suite ✅ **14/14**. Full `npm test`: **185/188** — the **3 failures are
+pre-existing and environmental**, confirmed by `git stash` on clean HEAD
+(3c7b7236) reproducing them identically. They live in `app.test.ts` /
+`server.test.ts` / `operator-runtime.test.ts` background-task **recovery**:
+`startBackgroundTask` spawns a *real bash launch script* whose `sed`-templated
+state write (`renderLaunchScript` in `src/harness/background-tasks.ts`, mirrored
+in `training/runner.ts`) emits malformed JSON in this cloud shell → `readJsonFile`
+throws `SyntaxError … at position 311`. Not touched by this run and out of scope
+(guardrail: don't rewrite working code to chase parity). **Pushed to the
+designated branch `claude/peaceful-dirac-6ciwt5`** (per branch instructions),
+which carries only this additive, green diff.
+
+**New idea:** make `startBackgroundTask`/`launch` inject the *state writer* as a
+pluggable strategy with a pure-Node default (write the running-state JSON from
+TypeScript via `writeJsonAtomic` before/alongside spawning the shell), so state
+serialization no longer depends on the host's `sed`/`printf`/`date` behaving
+identically to macOS — fixing the 3 environmental failures and hardening the
+launch path across platforms. Logged to ROADMAP.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
