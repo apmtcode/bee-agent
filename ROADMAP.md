@@ -58,22 +58,57 @@ unchecked items are queued. Keep this richer than you found it each run.
 ## Local-movement learning subsystem
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
-(exporter, job store/manifest, runner, execution service). Next increments:
+(exporter, job store/manifest, runner, execution service). **Run 9 added the
+in-process model loop in `src/movement/`** — the piece that actually *learns*
+from a dataset and predicts/generalizes, complementing the external-Python
+(mlx/axolotl) delegation path in `src/training/runner.ts`.
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
-      deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+- [x] Pluggable local-model backend interface (`MovementModelBackend`) with a
+      deterministic in-process backend (`MarkovMovementBackend`, variable-order
+      Markov + stupid-backoff) so cloud/CI tests pass — DONE run 9. The real
+      on-device small model plugs in behind the same seam.
+- [x] Synthetic event-stream generator (`generateSyntheticMovementDataset`, seeded
+      mulberry32 PRNG + task grammars) to validate the tokenize→train→generate
+      round-trip without real OS input — DONE run 9.
+- [x] Generalization eval harness (`evaluateMovementModel` + `splitMovementDataset`)
+      measuring next-movement top-1/recall and backoff-order distribution on
+      held-out related trajectories — DONE run 9 (held-out top-1 ~0.46, recall
+      ~0.80, mean backoff order < trained order ⇒ real generalization).
+- [ ] Trajectory→movement bridge in the control plane: expose `trajectories.*`
+      reviewed spans → `tokenizeTrajectoryDataset` → train → `movement.predict`
+      RPC so the CLI can drive the model. (`tokenizeTrajectorySpan` already maps
+      the real `TrajectorySpan`/gesture schema to `MovementSequence`.)
+- [ ] Model persistence: wire `MarkovModelState` serialize/restore through a
+      file store (mirror `FileTrainingJobStore`) so trained movement models
+      survive process restarts.
+- [ ] Second backend behind the seam: a positional/attention or
+      frequency-smoothed backend to compare generalization vs. the Markov
+      baseline on the same eval harness (the harness is backend-agnostic).
+
+## Known blockers (triage first)
+- [ ] **3 pre-existing test-file failures** discovered run 9, present on branch
+      HEAD *before* run 9's additive change (verified by stashing):
+      `operator-runtime.test.ts` ("starts, syncs, recovers…"),
+      `app.test.ts` (background/monitor/cron + session-lifecycle), and
+      `server.test.ts` ("session, transcript, approval, trajectory…"). Root cause:
+      these tests spawn **real subprocesses** via `renderLaunchScript`
+      (`src/harness/background-tasks.ts:732`, `bash`/`python3`/`date` + a
+      `printf | sed > state.json`) whose async single-line state write races /
+      corrupts the JSON the test later reads (`SyntaxError … position 311`).
+      Deterministic in this sandbox. Fix idea: make `startBackgroundTask`'s state
+      init happen in-process (or gate the launch-script write behind a test seam)
+      instead of a raced subprocess, so `readState` never sees a half-written /
+      sed-mangled file. Out of scope for run 9's movement increment.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in
       project health over time.
+- [ ] Online/continual movement learning: incrementally update the Markov
+      counts as new reviewed trajectories arrive (append-only count merge)
+      instead of retraining from scratch — a natural fit for the hourly engine.
 - [ ] Coordination guard between the parallel cloud + local self-evolve runs
       (e.g. a lightweight lock/heartbeat file) to avoid duplicated work and
       merge churn.

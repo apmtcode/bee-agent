@@ -6,6 +6,81 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-05 (run 9) — Movement subsystem: in-process train→predict→generalize loop (`src/movement/`)
+
+**Audited:** Standing objective 2 (local-movement learning). Prior runs built
+`src/capture/` (recording, consent, trajectory schema) and `src/training/`
+(exporter, job store, runner). But the runner only *delegates* to external
+Python (mlx/axolotl) via a generated launch script — there was **no in-process
+model that actually learns from a dataset and predicts/generalizes movements**,
+so pieces 2c (post-train to repeat movements) and 2d (generalize to related
+movements) were untested and unrunnable in the cloud. That was the highest-value
+gap: the core learning loop.
+
+**Changed (purely additive — new `src/movement/` module + barrel exports):**
+- `movement-event.ts` — discretized movement schema (`MovementToken`,
+  `MovementEvent`, `MovementSequence`, `MovementDataset`) plus
+  `tokenizeTrajectorySpan`/`tokenizeTrajectoryDataset` that map the **real**
+  `TrajectorySpan`/device-gesture metadata into comparable tokens
+  (`tap:submit`, `swipe:down`), and `slugifyMovementLabel`/`buildMovementToken`
+  for stable canonicalization. Observations are dropped — the model learns the
+  movement *policy*.
+- `model-backend.ts` — the pluggable seam: `MovementModelBackend` (`train`,
+  `restore`) + `MovementModel` (`predictNext`, `generate`, `serialize`) +
+  `MovementPrediction` (reports the backoff `order` used, for generalization
+  telemetry). The real on-device small model plugs in here later.
+- `markov-backend.ts` — `MarkovMovementBackend`: a dependency-free, deterministic
+  variable-order Markov chain with **stupid-backoff** (unseen high-order context
+  → shorter context ⇒ generalization). START/END boundary padding lets
+  `generate([])` roll out a full movement sequence and terminate naturally.
+  Deterministic argmax with a lexicographic tie-break; boundary `END` is
+  deprioritized on ties so a real movement wins over premature termination.
+  `serialize`/`restore` round-trip via `MarkovModelState`.
+- `synthetic.ts` — seeded mulberry32 PRNG + `generateSyntheticMovementDataset`
+  over overlapping task grammars (`form-fill`, `browse-and-select`,
+  `shortcut-command`). Byte-identical for identical options ⇒ validates the
+  capture→dataset→train→replay round-trip with **no real OS input** (we run in
+  the cloud with no device access).
+- `eval.ts` — `evaluateMovementModel` (next-movement top-1 accuracy, top-k
+  recall, backoff-order histogram, mean order, per-sequence breakdown) +
+  `splitMovementDataset` (deterministic stride hold-out) — the generalization
+  eval harness, backend-agnostic.
+- `src/index.ts` — exported the whole module surface.
+
+**Test results:** **24 new tests, all green** (`src/movement/` 4 files). Build ✅.
+`typecheck:src` ✅ (exit 0). Generalization measured on held-out synthetic data
+(seed 123, 60 seqs, 25% hold-out, order 3): **top-1 ≈ 0.46, recall ≈ 0.80, mean
+backoff order ≈ 2.8 < 3** — i.e. the model answers many held-out steps below the
+trained order, the signature of real generalization rather than memorization.
+(The grammars carry irreducible randomness, so <1.0 top-1 is expected/correct.)
+
+**⚠️ Pre-existing failures (NOT caused by this change):** the full `npm test`
+shows 3 failing test files — `operator-runtime.test.ts`, `app.test.ts`,
+`server.test.ts`. Verified by `git stash`: they **fail on branch HEAD without
+run 9's diff**. Root cause: those tests spawn real subprocesses via
+`renderLaunchScript` (`background-tasks.ts:732`; `bash`/`python3`/`date` +
+`printf|sed > state.json`) whose raced single-line state write corrupts the JSON
+`readState` later parses (`SyntaxError … position 311`), deterministic in this
+sandbox. Logged as the top "Known blockers" item in `ROADMAP.md` with a fix
+sketch (move state-init in-process behind a test seam). Left untouched to keep
+run 9 a focused, additive, reviewable diff per the guardrails.
+
+**Push decision:** run 9's change is strictly additive and fully green (own
+tests + build + source typecheck + all previously-passing tests). The 3 failures
+are ambient/pre-existing on the designated branch. Pushed to the mandated
+feature branch `claude/peaceful-dirac-l34kae` (not main), leaving the remote
+strictly more capable, with the pre-existing failures documented as next run's
+priority.
+
+**New idea (innovation):** *online/continual movement learning* — because the
+Markov model is just additive counts, new reviewed trajectories can merge into
+an existing model incrementally (count-merge) instead of retraining from
+scratch. That's a perfect fit for the hourly engine: each cycle folds the latest
+reviewed spans into the movement model and re-evaluates drift on a fixed held-out
+set. Queued in ROADMAP innovation backlog.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
