@@ -6,6 +6,58 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-05 (run 9) — Fix corrupt background-task state writer + make its tests deterministic
+
+**Audited:** Test-suite health on a clean tree. Run 8 logged 174/174 green, but
+`npm test` now showed **3 deterministic/flaky failures** all rooted in
+`src/harness/background-tasks.ts` — a genuine product bug plus test-isolation
+races. Root-caused with a `tsx` harness that dumped the generated launcher and
+the on-disk state file.
+
+**Root cause (real bug):** the background-task launcher wrote its initial
+`running` state via `printf '<json>' | sed "…; s/\"\$\$\"/$$/g" > state.json`.
+The TS template `s/\"\$\$\"/$$/g` renders to `s/"$$"/$$/g`, and the **unescaped
+`"` breaks out of the bash double-quotes** — so `$$` expanded to the launcher
+PID (making the pid substitution `s/<pid>/<pid>/` a no-op that leaves
+`"pid":"$$"`, a *string*), and single-quoted commands got mangled into
+**invalid JSON** (`"command":"printf "'…\n"'"`). That corrupt file then broke
+both the launcher's own python reader (`json.loads`) *and* bee-agent's
+`readState`, surfacing as `SyntaxError: Expected ',' or '}' … position 311`.
+
+**Changed (additive, `src/harness/background-tasks.ts`):** dropped `sed`
+entirely. The initial `running` state is now written by `python3` (like the
+existing completed/failed writers) — the shell-quoted JSON payload is passed
+straight as `argv[4]` (bash single-quote reconstruction is robust for any
+command content), and python fills `pid`/`startedAt`/`updatedAt`. New
+`renderRunningStateWriterPython()` mirrors `renderStateWriterPython()`.
+
+**Changed (test determinism):** the three failing tests spawned a **real
+detached bash launcher** that raced their own `writeState`/`writeOutput`
+(clobbering output with `starting monitor …`, exiting → reconciled as
+`missing-process` → `control=degraded`, and `ENOTEMPTY` on temp cleanup). Added
+an injectable spawn seam to `OperatorCliApp` (`backgroundTaskSpawnProcess` /
+`backgroundTaskIsProcessRunning`, forwarded to the runtime — mirrors the runtime
+option) and a shared `noopSpawnBackgroundProcess` no-op in `app.test.ts`,
+`server.test.ts` (×3 sites), and `operator-runtime.test.ts`. Tests drive
+execution state directly, so no real subprocess is needed.
+
+**Test results:** **174/174 green, deterministic across 4 consecutive runs**
+(was 3 failing). `typecheck:src` ✅ exit 0. Full `tsc` unchanged at **125**
+(test-only debt; no new errors). Build ✅.
+
+**New idea:** the launcher hard-depends on `python3` for *all* state writes,
+which is a hidden runtime requirement (and a portability gap on minimal
+images). Add a `renderStateWriter` seam that prefers `node -e`/`printf`-with-
+proper-quoting and falls back to python, plus a startup capability probe that
+records which writer backend is available — surfaced in health so a missing
+`python3` degrades loudly instead of silently corrupting task state. Also worth
+a focused unit test on `renderLaunchScript` output (assert the emitted state
+file parses as JSON for adversarial commands: single quotes, `$$`, newlines,
+heredoc-like `PY` lines) so launcher-quoting regressions are caught at the unit
+level, not via flaky integration races.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

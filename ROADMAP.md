@@ -70,6 +70,23 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Generalization eval harness: measure replay fidelity on held-out but
       related synthetic trajectories.
 
+## Reliability / correctness
+- [x] Fix corrupt background-task launcher state writer (2026-07-05, run 9). The
+      `printf | sed` running-state write produced invalid JSON (broken `$$`
+      escaping + mangled single-quoted commands); replaced with a python writer
+      (matching the completed/failed writers). Also fixed 3 flaky tests that
+      raced a real launcher subprocess by adding an injectable no-op spawn seam.
+- [ ] **Pluggable launcher state-writer backend.** The launcher hard-depends on
+      `python3` for every state write — a hidden runtime requirement and a
+      portability gap. Add a `renderStateWriter` seam (prefer `node -e` /
+      properly-quoted `printf`, fall back to python) + a startup capability probe
+      that records the available backend and degrades *loudly* in health when
+      none is present, instead of silently corrupting task state.
+- [ ] **Unit-test `renderLaunchScript` output directly.** Assert the emitted
+      state file parses as JSON for adversarial commands (single quotes, `$$`,
+      newlines, `PY`-like lines) so launcher-quoting regressions are caught at
+      the unit level rather than via flaky integration races.
+
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in

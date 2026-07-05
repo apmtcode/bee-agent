@@ -9,6 +9,10 @@ import type { ReviewedExportManifest } from "../training/export-manifest.js";
 
 const tempDirs: string[] = [];
 
+// See app.test.ts: a no-op spawn keeps background-task tests deterministic by
+// not racing a real detached launcher subprocess against writeState/writeOutput.
+const noopSpawnBackgroundProcess = () => ({ pid: 424242, unref() {} });
+
 async function makeTempDir(): Promise<string> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "operator-runtime-"));
   tempDirs.push(dir);
@@ -531,6 +535,7 @@ describe("StandaloneOperatorRuntime", () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
       backgroundTaskIsProcessRunning: () => false,
+      backgroundTaskSpawnProcess: noopSpawnBackgroundProcess,
     });
     const session = await runtime.startSession({ title: "Tasks", agentId: "main" });
 
