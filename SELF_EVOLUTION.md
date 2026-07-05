@@ -6,6 +6,69 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-05 (run 9) — Real launcher JSON-corruption bug fixed; whole suite made deterministic (green 175/175)
+
+**Audited:** The actual `npm test` result on a fresh machine — the standing
+"pay down typecheck debt" work had been the focus for runs 2–8, but nobody had
+re-run the *runtime* suite. It was **red and flaky**: 3–4 of 174 tests failed,
+the count varying run to run (`operator-runtime.test`, `control-plane/server.test`,
+`cli/app.test`). This is worse than typecheck debt — a red suite means the
+engine's own verification gate (procedure step 5) can't be trusted.
+
+**Root cause (a real production bug in the movement/background-task subsystem):**
+`renderLaunchScript` in `src/harness/background-tasks.ts` builds a bash launcher
+that writes a task's `state.json`. Its `shellQuote()` used the escape sequence
+`"'"'"'` for embedded single quotes — which is **wrong**: it injects a spurious
+`"` before each quote (turns `a'b` into `a"'b`). So any task whose command
+contains a single quote — e.g. `printf 'x'`, `bash -lc '…'` (extremely common) —
+produced **malformed state-file JSON** with the command's quotes unescaped, and
+the pid left as the literal string `"$$"`. Recovery/sync then threw
+`SyntaxError` while parsing it, crashing background-task reconciliation. The
+correct POSIX escape is `'"'"'` (which the *other* copy in `training/runner.ts`
+already had — this was a one-off divergence). Reproduced the corruption in an
+isolated shell before fixing; added a regression test that runs the **real**
+bash+python launcher end-to-end and asserts the state file is always valid JSON
+with the command preserved and a numeric pid (verified it fails on the old
+escape, passes on the fix).
+
+**Second real bug (torn writes):** both the launcher's initial `sed > state.json`
+redirect and its terminal `python … write_text()` were **non-atomic**, so a
+concurrent reader could observe an empty/half-written file (→ lost pid →
+`"… is not running"`). Made both writes atomic (temp file + `mv`/`os.replace`),
+matching the TS `writeJsonAtomic` helper.
+
+**Test determinism (root of the flakiness):** the failing integration tests
+manually `writeState`/`writeOutput` to control task state, but a **real detached
+launcher subprocess** was concurrently writing the same files — an inherent race
+(the fast `printf` exits before liveness/health checks, racily flagging
+`missing-process`). The wiring to inject an inert executor existed on the runtime
+(`backgroundTaskSpawnProcess` / `backgroundTaskIsProcessRunning`) but was only
+half-used (liveness injected, spawn not) and **not exposed on `OperatorCliApp`
+at all**. Fix: (a) thread both seams through `OperatorCliAppOptions` →
+`StandaloneOperatorRuntime` (production default unchanged: `undefined` → real
+spawn/liveness); (b) inject an inert spawn (pid 4321) into the racy tests so the
+manual state writes are authoritative. One test needed per-pid liveness
+(`(pid) => pid !== 999999`) to preserve its running→failed transition; another
+needed a stand-in `writeOutput` since the inert launcher no longer produces real
+stdout.
+
+**Changed:** `src/harness/background-tasks.ts` (shellQuote escape + atomic
+initial/terminal state writes), `src/cli/app.ts` (executor-injection options),
+and the three racy test files. Net **+106/−7** lines, additive and reversible.
+
+**Test results:** `npm run build` ✅. `npm run typecheck:src` ✅ (exit 0, all
+source files still clean). `npm test` ✅ **175/175** (was 174 with 3–4 flaky
+failures) — ran the full suite **5×** back-to-back, green every time. The new
+launcher regression test also ran 4× standalone, deterministic.
+
+**New idea (logged to ROADMAP):** A **flake sentinel** for the engine — run the
+suite N× (e.g. 3×) as the pre-push self-check instead of once, and treat any
+run-to-run variance in pass count as a blocker. A single green run hid a race
+for eight cycles; cheap repetition would have caught it immediately. Pairs well
+with the already-queued `verify` script.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

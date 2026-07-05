@@ -370,4 +370,46 @@ describe("BackgroundTaskExecutionService", () => {
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
   });
+
+  it("emits a valid, parseable state file when the real launcher runs a quoted command", async () => {
+    // Regression: the shell single-quote escape in renderLaunchScript once
+    // injected a spurious `"` around embedded single quotes, so a command like
+    // `printf 'x'` produced malformed state-file JSON and the pid stayed the
+    // literal `"$$"`. This drives the REAL bash+python launcher end to end.
+    const rootDir = await makeTempDir();
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"));
+    const command = "printf 'quoted-\"value\"-42'";
+    const task = await store.start({ title: "Quoted", command, cwd: rootDir, kind: "task" });
+
+    const statePath = path.join(rootDir, task.execution.stateFile);
+    const deadline = Date.now() + 8000;
+    let parsed: BackgroundTaskExecutionState | undefined;
+    while (Date.now() < deadline) {
+      let raw: string;
+      try {
+        raw = await fs.readFile(statePath, "utf8");
+      } catch {
+        continue;
+      }
+      // The file only ever exists post-rename, so any content present must be
+      // complete: an empty read means we lost the ENOENT race, not a torn write.
+      if (!raw.trim()) {
+        continue;
+      }
+      // Must always be parseable — a torn or mis-escaped write is the bug.
+      const candidate = JSON.parse(raw) as BackgroundTaskExecutionState;
+      if (candidate.status === "completed" || candidate.status === "failed") {
+        parsed = candidate;
+        break;
+      }
+    }
+
+    if (!parsed) {
+      throw new Error("launcher never wrote a terminal state file");
+    }
+    expect(parsed.status).toBe("completed");
+    expect(parsed.command).toBe(command);
+    expect(typeof parsed.pid).toBe("number");
+    expect(parsed.pid).toBeGreaterThan(0);
+  });
 });

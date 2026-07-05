@@ -731,6 +731,7 @@ function applyExecutionState(task: BackgroundTaskRecord, state: BackgroundTaskEx
 
 function renderLaunchScript(task: BackgroundTaskRecord): string {
   const quotedStatePath = shellQuote(task.execution.stateFile);
+  const quotedStateTmpPath = shellQuote(`${task.execution.stateFile}.launch.tmp`);
   const quotedOutputFile = shellQuote(task.execution.outputFile);
   const quotedCwd = shellQuote(task.cwd);
   const quotedCommand = shellQuote(task.command);
@@ -754,7 +755,10 @@ function renderLaunchScript(task: BackgroundTaskRecord): string {
     "set -euo pipefail",
     `mkdir -p $(dirname ${quotedStatePath}) $(dirname ${quotedOutputFile})`,
     "started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-    `printf '%s' ${quotedStatePayload} | sed "s/__OPENCLAW_STARTED_AT__/$started_at/g; s/\"\$\$\"/$$/g" > ${quotedStatePath}`,
+    // Write the initial state via a temp file + atomic rename so a concurrent
+    // reader never observes the half-truncated file left by a bare `>` redirect.
+    `printf '%s' ${quotedStatePayload} | sed "s/__OPENCLAW_STARTED_AT__/$started_at/g; s/\"\$\$\"/$$/g" > ${quotedStateTmpPath}`,
+    `mv -f ${quotedStateTmpPath} ${quotedStatePath}`,
     `printf '%s\n' "starting ${task.kind} ${task.id}" >> ${quotedOutputFile}`,
     `if cd ${quotedCwd} && bash -lc ${quotedCommand} >> ${quotedOutputFile} 2>&1; then`,
     "  completed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
@@ -776,6 +780,7 @@ function renderLaunchScript(task: BackgroundTaskRecord): string {
 function renderStateWriterPython(status: BackgroundTaskExecutionState["status"]): string[] {
   return [
     "import json",
+    "import os",
     "import pathlib",
     "import sys",
     "state_path = pathlib.Path(sys.argv[1])",
@@ -789,10 +794,21 @@ function renderStateWriterPython(status: BackgroundTaskExecutionState["status"])
     "state['completedAt'] = timestamp",
     "state['exitCode'] = exit_code",
     `state['error'] = None if '${status}' == 'completed' else f'background task exited non-zero ({exit_code})'`,
-    "state_path.write_text(json.dumps(state, indent=2) + '\\n')",
+    // Write atomically (temp file + rename) so a concurrent reader never
+    // observes a truncated/partial state file. A non-atomic write_text() races
+    // with readState(), which would then parse an empty string and lose the pid.
+    "tmp_path = state_path.with_suffix(state_path.suffix + f'.{pid}.tmp')",
+    "tmp_path.write_text(json.dumps(state, indent=2) + '\\n')",
+    "os.replace(tmp_path, state_path)",
   ];
 }
 
 function shellQuote(value: string): string {
-  return `'${value.replaceAll(`'`, `"'"'"'`)}'`;
+  // POSIX single-quote escaping: close the quote, emit an escaped quote via a
+  // double-quoted string, then reopen. The sequence is `'"'"'` — a leading
+  // `'` to close the current quote is required, otherwise the escaped quote is
+  // injected *inside* the still-open string and a spurious `"` leaks through,
+  // corrupting embedded values (e.g. a command's own single quotes), which in
+  // turn produces invalid state-file JSON.
+  return `'${value.replaceAll(`'`, `'"'"'`)}'`;
 }

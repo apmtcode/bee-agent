@@ -8,6 +8,14 @@ unchecked items are queued. Keep this richer than you found it each run.
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`
       (2026-06-22).
+- [x] **Turn the runtime suite green + deterministic** (2026-07-05, run 9). Was
+      red/flaky (3–4 of 174 failing, count varying) for eight cycles while the
+      engine only watched the typecheck count. Fixed the underlying **real**
+      launcher JSON-corruption bug (bad `shellQuote` single-quote escape) + made
+      both launcher state writes atomic, then killed the test race by injecting
+      an inert background-task executor (spawn seam now exposed on
+      `OperatorCliApp`, production default unchanged). `npm test` now **175/175**,
+      green across 5 consecutive full-suite runs.
 - [ ] **Pay down typecheck debt** (surfaced by the `typecheck` script). Full
       `tsc --noEmit` count was **397** on 2026-06-22; now **125**. 🎯 ALL source
       (`src/**` non-test) files typecheck clean since run 7; remaining 125 errors
@@ -84,3 +92,10 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
       count to a baseline file and fail if a module regresses above it. Lets the
       engine pay debt down module-by-module without one green-gate blocking
       progress, and prevents backsliding while the total is still > 0.
+- [ ] **Flake sentinel** (new, run 9): make the engine's pre-push self-check run
+      the suite N× (e.g. 3×) and treat any run-to-run variance in pass count as a
+      blocker, not just a single green run. A background-task subprocess race hid
+      a red suite behind an occasionally-green run for eight cycles; cheap
+      repetition catches it immediately. Also consider `vitest --retry=0` +
+      seeding, and grep tests for real-subprocess spawns (`printf`, `tail -f`)
+      that should use the now-exposed inert-executor seam instead.
