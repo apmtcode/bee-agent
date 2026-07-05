@@ -794,5 +794,7 @@ function renderStateWriterPython(status: BackgroundTaskExecutionState["status"])
 }
 
 function shellQuote(value: string): string {
-  return `'${value.replaceAll(`'`, `"'"'"'`)}'`;
+  // POSIX-safe: close the quote, emit an escaped single quote, reopen. The
+  // canonical sequence is 'A'\''B' — i.e. replace each ' with '"'"' (5 chars).
+  return `'${value.replaceAll(`'`, `'"'"'`)}'`;
 }

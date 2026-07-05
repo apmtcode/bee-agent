@@ -6,6 +6,64 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-05 (run 9) — In-process movement model (train→infer) + shellQuote corruption bug root-caused & fixed
+
+**Audited:** The local-movement learning subsystem (standing objective #2). Found
+`src/training/` only emits *shell launch plans* for a real on-device runtime
+(MLX/Axolotl via `LocalAppleSiliconTrainingRunner`) — those cannot execute in
+Anthropic's cloud, so the core loop of objective #2 parts (c) **post-train a
+model to repeat recorded movements** and (d) **generalize to new-but-related
+movements** had **no cloud-runnable, testable implementation**. Also
+investigated a pre-existing red suite (3 failing tests at HEAD).
+
+**Changed (additive):**
+1. **New `src/training/movement-model.ts`** — a pluggable, deterministic,
+   dependency-free in-process train→infer pipeline:
+   - `tokenizeAction` / `buildMovementDataset`: a canonical *movement token*
+     schema derived from recorded `TrajectoryAction`s (tool + gesture +
+     direction/target-bucket). Numeric targets (`row-3`, `row-7`) collapse to a
+     shared bucket token — the seam that lets the model generalize.
+   - `MovementModelBackend` interface + `MovementModelRegistry` so the backend is
+     swappable (deterministic mock now; real on-device small model later).
+   - `NgramMovementBackend`: an n-gram policy with **Katz-style backoff** — exact
+     recorded prefixes replay verbatim (2c); unseen-but-related prefixes back off
+     to lower-order stats and still emit a sensible next move (2d).
+   - `rolloutMovements` (deterministic replay/generation) and `replayFidelity`
+     (LCS-ratio eval metric for the generalization harness).
+   - `createDefaultMovementModelRegistry()` pre-seeds the mock backend.
+   - Exported the full surface from `src/index.ts`.
+2. **Real bug fixed — `shellQuote` in `src/harness/background-tasks.ts`:** the
+   POSIX single-quote escape was `"'"'"'` (6 chars) instead of the correct
+   `'"'"'` (5 chars, as in `training/runner.ts`). Any background-task **command
+   containing a single quote** (e.g. `printf 'line-1\nline-2\n'`) produced a
+   corrupt shell-quoted JSON payload, so the launch script wrote **malformed
+   `state.json`** → `readJsonFile` threw `SyntaxError: Expected ',' or '}'` during
+   recovery. Root-caused by dumping the corrupt bytes (stray `'` inside the
+   `command` field + unsubstituted `"pid":"$$"`). One-token fix, matches the
+   already-correct sibling in `runner.ts`.
+
+**Test results:** `movement-model.test.ts` **14/14** green. `typecheck:src`
+CLEAN (exit 0). Build ✅. The shellQuote fix removed the **deterministic** JSON
+crash in `operator-runtime.test.ts` (was 3 red at HEAD; the crash mode is gone).
+
+**Known-remaining (pre-existing, NOT caused by this run):** 3 integration tests
+(`operator-runtime`, `server`, `app`) are **flaky** — they construct
+`StandaloneOperatorRuntime` with the *real* `spawnProcess`/`isProcessRunning`, so
+they spawn actual OS subprocesses (`sleep 5`, `printf drift`) and assert on their
+liveness. In this cloud sandbox a task caught mid-transition reads `running`
+after its process already exited → `missing-process` → `control=degraded`, so
+`control=active` assertions flake (observed 1–2 failures varying run-to-run). The
+injection seams **already exist** (`backgroundTaskSpawnProcess`,
+`backgroundTaskIsProcessRunning` options) — the fix is to inject a deterministic
+mock launcher in those 3 tests. Queued as the top ROADMAP item (too broad to rush
+safely this hour without rewriting the tests' liveness expectations).
+
+**New idea:** persist a trained `MovementModel` to disk and add a
+`MovementModelStore` so a recorded→trained→replay round-trip survives process
+restarts, and wire the mock backend into the training `execution-service` as the
+cloud/CI execution path (real MLX/Axolotl on device, n-gram mock in the cloud) —
+giving the whole objective-#2 pipeline an end-to-end test without any OS/GPU.
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
