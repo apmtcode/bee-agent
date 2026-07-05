@@ -6,6 +6,54 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-05 (run 9) — Movement subsystem: pluggable local-model backend + deterministic n-gram trainer + eval harness
+
+**Audited:** Standing objective #2 (local-movement learning). Inventoried what
+`src/capture` + `src/training` already cover against the objective's five pieces:
+capture/recording (`recorder`, `os/device/browser` adapters, `ingestion`) ✅,
+event schema (`trajectory.ts`) ✅, dataset format (`exporter.ts` →
+`ReviewedExportManifest`, `replay.ts` → `ReplayManifest`) ✅, replay engine
+(`replay-service.ts`) ✅ — but **train/infer (pieces c & d) had no cloud-runnable
+implementation.** `runner.ts` only emits an MLX/Axolotl launch *plan* for
+Apple-Silicon; nothing can actually train a model or generate movements in CI.
+
+**Changed (additive) — new `src/training/movement-backend.ts`:**
+- `LocalMovementBackend` interface (`train` + `load`) — the pluggable seam for a
+  real on-device small model, with `MovementBackendRegistry` to swap backends by id.
+- `NGramMovementBackend` — a deterministic, zero-dependency reference backend: an
+  order-k Markov model with stupid-backoff decoding and lexicographic tie-breaks,
+  so identical datasets always yield identical models/predictions. It **memorizes**
+  recorded movements exactly (piece c) and **generalizes** by composing overlapping
+  sub-sequences across trajectories (piece d).
+- `buildMovementDataset` / `tokenizeReplayManifest` / `tokenizeReplayEvent` — turn
+  recorded `ReplayManifest`s into a model-ready `MovementDataset` (tokens like
+  `action:<tool>`, `observation:<source>`, `transcript:<role>`).
+- `TrainedMovementModel` — `predictNext` / `generate` / `toJSON` / `fromJSON`
+  (serializable so a trained model persists and reloads without behaviour change).
+- `evaluateReplayFidelity` — the generalization eval harness: teacher-forced
+  next-token accuracy + end-to-end exact-replay rate on held-out samples.
+- Exported all of the above from `src/index.ts`.
+
+**Test results:** new `movement-backend.test.ts` — **16/16 green** (tokenization,
+exact replay, empty-prompt generation, determinism, tie-breaking, cross-trajectory
+generalization, backoff, JSON round-trip, registry, fidelity eval). `npm run
+build` ✅. `npm run typecheck:src` ✅ (source stays clean). Full `npm test`:
+**186 passed**, plus **4 PRE-EXISTING failures** (server.test/app.test/
+operator-runtime.test) that also fail on clean `HEAD` before this change — they are
+NOT a regression from this run (verified via `git stash`). Root cause: the
+training **launch script's `date`/`sed` placeholder substitution
+(`__OPENCLAW_STARTED_AT__`) produces invalid JSON under this sandbox's shell**, so
+`readJsonFile` throws `SyntaxError` when a test reads the run-state file. Logged as
+a roadmap fix.
+
+**New idea:** wire this backend into `execution-service`/`runner` behind a
+`backend: "mlx" | "axolotl" | "ngram-mock"` selector so a job can run the in-process
+mock end-to-end (prepare → train → eval → persist model JSON) for CI/preview, and
+only shell out to the native trainer when a real device is present — giving the
+whole train→infer loop a green path in the cloud.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

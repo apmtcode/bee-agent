@@ -59,16 +59,30 @@ unchecked items are queued. Keep this richer than you found it each run.
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
 (exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
-      objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Inventory what `src/capture` + `src/training` already implement vs. the
+      objective's five pieces — DONE run 9 (see SELF_EVOLUTION). Gap was
+      train/infer (pieces c & d): no cloud-runnable trainer existed.
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
+      for a real on-device small model — DONE run 9 (`src/training/movement-backend.ts`:
+      `LocalMovementBackend` + `MovementBackendRegistry` + `NGramMovementBackend`).
+- [x] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories — DONE run 9 (`evaluateReplayFidelity`:
+      next-token accuracy + exact-replay rate).
 - [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      round-trips without real OS input (run 9's tests build synthetic replays
+      inline; extract a reusable generator that emits mouse/keyboard/window event
+      streams through the `os/device/browser` adapters end-to-end).
+- [ ] Wire the movement backend into `execution-service`/`runner` behind a
+      `backend: "mlx" | "axolotl" | "ngram-mock"` selector so a job can run the
+      in-process mock end-to-end (prepare → train → eval → persist model JSON) in
+      CI/preview, shelling out to the native trainer only on a real device.
+- [ ] **Fix pre-existing training-launch JSON bug** (surfaced run 9): the launch
+      script's `__OPENCLAW_STARTED_AT__` `date`/`sed` substitution produces invalid
+      JSON under some shells, so `readJsonFile` throws `SyntaxError` in
+      server.test/app.test/operator-runtime.test. Make the state-file writer emit
+      valid JSON regardless of the substitution timing (write the timestamp from the
+      Python state-writer, not via `sed`).
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
