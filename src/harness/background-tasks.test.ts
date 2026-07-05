@@ -1,12 +1,16 @@
+import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   BackgroundTaskExecutionService,
   FileBackgroundTaskStore,
   type BackgroundTaskExecutionState,
 } from "./background-tasks.js";
+
+const execFileAsync = promisify(execFile);
 
 const tempDirs: string[] = [];
 
@@ -369,5 +373,45 @@ describe("BackgroundTaskExecutionService", () => {
     await expect(fs.readFile(path.join(rootDir, task.execution.launchScript), "utf8")).resolves.toContain("bash -lc");
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
+  });
+
+  async function runLaunchScript(
+    command: string,
+  ): Promise<{ state: BackgroundTaskExecutionState; statePath: string; command: string }> {
+    const rootDir = await makeTempDir();
+    const store = new FileBackgroundTaskStore(
+      path.join(rootDir, "background-tasks.json"),
+      () => ({ pid: 4242, unref() {} }),
+    );
+    const task = await store.start({ title: "Launch", command, cwd: rootDir, kind: "task" });
+    const scriptPath = path.join(rootDir, task.execution.launchScript);
+    // The command may legitimately exit non-zero; we only care that the launch
+    // script always leaves behind well-formed state.json, so tolerate rejection.
+    await execFileAsync("bash", [scriptPath], { cwd: rootDir }).catch(() => undefined);
+    const statePath = path.join(rootDir, task.execution.stateFile);
+    const raw = await fs.readFile(statePath, "utf8");
+    return { state: JSON.parse(raw) as BackgroundTaskExecutionState, statePath, command: task.command };
+  }
+
+  it("always writes parseable state.json even for the exact newline-bearing command that used to corrupt it", async () => {
+    // Regression: the initial state.json was produced by a `printf | sed`
+    // pipeline that corrupted commands containing quotes, backslashes, or
+    // newlines — `printf 'line-1\nline-2\n'` yielded invalid JSON that crashed
+    // every downstream reader (the recovery/breaker paths). The launch script
+    // must now always persist well-formed JSON that round-trips the command.
+    const { state, statePath, command } = await runLaunchScript("printf 'line-1\nline-2\n'");
+    expect(state.command).toBe(command);
+    expect(typeof state.pid).toBe("number");
+    expect(state.pid).toBeGreaterThan(0);
+    // The seed side-file must be cleaned up, not left behind next to state.json.
+    await expect(fs.access(`${statePath}.seed`)).rejects.toThrow();
+  });
+
+  it("round-trips quotes and backslashes and records the completed terminal state", async () => {
+    const { state } = await runLaunchScript('echo "quote:\\"back:\\\\ done"');
+    expect(state.command).toBe('echo "quote:\\"back:\\\\ done"');
+    expect(state.status).toBe("completed");
+    expect(state.exitCode).toBe(0);
+    expect(state.pid).toBeGreaterThan(0);
   });
 });

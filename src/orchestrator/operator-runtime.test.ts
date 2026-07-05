@@ -528,9 +528,15 @@ describe("StandaloneOperatorRuntime", () => {
   });
 
   it("starts, syncs, recovers, lists, and cancels background tasks", async () => {
+    let nextPid = 4242;
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
       backgroundTaskIsProcessRunning: () => false,
+      // Deterministic launch: hand back a synthetic pid without executing the
+      // detached script, so the recovery assertions are driven purely by the
+      // explicit `writeState` calls below rather than racing a real process
+      // that would rewrite state.json asynchronously.
+      backgroundTaskSpawnProcess: () => ({ pid: nextPid++, unref: () => {} }),
     });
     const session = await runtime.startSession({ title: "Tasks", agentId: "main" });
 

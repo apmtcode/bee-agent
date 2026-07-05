@@ -729,32 +729,50 @@ function applyExecutionState(task: BackgroundTaskRecord, state: BackgroundTaskEx
   };
 }
 
+// Delimiter for the quoted heredoc that carries the initial JSON payload.
+// The payload is always a single line of `JSON.stringify` output starting with
+// `{`, so it can never collide with this bare-line delimiter.
+const STATE_HEREDOC_DELIMITER = "OPENCLAW_STATE_JSON";
+
 function renderLaunchScript(task: BackgroundTaskRecord): string {
   const quotedStatePath = shellQuote(task.execution.stateFile);
   const quotedOutputFile = shellQuote(task.execution.outputFile);
   const quotedCwd = shellQuote(task.cwd);
   const quotedCommand = shellQuote(task.command);
-  const quotedStatePayload = shellQuote(
-    JSON.stringify({
-      version: 1,
-      taskId: task.id,
-      kind: task.kind,
-      status: "running",
-      pid: "$$",
-      startedAt: "__OPENCLAW_STARTED_AT__",
-      updatedAt: "__OPENCLAW_STARTED_AT__",
-      outputFile: task.execution.outputFile,
-      cwd: task.cwd,
-      command: task.command,
-    }),
-  );
+  // Single-line JSON. `pid`, `startedAt`, and `updatedAt` are placeholders that
+  // the Python fixup below overwrites with the real runtime values. The payload
+  // is emitted verbatim through a *quoted* heredoc, so no shell escaping is
+  // applied to it — this avoids the quoting/backslash corruption that a
+  // `printf | sed` pipeline inflicts on commands containing quotes or newlines.
+  const initialStatePayload = JSON.stringify({
+    version: 1,
+    taskId: task.id,
+    kind: task.kind,
+    status: "running",
+    pid: 0,
+    startedAt: "",
+    updatedAt: "",
+    outputFile: task.execution.outputFile,
+    cwd: task.cwd,
+    command: task.command,
+  });
 
   return [
     "#!/usr/bin/env bash",
     "set -euo pipefail",
     `mkdir -p $(dirname ${quotedStatePath}) $(dirname ${quotedOutputFile})`,
     "started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-    `printf '%s' ${quotedStatePayload} | sed "s/__OPENCLAW_STARTED_AT__/$started_at/g; s/\"\$\$\"/$$/g" > ${quotedStatePath}`,
+    // Carry the payload to a side file via a *quoted* heredoc (no shell
+    // expansion, so quotes/backslashes/newlines in the command survive intact),
+    // then let Python fold in the real pid + timestamp and write `state.json` in
+    // a single pass. `state.json` therefore only ever appears fully-formed with
+    // the real pid — there is no window where a reader can observe placeholders.
+    `cat > ${quotedStatePath}.seed <<'${STATE_HEREDOC_DELIMITER}'`,
+    initialStatePayload,
+    STATE_HEREDOC_DELIMITER,
+    `python3 - ${quotedStatePath} $$ "$started_at" <<'PY'`,
+    ...renderInitialStateWriterPython(),
+    "PY",
     `printf '%s\n' "starting ${task.kind} ${task.id}" >> ${quotedOutputFile}`,
     `if cd ${quotedCwd} && bash -lc ${quotedCommand} >> ${quotedOutputFile} 2>&1; then`,
     "  completed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
@@ -771,6 +789,24 @@ function renderLaunchScript(task: BackgroundTaskRecord): string {
     "fi",
     "",
   ].join("\n");
+}
+
+function renderInitialStateWriterPython(): string[] {
+  return [
+    "import json",
+    "import pathlib",
+    "import sys",
+    "state_path = pathlib.Path(sys.argv[1])",
+    "seed_path = pathlib.Path(str(state_path) + '.seed')",
+    "pid = int(sys.argv[2])",
+    "timestamp = sys.argv[3]",
+    "state = json.loads(seed_path.read_text())",
+    "state['pid'] = pid",
+    "state['startedAt'] = timestamp",
+    "state['updatedAt'] = timestamp",
+    "state_path.write_text(json.dumps(state, indent=2) + '\\n')",
+    "seed_path.unlink(missing_ok=True)",
+  ];
 }
 
 function renderStateWriterPython(status: BackgroundTaskExecutionState["status"]): string[] {

@@ -6,6 +6,60 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-05 (run 9) — 🐛 Fix background-task `state.json` corruption (3 red tests → green)
+
+**Audited:** Ran the full suite as the first step and found **3 failing tests**
+(the log had recorded 174/174 — the failures are real in this environment and
+are triggered by commands containing shell-special characters, e.g. the
+`printf 'line-1\nline-2\n'` fixture whose real newlines only bite now). Traced
+all three to a single root cause in `src/harness/background-tasks.ts`.
+
+**Root cause:** `renderLaunchScript` wrote the initial `state.json` with a
+`printf '%s' <json> | sed 's/__STARTED_AT__/…/; s/"$$"/$$/'` pipeline. For any
+command containing quotes, backslashes, or newlines the payload was mangled
+(backslashes dropped, quotes unbalanced) → **invalid JSON on disk**. Every
+downstream reader (`readState` → `reconcileTask` → recovery/circuit-breaker
+paths) then threw `SyntaxError: … in JSON`, or read a half-written placeholder.
+
+**Changed (additive, `src/harness/background-tasks.ts`):**
+- Initial state is now carried to a `state.json.seed` side-file via a **quoted
+  heredoc** (`<<'OPENCLAW_STATE_JSON'` — zero shell expansion, so the JSON
+  survives byte-for-byte), then a small Python pass folds in the real `pid` +
+  `startedAt` and writes `state.json` in **one** shot (no window where a reader
+  can observe the `pid:0`/`""` placeholders) and unlinks the seed. Eliminates
+  the entire `printf|sed` quoting failure class.
+- Added `renderInitialStateWriterPython()` mirroring the existing completion
+  writer; dropped the fragile `sed` substitution and the magic placeholder
+  strings.
+
+**Tests:**
+- New end-to-end regression tests in `src/harness/background-tasks.test.ts`:
+  actually execute the generated launch script and assert `state.json` is always
+  parseable and round-trips the command verbatim — including the exact
+  newline-bearing command that used to corrupt it, and a quote/backslash command
+  that reaches the `completed` terminal state. Also asserts the `.seed` file is
+  cleaned up.
+- Made the three previously-flaky reconcile/breaker tests **deterministic** by
+  injecting a synthetic `backgroundTaskSpawnProcess` (returns a fake pid, never
+  executes the detached script) so recovery assertions are driven purely by the
+  explicit `writeState` calls instead of racing a real background process that
+  rewrites `state.json` asynchronously. (`operator-runtime.test.ts` +
+  `server.test.ts` ×3 runtimes via a shared `deterministicSpawn()` helper.)
+
+**Results:** full suite **176/176 green** (was 173/176). `typecheck:src` ✅
+(exit 0). `npm run build` ✅.
+
+**New idea:** the `renderLaunchScript` shell template is still stringly-typed and
+only exercised end-to-end by these new tests. Extract it behind a tiny
+`StateFileWriter` seam with two backends — the current bash+python launcher and
+a pure-Node writer used when `python3` is absent — and add a `hasPython3()`
+probe at task start so environments without Python degrade to the Node writer
+instead of silently failing every background task. Bonus: a fuzz test that feeds
+`renderLaunchScript` a corpus of adversarial commands (nul-free) and asserts the
+executed script always yields parseable JSON.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

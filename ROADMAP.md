@@ -4,6 +4,17 @@ Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
 ## Foundations / DX
+- [x] **Fix background-task `state.json` corruption** (2026-07-05, run 9). The
+      launch script's `printf|sed` initial-state writer produced invalid JSON for
+      commands with quotes/backslashes/newlines, crashing every downstream reader
+      (3 red tests). Replaced with a quoted-heredoc → Python single-write path;
+      added end-to-end regression tests + deterministic-spawn seams in the
+      reconcile/breaker tests. Suite 173→**176/176** green.
+- [ ] **Pluggable `StateFileWriter` + `hasPython3()` probe** (from run 9): the
+      launch script hard-requires `python3`; on hosts without it every background
+      task silently fails. Add a pure-Node writer backend and select it at task
+      start when Python is absent. Add a `renderLaunchScript` fuzz test over
+      adversarial commands.
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`
