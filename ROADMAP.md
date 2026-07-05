@@ -38,6 +38,14 @@ unchecked items are queued. Keep this richer than you found it each run.
     `skills.executable.*`, `push.subscriptions.*`, `trajectories.*`, `replays.*`,
     `cron.runs`/misc — plus a few genuine test-only typings. Map the rest, then
     fix residual test-only typings.
+- [ ] **Stabilize the flaky `server.test.ts` platform-breaker assertion**
+      (found run 9). It fails ~1/4 runs: the breaker reaches
+      `failureCount:3/threshold:3/state:paused` instead of `2/2/degraded` because
+      the count of "automatic retryable (missing-process)" failures is
+      timing/ordering-dependent. Likely the same root cause as `app.test.ts`'s
+      intermittent `control=active`. Make the failure-count accrual deterministic
+      (drive reconciliation synchronously in the test, or count idempotently per
+      task rather than per reconcile pass).
 - [ ] Add a `verify` npm script (`typecheck && build && test`) and have the
       engine run it as a pre-push self-check each cycle.
 - [x] Interim **source-only typecheck gate** — DONE run 7. `tsconfig.src.json`
@@ -71,6 +79,17 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
       related synthetic trajectories.
 
 ## Innovation backlog
+- [x] **Fix `shellQuote` corruption** (2026-07-05, run 9) — the escape sequence
+      was `"'"'"'` instead of the POSIX-correct `'"'"'`, so every single-quoted
+      background-task command was mis-quoted (broke `bash -lc` execution *and*
+      the generated `state.json`). Fixed + hardened the initial-state writer to
+      use a `python3 json` writer instead of `printf | sed` surgery on JSON.
+- [ ] **Shared, property-tested `shellQuote`** — extract the (now-duplicated,
+      once-buggy) `shellQuote` from `background-tasks.ts` and `training/runner.ts`
+      into `src/shared/shell.ts` and add a property test: for a corpus of nasty
+      strings (mixed quotes, `$`, backticks, `\n`, `;`, `|`, globs), assert
+      `bash -c "printf %s <quoted>"` echoes the input verbatim. Prevents this
+      typo class from recurring and removes the copy-paste divergence risk.
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in
       project health over time.

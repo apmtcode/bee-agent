@@ -6,6 +6,71 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-05 (run 9) — 🐛 Root-cause fix: `shellQuote` corrupted every single-quoted background-task command
+
+**Audited:** Started from the green-baseline check and found **3 tests failing**
+that the run-8 log recorded as passing (174/174) — a real regression surfaced,
+not flakiness (deterministic across repeated runs). The loudest was
+`operator-runtime.test.ts > starts, syncs, recovers…` rejecting with a
+`SyntaxError` from `JSON.parse` while recovering a background task whose command
+was `printf 'line-1\nline-2\n'`.
+
+**Root cause (found by instrumenting `readJsonFile` to dump the malformed file,
+then bisecting the launch-script generation):** `shellQuote` in
+`src/harness/background-tasks.ts` used the escape sequence `` `"'"'"'` `` (6
+chars, starting with a stray `"`) instead of the correct POSIX single-quote
+escape `` `'"'"'` `` (5 chars). Every `'` in a value therefore round-tripped
+through bash as `"'` — so **any** background-task command containing a single
+quote was mis-quoted. Impact was twofold: (1) `bash -lc <command>` executed a
+corrupted command, and (2) the `'…'`-wrapped JSON state payload became invalid,
+so `state.json` failed to parse on every subsequent `sync`/`recover`. The
+sibling copy in `src/training/runner.ts` already had the correct sequence,
+confirming this was a lone typo, not a shared convention.
+
+**Changed (additive/surgical) in `src/harness/background-tasks.ts`:**
+1. **The fix:** `shellQuote` now emits `'"'"'` (documented with a comment
+   explaining the POSIX escape and the past failure mode).
+2. **Hardening:** replaced the initial-state writer's fragile
+   `printf '%s' <json> | sed "s/…/…/; s/\"$$\"/…/"` pipeline — which did regex
+   substitution *on the JSON text itself* (brittle if a command contained
+   `"$$"` or the `__OPENCLAW_STARTED_AT__` sentinel, and `$` is special in sed
+   BRE) — with a `python3` writer (`renderInitialStateWriterPython`) that
+   `json.loads` a placeholder payload and fills `pid`/`startedAt`/`updatedAt`
+   from argv, then `json.dumps` it. This mirrors the already-present
+   completion/fail writers (`renderStateWriterPython`), so launch and terminal
+   state are now produced the same robust way and never via text surgery on JSON.
+
+**New regression test** (`background-tasks.test.ts`): renders a real launch
+script for a JSON-hostile command (`printf 'she said "hi"\ncost: $5\n'` — mixed
+quotes, a `$`, newlines), executes it with `bash`, and asserts `state.json`
+parses, `state.command` is byte-for-byte preserved, and status/exitCode/pid are
+correct. Fails against the old `shellQuote`, passes now.
+
+**Test results:** full `vitest run` **175/175** ✅ (was 172/175 at baseline; the
+3 regressions are fixed and +1 new test). `npm run typecheck:src` ✅ exit 0.
+`npm run build` ✅. Full `tsc` (incl. tests) unchanged at **125** (all remaining
+debt is still test-only; this change adds none).
+
+**Discovered (pre-existing, NOT introduced here):** `server.test.ts > handles
+session… and orchestration methods` is **flaky** — it fails ~1 in 4 isolated
+runs with the platform-breaker reaching `failureCount:3/threshold:3/state:paused`
+instead of the asserted `2/2/degraded`. The count of "automatic retryable
+failures (background task missing-process)" is timing/ordering-dependent, so the
+breaker crosses its pause threshold nondeterministically. Unrelated to this
+run's capture/harness fix; left untouched and queued in ROADMAP (Foundations)
+rather than rabbit-holed. The `app.test.ts` `control=active` assertion is likely
+the same subsystem.
+
+**New idea:** add a tiny **shell-quoting property test** — for a corpus of nasty
+strings (single/double quotes, `$`, backticks, `\n`, `;`, `|`, glob chars),
+assert `bash -c "printf %s ${shellQuote(s)}"` echoes `s` exactly. Both
+`background-tasks.ts` and `training/runner.ts` hand-roll `shellQuote`; a shared,
+property-tested `src/shared/shell.ts` helper (imported by both) would prevent
+this class of typo from ever recurring and kill the duplication. Queued in
+ROADMAP under Innovation.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

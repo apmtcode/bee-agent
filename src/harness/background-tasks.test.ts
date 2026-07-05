@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -369,5 +370,28 @@ describe("BackgroundTaskExecutionService", () => {
     await expect(fs.readFile(path.join(rootDir, task.execution.launchScript), "utf8")).resolves.toContain("bash -lc");
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
+  });
+
+  it("writes valid JSON state for commands containing quotes, dollars, and newlines", async () => {
+    const rootDir = await makeTempDir();
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"), () => ({
+      pid: 2222,
+      unref() {},
+    }));
+    // A command that previously corrupted state.json when the launch script built
+    // JSON via `printf | sed`: embedded double/single quotes, a `$`, and a newline.
+    const command = "printf 'she said \"hi\"\\ncost: $5\\n'";
+    const task = await store.start({ title: "Nasty command", command, cwd: rootDir, kind: "task" });
+
+    const scriptPath = path.join(rootDir, task.execution.launchScript);
+    execFileSync("bash", [scriptPath], { cwd: rootDir, stdio: "ignore" });
+
+    const raw = await fs.readFile(path.join(rootDir, task.execution.stateFile), "utf8");
+    const state = JSON.parse(raw) as BackgroundTaskExecutionState;
+    expect(state.command).toBe(command);
+    expect(state.status).toBe("completed");
+    expect(state.exitCode).toBe(0);
+    expect(typeof state.pid).toBe("number");
+    expect(state.startedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
   });
 });
