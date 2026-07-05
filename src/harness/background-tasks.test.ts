@@ -370,4 +370,38 @@ describe("BackgroundTaskExecutionService", () => {
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
   });
+
+  // Regression: shellQuote used a malformed single-quote escape (`"'"'"'`),
+  // which corrupted commands containing single quotes into invalid JSON when the
+  // real launch script wrote its state file. Exercise the real spawned shell and
+  // assert the persisted state.json parses and preserves the exact command.
+  it("writes a valid state file when the command contains single quotes", async () => {
+    const rootDir = await makeTempDir();
+    // Default constructor => real child_process.spawn + real launch script.
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"));
+    const command = "printf 'it'\\''s a test: %s\\n' ok";
+    const task = await store.start({ title: "Quoted command", command, cwd: rootDir, kind: "task" });
+
+    const statePath = path.join(rootDir, task.execution.stateFile);
+    let raw: string | undefined;
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      try {
+        const candidate = await fs.readFile(statePath, "utf8");
+        const parsed = JSON.parse(candidate) as BackgroundTaskExecutionState;
+        if (parsed.status === "completed" || parsed.status === "failed") {
+          raw = candidate;
+          break;
+        }
+      } catch {
+        // File not yet written or mid-write; retry.
+      }
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+
+    expect(raw, "launch script never wrote a terminal state file").toBeDefined();
+    const state = JSON.parse(raw as string) as BackgroundTaskExecutionState;
+    expect(state.taskId).toBe(task.id);
+    expect(state.command).toBe(command);
+    expect(state.status).toBe("completed");
+  });
 });

@@ -6,6 +6,57 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-05 (run 9) — 🐞 Real correctness bug: `shellQuote` corrupted background-task state JSON; suite made deterministic
+
+**Audited:** Ran the baseline build+test on a clean checkout. Contrary to run 8's
+recorded "174/174", **3 tests failed consistently** (`operator-runtime.test.ts`,
+`server.test.ts`, `app.test.ts`) — and one more (`app.test.ts` background/monitor)
+was flaky (~1/3). Root-caused all four.
+
+**Root cause #1 — a genuine production bug (`src/harness/background-tasks.ts`):**
+`shellQuote()` used a **malformed** POSIX single-quote escape — replacement
+`` `"'"'"'` `` (6 chars) instead of the correct `` `'"'"'` `` (5 chars, i.e.
+close-quote / double-quoted-quote / reopen). The identical helper in
+`src/training/runner.ts:228` was already correct, confirming the typo. Any
+background-task **command containing a single quote** (e.g. `printf 'line-1\n'`)
+was mis-escaped, so the detached launch script wrote a **corrupt, unparseable
+`state.json`**. `readState` then threw `SyntaxError` — breaking task recovery,
+sync, and remote-status derivation at runtime, not just in tests. **Fixed** to
+match the correct 5-char escape.
+
+**Root cause #2 — real-subprocess test races (test-only):** the three failing
+tests already passed `backgroundTaskIsProcessRunning: () => false` (intent: no
+live processes) but forgot to also mock the **spawner**, so they launched real
+detached bash (`sleep 5`, `tail -f`, `printf …`) whose async state writes raced
+the assertions — flipping remote control state `active`↔`degraded` and
+`unchanged`↔`missing-process`. Matched the existing `background-tasks.test.ts`
+pattern by injecting a deterministic no-op spawner
+(`() => ({ pid: 4242, unref() {} })`). To thread this through the CLI tests,
+added optional `backgroundTaskSpawnProcess` / `backgroundTaskIsProcessRunning`
+to `OperatorCliAppOptions` (additive; production defaults unchanged — real
+`spawn`). The background/monitor test needed `isProcessRunning: () => true` +
+an explicit `writeOutput` so the task stays *active* while its output is present
+(mirroring how that test's monitor half already drives state explicitly).
+
+**Regression guard:** added a test that runs the **real** launch script with a
+single-quoted command and asserts the persisted `state.json` parses and
+preserves the exact command. Verified it **fails** on the buggy escape (exhausts
+its poll window) and **passes** on the fix.
+
+**Test results:** `typecheck:src` ✅ (exit 0). Build ✅. Full `tsc` unchanged at
+**125** (all test-file debt; no new errors). Tests **174→175** and now **green
+5/5 consecutive full runs** (was 3 hard failures + 1 flaky on the clean tree).
+
+**New idea:** the real bug slipped through because `shellQuote` is duplicated in
+two modules and only one copy was correct. Extract a single shared
+`shellQuote`/`posixSingleQuote` into `src/shared/` and have both call sites use
+it — plus a tiny property test (`JSON.parse(roundTripThroughShell(x)) === x` over
+strings with quotes/newlines/`$`). Also: the engine's per-run self-check should
+run the **full** `npm test`, not trust the prior log's pass count — this run's
+"174/174" claim was stale and masked a shipped correctness bug.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

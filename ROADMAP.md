@@ -70,6 +70,25 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Generalization eval harness: measure replay fidelity on held-out but
       related synthetic trajectories.
 
+## Reliability / correctness (run 9)
+- [x] **Fix `shellQuote` single-quote escape bug** (`src/harness/background-tasks.ts`)
+      — DONE run 9. Was `"'"'"'` (6 chars); corrected to `'"'"'`. Corrupted
+      `state.json` for any background-task command containing a single quote.
+      Added a real-launch-script regression test.
+- [ ] **De-duplicate `shellQuote`**: it exists in both
+      `src/harness/background-tasks.ts` and `src/training/runner.ts` — only one
+      was correct, which is exactly how the run-9 bug survived. Extract one
+      shared `posixSingleQuote` into `src/shared/` and route both call sites
+      through it; add a property test `JSON.parse(roundTripThroughShell(x)) === x`
+      over strings with quotes / newlines / `$`.
+- [ ] **Audit other real-subprocess/real-`Date.now()` tests for races.** Run 9
+      fixed 3 (operator-runtime/server/app) by injecting a deterministic no-op
+      background-task spawner; sweep for other suites that spawn real processes
+      or depend on wall-clock freshness windows and make them deterministic.
+- [ ] Engine self-check should run the **full** `npm test` every cycle rather
+      than trusting the previous log's pass count — run 8 recorded "174/174" but
+      the clean tree actually had 3 hard failures + 1 flaky (a shipped bug).
+
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in
