@@ -59,16 +59,60 @@ unchecked items are queued. Keep this richer than you found it each run.
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
 (exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
-      objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
-      deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+- [x] Inventory what `src/capture` + `src/training` already implement vs. the
+      objective's five pieces — DONE run 9. Had: capture (adapters→recorder),
+      schema (trajectory/replay), dataset (exporter→ReviewedExportManifest),
+      replay (ReplayManifest). Missing: an in-process trainable/inferable model.
+- [x] Pluggable local-model backend interface for the training runner with a
+      deterministic mock backend and a documented seam for a real on-device
+      model — DONE run 9. `MovementModelBackend` interface +
+      `MarkovMovementBackend` (deterministic back-off n-gram) +
+      `createMovementBackend()` registry seam (`src/training/movement-model.ts`,
+      `markov-backend.ts`). 18 tests.
+- [~] Synthetic event-stream generator to validate capture→dataset→replay
+      round-trips without real OS input. Partial: run 9's tests build datasets
+      from synthetic trajectories/replays and round-trip train→generate→score.
+      Next: a reusable generator that emits parameterized device/os/browser
+      event streams (varying apps, gestures, lengths) for larger evals.
+- [x] Generalization eval harness — DONE run 9.
+      `MovementTrainingService` + `evaluateMovementModel` (teacher-forced token
+      accuracy, greedy exact-match replay fidelity, mean log-prob) with a
+      deterministic held-out split (`src/training/movement-training-service.ts`).
+- [ ] **Intent-conditioned movement policy** (run 9 idea): prefix each sequence
+      with a coarse goal token (from trajectory outcome / skill title) so
+      `generate({ seed: [START, goal] })` yields the movement path *for that
+      goal* — turns the Markov replayer into a small goal→movement policy and is
+      the bridge to #2d generalization across related goals.
+- [ ] `MovementReplayEngine`: map generated movement tokens back to concrete
+      device/os/browser adapter calls so a trained model can drive on-device
+      execution (guarded behind the simulated adapter for cloud tests).
+
+## Background-task reliability (NEW — pre-existing flaky suite, run 9)
+The full `npm test` is **flaky-red**: 3 "big lifecycle" tests
+(`orchestrator/operator-runtime.test.ts`, `control-plane/server.test.ts`,
+`cli/app.test.ts`) fail non-deterministically under parallel load on the
+contended cloud host (1–4 failures/run). They pre-date run 9 (bee-agent HEAD
+unchanged since run 8; only host load differs). This blocks the pre-push green
+gate and forces work onto the dev branch. Fix in a **dedicated focused run**
+(prototyped + reverted in run 9 to keep the movement diff clean):
+- [ ] Fix `renderLaunchScript` (`src/harness/background-tasks.ts`): it hand-rolls
+      the running-state JSON via `printf '%s' … | sed`, which yields **invalid
+      JSON** for commands containing single quotes/newlines, and its pid
+      substitution `s/"$$"/…/` never matches (`$` is a sed anchor). Replace with
+      a **quoted heredoc** (`cat > state <<'X'` — zero shell interpretation of
+      the `JSON.stringify` output) + a tiny python step to fill pid/timestamps
+      (reuses the existing safe python state-writer pattern). The same
+      `printf | sed` bug also exists in `src/training/runner.ts` — fix both.
+- [ ] Fix the `bash -lc <shellQuote(command)>` path that mangles special-char
+      commands (a command with quotes/newlines exits 2 after the JSON fix).
+- [ ] Make the 3 failing tests **deterministic** by injecting the codebase's
+      existing **mock spawn** (`backgroundTaskSpawnProcess: () => ({ pid, unref(){} })`,
+      as `background-tasks.test.ts` already does) so launch scripts never execute
+      real subprocesses that race the tests' explicit `writeState`. `OperatorCliApp`
+      needs a small additive `backgroundTaskSpawnProcess?`/`…IsProcessRunning?`
+      option (mirroring the existing `configHome` test-seam) threaded to its
+      runtime, so `app.test.ts` can inject too.
+- [ ] Then promote the run-9 movement subsystem from the dev branch to `main`.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

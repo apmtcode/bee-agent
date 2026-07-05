@@ -6,6 +6,82 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-05 (run 9) — 🧠 Movement-model subsystem: pluggable backend + Markov learner + eval harness
+
+**Audited:** Standing objective #2 (local-movement learning) — neglected since
+runs 2–8 focused entirely on typecheck debt. Inventoried `src/capture/`
+(recorder → replay → trajectory → device/os/browser adapters) and
+`src/training/` (exporter → job-store/manifest → runner → execution-service).
+**Gap found:** the pipeline could capture, record, export, and emit an
+Apple-Silicon `mlx`/`axolotl` *shell-out plan* — but had **no in-process,
+pluggable model backend that actually learns from the movement dataset and
+generalizes** (objective #2c/#2d, and the top movement item in ROADMAP). Nothing
+was trainable or testable in the cloud; the runner only rendered an external
+command.
+
+**Changed (additive, new files only — zero edits to existing behaviour):**
+- `src/training/movement-model.ts` — the model layer's shared types + the
+  **pluggable `MovementModelBackend` interface** (`train`/`load` →
+  `TrainedMovementModel` with `predictNext`/`generate`/`scoreSequence`/`toJSON`).
+  Plus a **tokenizer** (`movementTokenFromAction` → coarse `tool:verb:target`
+  tokens; `normalizeTargetClass` strips numeric/hex id suffixes so `field-3` and
+  `field-7` collapse → generalization), **dataset builders** from trajectories
+  and from replay manifests, a deterministic `splitMovementDataset`, and the
+  `createMovementBackend(kind)` **registry seam** for dropping in a real
+  on-device model later.
+- `src/training/markov-backend.ts` — a **deterministic back-off n-gram (Markov)
+  backend**. Learns transition counts from the dataset; reproduces recorded
+  movements exactly (argmax with lexical tie-break) and **generalizes** by
+  recombining learned transitions through back-off to shorter contexts.
+  Add-α smoothing, `scoreSequence` (mean log-prob), and JSON
+  serialize/round-trip.
+- `src/training/movement-training-service.ts` — `MovementTrainingService`
+  (train from dataset / trajectories / reviewed export) + **generalization eval
+  harness** (`evaluateMovementModel`: teacher-forced token accuracy, greedy
+  exact-match replay fidelity, mean log-prob; deterministic held-out split).
+- Barrel exports added to `src/index.ts`.
+
+**Test results:** new `src/training/movement-model.test.ts` — **18/18 passing**
+(tokenization, id-collapse generalization, exact replay, novel-path
+generalization, determinism, serialization round-trip, empty-model safety,
+train-from-trajectories fidelity, held-out generalization eval).
+`npm run typecheck:src` ✅ (source stays clean). `npm run build` ✅.
+
+**⚠️ Blocker (pre-existing, NOT introduced this run):** the full `npm test` is
+**flaky-red** — 3 background-task tests (`operator-runtime.test.ts`,
+`control-plane/server.test.ts`, `cli/app.test.ts`, "big lifecycle" cases) fail
+**non-deterministically** under parallel load (observed 1–4 failures across
+runs). They pre-date this run (nothing in bee-agent changed since run 8's HEAD;
+only wall-clock/host load differs). **Root-caused precisely** (see ROADMAP):
+(1) `renderLaunchScript` hand-rolls the running-state JSON via
+`printf '%s' … | sed`, which produces **invalid JSON** when a task command
+contains single quotes/newlines, and its pid `sed` (`s/"$$"/…/`) never matches
+(`$` is a regex anchor); (2) exposing that, the command is passed to
+`bash -lc <shellQuote(command)>` in a way that mangles special-char commands
+(exit 2); (3) the failing tests use a **real spawn** and race their own
+`writeState`, so timing on a contended host flips results. A dedicated
+"background-task reliability" run should fix the JSON writer (quoted-heredoc +
+python, already prototyped), fix the shell-quoting, and convert the
+background-task tests to the codebase's existing **mock-spawn** pattern
+(`() => ({ pid, unref(){} })`) so they're deterministic. I prototyped all three
+fixes this run but **reverted them** to keep this diff focused on the movement
+deliverable (the partial fix left the suite still flaky-red and sprawled across
+an unrelated subsystem).
+
+**Because the suite is flaky-red, per procedure this pushes to the designated
+dev branch `claude/peaceful-dirac-hisnm2` (a feature branch, not `main`); the
+movement subsystem itself is fully green in isolation.**
+
+**New idea:** give the movement model an **intent-conditioned** context — prefix
+each sequence with a coarse goal token (derived from the trajectory outcome /
+skill title) so `generate({ seed: [START, goal:"compose-email"] })` produces the
+movement path *for that goal*. This turns the Markov learner from a single
+most-likely-path replayer into a small goal→movement policy, and is the natural
+bridge to objective #2d "generalize to new but related movements" — the same
+back-off then transfers sub-paths across related goals. Pairs with a
+`MovementReplayEngine` that maps generated tokens back to concrete
+device/os adapter calls for on-device execution.
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
