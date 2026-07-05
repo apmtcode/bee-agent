@@ -1180,6 +1180,38 @@ describe("OperatorCliApp", () => {
     expect(cronDelete).toContain(`Deleted cron job ${job.id}`);
   });
 
+  it("uses an injected background-task backend so tests never spawn real processes", async () => {
+    const rootDir = await makeTempDir();
+    const spawnedCommands: string[] = [];
+    const app = new OperatorCliApp({
+      rootDir,
+      cwd: rootDir,
+      currentDate: "2026-05-25",
+      backgroundTaskSpawnProcess: (command) => {
+        spawnedCommands.push(command);
+        return { pid: 9999, unref() {} };
+      },
+      backgroundTaskIsProcessRunning: () => true,
+    });
+    const session = await app.runtime.startSession({ title: "inject", cwd: rootDir, agentId: "operator-cli" });
+
+    const startOutput = await app.dispatchSlashCommand(
+      { kind: "background-start", title: "smoke", command: "printf ok" },
+      session.id,
+    );
+    expect(startOutput).toContain("Started background task");
+
+    const [task] = await app.runtime.listBackgroundTasks(session.id);
+    if (!task) {
+      throw new Error("expected background task");
+    }
+    // The stub's pid is recorded verbatim, proving the injected spawn ran
+    // instead of a real detached process.
+    expect(task.status).toBe("running");
+    expect(task.execution.processId).toBe(9999);
+    expect(spawnedCommands).toHaveLength(1);
+  });
+
   it("gates dangerous background commands and allows rerun after approval", async () => {
     const rootDir = await makeTempDir();
     await fs.mkdir(path.join(rootDir, ".claude"), { recursive: true });

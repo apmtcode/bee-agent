@@ -6,6 +6,65 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-05 (run 9) — 🐛 Atomic/robust background-task state writes: suite reliably green
+
+**Audited:** The test suite's actual pass state on a fresh checkout of `HEAD`.
+Contrary to the "174/174" recorded by earlier runs (measured on a different
+machine), **3 test files / 4 tests failed reliably in this environment** —
+`operator-runtime.test.ts`, `server.test.ts`, `app.test.ts`. Two distinct root
+causes, both genuine production reliability bugs, not test bugs:
+
+1. **Torn / corrupt state reads.** The detached background-task launch script
+   (`renderLaunchScript` in `src/harness/background-tasks.ts`) wrote `state.json`
+   with `printf '%s' <json> | sed 's/"$$"/PID/' > state.json` — a **non-atomic**
+   truncate-then-write that races with recovery's `readState()`. Worse, the
+   `printf | sed` `$$`/timestamp-substitution pipeline **mangles the JSON** when
+   the task command contains quotes, newlines, or sed metacharacters. The test
+   command `printf 'line-1\nline-2\n'` produced literal newlines inside a JSON
+   string → `SyntaxError: Expected ',' or '}'` thrown mid-recovery. Reproduced
+   the exact corrupt bytes by instrumenting `readJsonFile`.
+2. **Real-process timing dependence.** Tests spawned real detached `tail -f` /
+   `sleep 5` processes and asserted `control: active` vs `missing-process`
+   depending on whether that process (or its async `state.json` write) had landed
+   yet — inherently flaky across environments.
+
+**Changed (additive, reversible):**
+- `src/harness/background-tasks.ts`: initial running-state is now written by a
+  Python heredoc that decodes the base JSON from an **environment variable**
+  (shell-safe for any command bytes), injects pid/timestamps, and swaps it in
+  **atomically** via `os.replace(tmp, state)`. Removed the fragile
+  `printf | sed`. Completion/failure writers also switched to atomic replace.
+- `src/training/runner.ts`: same class of bug — made its launch-script state
+  writes atomic (temp + `mv` / `os.replace`).
+- `src/cli/app.ts` (**production capability**): `OperatorCliApp` now accepts
+  optional `backgroundTaskSpawnProcess` / `backgroundTaskIsProcessRunning`,
+  threading them into its runtime — parity with `StandaloneOperatorOptions`, so
+  the CLI app can be driven hermetically. Backward-compatible (undefined ⇒ real
+  `child_process.spawn`, unchanged).
+- Test hermeticity: injected deterministic no-op spawn stubs into the
+  `server.test.ts` mega/drift/breaker runtimes and the `operator-runtime.test.ts`
+  background-tasks test (they already stub `isProcessRunning`), so those unit
+  tests never launch real OS processes or depend on scheduling timing. Added a
+  new `app.test.ts` case exercising the injection seam (asserts the stub pid is
+  recorded, proving no real process spawned). `app.test.ts`'s own failures were
+  the JSON-corruption crash and cleared with the atomic fix alone — left its
+  output-dependent tests unchanged.
+
+**Test results:** full suite **175/175 passing, deterministically across 11
+consecutive `npm test` runs** (was 3–4 failing intermittently at `HEAD`). Build
+✅. `typecheck:src` ✅ (0). Full `tsc` unchanged at **125** (all in test files).
+
+**New idea:** two guards worth adding — (a) a tiny lint that flags any shell
+here-doc/redirect writing a `*.json`/state file without the temp-file+rename
+atomic pattern (the exact bug class fixed here, still latent anywhere that
+pattern recurs); and (b) a **test-hygiene reaper** — an afterAll/global-teardown
+that fails the run (or at least warns) if a test leaves a real child process
+alive, so "unit tests spawning real detached processes" is caught structurally
+rather than surfacing as cross-environment flakiness. One `sleep 5` still leaks
+from an intentionally-real output-dependent test — a candidate first customer.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

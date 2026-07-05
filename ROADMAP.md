@@ -70,6 +70,25 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Generalization eval harness: measure replay fidelity on held-out but
       related synthetic trajectories.
 
+## Reliability / correctness
+- [x] **Atomic + robust background-task state writes** (2026-07-05, run 9). The
+      launch-script `printf | sed > state.json` was non-atomic (torn reads) and
+      corrupted JSON for commands with quotes/newlines/sed-metachars. Rewrote the
+      initial write as a Python heredoc reading the base JSON from an env var and
+      swapping in atomically via `os.replace`; made completion/failure writers and
+      the training runner's writes atomic too. Fixed 4 intermittently-failing
+      tests → suite green 11/11 runs.
+- [x] **Injectable background-task backend on `OperatorCliApp`** (run 9) —
+      `backgroundTaskSpawnProcess` / `backgroundTaskIsProcessRunning` options for
+      hermetic CLI-app tests (parity with the runtime).
+- [ ] **Atomic-write lint**: flag any shell here-doc/redirect that writes a
+      `*.json`/state file without the temp-file+rename pattern. Prevents the
+      run-9 bug class from recurring anywhere the pattern is copied.
+- [ ] **Test-hygiene reaper**: global teardown that fails/warns if a test leaves
+      a real child process alive (one `sleep 5` still leaks from an
+      output-dependent test), so real-process spawning in unit tests is caught
+      structurally instead of as cross-environment flakiness.
+
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in
