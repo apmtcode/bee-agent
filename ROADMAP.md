@@ -3,6 +3,18 @@
 Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
+## Reliability (top priority — pre-existing test failures)
+- [ ] **Atomic background-task state write.** `renderLaunchScript` in
+      `src/harness/background-tasks.ts` writes `state.json` via a non-atomic
+      `printf … | sed … > state.json`; a concurrent `readState` catches it
+      mid-write → truncated JSON (`Expected ',' or '}' … at position 311`). This
+      deterministically fails 3 kitchen-sink tests (`operator-runtime`, `server`,
+      `app`) in the fast cloud container (was green in run 8's slower env).
+      Diagnosed run 9 (confirmed pre-existing via stash). Fix: write to a temp
+      file then `mv` (atomic same-fs rename). Apply the same fix to the identical
+      pattern in `src/training/runner.ts renderLaunchScript`. Add a regression
+      test that reads state under write contention.
+
 ## Foundations / DX
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
@@ -62,9 +74,16 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
+      for a real on-device small model. **DONE run 9** — `src/training/backend.ts`
+      (`TrainingBackend` interface, `AppleSiliconTrainingBackend` default,
+      `MockTrainingBackend` that actually runs in the cloud and produces a
+      deterministic artifact + replay-eval). Runner takes an injectable backend.
+- [ ] `TrainingBackendRegistry` + `selectBackend(job, env)` policy so a job can
+      request a runtime (`mock` in cloud, `mlx`/`axolotl` on-device) and the
+      runner resolves it; add a per-run cloud smoke-test that trains the mock
+      backend as a live pipeline health check.
 - [ ] Synthetic event-stream generator to validate capture→dataset→replay
       round-trips without real OS input.
 - [ ] Generalization eval harness: measure replay fidelity on held-out but

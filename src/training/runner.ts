@@ -1,15 +1,15 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { ensureParentDir, readJsonFile, writeJsonAtomic } from "../shared/fs.js";
+import { AppleSiliconTrainingBackend } from "./backend.js";
+import type { LocalTrainingRuntime, TrainingBackend } from "./backend.js";
 import type { TrainingExecutionState } from "./execution-service.js";
 import type {
   LocalTrainingExecution,
   LocalTrainingJobManifest,
-  RlTrainingConfig,
-  SftTrainingConfig,
 } from "./job-manifest.js";
 
-export type LocalTrainingRuntime = "mlx" | "axolotl";
+export type { LocalTrainingRuntime } from "./backend.js";
 
 export type TrainingJobPlan = {
   version: 1;
@@ -26,78 +26,33 @@ export type TrainingJobPlan = {
 };
 
 export class LocalAppleSiliconTrainingRunner {
-  constructor(private readonly rootDir: string) {}
+  private readonly backend: TrainingBackend;
+
+  constructor(private readonly rootDir: string, backend: TrainingBackend = new AppleSiliconTrainingBackend()) {
+    this.backend = backend;
+  }
 
   buildPlan(job: LocalTrainingJobManifest, execution: LocalTrainingExecution): TrainingJobPlan {
-    if (job.mode === "sft") {
-      const config = job.config as SftTrainingConfig;
-      return {
-        version: 1,
-        jobId: job.id,
-        mode: job.mode,
-        targetPlatform: "apple-silicon",
-        runtime: "mlx",
-        datasetPath: execution.datasetDir,
-        outputPath: path.posix.join(execution.artifactDir, "model.gguf"),
-        replayEvalPath: execution.replayEvalFile,
-        statePath: execution.stateFile,
-        command: [
-          "python3",
-          "-m",
-          "mlx_lm.lora",
-          "--train",
-          "--data",
-          execution.datasetDir,
-          "--adapter-path",
-          execution.artifactDir,
-          "--learning-rate",
-          String(config.learningRate),
-          "--batch-size",
-          String(config.batchSize),
-          "--iters",
-          String(config.epochs * 1000),
-        ],
-        environment: {
-          OPENCLAW_TRAINING_JOB_ID: job.id,
-          OPENCLAW_TRAINING_MODE: job.mode,
-          OPENCLAW_TARGET_PLATFORM: job.targetPlatform,
-          OPENCLAW_TRAINING_RUNTIME: "mlx",
-          OPENCLAW_REVIEWED_EXPORT_REQUIRED: "true",
-          OPENCLAW_RAW_CAPTURE_ALLOWED: "false",
-        },
-      };
-    }
-
-    const config = job.config as RlTrainingConfig;
+    const backendPlan = this.backend.buildExecutionPlan(job, execution);
     return {
       version: 1,
       jobId: job.id,
       mode: job.mode,
       targetPlatform: "apple-silicon",
-      runtime: "axolotl",
+      runtime: backendPlan.runtime,
       datasetPath: execution.datasetDir,
-      outputPath: path.posix.join(execution.artifactDir, "policy.gguf"),
+      outputPath: path.posix.join(execution.artifactDir, backendPlan.outputArtifact),
       replayEvalPath: execution.replayEvalFile,
       statePath: execution.stateFile,
-      command: [
-        "python3",
-        "-m",
-        "axolotl.cli.train",
-        execution.planFile,
-        "--reward-model",
-        "replay-manifest",
-        "--rollouts",
-        String(config.rolloutCount),
-        "--kl-penalty",
-        String(config.klPenalty),
-      ],
+      command: backendPlan.command,
       environment: {
         OPENCLAW_TRAINING_JOB_ID: job.id,
         OPENCLAW_TRAINING_MODE: job.mode,
         OPENCLAW_TARGET_PLATFORM: job.targetPlatform,
-        OPENCLAW_TRAINING_RUNTIME: "axolotl",
+        OPENCLAW_TRAINING_RUNTIME: backendPlan.runtime,
         OPENCLAW_REVIEWED_EXPORT_REQUIRED: "true",
         OPENCLAW_RAW_CAPTURE_ALLOWED: "false",
+        ...backendPlan.extraEnvironment,
       },
     };
   }

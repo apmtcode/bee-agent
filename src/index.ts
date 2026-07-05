@@ -400,6 +400,15 @@ export type {
   LocalTrainingRuntime,
   TrainingJobPlan,
 } from "./training/runner.js";
+export {
+  AppleSiliconTrainingBackend,
+  MockTrainingBackend,
+  MOCK_TRAINING_SCRIPT,
+} from "./training/backend.js";
+export type {
+  TrainingBackend,
+  TrainingBackendExecutionPlan,
+} from "./training/backend.js";
 export type {
   ExportedMemoryReference,
   ExportedPromotedSkill,

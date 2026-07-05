@@ -6,6 +6,77 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-05 (run 9) — Pluggable training backend + deterministic cloud-runnable mock (movement subsystem objective #2)
+
+**Audited:** `src/training/` against roadmap objective #2 ("post-train a local
+model … make the model backend pluggable"). Found the train/infer pipeline was
+**hardwired to Apple Silicon**: `LocalAppleSiliconTrainingRunner.buildPlan`
+inlined the mlx (SFT) / axolotl (RL) runtime, launch command, and env directly,
+with the runtime type `LocalTrainingRuntime = "mlx" | "axolotl"`. Consequence:
+the whole training pipeline **could not execute in the cloud/CI** to validate
+itself — no way to prove prepare → launch → produce-artifact → read-state works
+without a real ML toolchain. This is exactly the "pluggable local-model backend
++ deterministic mock backend" roadmap item.
+
+**Changed (additive, backward-compatible):**
+- **New `src/training/backend.ts`** — the pluggable seam:
+  - `TrainingBackend` interface (`name`, `buildExecutionPlan(job, execution)`)
+    returning a narrow `TrainingBackendExecutionPlan` (`runtime`,
+    `outputArtifact`, `command`, `extraEnvironment?`) — a backend decides only
+    *how* the model trains, not the surrounding bookkeeping.
+  - `AppleSiliconTrainingBackend` — the **exact** prior mlx/axolotl behaviour,
+    lifted verbatim behind the interface (default, zero behaviour change).
+  - `MockTrainingBackend` + `MOCK_TRAINING_SCRIPT` — a **deterministic,
+    dependency-free Node** launch command (no Python, no ML libs) that reads the
+    reviewed dataset manifest, derives a stable sha256 digest, and writes a stub
+    model artifact + a replay-eval result. Output depends **only** on the
+    reviewed dataset, so identical data → byte-identical output.
+  - Widened `LocalTrainingRuntime` to `"mlx" | "axolotl" | "mock"`.
+- **`src/training/runner.ts`** — `LocalAppleSiliconTrainingRunner` now takes an
+  optional `backend` (defaults to `AppleSiliconTrainingBackend`); `buildPlan`
+  delegates the runtime-specific slice to it and composes the standard plan +
+  env block (incl. the reviewed-export/raw-capture guarantees) around it. Output
+  is identical for the default backend (runner.test.ts unchanged & green).
+- **`src/index.ts`** — re-export `LocalTrainingRuntime` from `backend.js`
+  (keeps the barrel stable) and export the new backend surface.
+- **New `src/training/backend.test.ts`** (5 tests): default-backend parity;
+  injected-backend runtime threading; **end-to-end** — actually `spawnSync`s the
+  mock command and asserts a real artifact + replay-eval land on disk; a
+  determinism test (two datasets differing only by jobId → same digest); and RL
+  axolotl selection.
+
+**Why this matters:** the cloud engine (this process) and CI can now exercise
+the *entire* training pipeline for real via `MockTrainingBackend`, satisfying
+the guardrail "provide a simulated/mock implementation so tests pass in the
+cloud" for the on-device training piece — previously impossible.
+
+**Test results:** new backend + affected training suites ✅ **10/10**.
+`typecheck:src` ✅ (source stays green). Build ✅ (tsdown, 5 files, 537 kB).
+Full suite: **176 passed**, **3 pre-existing failures** (NOT caused by this
+change — see blocker) + the 5 new tests.
+
+**⚠️ Blocker diagnosed (pre-existing, unrelated to this change):** three
+kitchen-sink tests — `operator-runtime.test.ts` (background-task recover),
+`server.test.ts`, `app.test.ts` — now fail with a JSON parse error
+(`Expected ',' or '}' … at position 311`) when `readState` reads a background
+task's `state.json`. Root cause: `renderLaunchScript` in
+`src/harness/background-tasks.ts` writes state via a **non-atomic**
+`printf '%s' … | sed … > state.json`, which a concurrent `readState` (or the
+test's own `writeState`) can catch mid-write → truncated/partial JSON. It was
+recorded green (174/174) in run 8; the fast fresh cloud container now exposes
+the race deterministically. Confirmed by stashing this run's diff — the three
+fail on the clean baseline too. Left unfixed this run to respect the
+"no rewriting working code to chase unrelated issues" guardrail; queued as the
+top ROADMAP item with the exact fix (temp-file + `mv` atomic write, same for the
+identical pattern in `training/runner.ts renderLaunchScript`).
+
+**New idea:** now that training backends are pluggable, add a
+`TrainingBackendRegistry` keyed by `runtime` + a `selectBackend(job, env)` policy
+so a job manifest can *request* a runtime (`mock` in cloud, `mlx`/`axolotl`
+on-device) and the runner resolves it — turning "which backend" into
+configuration + enabling a cloud smoke-test job that trains the mock backend on
+every self-evolve run as a live pipeline health check.
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
