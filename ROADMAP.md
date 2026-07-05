@@ -45,6 +45,20 @@ unchecked items are queued. Keep this richer than you found it each run.
       have the engine run it as a per-run pre-push self-check.
 - [ ] Add a minimal CI workflow mirroring `verify` for human-opened PRs.
 
+## Test reliability
+- [x] **Deterministic background-task launcher** (2026-07-05, run 9). Removed a
+      real-detached-process race that made 4 integration tests flaky-fail. Added
+      `src/harness/testing/fake-background-launcher.ts` and a
+      `backgroundTaskSpawnProcess`/`backgroundTaskIsProcessRunning` injection seam
+      on `OperatorCliApp`. Suite is 174/174 and stable across repeated runs.
+- [ ] **Atomic state write in the production launcher.** The shell launcher writes
+      `state.json` non-atomically (`sed > state.json`, `python … write_text`); a
+      concurrent reader can observe a torn file in production too. Write to
+      `state.json.tmp` then `mv` (atomic rename), mirroring `writeJsonAtomic`.
+- [ ] **Real-process test-lint.** Flag any `new StandaloneOperatorRuntime` /
+      `new OperatorCliApp` in a `*.test.ts` that starts a background task without
+      injecting a fake launcher, so this flake class can't silently reappear.
+
 ## Capability parity (audit reference agents → port gaps)
 - [ ] Build a "capability inventory" generator: enumerate bee-agent's exported
       RPC/tool surface (`src/index.ts`) and diff it against `openclaw`,

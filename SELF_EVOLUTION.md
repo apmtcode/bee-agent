@@ -6,6 +6,63 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-05 (run 9) — Deterministic background-task launcher: fixed 4 flaky-failing tests
+
+**Audited:** Full `npm test` on the current `main`/branch HEAD. Found the suite
+**red** — 3 test files failing (`operator-runtime.test.ts`,
+`control-plane/server.test.ts`, `cli/app.test.ts`; a 4th test in `app.test.ts`
+also failed when that file ran in isolation). The prior run logged 174/174, so
+this was an environment-timing regression, not a code change.
+
+**Root cause (one, shared):** the background-task subsystem launches a task by
+`spawn`-ing a **real detached bash process** (`BackgroundTaskExecutionService.launch`)
+that writes `state.json`/`output.log` asynchronously via `sed`/`python3`. Several
+integration tests then either (a) manually `writeState`/`writeOutput` and read it
+back, or (b) assert on task lifecycle — both of which **race the live OS process**.
+On this (faster) runner the process wrote `state.json` mid-read → `SyntaxError:
+Expected ',' or '}' … at position 311` (corrupt JSON), or reconciled a task to
+`missing-process` at the wrong moment → `control: degraded` instead of `active`,
+or completed a `printf` task before a `watch-active` check → "No active task".
+Purely timing-dependent; passed before by luck.
+
+**Changed (additive, reversible):**
+- **New shared test helper** `src/harness/testing/fake-background-launcher.ts`:
+  `createFakeBackgroundLauncher({ output? })` → `{ spawn, isProcessRunning,
+  livePids }`. `spawn` returns a synthetic pid without touching the OS (optionally
+  seeding canned `output.log`); `isProcessRunning` is **pid-aware** (true only for
+  pids it issued), so lifecycle is driven solely by what a test writes. Not
+  referenced by `src/index.ts`/`entry.ts`, so it is **excluded from the production
+  bundle** (verified).
+- **Real DX improvement in `src/cli/app.ts`:** `OperatorCliApp` hard-coded
+  `new StandaloneOperatorRuntime({ rootDir })`, so app-level tests had **no seam**
+  to inject a launcher. Added optional `backgroundTaskSpawnProcess` /
+  `backgroundTaskIsProcessRunning` to `OperatorCliAppOptions` and forwarded them
+  (both default `undefined` → runtime's real launcher; zero production change).
+- **Tests** now inject the fake launcher at the 4 failing sites (+ 2 latent
+  `sleep 5`-spawning server tests hardened proactively): `operator-runtime` recovery
+  test (no-op spawn, keeps `() => false`), `server` orchestration test (no-op spawn
+  + `() => false` — the real process's `state.json` was the sole cause of the
+  `degraded`; with nothing writing it, `remoteStatus` stays `active` and
+  `background.tasks.state` still correctly returns `NOT_FOUND`), `app` lifecycle
+  test (pid-aware, so a foreign `pid: 999999` still fails as `missing-process`),
+  `app` background/monitor test (pid-aware + canned `"ok\n"`).
+
+**Test results:** 🟢 **174/174 passing, stable across 3 consecutive runs** (was 3
+files / 4 tests failing). `npm run build` ✅. `npm run typecheck:src` ✅ (exit 0).
+Full `tsc --noEmit` still **125** (all pre-existing test-file debt) — **no new
+typecheck errors**.
+
+**New idea (logged to ROADMAP):** the flake is possible because even the *real*
+launcher's initial `state.json` write is non-atomic (`sed > state.json`) — a
+concurrent reader in production can observe a torn file too. Harden by having the
+shell launcher write to `state.json.tmp` then `mv` (atomic rename), mirroring
+`writeJsonAtomic`. Second idea: a tiny test-lint that flags any
+`new StandaloneOperatorRuntime`/`new OperatorCliApp` in a `*.test.ts` that starts
+a background task without injecting `backgroundTaskSpawnProcess`, so this class of
+real-process flake can't silently return.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
