@@ -8,6 +8,23 @@ unchecked items are queued. Keep this richer than you found it each run.
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`
       (2026-06-22).
+- [x] **De-flake the background-task tests** (run 9, 2026-07-05) — 3 tests were
+      spawning *real* detached OS processes (non-atomic `sed`/`python` state
+      writes racing reconcile). Added a `backgroundTaskSpawnProcess` seam to
+      `OperatorCliAppOptions` and injected the deterministic no-op spawn into
+      every affected runtime/app. Suite now 174/174, green 4× under load.
+- [ ] **Atomic state-file writes in launch scripts (production reliability).**
+      The shell/python writers in `harness/background-tasks.ts` and
+      `training/runner.ts` truncate-write the state file (`printf|sed > file`,
+      `write_text`), so a concurrent `readState` in production can read a torn
+      file and crash recovery (the exact failure run 9 saw in tests). Fix:
+      write `${stateFile}.tmp` then `mv -f` / `os.replace` (atomic rename),
+      matching `writeJsonAtomic`. Also harden `readJsonFile` to treat a
+      `JSON.parse` failure on a *non-empty* file as a retryable torn read.
+- [ ] **Flaky-spawn guard:** a test/lint that fails if any test builds a runtime
+      or `OperatorCliApp` that starts background tasks without mocking
+      `backgroundTaskSpawnProcess` — stops this flake class from silently
+      returning as new task tests are added.
 - [ ] **Pay down typecheck debt** (surfaced by the `typecheck` script). Full
       `tsc --noEmit` count was **397** on 2026-06-22; now **125**. 🎯 ALL source
       (`src/**` non-test) files typecheck clean since run 7; remaining 125 errors

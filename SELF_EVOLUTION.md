@@ -6,6 +6,67 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-05 (run 9) — De-flake the suite: hermetic background-task tests + `OperatorCliApp` spawn seam
+
+**Audited:** The build/test baseline before starting any feature work — and found
+the suite **red at HEAD**: 3 tests failing (`operator-runtime.test.ts`,
+`server.test.ts`, `app.test.ts`) that run 8 recorded as 174/174. Since no source
+changed between runs, the only variable was wall-clock/environment timing →
+smelled like non-deterministic tests, and it was.
+
+**Root cause (one family, three symptoms):** these tests call
+`runtime.startBackgroundTask(...)` but only mocked `backgroundTaskIsProcessRunning`,
+**not** `backgroundTaskSpawnProcess`. So they launched **real detached OS
+processes** whose shell launch scripts write the execution state file
+*non-atomically* (`printf … | sed > stateFile`, then a `python … write_text`).
+That real, out-of-band writer races the test's own `writeState`/reconcile
+`readState`, producing timing-dependent failures:
+- `operator-runtime`: `readState` read a torn half-written file →
+  `SyntaxError: Expected ',' or '}' … position 311`.
+- `server` / `app`: the real process's `sed`-written `status:"running"` state,
+  combined with `isProcessRunning:()=>false`, tripped the
+  `server.ts:2175` "background task missing-process" branch → `control=degraded`
+  instead of the expected `active`/`mixed`; and spurious per-task state files
+  inflated the automatic-breaker `failureCount` past its threshold.
+- `app.test` "background and monitor task commands" was **load-flaky** (~2/3
+  under full-suite parallelism): the real `printf ok` completed and flipped the
+  task out of `running` before `watch-active` asserted it.
+
+**Changed (additive, test-isolation — mirrors run 1's `configHome` seam):**
+- `src/cli/app.ts` (the only *source* change): added optional
+  `backgroundTaskSpawnProcess` / `backgroundTaskIsProcessRunning` to
+  `OperatorCliAppOptions`, threaded into the internal `StandaloneOperatorRuntime`.
+  Production leaves them undefined → real `spawn` + `process.kill(pid,0)`, zero
+  behaviour change. Documented *why* (torn-read/`missing-process` flakiness).
+- Injected the established deterministic no-op spawn
+  `() => ({ pid, unref() {} })` into every runtime/app the three tests build
+  (operator-runtime L531; server main/drifting/breaker runtimes; app L804/L1072),
+  keeping each test's existing `isProcessRunning` intent so the *deliberate*
+  degraded/breaker/`missing-process` assertions still hold via **explicitly
+  written** state files (now the sole source of truth).
+- Seeded the background half of the "background and monitor task commands" test
+  with an explicit output + `running` state (the monitor half already did this),
+  removing its dependence on real `printf ok` timing.
+
+**Test results:** the 3 originally-red tests now pass; full suite **174/174**,
+verified **green 4×** back-to-back under full parallel load (previously 2/3 red).
+`typecheck:src` ✅ (exit 0). Build ✅ (532 kB). Full `tsc` unchanged at 125 (all
+pre-existing test-file debt).
+
+**New idea (logged to ROADMAP):** the real *production* root cause still stands —
+the shell/python launch-script state writers (`background-tasks.ts` and
+`training/runner.ts`) truncate-write (`sed > file`, `write_text`), so a
+concurrent `readState` in production can also hit a torn read and crash
+recovery. Fix at the source: write to `${stateFile}.tmp` then `mv -f` /
+`os.replace` (atomic rename), matching `writeJsonAtomic`. Additionally harden
+`readJsonFile` to treat a transient `JSON.parse` failure on a *non-empty* file as
+a retryable torn read (bounded re-read) rather than throwing. Also add a
+`vitest` guard/lint that flags any test constructing a runtime/app that starts
+background tasks without a mocked `backgroundTaskSpawnProcess`, so this class of
+flake can't silently return.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
