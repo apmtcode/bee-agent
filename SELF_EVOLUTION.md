@@ -6,6 +6,61 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-05 (run 9) — Movement learning subsystem: pluggable model backend + generalization + a real reliability fix
+
+**Audited:** The local-movement learning subsystem (standing objective #2). The
+existing `src/capture/` (recorder, schema, replay, adapters) and `src/training/`
+(exporter, runner) covered capture → dataset → *external* training-script
+emission, but there was **no in-process, cloud-testable path for pieces (c) train
+and (d) generalize** — the runner only shells out to `mlx`/`axolotl`, which
+cannot run in CI. Three queued ROADMAP items pointed at exactly this gap
+(pluggable backend, synthetic generator, generalization eval).
+
+**Changed — new `src/movement/` module (additive):**
+- `movement-event.ts` — canonical low-level movement schema (`MovementEvent`:
+  pointer/scroll/key/shortcut/focus/wait), a coarse **tokenizer** (coordinate-free
+  so the model generalizes), `MovementSequence`/`MovementDataset`, and a bridge
+  `movementSequenceFromTrajectory()` so real captured trajectories feed the same
+  backends as synthetic data.
+- `model-backend.ts` — the **pluggable `MovementModelBackend` seam**
+  (`train() → TrainedMovementModel` with `predictNext`/`generate`), a deterministic
+  seedable PRNG (mulberry32) and sampling helpers. No `Date.now()`/`Math.random()`
+  anywhere — determinism is a hard requirement for cloud tests.
+- `ngram-backend.ts` — reference **deterministic in-process n-gram backend** with
+  **stupid-backoff** decoding: it learns transition stats at every context length
+  0..N and falls back to the longest observed suffix, which is precisely what lets
+  it generalize to unseen-but-related contexts instead of returning nothing.
+- `eval.ts` — a **synthetic movement-stream generator** (seeded intent templates)
+  and a **generalization eval harness** (`evaluateGeneralization`: train/held-out
+  split → next-token accuracy, transition coverage, exact-match) so the whole
+  capture→dataset→train→generate loop is validated on simulated input.
+- Barrel exports for all of the above in `src/index.ts`.
+
+**Bonus — fixed a real pre-existing reliability bug (surfaced as failing tests in
+this container):** the background-task and training launch scripts wrote their
+state JSON **non-atomically** and templated dynamic values with a fragile
+`printf | sed > file`. `sed` mangled any command containing quotes/backslashes
+(e.g. `printf "x\n"`) into **invalid JSON**, and the plain redirect let readers
+observe half-written files. Replaced both with a small **`python3` writer that
+builds the JSON from argv and `os.replace`s atomically** (python3 was already a
+script dependency). Also added an optional `backgroundTaskSpawnProcess`/
+`backgroundTaskIsProcessRunning` injection to `OperatorCliApp`, and wired a no-op
+spawn into the three tests that manage their own task state — so unit assertions
+no longer race real subprocess timing.
+
+**Test results:** `typecheck:src` ✅ (source stays clean). Build ✅. Tests ✅
+**187/187** (+13 new movement tests), and — importantly — **stable across 10
+consecutive full-suite runs**. On this Linux container the suite was previously
+**flaky (2–4 failures/run at baseline)** due to the non-atomic writes + real
+subprocess races; it is now deterministic.
+
+**New idea:** add a **replay↔generation adapter** that turns a generated
+`MovementEvent[]` back into `ReplayTimelineEvent`s (or device-adapter calls) so a
+trained model can *drive* the existing replay engine end-to-end — closing the loop
+from "learn movements" to "perform new movements" against the same infrastructure
+the capture side already uses. Pair it with a fidelity metric (edit distance
+between generated and reference replay timelines) as the on-device eval signal.
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

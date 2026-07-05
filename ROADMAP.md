@@ -62,15 +62,36 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      for a real on-device small model. — DONE run 9 (`src/movement/model-backend.ts`
+      `MovementModelBackend` + deterministic `NgramMovementBackend`; real backend
+      drops in by implementing the same interface).
+- [x] Synthetic event-stream generator to validate capture→dataset→replay
+      round-trips without real OS input. — DONE run 9
+      (`generateSyntheticMovementDataset` + intent templates in
+      `src/movement/eval.ts`).
+- [x] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories. — DONE run 9 (`evaluateGeneralization`:
+      next-token accuracy + transition coverage + exact-match on a held-out split).
+- [ ] **Replay↔generation adapter (run 9 idea):** turn a generated
+      `MovementEvent[]` back into `ReplayTimelineEvent`s / device-adapter calls so a
+      trained model can *drive* the existing replay engine end-to-end, with an
+      edit-distance fidelity metric as the eval signal.
+- [ ] Wire a real on-device backend behind `MovementModelBackend` (small local
+      model, e.g. an MLX/llama.cpp adapter) guarded so cloud tests keep using the
+      n-gram backend.
 
 ## Innovation backlog
+- [x] **Atomic state-file writes for background/training launch scripts** — DONE
+      run 9. The `printf | sed > file` templating produced invalid JSON for
+      commands with quotes/backslashes and let readers see half-written files;
+      replaced with an atomic `python3` writer (`os.replace`). Fixed the flaky
+      subprocess tests on Linux.
+- [ ] **Deterministic-spawn test harness (run 9 follow-up):** several tests still
+      construct runtimes without injecting `backgroundTaskSpawnProcess`. Audit the
+      remaining `new StandaloneOperatorRuntime(...)` sites in tests and inject a
+      shared no-op spawn helper so no unit test depends on real subprocess timing.
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in
       project health over time.

@@ -800,8 +800,15 @@ describe("OperatorCliApp", () => {
   });
 
   it("supports session lifecycle, transcript, approvals, pairing, config, and prompt commands", async () => {
+    // no-op spawn below: keep default isProcessRunning so pid-999999 tasks still
+    // read as not-running, but stop real launch scripts from racing our writes.
     const rootDir = await makeTempDir();
-    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    const app = new OperatorCliApp({
+      rootDir,
+      cwd: rootDir,
+      currentDate: "2026-05-25",
+      backgroundTaskSpawnProcess: () => ({ pid: 4242, unref() {} }),
+    });
     const firstSession = await app.runtime.startSession({ title: "first", cwd: rootDir, agentId: "operator-cli" });
     const secondSession = await app.runtime.startSession({ title: "second", cwd: rootDir, agentId: "operator-cli" });
 
