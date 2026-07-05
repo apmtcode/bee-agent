@@ -59,16 +59,31 @@ unchecked items are queued. Keep this richer than you found it each run.
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
 (exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
-      objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
-      deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+- [x] Inventory what `src/capture` + `src/training` already implement vs. the
+      objective's five pieces (2026-07-05, run 9): capture (recorder + device/os/
+      browser adapters), schema (`TrajectorySpan`), dataset (reviewed export),
+      replay (`buildReplayManifest`) all existed; the **train/infer** piece did
+      not — only a training *plan/launch-script* runner. Filled below.
+- [x] Pluggable local-model backend interface (`MovementModelBackend`) with a
+      deterministic backend (`NGramMovementBackend`, stupid-backoff, no RNG/IO —
+      cloud/CI safe) and a documented seam for a real on-device small model
+      (2026-07-05, run 9, `src/training/movement-model.ts`).
+- [x] Generalization eval harness (`evaluateMovementGeneralization`): top-1 exact
+      + movement-class accuracy on held-out related synthetic trajectories
+      (2026-07-05, run 9).
+- [ ] **Fix the twin `printf|sed` state-write bug in `src/training/runner.ts`**
+      (`renderLaunchScript`) — identical to the one fixed in
+      `src/harness/background-tasks.ts` run 9; apply the same `python3 json.dumps`
+      heredoc (`renderRunningStateWriterPython` pattern). Latent JSON-corruption
+      risk when a training command contains quotes / on `sed` variants.
+- [ ] Wire the movement model into the pipeline: after a reviewed export,
+      auto-train an `NGramMovementBackend` snapshot as a baseline/fallback replay
+      policy (works today) with mlx/axolotl as the upgrade path.
+- [ ] Synthetic event-stream *generator* (parameterized episode families) to
+      stress capture→dataset→replay→train round-trips at scale — beyond the
+      hand-written fixtures in `movement-model.test.ts`.
+- [ ] Feature-weighted backoff (partial-target similarity) as a second
+      generalization signal beyond class backoff.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

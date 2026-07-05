@@ -6,6 +6,62 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-05 (run 9) — Local-movement model: pluggable backend + n-gram/generalization (+ fixed a pre-existing green-gate regression)
+
+**Audited:** Standing objective #2 (local-movement learning). Inventoried
+`src/capture` + `src/training`: capture→dataset→replay and a training-*plan*
+runner (emits an mlx/axolotl launch script) all existed, but there was **no
+actual model that consumes the dataset to predict/repeat movements or generalize
+to new ones** — objective #2c/#2d was entirely unbuilt. That's the highest-value
+gap, and it's fully testable in the cloud with synthetic data.
+
+**Changed (additive):**
+- **New `src/training/movement-model.ts`** — the missing train+infer half of the
+  subsystem, with a **pluggable backend contract** (`MovementModelBackend`) so a
+  real on-device small model can drop in later:
+  - `MovementToken` schema + `movementTokenFromAction` (recovers structured
+    gesture/target/direction from `action.metadata`, laid down by the
+    device/os/browser adapters), and `buildMovementSequences` /
+    `buildMovementSequencesFromReplay` dataset adapters.
+  - `NGramMovementBackend` — a **deterministic** (no RNG, no I/O) n-gram model
+    with stupid-backoff. Generalization comes from two backoff layers: (1)
+    context backoff — an unseen full history falls back to shorter suffixes; (2)
+    **movement-class backoff** — an unseen concrete target falls back to its
+    class (`tool+gesture+direction`), reconstructed from a learned exemplar, so a
+    new-but-related target reachable by a known gesture is still predicted.
+  - `MovementLearner` (train / `rollout` autoregressive replay) and
+    `evaluateMovementGeneralization` (top-1 exact + class accuracy + share of
+    correct calls that came from the generalization path) — the eval harness the
+    roadmap asked for.
+  - Snapshot is plain JSON (`MovementModelSnapshot`) → persists/round-trips for
+    on-device reuse. Exported from the barrel.
+- **Fixed a pre-existing green-gate regression** (not introduced this run; failed
+  on clean HEAD). `renderLaunchScript` in `src/harness/background-tasks.ts` wrote
+  the initial "running" state via `printf … | sed "s/\"$$\"/$$/g"`. On this
+  environment's `sed` the pid substitution silently no-ops **and** a command
+  containing quotes corrupts the JSON on disk; the completed/failed python writer
+  then crashes on `json.loads` and strands the broken file, so
+  `recoverBackgroundTasks` later throws `SyntaxError`. Replaced the fragile
+  `printf|sed` with the same robust `python3 json.dumps` heredoc the file already
+  uses for terminal states (`renderRunningStateWriterPython`). 3 tests
+  (operator-runtime, server, app) go green.
+
+**Test results:** new module **14/14**. Full suite **174 → 188 passing (188/188,
+was 3 failing on HEAD)**. `typecheck:src` ✅ (exit 0). Build ✅. Deterministic:
+snapshot + predictions are byte-identical across runs (asserted).
+
+**New idea / follow-ups:** (1) `src/training/runner.ts` has the **identical
+`printf|sed` state-write bug** (twin of the one fixed here) — logged to ROADMAP;
+same `python3` heredoc fix applies. (2) Wire the movement model into the training
+pipeline: after a reviewed export, auto-train an `NGramMovementBackend` snapshot
+as a *baseline/fallback policy* the replay engine can use when no on-device model
+is present — gives the subsystem an end-to-end default that works today, with the
+heavy mlx/axolotl runtime as the upgrade path. (3) Add a feature-weighted backoff
+(partial-target similarity) as a second generalization signal beyond class
+backoff.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
