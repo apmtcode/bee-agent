@@ -801,7 +801,12 @@ describe("OperatorCliApp", () => {
 
   it("supports session lifecycle, transcript, approvals, pairing, config, and prompt commands", async () => {
     const rootDir = await makeTempDir();
-    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    const app = new OperatorCliApp({
+      rootDir,
+      cwd: rootDir,
+      currentDate: "2026-05-25",
+      backgroundTaskSpawnProcess: () => ({ pid: 4242, unref() {} }),
+    });
     const firstSession = await app.runtime.startSession({ title: "first", cwd: rootDir, agentId: "operator-cli" });
     const secondSession = await app.runtime.startSession({ title: "second", cwd: rootDir, agentId: "operator-cli" });
 
@@ -1063,7 +1068,17 @@ describe("OperatorCliApp", () => {
 
   it("supports background and monitor task commands plus cron commands", async () => {
     const rootDir = await makeTempDir();
-    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    // Inject a deterministic background-task process seam so the test never
+    // races a real detached process: the launch stub writes no state, and the
+    // test drives the task's output/state explicitly (as the monitor half of
+    // this test already does), keeping the task deterministically "active".
+    const app = new OperatorCliApp({
+      rootDir,
+      cwd: rootDir,
+      currentDate: "2026-05-25",
+      backgroundTaskSpawnProcess: () => ({ pid: 4242, unref() {} }),
+      backgroundTaskIsProcessRunning: () => true,
+    });
     const session = await app.runtime.startSession({ title: "CLI ops", cwd: rootDir, agentId: "operator-cli" });
 
     const startOutput = await app.dispatchSlashCommand(
@@ -1078,6 +1093,19 @@ describe("OperatorCliApp", () => {
     if (!task) {
       throw new Error("expected background task");
     }
+    await app.runtime.backgroundTasks.executionService.writeOutput(task, "ok\n");
+    await app.runtime.backgroundTasks.executionService.writeState(task, {
+      version: 1,
+      taskId: task.id,
+      kind: "task",
+      status: "running",
+      pid: task.execution.processId ?? 4242,
+      startedAt: task.execution.startedAt ?? task.updatedAt,
+      updatedAt: task.updatedAt,
+      outputFile: task.execution.outputFile,
+      cwd: task.cwd,
+      command: task.command,
+    });
 
     const listOutput = await app.dispatchSlashCommand({ kind: "background-list" });
     expect(listOutput).toContain(task.id);

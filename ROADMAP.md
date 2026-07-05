@@ -4,6 +4,20 @@ Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
 ## Foundations / DX
+- [x] **Atomic background-task state writes + test hermeticity** (2026-07-05,
+      run 9). Fixed a real read-during-write race: the detached launch script
+      wrote `state.json` non-atomically, so concurrent `readState` reads saw
+      partial JSON and threw, aborting recovery. Made the shell `sed` write and
+      the Python writer atomic (temp + `mv`/`os.replace`), added
+      `readJsonFileResilient` as defense-in-depth, threaded an injectable spawn
+      seam through `OperatorCliApp`, and made 3 flaky tests hermetic. Suite is
+      now deterministic (174/174 across 5 runs; was 3–4 red non-deterministically).
+- [ ] **Atomic-write invariant lint**: grep `src/**` for state-file writers that
+      use a raw `>`-redirect or `write_text` onto a `.json` path (bypassing
+      temp+rename) and fail, so read-during-write corruption can't be reintroduced.
+- [ ] **Spawn-hermeticity lint**: flag any `*.test.ts` that constructs a runtime
+      able to start background tasks without injecting `backgroundTaskSpawnProcess`,
+      so tests can't silently reintroduce real-process races.
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`

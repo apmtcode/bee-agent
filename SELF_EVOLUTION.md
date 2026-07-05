@@ -6,6 +6,60 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-05 (run 9) — 🔴→🟢 Atomic background-task state writes: fixed a real read-during-write race (3 flaky-red tests → deterministic green)
+
+**Audited:** Started with the required green gate and found the suite was **not**
+green in this environment: `npm test` failed **3–4 tests non-deterministically**
+(`operator-runtime`, `control-plane/server`, `cli/app`) — despite run 8 logging
+174/174. Root-caused it rather than papering over it.
+
+**Root cause (genuine reliability bug, not a test bug):** background-task
+`state.json` is written by a *detached* launch script (`printf … | sed > file`
+and a Python `write_text`) that runs concurrently with the runtime's
+`readState`/recovery reads. Both writers were **non-atomic** (truncate-in-place),
+so a reader could observe a half-written file → `JSON.parse` threw inside
+`readState`, aborting the whole recovery sweep (`SyntaxError … position 311`).
+Everywhere *else* in the codebase writes go through `writeJsonAtomic` (temp +
+rename); the launch script was the one place that didn't. The higher-level tests
+also spawned **real** processes (`sleep 5`, `printf ok`) and raced them against
+manual `writeState`, so which write "won" was timing-dependent.
+
+**Changed (additive, reversible):**
+- `src/harness/background-tasks.ts` + `src/training/runner.ts`: made the launch
+  script's state writes **atomic** — the `sed` write now redirects to
+  `state.json.launch.tmp` then `mv`s over the real path; the Python writer writes
+  `…writer.tmp` then `os.replace()`s. POSIX `mv`/`os.replace` are atomic, so a
+  reader always sees a *complete* old-or-new file, never a partial one.
+- `src/shared/fs.ts`: added `readJsonFileResilient()` (defense-in-depth) — retries
+  a transient parse failure a few times and degrades to the fallback instead of
+  throwing, so one corrupt state file can never crash a recovery sweep. Wired it
+  into `BackgroundTaskExecutionService.readState`.
+- `src/cli/app.ts`: threaded an injectable `backgroundTaskSpawnProcess` /
+  `backgroundTaskIsProcessRunning` seam through `OperatorCliAppOptions` into the
+  runtime (mirrors the run-1 `configHome` hermeticity seam; production unchanged).
+- Tests made **hermetic**: injected the existing no-op spawn stub
+  (`() => ({ pid, unref(){} })`, already used by `background-tasks.test.ts`) into
+  the three higher-level tests so no real detached process races the state file,
+  and drove the one output-dependent case via explicit `writeOutput`/`writeState`
+  (matching that test's own monitor half). Strengthened the runner test to assert
+  the atomic `…launch.tmp` + `mv` pattern.
+
+**Test results:** `npm test` **174/174**, now **deterministic across 5
+consecutive full runs** (was 3–4 red, non-deterministic). Verified the real-spawn
+path still emits valid JSON end-to-end (`status=completed`). Build ✅ (533 kB).
+`typecheck:src` ✅ (exit 0). Full `tsc` steady at **125** (test-only, no regress).
+
+**New idea:** every state/artifact file that is written by one process and read by
+another should go through a single **atomic-write invariant** — add a tiny lint/test
+that greps `src/**` for shell/Python writers using `>`-redirect or `write_text`
+directly onto a `.json` state path (i.e. bypassing temp+rename) and fails, so this
+class of read-during-write corruption can't be reintroduced. Bigger: a "spawn
+hermeticity" test lint that flags any `*.test.ts` constructing a runtime that can
+start background tasks *without* injecting `backgroundTaskSpawnProcess`, so future
+tests can't silently reintroduce real-process races.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
