@@ -531,6 +531,10 @@ describe("StandaloneOperatorRuntime", () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
       backgroundTaskIsProcessRunning: () => false,
+      // Deterministic launch: the test drives execution state directly via
+      // writeState/writeOutput, so avoid spawning a real detached process
+      // (whose async writes would otherwise race these assertions).
+      backgroundTaskSpawnProcess: () => ({ pid: 43210, unref() {} }),
     });
     const session = await runtime.startSession({ title: "Tasks", agentId: "main" });
 

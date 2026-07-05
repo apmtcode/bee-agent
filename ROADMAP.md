@@ -70,6 +70,21 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Generalization eval harness: measure replay fidelity on held-out but
       related synthetic trajectories.
 
+## Reliability / correctness
+- [x] **Atomic execution-state writes** (2026-07-05, run 9). The detached launch
+      scripts wrote `state.json` non-atomically (`sed > file`, python
+      `write_text`), so a concurrent `reconcileTask` reader could observe a
+      partial write → `JSON.parse` crash. Fixed to temp-file + `mv`/`os.replace`
+      in `background-tasks.ts` + `training/runner.ts`; added
+      `readJsonFileResilient` (tolerates a transient partial snapshot) on the two
+      state readers; de-flaked the 3 real-process tests via the
+      `backgroundTaskSpawnProcess` seam (now also on `OperatorCliApp`). Suite
+      178/178, deterministic.
+- [ ] Extract a shared `renderAtomicJsonStateWriter` (bash) + atomic python
+      update helper used by both shell renderers, so the "write tmp → rename"
+      invariant lives in one place; add a lint/test that fails on a bare
+      `> <statePath>` redirect in any generated launch script.
+
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in

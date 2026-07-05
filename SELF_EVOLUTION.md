@@ -6,6 +6,65 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-05 (run 9) — 🐛 Atomic state writes: fix concurrent-read corruption + de-flake the suite (170/174 → 178/178)
+
+**Audited:** Started the run by re-establishing the baseline — and found the
+suite was **not** green in this environment: **3 failing tests** across
+`operator-runtime`, `server`, and `app`. Root-caused rather than papered over.
+
+**Root cause (a real robustness bug, not just test flakiness):** background-task
+and training **execution-state files are written non-atomically by the detached
+launch script** — `printf … | sed > state.json` truncates-then-writes, and the
+Python completion writer did `state_path.write_text(...)`. Meanwhile
+`reconcileTask()` concurrently `readState()`s the same file. A reader that
+catches the file mid-write gets a **partial JSON snapshot** → `JSON.parse` throws
+`SyntaxError` and crashes recovery (`readJsonFile src/shared/fs.ts:17`). The JS
+side already writes atomically via `writeJsonAtomic` (temp + `rename`); the shell
+side did not. Any real monitor polling `state.json` while the script rewrites it
+hits the same corruption — this is a production concern, not a test artifact.
+
+**Changed (additive, reversible):**
+- **Atomic shell writes** in `src/harness/background-tasks.ts` and
+  `src/training/runner.ts`: the initial `sed` write now goes to
+  `"$state_tmp"` then `mv "$state_tmp" <state>`; the Python completion writer
+  writes a `.tmp` then `os.replace(tmp, state_path)`. `rename`/`os.replace` are
+  atomic on POSIX, so a concurrent reader always sees a **complete** old-or-new
+  file — never a partial one.
+- **Defense-in-depth reader** `readJsonFileResilient()` in `src/shared/fs.ts`:
+  like `readJsonFile` but treats an unparseable (transient/partial) snapshot as
+  "no state yet" (returns the fallback) instead of throwing. Wired into the two
+  execution-state readers (`background-tasks`, `training/execution-service`) —
+  callers already handle `undefined` (→ reconcile), so a corrupt state file now
+  triggers recovery rather than a hard crash. Left `readJsonFile` strict
+  everywhere else (store files are JS-atomic; silent tolerance there would mask
+  real corruption).
+- **De-flaked the 3 tests deterministically** via the existing
+  `backgroundTaskSpawnProcess` seam (added the matching pass-through option to
+  `OperatorCliApp` — a genuine testability/DX seam, production default
+  unchanged). `operator-runtime`/`server` tests inject a no-op stub + fixed pid
+  (they drive state directly); the `app` background test simulates the pid as
+  alive and drives the first task's output/state explicitly, mirroring the
+  monitor section it already contained. No test now depends on real detached
+  OS-process timing.
+- **New regression test** `src/shared/fs.test.ts` (4 cases): proves
+  `readJsonFileResilient` reads good JSON, returns fallback on ENOENT, tolerates
+  a truncated file where the strict reader throws `SyntaxError`, and clones the
+  fallback.
+
+**Test results:** `npm test` **178/178** (was 171/174 with 3 failing) — green on
+**two consecutive runs** (deterministic; the flakiness is gone). Build ✅.
+`typecheck:src` ✅ (exit 0). Full `tsc` still **125** (unchanged, all test-file).
+
+**New idea:** the atomic-write pattern is now open-coded in two shell renderers.
+Extract a single `renderAtomicJsonStateWriter({payload, statePath, tmpVar})`
+helper (bash) + `renderAtomicJsonUpdate` (python) shared by `background-tasks`
+and `training/runner`, so the "write tmp → rename" invariant lives in one place
+and a future state-file writer can't silently reintroduce the non-atomic bug.
+Pair it with a tiny lint/test that greps the generated launch scripts for a bare
+`> <statePath>` redirect (i.e. a non-atomic state write) and fails.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

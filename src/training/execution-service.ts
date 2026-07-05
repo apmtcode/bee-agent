@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { spawn } from "node:child_process";
-import { ensureParentDir, readJsonFile, writeJsonAtomic } from "../shared/fs.js";
+import { ensureParentDir, readJsonFileResilient, writeJsonAtomic } from "../shared/fs.js";
 import type { LocalTrainingJobManifest } from "./job-manifest.js";
 
 export type TrainingExecutionState = {
@@ -83,7 +83,7 @@ export class LocalTrainingExecutionService {
       return undefined;
     }
 
-    return await readJsonFile<TrainingExecutionState | undefined>(
+    return await readJsonFileResilient<TrainingExecutionState | undefined>(
       path.join(this.rootDir, job.execution.stateFile),
       undefined,
     );

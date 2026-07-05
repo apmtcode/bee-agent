@@ -26,6 +26,31 @@ export async function readJsonFile<T>(filePath: string, fallback: T): Promise<T>
   }
 }
 
+/**
+ * Like {@link readJsonFile} but also tolerates a malformed/partially-written
+ * file by returning the fallback instead of throwing a `SyntaxError`.
+ *
+ * State files (background-task/training execution state) are written by a
+ * detached shell process while other parts of the system may concurrently
+ * read them. A reader that catches the file mid-write would otherwise crash
+ * with a JSON parse error. For these transient, reconstructable files an
+ * unreadable snapshot is best treated as "no state yet" so callers fall back
+ * to reconciliation rather than propagating a hard failure.
+ */
+export async function readJsonFileResilient<T>(filePath: string, fallback: T): Promise<T> {
+  try {
+    return await readJsonFile<T>(filePath, fallback);
+  } catch (error) {
+    if (error instanceof SyntaxError) {
+      if (fallback === undefined) {
+        return fallback;
+      }
+      return JSON.parse(JSON.stringify(fallback)) as T;
+    }
+    throw error;
+  }
+}
+
 let writeCounter = 0;
 
 export async function writeJsonAtomic(filePath: string, value: unknown): Promise<void> {

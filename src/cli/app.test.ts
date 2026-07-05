@@ -801,7 +801,13 @@ describe("OperatorCliApp", () => {
 
   it("supports session lifecycle, transcript, approvals, pairing, config, and prompt commands", async () => {
     const rootDir = await makeTempDir();
-    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    const app = new OperatorCliApp({
+      rootDir,
+      cwd: rootDir,
+      currentDate: "2026-05-25",
+      backgroundTaskIsProcessRunning: () => false,
+      backgroundTaskSpawnProcess: () => ({ pid: 43210, unref() {} }),
+    });
     const firstSession = await app.runtime.startSession({ title: "first", cwd: rootDir, agentId: "operator-cli" });
     const secondSession = await app.runtime.startSession({ title: "second", cwd: rootDir, agentId: "operator-cli" });
 
@@ -1063,7 +1069,18 @@ describe("OperatorCliApp", () => {
 
   it("supports background and monitor task commands plus cron commands", async () => {
     const rootDir = await makeTempDir();
-    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    // Deterministic launch: don't spawn a real detached process (whose async
+    // writes race these assertions). The stub reports a fixed pid, that pid is
+    // treated as "alive", and the test drives execution output/state directly —
+    // exactly as the monitor section below already does.
+    const stubPid = 43210;
+    const app = new OperatorCliApp({
+      rootDir,
+      cwd: rootDir,
+      currentDate: "2026-05-25",
+      backgroundTaskIsProcessRunning: (pid) => pid === stubPid,
+      backgroundTaskSpawnProcess: () => ({ pid: stubPid, unref() {} }),
+    });
     const session = await app.runtime.startSession({ title: "CLI ops", cwd: rootDir, agentId: "operator-cli" });
 
     const startOutput = await app.dispatchSlashCommand(
@@ -1078,6 +1095,20 @@ describe("OperatorCliApp", () => {
     if (!task) {
       throw new Error("expected background task");
     }
+
+    await app.runtime.backgroundTasks.executionService.writeOutput(task, "ok\n");
+    await app.runtime.backgroundTasks.executionService.writeState(task, {
+      version: 1,
+      taskId: task.id,
+      kind: "task",
+      status: "running",
+      pid: task.execution.processId ?? stubPid,
+      startedAt: task.execution.startedAt ?? task.updatedAt,
+      updatedAt: task.updatedAt,
+      outputFile: task.execution.outputFile,
+      cwd: task.cwd,
+      command: task.command,
+    });
 
     const listOutput = await app.dispatchSlashCommand({ kind: "background-list" });
     expect(listOutput).toContain(task.id);
