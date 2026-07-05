@@ -4,6 +4,18 @@ Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
 ## Foundations / DX
+- [x] **Fix `shellQuote` + background-task launch-script corruption** (2026-07-05,
+      run 9). `shellQuote` escaped `'` as `"'"'"'` (malformed) instead of `'\''`,
+      corrupting any command with an apostrophe; the launch script's `sed`-based
+      initial-state writer never substituted the pid (`"pid":"$$"` left literal)
+      and mangled quoted/multiline commands. Rewrote the writer as an atomic
+      python `json.dumps`; made all state writers atomic (`os.replace`). Made the
+      failing integration tests hermetic by injecting `backgroundTaskSpawnProcess`
+      stubs (threaded a new option through `OperatorCliApp`). Suite 171→175.
+- [ ] **"No real spawn in tests" guard**: a shared vitest setup that stubs
+      `child_process.spawn` to throw unless a test opts in, so non-hermetic
+      background-task tests fail at authoring time instead of flaking on CI timing
+      (this run's 3 failures were exactly that class, masked in a prior env).
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`

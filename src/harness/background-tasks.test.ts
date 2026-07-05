@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { spawn as realSpawn, spawnSync, type ChildProcess } from "node:child_process";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   BackgroundTaskExecutionService,
@@ -370,4 +371,47 @@ describe("BackgroundTaskExecutionService", () => {
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
   });
+
+  const python3Available = spawnSync("python3", ["--version"]).status === 0;
+
+  // The launch script substitutes the runtime pid/timestamps and serializes the
+  // task command into the state file. A command containing quotes, newlines, and
+  // `$$` must round-trip losslessly and the state file must remain valid JSON
+  // with a numeric pid — the previous `printf | sed >` writer failed both (it
+  // left `"pid":"$$"` unsubstituted and mangled such commands).
+  it.runIf(python3Available)(
+    "launch script writes valid JSON state with a numeric pid for commands containing quotes, newlines, and $$",
+    async () => {
+      const rootDir = await makeTempDir();
+      let child: ChildProcess | undefined;
+      const store = new FileBackgroundTaskStore(
+        path.join(rootDir, "background-tasks.json"),
+        (command, args, options) => {
+          child = realSpawn(command, args, options);
+          return child;
+        },
+      );
+
+      const command = "echo 'a b'\necho \"c $$ d\"; printf '%s' \"done\"";
+      const task = await store.start({ title: "special", command, cwd: rootDir, kind: "task" });
+
+      // Await the real (detached) launch script to run to completion so both the
+      // initial-running and final-completed state writers have executed.
+      await new Promise<void>((resolve, reject) => {
+        child?.on("close", () => resolve());
+        child?.on("error", reject);
+      });
+
+      const reloaded = await store.get(task.id);
+      expect(reloaded).toBeDefined();
+      // readState throws if the file is not valid JSON — proving the writer is robust.
+      const state = await store.executionService.readState(reloaded!);
+      expect(state).toBeDefined();
+      expect(state!.command).toBe(command);
+      expect(typeof state!.pid).toBe("number");
+      expect(Number.isNaN(state!.pid)).toBe(false);
+      expect(state!.status).toBe("completed");
+      expect(state!.exitCode).toBe(0);
+    },
+  );
 });

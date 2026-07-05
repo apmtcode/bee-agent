@@ -6,6 +6,57 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-05 (run 9) — 🐛 Fix real `shellQuote`/launch-script corruption bug; suite green again
+
+**Audited:** Ran the full suite first (procedure step 5). Found **3 tests failing**
+(174→171) — a regression vs run 8's green state, caused by environment-timing
+differences, not a code change. Root-caused it to genuine **product bugs** in the
+background-task launcher, masked in the prior environment by process-spawn timing.
+
+**Two real bugs found & fixed in `src/harness/background-tasks.ts`:**
+1. **`shellQuote` produced broken shell quoting.** It escaped embedded single
+   quotes by replacing `'` with `"'"'"'` (malformed) instead of the POSIX idiom
+   `'\''`. Verified: `shellQuote("a'b")` round-tripped through bash to `a"'b`
+   (spurious `"`, wrong). This corrupted **every** launch script for a command
+   containing an apostrophe — e.g. `printf 'hi'` — and mangled the serialized
+   state-file JSON. Fixed to `'\''`; added a 5-case round-trip check.
+2. **Launch-script initial-state writer never substituted the pid and mangled
+   commands.** The `printf '%s' <payload> | sed "…; s/"$$"/$$/g" > state.json`
+   line: the middle `"$$"` broke the shell double-quoting so the rule degraded to
+   a no-op `s/<pid>/<pid>/g` — `"pid":"$$"` was never replaced, breaking
+   process-liveness recovery — and the `sed`-into-JSON approach corrupted commands
+   with quotes/newlines. Replaced with a robust **atomic python writer** (python3
+   is already the completion-writer runtime dep): passes the base state as one
+   shell-quoted argv, sets pid/timestamps via `sys.argv`, `json.dumps`, and
+   `os.replace`. Made the completion/failure writer atomic (`os.replace`) too.
+
+**Test hermeticity (root cause of the 3 failures):** the failing integration tests
+constructed `StandaloneOperatorRuntime`/`OperatorCliApp` **without** a spawn mock,
+so `startBackgroundTask` launched **real detached bash processes** whose
+launch-script state writes raced/clobbered the tests' controlled `writeState`
+calls (a JSON-parse crash + a circuit-breaker miscount). Injected the established
+`backgroundTaskSpawnProcess: () => ({ pid, unref })` stub at the 4 offending sites
+(operator-runtime, server ×3 runtimes in the one giant test, app) — same pattern
+as the run-1 `configHome` isolation fix. Threaded a new `backgroundTaskSpawnProcess`
+option through `OperatorCliApp` (production default unchanged).
+
+**New test:** `background-tasks.test.ts` now runs the **real** generated launch
+script (gated on python3 availability) for a command containing quotes, a newline,
+and `$$`, awaits completion, and asserts the state file is valid JSON with a
+**numeric** pid, `status: completed`, `exitCode: 0`, and a losslessly round-tripped
+command — directly proving both bug fixes.
+
+**Test results:** suite **171→175 passing** (41 files; +1 new test), stable across
+3 consecutive runs. Build ✅. `typecheck:src` ✅ (source stays clean, exit 0).
+
+**New idea:** the two masked bugs only surfaced because a test happened to spawn a
+real process. Add a lightweight **"no real spawn in tests" guard** — a shared test
+helper (or a vitest setup that stubs `child_process.spawn` to throw unless a test
+opts in) so any future non-hermetic background-task test fails loudly at authoring
+time instead of flaking on CI timing. Complements the per-module ratchet idea.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
