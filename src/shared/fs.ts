@@ -5,25 +5,59 @@ export async function ensureParentDir(filePath: string): Promise<void> {
   await fs.promises.mkdir(path.dirname(filePath), { recursive: true });
 }
 
-export async function readJsonFile<T>(filePath: string, fallback: T): Promise<T> {
-  try {
-    const raw = await fs.promises.readFile(filePath, "utf8");
+export type ReadJsonFileOptions = {
+  /**
+   * How many extra attempts to make when a non-empty file fails to parse. A
+   * parse failure on a file that exists is almost always a concurrent partial
+   * write — state files written by external shell/python launch scripts are
+   * not atomic — so we re-read briefly before giving up. Genuine corruption
+   * still throws after the final attempt. Default: 4 (5 attempts total).
+   */
+  parseRetries?: number;
+};
+
+export async function readJsonFile<T>(
+  filePath: string,
+  fallback: T,
+  options: ReadJsonFileOptions = {},
+): Promise<T> {
+  const maxAttempts = Math.max(1, (options.parseRetries ?? 4) + 1);
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    let raw: string;
+    try {
+      raw = await fs.promises.readFile(filePath, "utf8");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        return cloneFallback(fallback);
+      }
+      throw error;
+    }
     if (!raw.trim()) {
-      if (fallback === undefined) {
-        return fallback;
-      }
-      return JSON.parse(JSON.stringify(fallback)) as T;
+      return cloneFallback(fallback);
     }
-    return JSON.parse(raw) as T;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      if (fallback === undefined) {
-        return fallback;
+    try {
+      return JSON.parse(raw) as T;
+    } catch (parseError) {
+      if (attempt < maxAttempts - 1) {
+        await delay(2 * (attempt + 1));
+        continue;
       }
-      return JSON.parse(JSON.stringify(fallback)) as T;
+      throw parseError;
     }
-    throw error;
   }
+  // Unreachable: the loop either returns or throws on the final attempt.
+  return cloneFallback(fallback);
+}
+
+function cloneFallback<T>(fallback: T): T {
+  if (fallback === undefined) {
+    return fallback;
+  }
+  return JSON.parse(JSON.stringify(fallback)) as T;
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 let writeCounter = 0;

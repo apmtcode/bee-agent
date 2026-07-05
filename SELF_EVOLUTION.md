@@ -6,6 +6,71 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-05 (run 9) — Movement-model backend (train→reproduce→generalize) + fixed a real state-file read race
+
+**Audited:** The local-movement subsystem (standing objective #2). `src/capture`
+already covers record→schema→dataset→replay and `src/training` covers reviewed
+export + on-device job planning (the runner emits MLX/axolotl **shell commands**).
+The gap: nothing in-process could actually *train a local model and run
+inference*, so objective #2c (post-train) and #2d (generalize) were untestable in
+the cloud. Also ran the suite on this box and found it is **not** 174/174 here —
+3 tests fail (the run-8 log measured on a different machine).
+
+**Changed (additive):**
+- **New `src/training/movement-model.ts`** — a pluggable local-model backend:
+  - `MovementModelBackend` interface (`train` async so a real MLX/axolotl backend
+    can shell out; inference sync) + `MovementModel` (`predictNext` / `generate` /
+    `serialize`).
+  - `MarkovMovementBackend` — a deterministic order-k Markov policy with
+    stupid-backoff. **Reproduces** recorded movements from a prefix (argmax +
+    a learned end-of-sequence sentinel so rollout terminates) and **generalizes**
+    to novel higher-order contexts by backing off to the shortest matching
+    context down to the global next-token distribution; predictions expose
+    `novel`/`backoffDepth` so callers can *see* generalization happening.
+  - Dataset helpers wired to the existing schema: `movementTokenFromAction`
+    (normalizes a `TrajectoryAction` + metadata → a movement token),
+    `buildMovementDataset`, `buildMovementDatasetFromReplays` (groups replay
+    action events per trajectory in ts order). JSON-safe `serialize`/`load`
+    round-trip. Fully deterministic (no RNG/clock) → cloud-testable with
+    synthetic streams. Exported from the barrel.
+- **Fixed a genuine reliability bug in `src/shared/fs.ts`:** background-task /
+  training **state files are written non-atomically by the spawned launch
+  scripts** (`printf > state.json`, python `write_text`), so a concurrent
+  `readState` could read half-written JSON → `SyntaxError` (this was one of the
+  flaky failures). `readJsonFile` now does a bounded retry-on-parse-failure
+  (default 4 retries, tiny backoff) — a parse error on an existing non-empty file
+  is almost always a concurrent partial write; genuine corruption still throws
+  after the final attempt. New `ReadJsonFileOptions.parseRetries`. Refactored the
+  fallback-clone into a helper. Backward-compatible for every internal caller
+  (they read atomically-written files, so the retry never triggers).
+
+**Test results:** new tests **17/17** green — `movement-model.test.ts` (12:
+reproduce, exact-context prediction, backoff generalization, determinism,
+weighted candidates, serialize round-trip, empty model, token keys, dataset
+builders) + `fs.test.ts` (5, incl. a simulated concurrent partial-write recovery).
+`typecheck:src` ✅ (source stays clean). Build ✅.
+
+**Known pre-existing blocker (not introduced this run):** on this cloud box the
+full suite fails **3 tests that predate this run** — verified by stashing ALL my
+changes and re-running the clean baseline (still 3 failed). They are
+*process-liveness* races: integration tests spawn a real background/monitor
+subprocess and assert it is still running (`isProcessRunning(pid)`), which is
+non-deterministic under load (a task shows `missing-process` /
+`control=degraded` / "is not running"). My fs fix removed the *JSON-parse* flake;
+these liveness flakes remain and are logged to ROADMAP. Per the branch
+requirement I push to `claude/peaceful-dirac-ko4bs7`; my additions are green and
+strictly reduce flakiness.
+
+**New idea:** make the launch-script writers *atomic* at the source (write
+`state.json.tmp` then `mv`/`os.replace`) in both `background-tasks.ts` and
+`training/runner.ts`, mirroring `writeJsonAtomic` — that removes the read race at
+the writer instead of the reader, and is the correct long-term fix. Second idea:
+a `verify` script + a tiny **test-retry/flake-quarantine** wrapper so the
+inherently-process-spawning integration tests (liveness) don't block a green gate
+while genuine regressions still do.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

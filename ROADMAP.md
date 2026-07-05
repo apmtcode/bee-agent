@@ -62,13 +62,41 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
+      for a real on-device small model. **DONE run 9** — `src/training/movement-model.ts`:
+      `MovementModelBackend`/`MovementModel` interfaces + `MarkovMovementBackend`
+      (order-k Markov w/ stupid-backoff). Reproduces recorded movements
+      (objective #2c) and generalizes via backoff (objective #2d); deterministic,
+      serialize/load round-trip, dataset helpers wired to the trajectory/replay
+      schema. 12 tests.
+- [ ] **Real on-device backend behind `MovementModelBackend`** — implement an MLX
+      (or small-transformer) backend that trains from the same `MovementDataset`
+      and returns a `MovementModel`; keep `MarkovMovementBackend` as the cloud/CI
+      mock. The runner's shell-command path (`runner.ts`) should target this.
 - [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
+      round-trips without real OS input. (Partly seeded: `movement-model.test.ts`
+      builds synthetic movement streams; extend to full capture→replay.)
 - [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      related synthetic trajectories (e.g. top-1 next-movement accuracy vs.
+      backoff depth) using `MovementModel.predictNext`.
+
+## Reliability / test health
+- [x] Fix the state-file **read race** (concurrent partial write → JSON parse
+      error). **DONE run 9** — `readJsonFile` retries on parse failure
+      (`ReadJsonFileOptions.parseRetries`). Removed one class of suite flakiness.
+- [ ] **Make launch-script state writers atomic at the source** (write
+      `state.json.tmp` then `mv`/`os.replace`) in `harness/background-tasks.ts`
+      *and* `training/runner.ts`, mirroring `writeJsonAtomic`. Correct long-term
+      fix for the read race (belt-and-suspenders with the reader retry).
+- [ ] **Process-liveness test flakiness (pre-existing blocker).** On the cloud
+      box, 3 integration tests fail intermittently because they spawn a real
+      background/monitor subprocess and assert `isProcessRunning(pid)` — the task
+      shows `missing-process` / `control=degraded` / "is not running" under load.
+      Verified pre-existing (fails on clean baseline). Fix: inject a controllable
+      process-liveness probe (or a long-lived sentinel child) into the affected
+      tests, and/or add a flake-quarantine test wrapper so liveness flakes don't
+      block a green gate while genuine regressions still do.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
