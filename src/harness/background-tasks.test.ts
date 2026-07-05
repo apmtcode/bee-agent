@@ -370,4 +370,50 @@ describe("BackgroundTaskExecutionService", () => {
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
   });
+
+  it("tolerates a partially written state file instead of throwing", async () => {
+    const rootDir = await makeTempDir();
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"), () => ({ pid: 1212, unref() {} }));
+    const task = await store.start({ title: "Racy", command: "printf 'ok'", cwd: rootDir });
+    const service = new BackgroundTaskExecutionService(rootDir, () => ({ pid: 1212, unref() {} }));
+    const statePath = path.join(rootDir, task.execution.stateFile);
+
+    // Simulate a reader observing the launch process mid-write (truncated JSON).
+    await ensureParentDirFor(statePath);
+    await fs.writeFile(statePath, '{"version":1,"taskId":"' + task.id + '","status":"run', "utf8");
+    await expect(service.readState(task)).resolves.toBeUndefined();
+
+    // A complete document still parses normally.
+    await service.writeState(task, {
+      version: 1,
+      taskId: task.id,
+      kind: "task",
+      status: "running",
+      pid: 1212,
+      startedAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      outputFile: task.execution.outputFile,
+      cwd: rootDir,
+      command: task.command,
+    });
+    await expect(service.readState(task)).resolves.toMatchObject({ status: "running", pid: 1212 });
+  });
+
+  it("renders a launch script that writes state atomically (temp file + rename)", async () => {
+    const rootDir = await makeTempDir();
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"), () => ({ pid: 1313, unref() {} }));
+    const task = await store.start({ title: "Atomic", command: "printf 'ok'", cwd: rootDir });
+    const script = await fs.readFile(path.join(rootDir, task.execution.launchScript), "utf8");
+
+    // The initial state must be staged to a temp file, then renamed over the
+    // final path — never truncated in place with a bare `> state.json`.
+    expect(script).toContain('.$$.tmp');
+    expect(script).toContain('mv -f "$state_tmp"');
+    expect(script).toContain("os.replace(tmp_path, state_path)");
+    expect(script).not.toMatch(/> '[^']*state\.json'/);
+  });
 });
+
+async function ensureParentDirFor(filePath: string): Promise<void> {
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+}

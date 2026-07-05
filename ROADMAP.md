@@ -3,6 +3,22 @@
 Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
+## Reliability
+- [x] **Atomic + corruption-tolerant background-task state I/O** (2026-07-05,
+      run 9). Launch script writes `state.json` via temp+rename (bash `mv -f` and
+      python `os.replace`); `readState` uses new `tryReadJsonFile` to tolerate a
+      partially-written document instead of crashing the status/diagnostics RPC.
+      Added `backgroundTaskSpawnProcess`/`backgroundTaskIsProcessRunning`
+      injection seams to `OperatorCliApp` and made the racy background-task tests
+      deterministic → suite is 176/176 stable (was 2–3 flaky).
+- [ ] **`test:stress` pre-push gate**: run the full suite N× (or a targeted
+      subset) so timing/CPU-load-dependent regressions are caught deterministically
+      instead of surfacing only under parallel load or a particular wall clock.
+- [ ] **`AtomicJsonFile` helper**: wrap `tryReadJsonFile` + `writeJsonAtomic` as a
+      single type so every externally-written state file (background tasks, cron
+      runs, pairing, platform breakers) is crash-safe by construction. Audit the
+      other launch/writer paths for the same non-atomic `>`-redirect pattern.
+
 ## Foundations / DX
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.

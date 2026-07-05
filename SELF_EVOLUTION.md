@@ -6,6 +6,64 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-05 (run 9) — 🛠 Reliability: atomic + corruption-tolerant background-task state I/O (fixed 3 flaky suites → 176/176 stable)
+
+**Audited:** The test suite health gate itself. On a fresh checkout `npm test`
+was **flaky** — 2–3 failures that varied run-to-run (server.test.ts,
+app.test.ts, operator-runtime.test.ts), including a hard `SyntaxError: … in JSON
+at position 311` crash inside `readState`. The previous run logged "174/174" but
+the failures are **wall-clock/CPU-load dependent**, so they surface now (07-05)
+and under full parallel load though the code is unchanged.
+
+**Root cause (a real product bug, not just a test bug):** the background-task
+**launch script writes `state.json` non-atomically** — a bare `printf … > state.json`
+truncates-then-writes in place (`renderLaunchScript`), and the python
+completion/failure writers did `state_path.write_text(...)` directly. Any
+concurrent status poll (`readState`, hit by the remote-status/diagnostics path)
+can observe a **partially written document** → `JSON.parse` throws and crashes
+the whole status RPC. Separately, several tests spawned **real detached
+subprocesses** (`sleep 5`, `printf ok`) that race the assertions: the script's
+transient `status:"running"` write combined with a mocked `isProcessRunning:()=>false`
+produced a spurious `background task missing-process` → `degraded`/`paused`
+control state, and the completion write could CPU-starve under parallel load.
+
+**Changed (additive, reversible):**
+- **Product — `src/shared/fs.ts`:** added `tryReadJsonFile()` (like `readJsonFile`
+  but returns the fallback on a `SyntaxError`, not just `ENOENT`). Kept strict
+  `readJsonFile` for owner-written, atomically-written files so genuine
+  corruption still surfaces.
+- **Product — `src/harness/background-tasks.ts`:** `readState()` now uses
+  `tryReadJsonFile` so a truncated/in-flight state file is treated as "no
+  readable state yet" instead of crashing the diagnostics path. `renderLaunchScript`
+  now writes `state.json` **atomically** (stage to `state.json.$$.tmp`, then
+  `mv -f`); the python writers stage to a temp file then `os.replace()`.
+- **Product — `src/cli/app.ts`:** added `backgroundTaskSpawnProcess` /
+  `backgroundTaskIsProcessRunning` injection seams to `OperatorCliAppOptions`
+  (defaults unchanged in production; plumbed into the runtime). Consistent with
+  the existing `configHome` test-injection philosophy.
+- **Tests (determinism):** injected a deterministic fake spawn into the
+  background-task tests that assert on derived state — server.test.ts (main +
+  drifting + breaker runtimes), operator-runtime.test.ts (bg-task lifecycle),
+  and the two app.test.ts integration tests — so they never depend on real
+  subprocess timing. Added 2 regression tests: `readState` tolerates a truncated
+  state file, and the launch script renders atomic (temp+rename) writes.
+
+**Test results:** `npm test` **176/176 passing, stable across 5 consecutive full
+runs** (was 174 declared, actually 2–3 flaky). Build ✅ (tsdown, 5 files, ~533 kB).
+`typecheck:src` ✅ exit 0. Full `typecheck` unchanged at **125** (all in test
+files — no regression).
+
+**New idea:** the flakiness was invisible because the JSON-crash aborted the
+file early, masking downstream races. Add a **`test:stress` script** (`vitest run
+--retry=0` × N, or a small wrapper) the engine runs before pushing, so
+timing-dependent regressions are caught deterministically instead of by luck of
+the wall clock. Longer term: a lightweight `AtomicJsonFile` helper wrapping
+`tryReadJsonFile`/`writeJsonAtomic` as one type, so every externally-written
+state file (background tasks, cron runs, pairing, breakers) inherits
+crash-safe reads by construction rather than per-call discipline.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

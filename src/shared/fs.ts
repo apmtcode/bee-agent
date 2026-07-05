@@ -26,6 +26,28 @@ export async function readJsonFile<T>(filePath: string, fallback: T): Promise<T>
   }
 }
 
+/**
+ * Like {@link readJsonFile}, but also returns the fallback when the file
+ * contains malformed/partial JSON instead of throwing. Use this for files that
+ * may be written by an external process with a non-atomic writer, where a
+ * concurrent read can observe a truncated document. Callers that own the
+ * writer (and write atomically) should prefer the strict {@link readJsonFile}
+ * so genuine corruption surfaces instead of being silently swallowed.
+ */
+export async function tryReadJsonFile<T>(filePath: string, fallback: T): Promise<T> {
+  try {
+    return await readJsonFile(filePath, fallback);
+  } catch (error) {
+    if (error instanceof SyntaxError) {
+      if (fallback === undefined) {
+        return fallback;
+      }
+      return JSON.parse(JSON.stringify(fallback)) as T;
+    }
+    throw error;
+  }
+}
+
 let writeCounter = 0;
 
 export async function writeJsonAtomic(filePath: string, value: unknown): Promise<void> {
