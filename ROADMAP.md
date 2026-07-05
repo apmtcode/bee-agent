@@ -6,6 +6,19 @@ unchecked items are queued. Keep this richer than you found it each run.
 ## Foundations / DX
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
+- [x] **Hermetic background-task tests** (2026-07-05, run 9) — the suite was
+      non-deterministic in the cloud because background-task tests launched real
+      OS processes (spawn/liveness were un-stubbed). Added a
+      `backgroundTaskSpawnProcess`/`backgroundTaskIsProcessRunning` injection seam
+      to `OperatorCliApp` and stubbed spawn + liveness at all 6 task-starting test
+      sites. `npm test` now 174/174 across repeated runs.
+- [ ] **Flake-guard in the pre-push self-check**: run the suite twice (or with
+      `--sequence.shuffle`) and only push to `main` if both pass, so timing/
+      environment nondeterminism is caught before it lands.
+- [ ] **Real-process lint for tests**: flag any `new StandaloneOperatorRuntime` /
+      `new OperatorCliApp` test call site that reaches `startBackgroundTask`
+      without a `backgroundTaskSpawnProcess` override (would launch real OS
+      processes).
 - [x] Make config loading hermetic in tests via an injectable `configHome`
       (2026-06-22).
 - [ ] **Pay down typecheck debt** (surfaced by the `typecheck` script). Full

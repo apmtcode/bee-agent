@@ -6,6 +6,61 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-05 (run 9) — 🧪 Hermetic background-task tests: kill real-process flakiness at the root
+
+**Audited:** The baseline `npm test`, which was **NOT green** in the cloud
+sandbox — it failed non-deterministically (3–4 failures, varying between
+invocations) across `operator-runtime.test.ts`, `server.test.ts`, and
+`app.test.ts`. Every prior run reported 174/174, so this is an
+**environment-dependent flake** the earlier machines never surfaced.
+
+**Root cause (two independent non-determinisms):** the background-task tests
+constructed `StandaloneOperatorRuntime` / `OperatorCliApp` **without stubbing the
+process-spawn seam**, so `startBackgroundTask` launched *real* OS processes
+(`sleep 5`, `tail -f app.log`, `printf …`) via the bash launch script. That
+caused: (1) the launch script's `sed`/`printf` state-writer **raced** the tests'
+own `writeState`, occasionally producing malformed JSON (`SyntaxError: Expected
+',' or '}'` in `readJsonFile`); and (2) the remote-control degradation probe
+(`server.ts:2175`, `state.status==="running" && !isProcessRunning(pid)`) read
+whichever state the launch script happened to have written — so a remote flipped
+between `control=active` and `control=degraded:… missing-process` depending on
+timing. `app.test.ts` was worst: it never mocked spawn *or* liveness, so it also
+depended on ambient PIDs via `defaultIsProcessRunning`'s `process.kill(-pid, 0)`.
+
+**Changed:**
+- **Source (real DX/testability capability):** `OperatorCliApp` hard-coded
+  `new StandaloneOperatorRuntime({ rootDir })` with **no injection seam**. Added
+  `backgroundTaskSpawnProcess` + `backgroundTaskIsProcessRunning` to
+  `OperatorCliAppOptions` (typed off `StandaloneOperatorOptions`) and threaded
+  them into the runtime — production still defaults to real spawn / real liveness
+  (zero behaviour change), but the CLI app is now fully hermetic-testable, matching
+  the seam the runtime already exposed.
+- **Tests (make the intent deterministic):** injected a stub spawn
+  (`() => ({ pid: 999_000_000, unref(){} })`) at the 6 sites that start
+  background tasks — an *implausibly high* PID so the production `stop()` path's
+  `process.kill(-pid)` is a guaranteed `ESRCH` no-op that never signals a real
+  process group. Paired each with the liveness stub its scenario needs:
+  `() => false` (recovery expects missing-process), `(pid) => pid !== 999999`
+  (the app "degraded remote" case wants exactly its dead sentinel PID to be gone
+  while other remotes stay active), or `() => true` (the CLI ops case wants the
+  task to stay running); the CLI ops case also materialises the `ok` output +
+  running state the stubbed command would have produced.
+
+**Test results:** `npm test` **174/174, green on 3 consecutive full runs**
+(was 3–4 failing, non-deterministic). `npm run build` ✅. `npm run typecheck:src`
+✅ (exit 0, source stays clean). Full `tsc` unchanged at **125** (all pre-existing
+test-file debt; this run added zero new type errors).
+
+**New idea:** add a tiny **flake-guard** to the engine's pre-push self-check —
+run the suite **twice** (or with `--sequence.shuffle`) and only push to `main` if
+*both* pass, so environment/timing-dependent nondeterminism is caught before it
+lands rather than discovered by the next run's baseline. Bigger idea: a
+lint/test that scans for `new StandaloneOperatorRuntime`/`new OperatorCliApp`
+call sites which reach `startBackgroundTask` without a `backgroundTaskSpawnProcess`
+override, flagging any future test that would launch real OS processes.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
