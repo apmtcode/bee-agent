@@ -59,18 +59,36 @@ unchecked items are queued. Keep this richer than you found it each run.
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
 (exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
-      objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
-      deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+- [x] Inventory what `src/capture` + `src/training` already implement vs. the
+      objective's five pieces (run 9). Capture→schema→dataset→reviewed-export and
+      Apple-Silicon script *generation* existed; the gap was actual train/infer +
+      generalization in cloud/CI. Now filled by `movement-model.ts`.
+- [x] Pluggable local-model backend interface with a deterministic backend
+      (run 9): `MovementModelBackend`/`MovementModel` seam +
+      `StatisticalMovementBackend` (backoff n-gram / token-affinity). Real
+      on-device runtimes (MLX/axolotl) implement the same interface.
+- [x] Synthetic event-stream generator (run 9): `synthetic-movements.ts` — seeded
+      recipe-based trajectory generator, no real OS input.
+- [x] Generalization eval harness (run 9): `evaluateMovementModel` — fidelity /
+      toolFidelity / per-strategy breakdown on held-out related trajectories.
+- [ ] **Close the training loop in-process:** give `execution-service`/`runner` an
+      injectable executor whose default (real) path spawns MLX but whose CI/mock
+      path trains `StatisticalMovementBackend` directly. Closes the job-store →
+      trained-model loop *and* lets the flaky bash-spawn suites run deterministically.
+- [ ] Persist trained movement models via the job-store artifact dir
+      (`model.snapshot()` → JSON) and expose a `movements.predict`/`movements.rollout`
+      RPC so the control plane can serve inference from a trained model.
+- [ ] Richer movement contexts: incorporate `observationSource` + a short window
+      of prior actions (bi/tri-gram context) into the model key, and add a
+      confidence-thresholded "abstain" so low-evidence contexts don't emit a
+      wrong action.
 
 ## Innovation backlog
+- [ ] **De-flake the shell-spawn suites.** `app.test.ts` ×2, `server.test.ts`,
+      `operator-runtime.test.ts` fail flakily (3↔4) in the cloud container: the
+      `renderLaunchScript` bash+`sed`+`python3`+`date` state-writer emits JSON this
+      environment mis-parses. Fix by making the executor injectable (see the
+      movement-subsystem loop item) so these tests don't shell out at all.
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in
       project health over time.

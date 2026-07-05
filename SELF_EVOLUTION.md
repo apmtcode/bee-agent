@@ -6,6 +6,67 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-05 (run 9) — Movement subsystem: trainable, pluggable in-process model (objective 2c+2d)
+
+**Audited:** The local-movement learning subsystem (standing objective #2). The
+`src/capture/*` (recorder/replay/trajectory) and `src/training/*` (exporter,
+job-store, runner, execution-service) code already covers capture → schema →
+dataset → reviewed-export and *generates* Apple-Silicon launch scripts
+(`runner.ts` → MLX/axolotl). **The missing pieces were parts (c) and (d): there
+was no way to actually train a model, run inference, or measure generalization in
+the cloud/CI** — the runner only emits shell scripts that need a real GPU + real
+OS. The ROADMAP flagged exactly this: "pluggable local-model backend with a
+deterministic mock backend" + "generalization eval harness" + "synthetic
+event-stream generator."
+
+**Changed (additive, new files only):**
+- **`src/training/movement-model.ts`** — the pluggable model seam. Defines
+  `MovementModelBackend` (train + load) and `MovementModel` (predict / rollout /
+  snapshot), the `MovementDataset` schema, and two dataset builders
+  (`buildMovementDatasetFromTrajectories`, `buildMovementDatasetFromReplays`) that
+  turn recorded trajectories/replays into supervised (context → action) steps
+  (each action paired with its preceding observation + the previous action's tool).
+  Ships `StatisticalMovementBackend` — a deterministic backoff n-gram / token-
+  affinity model: exact-context memory reproduces recorded movements; an
+  inverse-frequency token index generalizes to related-but-unseen contexts;
+  action→action transitions and a global prior are the final backoffs. Plus
+  `evaluateMovementModel` (fidelity / toolFidelity / per-strategy breakdown) — the
+  generalization eval harness. Fully deterministic (sorted argmax tie-breaks,
+  JSON-serializable snapshot round-trip).
+- **`src/training/synthetic-movements.ts`** — seeded (mulberry32, no
+  `Math.random`) synthetic trajectory generator from a movement *recipe* with
+  `{slot}` variation, so capture→dataset→train→eval round-trips and held-out
+  "related but unseen" variants can be built with zero real OS input.
+- **`src/training/movement-model.test.ts`** — 11 tests: dataset construction
+  (trajectory + replay parity), exact reproduction on the training set
+  (fidelity=1), **generalization to unseen slot values** (train on 4 docs, eval on
+  2 held-out docs → toolFidelity=1 via the `similar` strategy, `exact`=0),
+  rollout threading, transition/prior backoff, empty-model safety, and
+  snapshot round-trip + order-independence.
+- Barrel exports wired into `src/index.ts` (additive).
+
+**Test results:** new suite **11/11 green**; total **170→182 passing**. Source-only
+typecheck (`typecheck:src`) ✅ exit 0; full `tsc` unchanged at **125** (no new test
+debt). Build ✅ (tsdown, 5 files).
+
+**Known pre-existing blocker (NOT introduced this run):** 3–4 tests
+(`app.test.ts` ×2, `server.test.ts`, `operator-runtime.test.ts`) fail
+*flakily* in this cloud container — they spawn real `bash`+`python3`+`sed`+`date`
+launch scripts whose `sed` state-writer emits JSON this container mis-parses
+(`SyntaxError: Expected ',' or '}'`). They fail identically on the clean baseline
+(before any edit) and the count fluctuates 3↔4 between runs, confirming they're
+environmental, not deterministic. My change touches none of those paths. Follow-up
+idea below.
+
+**New idea:** make the training pipeline shell-free in CI by giving
+`execution-service`/`runner` an injectable executor with an in-process
+`StatisticalMovementBackend` "runtime" (train the movement model directly instead
+of spawning MLX) — this both closes the loop (a real trainable backend behind the
+existing job-store/manifest orchestration) *and* dodges the flaky bash-spawn tests
+by letting those suites run against the deterministic executor.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
