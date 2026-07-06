@@ -6,6 +6,70 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-06 (run 9) — 🟢 Deterministic background-task test backend: flaky suite → stable 174/174
+
+**Audited:** The test suite health on a fresh cloud container. Found the suite
+was **no longer green** here: 3 tests failed *consistently* and a 4th flaked
+(~1 in 5 runs) — all four in the background-task subsystem
+(`operator-runtime.test.ts`, `control-plane/server.test.ts`, and two in
+`cli/app.test.ts`). The run-8 log recorded 174/174, so this was an
+**environment-dependent regression**, not a code change.
+
+**Root cause (one mechanism, four symptoms):** `FileBackgroundTaskStore.start()`
+spawns a *real detached OS launch script* (`run.sh`) that asynchronously runs the
+task command and writes `state.json`/`output.log`. Those writes are non-atomic
+(shell `>` truncate; Python `write_text`) and race the tests' own state
+reads/writes; liveness is probed via `process.kill(-pid, 0)`. Under container
+load the launch script lands its `running` state *after* the test starts but
+*before* a health check, so:
+- `server.ts` `buildRemote…` degrades a remote only when a `state.json` with
+  `status:"running"` exists **and** the pid is dead — a raced `running` write
+  flips healthy `sleep 5` tasks to `missing-process` → `control=degraded`
+  (server.test line 719, app.test line 906). The circuit-breaker `mixed→degraded`
+  progression (breaker: write task-1, expect `mixed`; then task-2, expect
+  `degraded 2/2`) requires unwritten tasks to read as *active* — the real script
+  writing their state early broke `mixed`.
+- A truncating `state.json` write read mid-flight returns empty → `readState`
+  yields `undefined` → `getBackgroundTaskExecutionState` returned `undefined`
+  (operator-runtime line 569).
+
+**Changed (additive, guardrail-sanctioned "simulated implementation so tests pass
+in the cloud"):**
+- **New `src/harness/fake-background-process.ts`** — `createFakeBackgroundProcessBackend()`
+  returns an injectable `spawn` (hands out synthetic pids, records them alive,
+  launches nothing) + `isProcessRunning` (liveness purely from that in-memory
+  set) + `terminate(pid)`. Because no launch script runs, a task only has a
+  `state.json` when a test writes one explicitly — exactly what the
+  reconciliation/health logic under test consumes. Pids never handed out (e.g. a
+  hard-coded `999999` used to force a `missing-process` degradation) read as
+  dead, so deliberate failure paths still exercise.
+- **`src/cli/app.ts`** — added optional `backgroundTaskSpawnProcess` /
+  `backgroundTaskIsProcessRunning` to `OperatorCliAppOptions`, threaded into the
+  runtime (the runtime already exposed these; the CLI app didn't). Production
+  default unchanged (real detached launcher).
+- **Tests** injected the fake backend: `operator-runtime.test.ts` (1 runtime),
+  `server.test.ts` (main + drifting + breaker runtimes), `app.test.ts` (2
+  tests). For the one test that asserts real command *output* (`printf ok`), I
+  mirrored the sibling monitor task's existing pattern — write `output.log`
+  ("ok") + a `running` state with the alive fake pid — so watch/stop assertions
+  stay deterministic without a real subprocess.
+
+**Test results:** `npm test` **174/174**, now **green 6/6 consecutive full-suite
+runs** (was 3 consistent failures + 1 intermittent). `npm run build` ✅.
+`npm run typecheck:src` ✅ (exit 0, source stays clean incl. the new file). Full
+`tsc` unchanged at **125** (all in pre-existing test files). No production
+behaviour change — the real launcher remains the default everywhere.
+
+**New idea:** the real launch scripts still write `state.json` non-atomically
+(`… | sed > state.json` and Python `write_text`) — a concurrent status reader in
+*production* can momentarily observe an empty/torn state file and mis-classify a
+healthy task as `missing-state`. Make both launch-script writes atomic
+(write-temp + `mv`, matching `writeJsonAtomic`) so readers never see a partial
+file. That's a genuine product-robustness fix (not just test hygiene) and is now
+queued in ROADMAP.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

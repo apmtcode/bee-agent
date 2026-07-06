@@ -6,6 +6,12 @@ unchecked items are queued. Keep this richer than you found it each run.
 ## Foundations / DX
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
+- [x] **Deterministic background-task test backend** (2026-07-06, run 9) — the
+      suite spawned real detached OS launch scripts that raced test state
+      reads/writes, making 3 tests fail consistently + 1 flake in the cloud.
+      Added `src/harness/fake-background-process.ts`
+      (`createFakeBackgroundProcessBackend`) and CLI-app injection points; suite
+      now 174/174 stable across 6+ runs.
 - [x] Make config loading hermetic in tests via an injectable `configHome`
       (2026-06-22).
 - [ ] **Pay down typecheck debt** (surfaced by the `typecheck` script). Full
@@ -71,6 +77,14 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
       related synthetic trajectories.
 
 ## Innovation backlog
+- [ ] **Atomic launch-script state writes (product robustness).** The real
+      background-task and training launch scripts write `state.json`
+      non-atomically (`printf … | sed > state.json` and Python
+      `state_path.write_text(...)`). A concurrent status reader in production can
+      observe an empty/torn file and mis-classify a healthy task as
+      `missing-state`/`missing-process`. Fix: have the launch scripts write to a
+      temp path then `mv` into place (mirrors `writeJsonAtomic`), so readers
+      always see a complete document. Surfaced by run 9's flaky-suite diagnosis.
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in
       project health over time.
