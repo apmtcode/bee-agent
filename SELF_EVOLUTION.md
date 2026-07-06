@@ -6,6 +6,64 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-06 (run 9) — 🐛 Atomic background-task state writes + de-flaked the suite (green→reliably green)
+
+**Audited:** The health of the test/build gate itself. `npm test` — reported
+**174/174** by run 8 — was in fact **flaky in this environment**: repeated runs
+failed a *varying* 2–3 tests across `operator-runtime.test.ts`,
+`server.test.ts`, and `app.test.ts` (2, then 3, then 2 failures on successive
+runs). A green gate you can't trust is worse than a known-red one, so this was
+the highest-value target: nothing else can be safely verified on a flaky suite.
+
+**Root cause (one, shared by all the flakes):** background tasks spawn a **real
+detached OS process** (`child_process.spawn` of a generated bash launch script).
+That script wrote the task's execution-state JSON file **non-atomically** —
+`printf … > state.json` (truncate-then-write) and a Python `write_text`. Two
+independent failure modes fell out of this:
+1. **Torn reads** — the reconciler (`readState` → `readJsonFile`) could read a
+   half-written document mid-`>`, throwing `SyntaxError: Expected ',' or '}'`
+   (the `operator-runtime.test.ts` crash). **This is a real production bug**, not
+   a test artifact: `recoverBackgroundTasks` reads state at arbitrary times.
+2. **Async clobber / dead-pid races** — the detached process's later state write
+   lands after a test's explicit `writeState`, and a "running" state with an
+   already-exited pid yields a spurious `background task missing-process`
+   diagnostic → intermittent `degraded` instead of `active`/`mixed`
+   (`server.test.ts` + `app.test.ts` control-plane assertions).
+
+**Changed (additive, reversible):**
+- **Production fix — `src/harness/background-tasks.ts`:** the launch script now
+  writes its state file **atomically**. Initial write renders to
+  `state.json.tmp.$$` then `mv -f` into place; the terminal Python writer renders
+  to a `.tmp.<pid>` sibling then `os.replace()` (atomic rename). A concurrent
+  reader can now only ever observe a complete JSON document — closing the
+  torn-read window for the real reconciler, not just the tests.
+- **Determinism seam — `src/cli/app.ts`:** threaded optional
+  `backgroundTaskSpawnProcess` / `backgroundTaskIsProcessRunning` through
+  `OperatorCliAppOptions` into the runtime (production leaves them undefined →
+  real `spawn` + `process.kill(0)` probe). Lets callers/tests inject
+  deterministic process control.
+- **De-flaked tests** by injecting a no-op spawn (records a dead pid, never runs
+  a real process; execution state driven explicitly by each test):
+  `server.test.ts` (shared `noopBackgroundSpawn` on the primary + drifting +
+  breaker runtimes), `operator-runtime.test.ts` (recovery test),
+  `app.test.ts` (session-lifecycle test). The background/monitor CLI test additionally
+  seeds the task's output + running state (with `isProcessRunning: () => true`)
+  so watch/view/stop assertions no longer depend on real process timing.
+
+**Test results:** affected files **8/8 consecutive runs green** (50/50); full
+`npm test` **174/174 on 3 consecutive runs** (was 2–3 flaky failures/run
+before). Build ✅. `typecheck:src` ✅ (exit 0). Full `tsc` **125 → 125** — zero
+new typecheck debt from the test edits.
+
+**New idea:** add a **flake-detection self-check** to the engine's pre-push gate —
+run the suite N times (e.g. 3×) rather than once, and treat *any* variance in
+pass count as a red gate. A single green run hid this regression for an entire
+run (run 8 logged 174/174 while the suite was already flaky here). Cheap
+insurance: `for i in 1 2 3; do vitest run; done` and diff the totals. Bigger
+idea: a lint/grep guard that flags any `> "$file"` or `.write_text(`/`writeFile`
+targeting a `state`/`.json` path outside the shared `writeJsonAtomic` helper, so
+non-atomic persistence can't be reintroduced silently.
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

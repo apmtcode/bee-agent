@@ -6,6 +6,14 @@ unchecked items are queued. Keep this richer than you found it each run.
 ## Foundations / DX
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
+- [x] **Atomic background-task state writes + de-flaked suite** (2026-07-06,
+      run 9). The generated launch script wrote its execution-state JSON
+      non-atomically (`printf > file` / `write_text`), causing torn reads in the
+      reconciler (a real production bug) and, combined with real detached
+      spawns, intermittent control-plane `degraded` assertions. Fixed the script
+      to write-temp-then-rename, threaded deterministic spawn/liveness injection
+      through `OperatorCliAppOptions`, and gave the flaky tests a no-op spawn.
+      Suite now 174/174 across repeated runs.
 - [x] Make config loading hermetic in tests via an injectable `configHome`
       (2026-06-22).
 - [ ] **Pay down typecheck debt** (surfaced by the `typecheck` script). Full
@@ -71,6 +79,12 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
       related synthetic trajectories.
 
 ## Innovation backlog
+- [ ] **Flake-detection pre-push gate** (surfaced run 9): run the suite N times
+      (e.g. 3×) and treat any variance in pass count as red. A single green run
+      hid a real flaky regression for a whole cycle (run 8 logged 174/174 while
+      the suite was already flaky). Pair with a grep guard that flags any
+      `> "$file"` / `.write_text(` / `writeFile` targeting a `state`/`.json`
+      path outside `writeJsonAtomic`, so non-atomic persistence can't return.
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in
       project health over time.
