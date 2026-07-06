@@ -44,6 +44,25 @@ unchecked items are queued. Keep this richer than you found it each run.
       (excludes `**/*.test.ts`) + `typecheck:src` script; passes (exit 0). Next:
       have the engine run it as a per-run pre-push self-check.
 - [ ] Add a minimal CI workflow mirroring `verify` for human-opened PRs.
+- [ ] **Stabilize two flaky real-launch integration tests** (pre-existing; the
+      baseline `main` was red before run 9). Both spawn real detached `bash`
+      launch scripts whose async state-writes race with assertions:
+  - [ ] `operator-runtime.test.ts` "starts, syncs, recovers, lists, and cancels
+        background tasks": the printf task's async launch script overwrites its
+        state back to `running` after the test marks it complete, so the second
+        `recoverBackgroundTasks` returns `missing-process` instead of the expected
+        `unchanged`. Fix = construct the runtime with an injected mock
+        `spawnProcess` (mirror `background-tasks.test.ts`) so no real process runs.
+  - [ ] `server.test.ts` "handles session, transcript, approval, …": after
+        `sessions.remoteControl resume`, `deriveRemoteDiagnostics` reports
+        `background task missing-process` (active remote task state says `running`
+        but no live process) → `control.state:"degraded"` vs expected `"active"`.
+        Fix = deterministic spawn/isProcessRunning in the test, or have `resume`
+        reconcile the active task's state first.
+  - Note: run 9 fixed the two *real* launch-script bugs these tests were also
+    hitting (shellQuote corruption → invalid state JSON; PID placeholder never
+    substituted → every task mis-detected as dead). Those fixes are production
+    correctness wins; the residual failures above are test-determinism issues.
 
 ## Capability parity (audit reference agents → port gaps)
 - [ ] Build a "capability inventory" generator: enumerate bee-agent's exported
@@ -59,16 +78,28 @@ unchecked items are queued. Keep this richer than you found it each run.
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
 (exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
-      objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Inventory what `src/capture` + `src/training` already implement vs. the
+      objective's five pieces (run 9): capture ✅, schema ✅, dataset ✅ (now with
+      `buildMovementDataset*`), replay ✅, **train/infer** ✅ (run 9, in-process
+      Markov backend) — the heavy MLX/Axolotl runners remain Apple-Silicon-only
+      launch-script emitters.
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
+      for a real on-device small model — DONE run 9 (`src/training/movement-model.ts`:
+      `MovementModelBackend` + `MovementBackendRegistry` + default
+      `MarkovMovementBackend`; serialize/deserialize for artifacts).
+- [x] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories — DONE run 9 (`evaluateMovementModel`:
+      tokenAccuracy / exactSequenceMatch / meanLogLikelihood).
 - [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      round-trips without real OS input (feed generated OS/mouse/keyboard events
+      through the recorder → trajectory → `buildMovementDataset` → train → eval).
+- [ ] Wire a `markov` cold-start baseline model into the training runner's
+      artifact output (serialize alongside the MLX/Axolotl scripts) so a captured
+      dataset yields an immediately-usable replay policy before heavy training.
+- [ ] Add a second reference backend (e.g. suffix-automaton or small MLP over
+      one-hot movement tokens) behind the same seam to prove pluggability, and
+      compare via the eval harness.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

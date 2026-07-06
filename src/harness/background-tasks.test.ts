@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -21,6 +22,43 @@ afterEach(async () => {
 });
 
 describe("FileBackgroundTaskStore", () => {
+  it("generates a launch script that writes valid state JSON for single-quoted commands", async () => {
+    // Regression: shellQuote once injected a stray double quote per apostrophe,
+    // so a command like `printf 'x'` corrupted the launch script's state JSON and
+    // broke recovery. Execute the real generated script and assert the state parses.
+    const rootDir = await makeTempDir();
+    const filePath = path.join(rootDir, "background-tasks.json");
+    let launchScriptPath = "";
+    const store = new FileBackgroundTaskStore(
+      filePath,
+      (command) => {
+        launchScriptPath = command;
+        return { pid: 4242, unref() {} };
+      },
+      () => true,
+    );
+
+    const task = await store.start({
+      sessionId: "sess-quoted",
+      title: "Quoted command",
+      command: "printf 'hello world\\n'",
+      cwd: rootDir,
+      kind: "task",
+    });
+
+    // Run the actual generated launch script (real bash) rather than the mock spawn.
+    execFileSync("bash", [launchScriptPath], { cwd: rootDir });
+
+    const raw = await fs.readFile(path.join(rootDir, task.execution.stateFile), "utf8");
+    const parsed = JSON.parse(raw) as BackgroundTaskExecutionState;
+    expect(parsed.command).toBe("printf 'hello world\\n'");
+    expect(parsed.status).toBe("completed");
+    expect(typeof parsed.pid).toBe("number");
+
+    const output = await fs.readFile(path.join(rootDir, task.execution.outputFile), "utf8");
+    expect(output).toContain("hello world");
+  });
+
   it("starts tasks, persists output, syncs terminal state, and reloads", async () => {
     const rootDir = await makeTempDir();
     const filePath = path.join(rootDir, "background-tasks.json");

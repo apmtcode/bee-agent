@@ -6,6 +6,77 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-06 (run 9) — 🐝 Runnable movement-model backend (train + generalize) + two real launch-script bug fixes
+
+**Audited:** Standing objective #2 (local-movement learning). The whole capture
+→ trajectory → replay → reviewed-export → **training** pipeline existed, but
+pieces **(c) post-train a model** and **(d) generalize** were entirely delegated
+to Apple-Silicon shell scripts (`LocalAppleSiliconTrainingRunner` emits MLX /
+Axolotl launch scripts). **Nothing could train or infer in the cloud/CI** — the
+objective's core learning loop was untested and unrunnable here.
+
+**Changed (primary, additive) — `src/training/movement-model.ts` (+ test, +barrel):**
+A pluggable, dependency-free movement-model subsystem:
+- `MovementModelBackend` interface + `MovementBackendRegistry` (pluggable seam;
+  ships a default `markov` backend, real on-device backends register by id).
+- `MarkovMovementBackend`: a deterministic variable-order n-gram model with
+  Katz-style backoff. **Replay fidelity (c):** greedy generation reproduces a
+  recorded trajectory exactly. **Generalization (d):** an unseen prefix whose
+  *suffix* overlaps training backs off to shorter contexts and still predicts the
+  shared continuation. Reward/weight up-weighting gives an RL hook.
+- `predictNext` / `generate` / `scoreSequence` / `serialize` +
+  `deserializeMovementModel` (persist a trained model as a JSON artifact).
+- Dataset builders `buildMovementDataset` (from `ReplayManifest[]`) and
+  `buildMovementDatasetFromTrajectories`, with stable tokenizers.
+- `evaluateMovementModel`: generalization eval harness (token accuracy = teacher-
+  forced next-step; exact-sequence-match = replay fidelity; mean log-likelihood).
+- **17 new tests, deterministic, all green.**
+
+**Two genuine pre-existing bugs found + fixed while getting the suite runnable**
+(the baseline `main`/HEAD was already red — 3 tests crashing, masked behind a
+stale "174/174" note; the tree has grown to 192 tests via intervening runs):
+1. **`shellQuote` corruption** (`src/harness/background-tasks.ts`): used the
+   6-char replacement `"'"'"'` instead of the POSIX 5-char `'"'"'`, injecting a
+   **stray `"` per apostrophe**. Any background-task command containing a single
+   quote (e.g. `printf 'x'`) produced invalid launch-script state JSON → recovery
+   crashed on `JSON.parse`. Fixed + added a regression test that executes the real
+   generated launch script. (The training runner's `shellQuote` was already
+   correct, confirming the typo.)
+2. **PID placeholder never substituted** (`background-tasks.ts` + `training/
+   runner.ts`): the state-init `sed "…; s/\"\$\$\"/$$/g"` was written in a JS
+   template literal, so `\"`/`\$` were consumed by the *template* — `run.sh`
+   received raw `"` that broke out of bash's double-quoted sed arg, degenerating
+   into `s/PID/PID/g`. Result: `state.pid` stayed the literal string `"$$"`, so
+   **every real background task was mis-detected as dead** (`isProcessRunning("$$")`
+   always false). Fixed by emitting literal backslashes (`\\"`, `\\$`). Verified
+   empirically in bash (pid now numeric).
+
+**Test results:** `typecheck:src` ✅ (exit 0). Build ✅. My added tests ✅ 25/25
+deterministic. Full suite: pre-existing failures **3 → 2**; `app.test.ts` now
+passes and the JSON-corruption crashes are gone.
+
+**Remaining (pre-existing, NOT introduced here — documented for a dedicated run):**
+Two flaky integration tests use *real detached `bash` launches* whose async
+state-writes race with assertions:
+- `operator-runtime.test.ts` "starts, syncs, recovers…": second recovery of an
+  already-terminal task expects `reason:"unchanged"` but the printf task's async
+  launch script overwrites its state back to `running` (numeric pid, dead
+  process) → re-flagged `missing-process`. Fix likely = inject a mock spawn so
+  the runtime test is deterministic (mirror `background-tasks.test.ts`).
+- `server.test.ts` "handles session…": after `sessions.remoteControl resume`,
+  `deriveRemoteDiagnostics` returns `background task missing-process` (the active
+  remote task's launch-script state says `running` but no live process) →
+  `control.state:"degraded"` instead of `"active"`. Probed cause confirmed.
+
+**New idea:** the movement backend seam is ready for a *real* small on-device
+model — wire the `LocalAppleSiliconTrainingRunner` artifact path to also emit a
+`markov` baseline model (`serialize()`) alongside the MLX/Axolotl scripts, so a
+freshly-captured dataset yields an immediately-usable replay policy *before* any
+heavy training runs — a zero-dependency "cold-start" policy that the eval harness
+can score, and that the heavy runtime only needs to beat.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
