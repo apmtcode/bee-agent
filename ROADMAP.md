@@ -4,6 +4,19 @@ Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
 ## Foundations / DX
+- [x] **Fix background-task launch-script corruption** (2026-07-06, run 9). Two
+      shell-quoting bugs in `renderLaunchScript` (`src/harness/background-tasks.ts`):
+      broken POSIX single-quote escaping in `shellQuote`, and a `printf | sed`
+      init write that left `pid` as literal `"$$"`. Replaced the init write with
+      a python-via-env-var writer; added a real-execution regression test; made
+      the status-only tests deterministic via injected spawn stubs. Suite 175/175,
+      green 10/10 consecutive runs.
+- [ ] **Toolchain preflight for background tasks:** `assertToolchain()` in the
+      execution service that fails fast with a clear error if `python3`/`bash`/`date`
+      are missing, instead of silently writing no state file.
+- [ ] **Property-based `shellQuote` round-trip test:** fuzz random strings
+      (quotes, `$`, newlines, backslashes) through `bash -c 'printf %s'` and assert
+      byte-identical output, so quoting regressions are caught by construction.
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`

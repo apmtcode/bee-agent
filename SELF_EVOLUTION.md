@@ -6,6 +6,60 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-06 (run 9) — 🐛 Fix background-task launch-script corruption (2 shell-quoting bugs); suite green + deterministic
+
+**Audited:** Project health first (`npm test`), which surfaced a *regression the
+run-8 log had recorded as 174/174 green*: 3–4 tests failing, varying per run.
+Root-caused it to two real, latent bugs in `renderLaunchScript`
+(`src/harness/background-tasks.ts`) — the shell wrapper that launches every
+background task — plus test-level nondeterminism from real detached processes
+racing the assertions. None of the unit tests in `background-tasks.test.ts` ever
+executed the *actual* generated script (they all mock `spawnProcess`), so the
+bugs hid behind mocks and only bit the one end-to-end integration test.
+
+**Bugs fixed (production, `src/harness/background-tasks.ts`):**
+1. **`shellQuote` produced invalid POSIX single-quote escaping.** It replaced
+   each `'` with `"'"'"'` (leading `"`), but inside a single-quoted string the
+   leading `"` is literal — the quote never closes. Correct sequence is `'"'"'`
+   (close-quote, quoted-quote, reopen). Any command containing a single quote
+   (extremely common) corrupted the state JSON: unescaped quotes broke parsing,
+   so `readState` threw `SyntaxError` and every downstream sync/recover failed.
+2. **The initial-state `printf | sed` write left `pid` as the literal `"$$"`.**
+   The TS template literal consumed the backslashes in `s/\"\$\$\"/$$/g`, so the
+   file actually contained `s/"$$"/$$/g` — bash closed its `"…"` on the inner
+   `"`, the sed pattern degraded to the numeric PID, and `"$$"` was never
+   substituted. Recovered tasks then reported `process $$ is no longer running`.
+   Replaced the fragile `printf | sed` init write with a python writer
+   (`renderInitialStateWriterPython`) that receives the static payload via an
+   **env var** (only single-quote escaping needed) and injects pid/timestamp —
+   mirroring the existing completed/failed writers; no `sed`, no placeholders.
+
+**Testability + determinism (additive):**
+- `OperatorCliAppOptions` now forwards optional `backgroundTaskSpawnProcess` /
+  `backgroundTaskIsProcessRunning` to the runtime (`src/cli/app.ts`).
+- The status-only tests (operator-runtime, server, app-lifecycle) inject a
+  deterministic spawn stub — an alive-pid-tracking variant in app.test.ts so a
+  test's explicit dead-pid (999999) still reconciles to `degraded` — so state is
+  driven purely by explicit `writeState`, not a real process racing assertions.
+- **New regression test** `renderLaunchScript (real execution)` runs the *real*
+  launcher with a single-quote command and asserts the state file is valid JSON,
+  `pid` is numeric, the command round-trips, and output is correct. Verified it
+  FAILS against the pre-fix `shellQuote` and passes after.
+
+**Test results:** full suite **175/175**, green **10/10 consecutive full runs**
+(was 3–4 failing, nondeterministic). `typecheck:src` ✅ (exit 0). Build ✅.
+
+**New idea:** the launch script depends on `bash` + `python3` + `date` being
+present with GNU-ish behavior, and this class of shell-quoting bug is invisible
+to mock-based unit tests. Add (a) a tiny **`assertToolchain()` preflight** in the
+execution service that fails fast with a clear message if `python3`/`bash` are
+missing, rather than silently writing no state; and (b) a **property-based
+`shellQuote` round-trip test** — fuzz random strings (quotes, `$`, newlines,
+backslashes) through `bash -c 'printf %s'` and assert byte-identical output — so
+the *next* quoting regression is caught by construction, not by luck.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

@@ -371,3 +371,53 @@ describe("BackgroundTaskExecutionService", () => {
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
   });
 });
+
+// End-to-end regression guard for the launch script itself. Every other test in
+// this file mocks `spawnProcess`, so the actual generated shell script was never
+// executed and a shell-quoting bug in `renderLaunchScript` went undetected: a
+// command containing single quotes corrupted the initial state.json (unescaped
+// quotes broke the JSON) and the `pid` field was left as the literal string
+// "$$". Here we run the real launcher and assert the state file is well-formed.
+describe("renderLaunchScript (real execution)", () => {
+  async function waitForTerminal(
+    service: BackgroundTaskExecutionService,
+    task: Awaited<ReturnType<FileBackgroundTaskStore["start"]>>,
+    timeoutMs = 5000,
+  ): Promise<BackgroundTaskExecutionState> {
+    const deadline = Date.now() + timeoutMs;
+    let last: BackgroundTaskExecutionState | undefined;
+    while (Date.now() < deadline) {
+      // readState throws on corrupt JSON — the precise failure mode the bug
+      // produced — so a bad launch script fails the test right here.
+      last = await service.readState(task);
+      if (last && (last.status === "completed" || last.status === "failed")) {
+        return last;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    throw new Error(`background task ${task.id} did not reach a terminal state (last=${last?.status ?? "none"})`);
+  }
+
+  it("round-trips a command containing single quotes through a real launch", async () => {
+    const rootDir = await makeTempDir();
+    // Real spawn (no override) so the generated bash/python launch script runs.
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"));
+    const command = `printf "it's a test\\n"`; // embedded single quote + double quotes
+
+    const task = await store.start({ sessionId: "s1", title: "quoted", command, cwd: rootDir, kind: "task" });
+    expect(task.status).toBe("running");
+    expect(typeof task.execution.processId).toBe("number");
+    expect(task.command).toBe(command);
+
+    const terminal = await waitForTerminal(store.executionService, task);
+    expect(terminal.status).toBe("completed");
+    expect(terminal.exitCode).toBe(0);
+    // pid must be a real number, not the literal placeholder string "$$".
+    expect(typeof terminal.pid).toBe("number");
+    // Command round-trips unchanged, single quote and all.
+    expect(terminal.command).toBe(command);
+
+    const output = await store.getOutput(task.id);
+    expect(output).toContain("it's a test");
+  });
+});

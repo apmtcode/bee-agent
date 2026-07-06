@@ -10,6 +10,21 @@ import { OperatorCliApp, parseSlashCommand } from "./app.js";
 const tempDirs: string[] = [];
 const execFileAsync = promisify(execFile);
 
+// Deterministic spawn stub for tests that start background tasks but only assert
+// on task status (not real process output). It allocates a fake pid, records it
+// as "alive", and never launches a real detached process — so no lingering
+// process and no async state-file write races the assertions. `stubIsProcessRunning`
+// reports stub pids as alive while any other pid (e.g. a test's explicit dead-pid
+// state) reads as gone, which is exactly what the status-transition tests need.
+const aliveStubPids = new Set<number>();
+let stubPidCounter = 700000;
+const stubSpawn = () => {
+  const pid = (stubPidCounter += 1);
+  aliveStubPids.add(pid);
+  return { pid, unref() {} };
+};
+const stubIsProcessRunning = (pid: number): boolean => aliveStubPids.has(pid);
+
 async function makeTempDir(): Promise<string> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "operator-cli-app-"));
   tempDirs.push(dir);
@@ -801,7 +816,13 @@ describe("OperatorCliApp", () => {
 
   it("supports session lifecycle, transcript, approvals, pairing, config, and prompt commands", async () => {
     const rootDir = await makeTempDir();
-    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    const app = new OperatorCliApp({
+      rootDir,
+      cwd: rootDir,
+      currentDate: "2026-05-25",
+      backgroundTaskSpawnProcess: stubSpawn,
+      backgroundTaskIsProcessRunning: stubIsProcessRunning,
+    });
     const firstSession = await app.runtime.startSession({ title: "first", cwd: rootDir, agentId: "operator-cli" });
     const secondSession = await app.runtime.startSession({ title: "second", cwd: rootDir, agentId: "operator-cli" });
 

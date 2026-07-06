@@ -9,6 +9,13 @@ import type { ReviewedExportManifest } from "../training/export-manifest.js";
 
 const tempDirs: string[] = [];
 
+// Deterministic spawn stub: allocates a fake pid and never launches a real
+// detached process, so background-task state is driven solely by explicit
+// `writeState` calls rather than a real process writing state.json in the
+// background and racing the assertions.
+let stubPidCounter = 900000;
+const stubSpawn = () => ({ pid: (stubPidCounter += 1), unref() {} });
+
 async function makeTempDir(): Promise<string> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "operator-runtime-"));
   tempDirs.push(dir);
@@ -531,6 +538,7 @@ describe("StandaloneOperatorRuntime", () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
       backgroundTaskIsProcessRunning: () => false,
+      backgroundTaskSpawnProcess: stubSpawn,
     });
     const session = await runtime.startSession({ title: "Tasks", agentId: "main" });
 
