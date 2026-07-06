@@ -62,15 +62,43 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      for a real on-device small model — DONE run 9 (`src/training/model-backend.ts`:
+      `LocalModelBackend`/`LocalModelBackendRegistry` + deterministic
+      `NGramMovementBackend` train/repeat/generalize + snapshot round-trip).
+- [~] Synthetic event-stream generator to validate capture→dataset→replay
+      round-trips without real OS input. Partial: `datasetFromReplayEvents` /
+      `tokenizeReplayEvents` bridge `ReplayTimelineEvent` → movement tokens (run 9).
+      Still want a generator that *emits* synthetic `TrajectorySpan`/replay streams
+      (with realistic mouse/keyboard/window events) end-to-end.
+- [~] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories. Partial: `evaluateMovementModel` scores
+      next-token top-1 fidelity and credits backoff (generalized) matches (run 9).
+      Next: the **edit-distance-k curriculum eval** (see Innovation backlog) to
+      chart fidelity vs. divergence and gate real backends against the mock.
+- [ ] Wire the new in-process backend into the training runner/execution path so a
+      `job.mode` (or a `runtime: "in-process"`) can train+snapshot a movement model
+      as a first-class artifact alongside the mlx/axolotl launch scripts.
+
+## Known blockers
+- [ ] **Pre-existing test failures (3/189)** — `operator-runtime.test.ts`,
+      `control-plane/server.test.ts`, `cli/app.test.ts` fail on the untouched base
+      commit `3c7b7236` (verified run 9 via `git stash`). Operator-runtime root
+      cause: `readJsonFile` throws `SyntaxError` parsing a background-task launch
+      state file during `recoverBackgroundTasks` — the spawned-shell state writer
+      (`training/runner.ts` `renderStateWriterPython` / background-task launch
+      path) produces invalid JSON in this container. Run 8 logged 174/174, so this
+      is an env/toolchain regression, not a source change. Fix before the next
+      green-gate push to `main`; likely a quoting/`sed` substitution or a
+      Node/@types bump interaction.
 
 ## Innovation backlog
+- [ ] **Movement-generalization curriculum eval** (run 9 idea): auto-generate
+      held-out trajectories that are edit-distance-k variants of the training set
+      (swap one tool, insert one observation, reorder a pair) and chart replay
+      fidelity vs. k per backend — the acceptance test a real on-device backend
+      must beat the deterministic n-gram mock on before promotion.
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in
       project health over time.

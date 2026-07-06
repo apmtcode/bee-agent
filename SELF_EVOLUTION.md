@@ -6,6 +6,61 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-06 (run 9) — 🧠 In-process pluggable local-model backend (movement subsystem, parts c+d)
+
+**Audited:** The movement-learning subsystem (`src/capture/` + `src/training/`)
+against standing objective #2. Found the gap: `training/runner.ts` only emits
+**external** mlx/axolotl launch scripts — there is no *in-process* model that can
+actually train + infer, so objective #2 parts **(c) post-train to repeat
+movements** and **(d) generalize to related movements** were unvalidated in
+cloud/CI, and the roadmap's "pluggable local-model backend with a deterministic
+mock" item was unstarted.
+
+**Changed (additive):** new `src/training/model-backend.ts` + tests:
+- **`LocalModelBackend` pluggable interface** + `LocalModelBackendRegistry` (a
+  documented seam a real on-device small model swaps behind by id; seeded with a
+  working default so CI is green).
+- **`NGramMovementBackend`** — a fully deterministic variable-order Markov model
+  with Katz-style suffix backoff (no `Date.now`/`Math.random`/subprocess). It
+  **repeats** recorded movements exactly (BOS-anchored `generate([])` reproduces a
+  whole recording; seeded prefixes reproduce the continuation to `<eos>`) and
+  **generalizes** to novel-but-related contexts by backing off to the longest
+  previously-seen suffix. JSON `snapshot()`/`restore()` round-trip.
+- **`tokenizeReplayEvents` / `datasetFromReplayEvents`** bridge the existing
+  `capture/replay.ts` `ReplayTimelineEvent` schema → movement tokens (`action:*`,
+  `observation:*`), so the model plugs into the real reviewed-export dataset.
+- **`evaluateMovementModel`** eval harness: next-token top-1 fidelity on held-out
+  sequences, separately crediting backoff (generalized) matches — the roadmap's
+  "generalization eval harness" increment.
+- Barrel exports in `src/index.ts`.
+
+**Test results:** new `model-backend.test.ts` **15/15 green** (tokenize, train,
+BOS repeat-from-empty, most-frequent prediction, suffix-backoff generalization,
+eval fidelity/generalization/empty, snapshot round-trip, registry pluggability).
+`typecheck:src` ✅ (source stays fully clean). Build ✅ (tsdown, 5 files).
+
+**⚠️ Pre-existing blocker (NOT introduced this run):** the full `npm test` is
+**186/189** — 3 failures (`operator-runtime.test.ts`, `control-plane/server.test.ts`,
+`cli/app.test.ts`) all reproduce on the **untouched base commit** `3c7b7236`
+(verified via `git stash`). Root cause of the operator-runtime one: a
+`SyntaxError: Expected ',' or '}' after property value in JSON` from
+`readJsonFile` in `BackgroundTaskExecutionService.readState` during
+`recoverBackgroundTasks` — the test's spawned launch-script state file is invalid
+JSON in this container (the `renderStateWriterPython`/`sed` state writer in
+`training/runner.ts` or the background-task launch path is env-sensitive; run 8
+logged 174/174, so this regressed with the toolchain/container, not with source).
+Because these are pre-existing and my change is purely additive + green, work is
+pushed to the designated feature branch `claude/peaceful-dirac-9n714m`.
+
+**New idea:** a **movement-generalization curriculum eval** — auto-generate
+held-out trajectories that are *edit-distance-k* variants of the training set
+(swap one tool, insert one observation, reorder a pair) and chart replay fidelity
+vs. k. That turns "does it generalize?" into a measurable curve per backend, and
+becomes the acceptance test a real on-device backend must beat the n-gram mock on
+before it's promoted.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

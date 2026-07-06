@@ -400,6 +400,27 @@ export type {
   LocalTrainingRuntime,
   TrainingJobPlan,
 } from "./training/runner.js";
+export {
+  LocalModelBackendRegistry,
+  MOVEMENT_EOS,
+  NGramMovementBackend,
+  createDefaultModelBackendRegistry,
+  datasetFromReplayEvents,
+  evaluateMovementModel,
+  tokenizeReplayEvents,
+} from "./training/model-backend.js";
+export type {
+  LocalModelBackend,
+  MovementDataset,
+  MovementEvalResult,
+  MovementGeneration,
+  MovementModelSnapshot,
+  MovementPrediction,
+  MovementSequence,
+  TokenizeReplayOptions,
+  TrainedMovementModel,
+  TrainingBackendOptions,
+} from "./training/model-backend.js";
 export type {
   ExportedMemoryReference,
   ExportedPromotedSkill,
