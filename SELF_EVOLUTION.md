@@ -6,6 +6,68 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-06 (run 9) — 🧠 Movement learning core: pluggable model that replays + generalizes
+
+**Audited:** The local-movement learning subsystem (standing objective #2). The
+capture side (`src/capture/*`) records device gestures / OS events into
+`TrajectorySpan`s, and the training side (`src/training/runner.ts`) generates
+external MLX/axolotl *launch scripts*. But there was a **missing middle**: no
+in-process, testable model that actually *learns from* recorded movements and
+*generalizes* — objective #2(c) replay and #2(d) generalize were unimplemented.
+The training pipeline could only hand off to an out-of-process Python trainer we
+cannot run or validate in the cloud.
+
+**Changed (additive):** new `src/training/movement-model.ts` — the deterministic,
+cloud-testable learning core:
+- **Event schema / dataset format:** `MovementToken` (tool + gesture + optional
+  target/direction) with stable `encode/decodeMovementToken` round-tripping, plus
+  a target-agnostic `encodeMovementClass`. `buildMovementDataset(trajectories)`
+  distils `TrajectorySpan[]` → ordered `MovementSequence[]` + a sorted vocabulary
+  (honors review-redacted actions).
+- **Pluggable backend seam:** `MovementModelBackend` interface (`train(dataset) →
+  MovementPolicy`) so a real on-device small model can drop in locally; the
+  default `MarkovMovementBackend` needs no OS access and no randomness.
+- **Replay (2c):** an order-N Markov policy that reproduces a recorded workflow
+  verbatim — `generate(seed)` rolls it out; `predictNext` scores 1.0 exact
+  accuracy on training sequences.
+- **Generalize (2d):** two independent back-off ladders — *context* back-off
+  (drop oldest context token down to the unigram, for novel situations) and
+  *class* back-off (target-agnostic keying, so "tap Save"/"tap Send" substitute)
+  — let it emit correct new-but-related movements (e.g. predict "tap send-button"
+  after a never-seen message body). Fully deterministic (ties break on encoded
+  string).
+- **Eval harness:** `evaluateMovementPolicy(policy, heldOut)` → exact vs class
+  accuracy, generalization rate, abstention rate — the fidelity + generalization
+  signal the roadmap asked for.
+- Exported the surface from `src/index.ts`.
+
+**Test results:** new `src/training/movement-model.test.ts` — **14/14 passing**
+(encode round-trip, dataset build, verbatim replay, determinism, novel-target
+generalization, class-accuracy ≥ exact-accuracy on held-out, custom-backend
+seam, eval edge cases). `npm run typecheck:src` ✅ CLEAN. `npm run build` ✅. Full
+suite **185/188**.
+
+**Pre-existing failures (NOT from this run — verified via `git stash`):** 3 tests
+fail identically on the clean tree without my changes —
+`operator-runtime.test.ts` (recoverBackgroundTasks), `server.test.ts`,
+`app.test.ts`. Root cause is environmental: `runner.ts`'s bash launch script
+writes a background-task state file containing shell placeholders (`"$$"`,
+`__OPENCLAW_STARTED_AT__`) that are only `sed`-substituted when the real script
+executes; in this container the fixture is read back as **invalid JSON** and
+`readJsonFile` throws (`SyntaxError` at position 311). These regressed from the
+run-8 "174/174" independent of any source change here — likely a container/bash
+difference. Logged to ROADMAP as a real bug to fix next run. My change is fully
+additive and green in isolation, so I push it to the feature branch.
+
+**New idea:** close the loop between this model and the recorder — an
+**online-correction mode** where, during replay, the policy proposes the next
+movement, the device adapter reports the *actual* observed movement, and any
+divergence is appended as a fresh training pair. That turns replay drift into
+self-supervised data and lets the local model improve every session without a
+full retrain (a cheap incremental `MovementPolicy.observe(context, actual)`).
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

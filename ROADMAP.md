@@ -62,13 +62,34 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
-      deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+- [x] Pluggable local-model backend interface + deterministic mock backend
+      (2026-07-06, run 9) — `src/training/movement-model.ts`:
+      `MovementModelBackend`/`MovementPolicy` seam + `MarkovMovementBackend`
+      (no OS, no randomness). Learns from `TrajectorySpan[]`, replays verbatim,
+      generalizes to novel targets via class back-off.
+- [x] Synthetic event-stream validation of capture→dataset→replay round-trips
+      (2026-07-06, run 9) — `buildMovementDataset` + `movement-model.test.ts`
+      drive the full pipeline on synthetic trajectories (14 tests).
+- [x] Generalization eval harness (2026-07-06, run 9) —
+      `evaluateMovementPolicy` reports exact vs class accuracy, generalization
+      rate, and abstention rate on held-out related sequences.
+- [ ] **Fix pre-existing background-task JSON bug** (surfaced run 9): the bash
+      launch script `renderLaunchScript` in `src/training/runner.ts` writes a
+      state file with shell placeholders (`"$$"`, `__OPENCLAW_STARTED_AT__`)
+      that are only substituted when the script actually runs. When a test/
+      container reads that state file directly, `readJsonFile` throws a
+      `SyntaxError` (invalid JSON) — failing `operator-runtime.test.ts`,
+      `server.test.ts`, `app.test.ts`. Make the placeholder-state written to
+      disk valid JSON (or have `readState` tolerate/skip un-substituted
+      placeholders) so recovery is robust.
+- [ ] **Online-correction / incremental learning**: during replay, compare the
+      policy's proposed movement to the device adapter's observed movement and
+      append divergences as fresh training pairs (`MovementPolicy.observe`), so
+      the local model self-improves per session without a full retrain.
+- [ ] Wire the movement model into `LocalTrainingExporter`/runner so a reviewed
+      export can train the in-process `MarkovMovementBackend` as a baseline
+      policy alongside the external MLX/axolotl plan (gives a runnable policy
+      even before on-device training completes).
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
