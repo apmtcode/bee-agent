@@ -62,13 +62,38 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      for a real on-device small model. — DONE run 9
+      (`src/training/movement-policy.ts`: `MovementPolicyBackend`/`Model`
+      interfaces + deterministic in-process `MarkovMovementBackend`).
+- [x] Synthetic event-stream / dataset bridge to validate capture→dataset→replay
+      round-trips without real OS input. — DONE run 9
+      (`movementSequenceFromReplay`/`movementDatasetFromReplays` over
+      `ReplayTimelineEvent[]`; exercised end-to-end in tests).
+- [x] Generalization eval harness: measure prediction accuracy / replay fidelity
+      on held-out but related synthetic sequences. — DONE run 9
+      (`evaluateNextTokenAccuracy`, `measureReplayFidelity`).
+- [ ] `MovementPolicyReplayEngine`: drive the replay/device-adapter surface from
+      `model.generate(...)` behind a dry-run guard, closing the record→train→act
+      loop in simulation.
+- [ ] Second backend (`FallbackMovementBackend` ensemble) to prove the pluggable
+      interface hosts >1 backend, plus a documented seam wiring a real on-device
+      small model to `MovementPolicyBackend`.
+
+## Test health / reliability
+- [ ] **Fix the flaky background-task torn-JSON race** (HIGH — surfaced run 9).
+      `npm test` non-deterministically fails 2–4 tests in `background-tasks` /
+      `operator-runtime` recovery with `SyntaxError: Expected ',' or '}' after
+      property value in JSON`. Narrowed run 9: reproduces **even with
+      `--no-file-parallelism`**, so it is an **intra-test** race — a concurrent
+      reader (`readJsonFile`) parses a state/store file mid-write, not a
+      cross-file-parallelism issue. `writeJsonAtomic` renames a
+      `pid.counter.tmp` temp, so suspect either a concurrent same-path
+      read-modify-write (`load()`→mutate→`save()`) losing atomicity, or a
+      non-atomic `fs.writeFile` reader. Fix: serialize per-file writes (async
+      mutex per path) and/or make `readJsonFile` retry once on parse error;
+      add a stress test that hammers `save()`/`load()` concurrently.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

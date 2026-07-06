@@ -6,6 +6,67 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-06 (run 9) — 🐝 In-process movement-policy backend: capture→train→infer→replay now testable in the cloud
+
+**Audited:** Standing objective #2 (local-movement learning subsystem) and
+`src/training/`. Found the pipeline had a *plan-only* training story:
+`LocalAppleSiliconTrainingRunner` emits an MLX/axolotl launch script + plan, but
+that requires real Apple-Silicon hardware — **no part of "train a model that
+repeats/generalizes recorded movements" could run or be unit-tested in the
+cloud.** The five-piece objective (capture → schema → dataset → replay →
+train/infer) was missing its train/infer core behind a pluggable seam.
+
+**Changed (purely additive):**
+- New `src/training/movement-policy.ts`:
+  - `MovementPolicyBackend` / `MovementPolicyModel` interfaces — the pluggable
+    seam so a real on-device small model can drop in behind the same API.
+  - `MarkovMovementBackend` — a **deterministic, dependency-free, in-process**
+    variable-order n-gram model with stupid-backoff. It *repeats* recorded
+    movement sequences exactly (literal replay) and *generalizes* to
+    novel-but-related sequences by backing off to shared sub-sequences. No
+    randomness / no wall-clock → reproducible in CI and on-device.
+    `train`/`predict`/`generate`/`serialize`+`load` (stable key ordering).
+  - `evaluateNextTokenAccuracy` (teacher-forced top-1 accuracy over held-out
+    sequences) + `measureReplayFidelity` — quantifies the objective's
+    "generalize to new but related movements" property.
+  - Capture→dataset bridge: `movementSequenceFromReplay` /
+    `movementDatasetFromReplays` tokenize `ReplayTimelineEvent[]` (from the
+    existing replay manifest format) into `MovementSequence`s, with a
+    normalizing tokenizer so related movements share stems.
+- Barrel exports added to `src/index.ts` (8 values + 12 types).
+- New `src/training/movement-policy.test.ts` — 13 tests: literal replay,
+  probability ranking, generalization-via-backoff, generation cap/END
+  termination, serialize/load round-trip + backend-mismatch guard, eval
+  accuracy (perfect on train / partial on held-out), and the replay→dataset
+  bridge end-to-end.
+
+**Test results:** `typecheck:src` ✅ (source stays clean). Build ✅ (tsdown, 5
+files). New tests ✅ **13/13** (consistently green in isolation and repeated
+runs).
+
+**⚠️ Blocker discovered (pre-existing, NOT caused by this change):** the full
+`npm test` suite is **flaky** — 2–4 tests fail non-deterministically in
+`background-tasks` / `operator-runtime` recovery (`SyntaxError: Expected ',' or
+'}' after property value in JSON`). I characterized it this run: it reproduces
+**even with `--no-file-parallelism`**, so it is an **intra-test torn-JSON race**
+(a concurrent reader parses a background-task state/store file mid-write), *not*
+cross-file parallelism. Confirmed present on the clean baseline (stash test).
+Left untouched to keep this run's diff focused; logged as a high-priority
+ROADMAP item with the narrowed diagnosis. Pushed to the designated feature
+branch `claude/peaceful-dirac-ti1vh6` (per git branch requirements), with the
+green feature isolated from the pre-existing flake.
+
+**New idea:** now that a model can *predict the next movement*, add a
+`MovementPolicyReplayEngine` that drives the existing replay/device-adapter
+surface from `model.generate(...)` under a **dry-run guard** — closing the loop
+from "recorded dataset" to "agent autonomously performing a new-but-related
+movement" entirely in simulation. Pair it with an ensemble backend
+(`FallbackMovementBackend`) that tries a higher-order model first and backs off
+to a lower-order one, so the pluggable interface immediately hosts >1 backend
+and proves the abstraction.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
