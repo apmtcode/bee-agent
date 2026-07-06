@@ -6,6 +6,63 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-06 (run 9) — Movement-model backend (pluggable) + shellQuote JSON-corruption fix
+
+**Audited:** Standing objective #2 (local-movement learning) — the training
+subsystem (`src/training/`). Found the runner only *emits launch scripts* for
+external tools (mlx/axolotl); there was no in-process, cloud-runnable learnable
+backend, so the "post-train a model to repeat movements" + "generalize to
+related movements" pieces (objective 2c/2d) were unexercisable without a real
+machine. This was the top movement-subsystem item on the roadmap.
+
+**Changed (additive):**
+- **`src/training/movement-model.ts` (new)** — the pluggable local-model seam:
+  - Tokenization (`tokenizeGesture`/`tokenizeAction`) mapping device gestures
+    (`tap/swipe/scroll/type/shortcut`) + trajectory actions → stable movement
+    tokens; `buildMovementDataset`/`datasetFromSequences` (schema + dataset).
+  - `MovementModelBackend` interface (`train`/`load`) + `TrainedMovementModel`
+    (`predictNext`/`generate`/`snapshot`) — the interchangeable seam a real
+    on-device small model plugs into.
+  - `MarkovMovementBackend` — a **fully deterministic** variable-order n-gram
+    backend with stupid-backoff: argmax rollout *reproduces* recorded movement
+    paths (2c), and backoff to shorter contexts *generalizes* to unseen but
+    related prefixes (2d). No randomness → reproducible cloud tests.
+  - `generateSyntheticMovementSequences` (seeded mulberry32, no `Math.random`)
+    to validate capture→dataset→train→replay round-trips with no real OS input.
+  - `evaluateMovementModel` — a generalization eval harness measuring top-1 /
+    top-K next-token accuracy + backoff rate on held-out sequences.
+  - Wired the public surface into `src/index.ts`.
+- **`src/harness/background-tasks.ts` (1-line bug fix)** — while running the
+  suite I hit **3 deterministic failures** (server/app/operator-runtime) that
+  fail on clean HEAD too. Root-caused: `shellQuote` escaped `'` as `"'"'"'`
+  (stray leading `"`) instead of the correct POSIX idiom `'"'"'`. Any task
+  command containing a single quote (e.g. `printf 'line-1\nline-2\n'`) injected
+  stray `"` into the generated `state.json`, producing **invalid JSON** that
+  broke background-task recovery (`SyntaxError … in JSON at position N`). The
+  sibling `src/training/runner.ts` already had the correct escape — confirming
+  the typo. Added `background-tasks.shellquote.test.ts` (4 cases) that runs the
+  generated launch-script prologue through real bash and asserts valid JSON;
+  verified it fails when the bug is reintroduced.
+
+**Test results:** `typecheck:src` ✅ (exit 0). Build ✅. New tests: movement-model
+**15/15**, shellquote **4/4**. Full suite **174→193 tests**; the 3 previously
+*deterministic* failures are now *flaky* (2–4/run) — the JSON-corruption cause is
+fixed, and what remains is a **separate pre-existing race**: these 3 tests spawn
+**real detached OS processes** whose async state writes race the tests' own
+assertions (env-dependent; they passed on run 8's machine). Not my feature's
+concern and not newly introduced.
+
+**New idea / next step:** De-flake the 3 spawning tests by injecting a **no-op
+spawn** via the existing `backgroundTaskSpawnProcess` seam on
+`StandaloneOperatorRuntime` (and the control-plane server's runtime), so unit
+tests never launch real processes. The tests already `writeState`/`writeOutput`
+manually, so the real spawn is pure interference. Queued in ROADMAP as the next
+high-value reliability fix. Second idea: a `MovementReplayEngine` that consumes
+a `TrainedMovementModel` + a seed context and drives the existing device/replay
+adapters — closing the loop from learned model → simulated re-execution.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

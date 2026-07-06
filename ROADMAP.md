@@ -62,13 +62,41 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      for a real on-device small model. **DONE run 9** — `src/training/movement-model.ts`:
+      `MovementModelBackend`/`TrainedMovementModel` interfaces + deterministic
+      `MarkovMovementBackend` (variable-order n-gram, stupid backoff). Reproduces
+      recorded paths (argmax rollout) and generalizes (backoff) to unseen prefixes.
+- [x] Synthetic event-stream generator to validate capture→dataset→replay
+      round-trips without real OS input. **DONE run 9** —
+      `generateSyntheticMovementSequences` (seeded mulberry32, byte-stable).
+- [x] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories. **DONE run 9** — `evaluateMovementModel`
+      (top-1 / top-K next-token accuracy + backoff rate on held-out sequences).
+- [ ] `MovementReplayEngine`: consume a `TrainedMovementModel` + seed context to
+      drive the existing device/replay adapters — close the loop from learned
+      model → simulated re-execution (validated against synthetic trajectories).
+- [ ] Real on-device backend behind `MovementModelBackend` (e.g. a small MLX/
+      llama.cpp model), reusing `runner.ts`'s launch-script mechanism, swappable
+      for `MarkovMovementBackend` with no call-site changes.
+- [ ] Persist/load `MovementModelSnapshot` to disk via a store (mirror
+      `job-store.ts`) so trained movement models survive across sessions.
+
+## Reliability / test health
+- [ ] **De-flake the 3 background-task tests** (server.test, app.test,
+      operator-runtime.test — the "background/monitor task" cases). They spawn
+      **real detached OS processes** whose async state writes race the tests'
+      own assertions, giving 2–4 flaky failures per full run (env-dependent).
+      Fix: inject a **no-op spawn** via the existing `backgroundTaskSpawnProcess`
+      seam on `StandaloneOperatorRuntime` (and the control-plane server runtime)
+      so unit tests never launch real processes — the tests already
+      `writeState`/`writeOutput` manually, so the real spawn is pure noise. This
+      is the last thing between the suite and a green gate. (Run 9 fixed the
+      *deterministic* half: a `shellQuote` escape typo that corrupted state.json.)
+- [ ] Consider making background-task state writes **atomic** (temp + `mv` /
+      `os.replace`) in `renderLaunchScript`/`renderStateWriterPython` as defense
+      in depth against torn reads once the tests no longer spawn real processes.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
