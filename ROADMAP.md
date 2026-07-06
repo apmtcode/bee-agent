@@ -62,13 +62,32 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      for a real on-device small model. — DONE run 9 (`src/training/movement-model.ts`:
+      `MovementModelBackend` seam + `NgramMovementBackend` Markov+backoff, train
+      + `rolloutMovementSequence` inference, end sentinel, JSON-serializable).
+- [~] Synthetic event-stream generator to validate capture→dataset→replay
+      round-trips without real OS input. — PARTIAL run 9: `buildMovementDataset`
+      round-trips synthetic replay manifests in tests; still want a first-class
+      generator producing full `TrajectorySpan`/`ReplayManifest` streams.
+- [x] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories. — DONE run 9 (`evaluateMovementModel`:
+      next-token top-1 accuracy; add a comparative baseline backend next).
+- [ ] Second reference movement backend (prototype/centroid over token
+      co-occurrence) to give the eval harness a comparative baseline and prove
+      the pluggable seam carries >1 model family.
+- [ ] Fold `evaluateMovementModel` into the reviewed-export/training-job flow so
+      each job ships a held-out fidelity score in its manifest.
+
+## Known regressions
+- [ ] **4 integration tests fail env/date-dependently** (`operator-runtime`,
+      `control-plane/server`, `cli/app`). Regressed since run 8's "174/174"
+      (same commit `3c7b7236`, different day). Root cause is a JSON-parse error
+      in a process-written training state file — almost certainly the runner's
+      generated launch script (`renderLaunchScript`) sed-substituting a date/PID
+      into JSON and producing malformed output. Reproduce, then make the state
+      writer robust (write via python `json.dumps`, not sed into a JSON string).
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

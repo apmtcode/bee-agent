@@ -6,6 +6,70 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-06 (run 9) — 🧠 Movement learning: pluggable local-model train + infer pipeline
+
+**Audited:** Standing objective #2(d) — "post-train a local model on that dataset
+to repeat the recorded movements, and generalize to new but related movements."
+Read the whole `src/training/` chain (`exporter` → `job-manifest` →
+`runner` → `execution-service`) and `src/capture/` (replay/trajectory schema,
+device/os adapters). Gap found: the runner only *emits shell scripts* invoking
+real on-device tooling (`mlx_lm.lora`, `axolotl`) — there was **no backend that
+actually trains a model or runs inference**, and nothing runnable in the
+cloud/CI. So objective #2(d) had a launch seam but no working model.
+
+**Changed (additive):** new `src/training/movement-model.ts` — the missing
+train+infer half of the movement subsystem, fully deterministic and
+dependency-free so it validates in the cloud with synthetic event streams:
+- **Dataset builder** `buildMovementDataset(replays, {tokenizer?, minLength?})` —
+  turns reviewed `ReplayManifest`s into per-`(session,trajectory)` token
+  sequences, ordered by timestamp. Pluggable `MovementTokenizer` (default: tool
+  + leading verb of the summary, e.g. `device:swiped`) trades repeat-fidelity
+  vs. generalization. Deterministic vocabulary + sequence ordering for
+  reproducible exports.
+- **Pluggable backend seam** `MovementModelBackend` (`train`/`predict`) — a real
+  on-device MLX/GGUF policy can implement the same shape and drop in unchanged.
+- **`NgramMovementBackend`** — deterministic variable-order Markov model with
+  stupid-backoff. Counts every context length `0..order`; prediction uses the
+  longest seen suffix and backs off toward the unigram, which is exactly what
+  lets it **repeat** familiar movements *and* **generalize** to unseen prefixes.
+  Ties break by count then lexicographically → byte-stable, JSON-serializable
+  model.
+- **End-of-sequence sentinel** (`MOVEMENT_END_TOKEN`) learned during training so
+  rollouts self-terminate instead of looping — a real design fix surfaced by the
+  first rollout test.
+- **Inference** `rolloutMovementSequence(backend, model, {seed?, maxLength?,
+  stopToken?})` — greedy generative replay; reproduces a recorded trajectory
+  when unambiguous, improvises a related one via back-off otherwise.
+- **Generalization eval harness** `evaluateMovementModel(...)` — next-token
+  top-1 accuracy on held-out sequences (checks off a roadmap item too).
+- Barrel exports wired into `src/index.ts`.
+
+**Test results:** new `movement-model.test.ts` — **15/15 pass** (dataset
+grouping/ordering/custom-tokenizer, exact-repeat rollout, back-off
+generalization to a held-out flow, deterministic tie-breaking, JSON round-trip,
+maxLength/stopToken bounds, eval accuracy). `typecheck:src` ✅ (exit 0). Build ✅.
+Full suite **185/189** — the **4 failures are PRE-EXISTING and unrelated** (they
+fail identically on the base commit `3c7b7236` with my changes stashed): they are
+env/date-dependent integration tests in `operator-runtime`/`server`/`app` that
+spawn real bash/sed/python and hit a JSON-parse error in a process-written state
+file. Not caused by, nor touched by, this run. My change is isolated and 100%
+green. Pushing to the designated feature branch.
+
+**New idea:** add a second reference backend — a **prototype/centroid
+"movement primitives" backend** that clusters tokens by co-occurrence and
+predicts by nearest-primitive — to give the eval harness a *comparative*
+baseline (two backends, same dataset, same eval) and prove the pluggable seam
+carries more than one model family. Longer term: fold `evaluateMovementModel`
+into the reviewed-export flow so every training job ships a held-out fidelity
+score in its manifest.
+
+**Pre-existing blocker logged:** the 4 integration-test failures above regressed
+since run 8's "174/174" (same commit, different day) — almost certainly a
+date/PID-substitution bug in the runner's generated launch script
+(`renderLaunchScript` sed into JSON). Filed in ROADMAP for a focused future run.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
