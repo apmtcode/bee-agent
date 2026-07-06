@@ -6,6 +6,74 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-06 (run 9) — 🧠 In-process movement-policy learning: train + infer + generalize + eval
+
+**Audited:** The local-movement learning subsystem (standing objective #2)
+end-to-end. `src/capture/` covers (a) capture and the event schema and (c) the
+dataset (reviewed export); `src/training/runner.ts` covers heavy fine-tuning —
+but *only* by emitting an Apple-Silicon MLX/axolotl **shell launch script**,
+which can only run on the user's real machine. **Gap:** there was no in-process,
+dependency-free way to actually *train a model on a movement dataset and infer /
+generalize the next movement* — so objectives 2(c) "post-train a model to repeat
+the recorded movements" and 2(d) "generalize to new but related movements" had
+zero cloud/CI-testable implementation. Closed that gap this run.
+
+**Changed (additive, two new modules + barrel exports):**
+- **`src/training/movement-policy.ts`** — the pluggable learning seam:
+  - `MovementPolicyBackend` interface (`train(dataset) → TrainedMovementPolicy`)
+    and a `TrainedMovementPolicy` (`predictNext`, `generate`, `serialize`).
+  - `MarkovMovementBackend` — a **deterministic** variable-order n-gram backend
+    (the default/mock). It stores transition counts at every context order 0..N,
+    so inference **backs off** from the longest known context to shorter ones —
+    that backoff is exactly what lets it generalize to a new-but-related movement
+    whose exact prefix was never recorded. Lexicographic tie-breaks ⇒ stable in
+    CI with no native deps.
+  - `buildMovementDataset(trajectories)` — tokenizes each trajectory's actions in
+    timestamp order (pluggable `MovementTokenizer`, default = tool name), pads
+    with `<start>`/`<end>`, and emits sliding-window supervised samples.
+  - `serialize()` / `deserializeMovementPolicy()` — persist a trained model to
+    JSON and reload it for offline inference (the load-and-infer seam).
+  - Backend registry (`createMovementPolicyBackend` / `registerMovementPolicyBackend`)
+    with a documented seam so a real on-device model can register under a new id
+    and satisfy the same contract.
+- **`src/training/movement-eval.ts`** — validation without real OS input:
+  - `generateSyntheticTrajectories(templates)` — deterministic (seeded mulberry32,
+    no `Math.random`) generator that emits related-but-varied trajectories from
+    workflow templates via small drop/repeat perturbations.
+  - `evaluateMovementPolicy(policy, heldOut)` — generalization eval harness:
+    next-token accuracy, top-k accuracy, and normalized-LCS sequence-completion
+    fidelity, per-trajectory and aggregate.
+- Wired all public types into `src/index.ts`.
+
+**Test results:** two new suites, **18/18 passing** — memorized-data rollout
+fidelity >0.9, held-out generalization top-k >0.6 with a train/held-out split on
+related synthetic workflows, serialize round-trip, deterministic tie-breaks,
+registry errors, empty-input guards. `npm run build` ✅. `npm run typecheck:src`
+✅ (all source still clean). Full suite **189/192**.
+
+**⚠️ Blocker discovered (pre-existing, NOT introduced this run):** 3 tests fail
+on today's tree — `operator-runtime.test.ts` (background-task recovery),
+`server.test.ts`, `app.test.ts`. Root: a `SyntaxError` reading a background-task
+**state JSON** (`readJsonFile` at `background-tasks.ts:234`, byte ~311). Verified
+pre-existing by `git stash`-ing this run's changes — the same tests still fail
+without them (and the isolated 3-file run showed 4 failures vs 3 in the full run,
+i.e. some ordering/flakiness). The last green run (2026-06-23) reported 174/174,
+so this regressed between then and now, independent of the movement work. Logged
+to ROADMAP as the next run's highest-priority fix. Because these failures leave
+the suite red, this run pushes to the designated feature branch
+`claude/peaceful-dirac-ltz3wt` (never `main`).
+
+**New idea:** add a **movement-policy RPC surface** so the trained policy is
+usable at runtime, not just in tests — `trajectories.trainPolicy` (build dataset
+from approved trajectories → train → persist `MovementPolicyModel`) and
+`trajectories.suggestNextMovement` (load model → `predictNext(context)`), letting
+the operator propose the next UI action mid-session and turning the recorded
+dataset into a live "autocomplete for movements." Pair it with a **confidence
+gate** (only surface suggestions above a `confidence`/`backoffOrder` threshold) so
+low-evidence backoff guesses aren't shown as if memorized.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

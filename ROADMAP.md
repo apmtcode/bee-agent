@@ -58,17 +58,48 @@ unchecked items are queued. Keep this richer than you found it each run.
 ## Local-movement learning subsystem
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
-(exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
-      objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
-      deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+(exporter, job store/manifest, runner, execution service,
+**movement-policy + movement-eval** as of run 9). Next increments:
+- [x] Inventory what `src/capture` + `src/training` already implement vs. the
+      objective's five pieces — DONE run 9 (see SELF_EVOLUTION): capture/schema/
+      dataset/replay existed; the missing piece was an in-process train+infer path
+      (the runner only emits an on-device shell script).
+- [x] Pluggable local-model backend interface with a deterministic mock backend
+      (so cloud/CI tests pass) and a documented seam for a real on-device model —
+      DONE run 9 (`MovementPolicyBackend` + `MarkovMovementBackend` +
+      `createMovementPolicyBackend`/`registerMovementPolicyBackend`).
+- [x] Synthetic event-stream generator to validate the capture→dataset→train→
+      infer loop without real OS input — DONE run 9
+      (`generateSyntheticTrajectories`, seeded/deterministic).
+- [x] Generalization eval harness: next-token / top-k accuracy + normalized-LCS
+      sequence fidelity on held-out related trajectories — DONE run 9
+      (`evaluateMovementPolicy`).
+- [ ] **Movement-policy RPC surface** (run 9 idea): `trajectories.trainPolicy`
+      (approved trajectories → dataset → train → persist `MovementPolicyModel`) and
+      `trajectories.suggestNextMovement` (load model → `predictNext(context)` with a
+      confidence/backoffOrder gate) so the operator can propose the next movement
+      live mid-session — "autocomplete for movements."
+- [ ] Persist trained `MovementPolicyModel`s via a `FileMovementPolicyStore`
+      (mirroring `FileTrajectoryStore`/`FileTrainingJobStore`) so a policy trained
+      on-device survives restarts and is loadable for inference.
+- [ ] Richer tokenizer: fold coarse observation context / UI-target buckets into
+      the movement token (not just tool name) so predictions condition on *where*
+      an action happened, improving generalization to new-but-related targets.
+- [ ] Wire the real MLX/axolotl runner (`runner.ts`) in behind the
+      `MovementPolicyBackend` interface as a non-mock backend id for on-device use.
+
+## Known blockers / regressions
+- [ ] **3 pre-existing test failures on the 2026-07-06 tree** (last green run was
+      2026-06-23 at 174/174). Root: `SyntaxError` reading a background-task **state
+      JSON** — `readJsonFile` at `background-tasks.ts:234` (byte ~311), reached via
+      `FileBackgroundTaskStore.reconcileTask` → `readState`. Fails in
+      `operator-runtime.test.ts` (task recovery), and cascades to `server.test.ts`
+      + `app.test.ts`. Verified pre-existing via `git stash` (fails without run 9's
+      changes). Isolated 3-file run showed 4 failures vs 3 in the full run ⇒ some
+      ordering/flakiness in state serialization. **Highest-priority fix next run:**
+      reproduce the exact malformed state payload, determine whether the launch
+      script's `sed`/`$$`/date substitution or a concurrent write corrupts it, and
+      restore a green suite.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
