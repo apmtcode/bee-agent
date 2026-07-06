@@ -6,6 +6,55 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-06 (run 9) — Movement inference engine + pluggable model backend (objective 2c/2d)
+
+**Audited:** The local-movement learning subsystem (`src/capture` + `src/training`)
+against standing objective #2's five pieces (capture → schema → dataset → replay
+→ train/infer). Found capture/schema/dataset/replay and a *training-plan
+generator* (`runner.ts` emits MLX/axolotl launch scripts) all present — but the
+**inference half was entirely missing**: nothing consumes a model to actually
+(c) *repeat* a recorded movement or (d) *generalize* to a new-but-related one.
+That is the roadmap's "pluggable local-model backend with a deterministic mock."
+
+**Changed (additive, new file `src/training/movement-model.ts`):**
+- `MovementModelBackend` — pluggable `fit`/`predict` interface. A real on-device
+  small model, a remote model, or the bundled mock all satisfy the same contract.
+- `NgramMovementBackend` — deterministic mock (no RNG, no OS, no fs). Learns, at
+  every order 0..K, the next-tool distribution given the trailing K tools, with
+  BOS-padding so full-order context exists from the first step. Uses stupid-
+  backoff (highest matching order wins) and weights each transition by Jaccard
+  overlap between the query goal's tokens and the demo's goal tokens — so an
+  identical goal reproduces a demo exactly, a *related* goal borrows movements
+  from the demos it most resembles (generalization), and an unrelated goal still
+  yields a plan via a small base weight. All tie-breaks lexical → reproducible.
+- `MovementInferenceEngine` — trains on `TrajectorySpan[]` (reviewer-redacted
+  actions preferred; approved-only by default) and rolls out a `MovementPlan`
+  greedily with an EOS stop signal + loop guard.
+- `evaluateReplayFidelity` — LCS-based replay/generalization eval harness
+  (knocks off the roadmap "generalization eval" item).
+- Exported all of the above from `src/index.ts`.
+
+**Test results:** new `src/training/movement-model.test.ts` — **11/11 pass**
+(repeat exactness, determinism across instances, loop guard, generalization to
+unseen related goals, base-weight fallback, LCS fidelity incl. end-to-end
+held-out-goal eval). `npm run build` ✅. `typecheck:src` ✅ (exit 0, source stays
+green). Full `vitest run`: my module + 39 files pass; **3 files
+(`app.test.ts`, `server.test.ts`, `operator-runtime.test.ts`) fail identically
+on the clean pre-change tree** (verified via `git stash`) and the failure count
+is non-deterministic (3↔4 across runs) — they are **pre-existing, time/PID-
+dependent flaky tests**, not a regression from this change. Pushed to the
+designated feature branch per the harness branch policy.
+
+**New idea:** an *interpolated* backend (Kneser-Ney style smoothing across
+orders instead of hard stupid-backoff) plus a `confidence`-gated "ask before
+acting" mode — when the top prediction's confidence is below a threshold the
+engine emits a `needs-confirmation` movement instead of executing, so a
+generalized plan surfaces its uncertain steps to the operator rather than
+blindly replaying them. Also worth: quarantine the 3 flaky test files behind a
+deterministic clock/PID injection so the suite can go green again.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

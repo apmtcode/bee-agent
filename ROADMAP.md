@@ -44,6 +44,11 @@ unchecked items are queued. Keep this richer than you found it each run.
       (excludes `**/*.test.ts`) + `typecheck:src` script; passes (exit 0). Next:
       have the engine run it as a per-run pre-push self-check.
 - [ ] Add a minimal CI workflow mirroring `verify` for human-opened PRs.
+- [ ] **Quarantine flaky tests.** `app.test.ts`, `server.test.ts`, and
+      `operator-runtime.test.ts` fail non-deterministically (3↔4 failures/run) on
+      time/PID-dependent assertions (`control=degraded`, `missing-process`,
+      `retryable failures 2/2`). Inject a deterministic clock + PID source so the
+      full suite can return to green (observed on the run-9 machine).
 
 ## Capability parity (audit reference agents → port gaps)
 - [ ] Build a "capability inventory" generator: enumerate bee-agent's exported
@@ -59,16 +64,28 @@ unchecked items are queued. Keep this richer than you found it each run.
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
 (exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
-      objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
-      deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
+- [x] Inventory what `src/capture` + `src/training` already implement vs. the
+      objective's five pieces (2026-07-06, run 9). Gap found: capture/schema/
+      dataset/replay + a training-*plan* generator existed, but the inference
+      half (repeat + generalize) was missing.
+- [x] Pluggable local-model backend interface with a deterministic mock backend
+      (2026-07-06, run 9) — `src/training/movement-model.ts`:
+      `MovementModelBackend` (pluggable `fit`/`predict`), `NgramMovementBackend`
+      (deterministic mock, cloud-safe), `MovementInferenceEngine` (train from
+      trajectories → roll out a plan). Covers objective 2c (repeat) + 2d
+      (generalize via goal-token-weighted backoff).
+- [x] Generalization eval harness (2026-07-06, run 9) — `evaluateReplayFidelity`
+      (LCS of tool sequences) with an end-to-end held-out-goal test.
 - [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      round-trips without real OS input (the *device-event* level; the movement
+      model above works at the trajectory-action level).
+- [ ] Interpolated backend (Kneser-Ney smoothing across orders) + a
+      confidence-gated "ask before acting" mode: below a confidence threshold the
+      engine emits a `needs-confirmation` step instead of replaying it, surfacing
+      uncertain generalized movements to the operator.
+- [ ] Wire the movement engine into the control-plane RPC surface + a CLI
+      command so an operator can `movement.repeat --goal "…"` against the trained
+      backend.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
