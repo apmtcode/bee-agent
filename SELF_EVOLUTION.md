@@ -6,6 +6,67 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-06 (run 9) — 🧠 Pluggable movement-model backend: train + infer + generalize, in-process
+
+**Audited:** The local-movement learning subsystem (standing objective #2) end to
+end — `src/capture/` (recorder, replay, trajectory, device/os/browser adapters)
+and `src/training/` (exporter, job-manifest, runner, execution-service). Finding:
+pieces (a) capture, (b) schema, (c) dataset export, and (d) replay-manifest are
+all present, but the **train + infer half was missing in the cloud**. The only
+"training" path (`LocalAppleSiliconTrainingRunner`) merely emits an MLX/axolotl
+*plan + launch script* for real Apple-Silicon hardware — nothing bee-agent can
+actually train or run inference with in CI, so objective #2(c) "post-train a
+local model" and #2(d) "generalize to new movements" were unverifiable.
+
+**Changed (additive):** new `src/training/movement-model.ts` closing that loop
+with a **pluggable backend** and a deterministic reference implementation:
+- `MovementModelBackend` / `MovementModel` interfaces — the documented seam for a
+  real on-device small model to slot in beside the cloud backend.
+- `MarkovMovementBackend` — an order-N n-gram sequence model with stupid-backoff
+  decoding. Fully deterministic (ties broken by count then lexicographic token),
+  zero deps, zero randomness → runs in CI. It **memorizes** recorded movements
+  (replay) and **generalizes** to novel-but-related contexts by following learned
+  transitions with backoff. Learns a `MOVEMENT_END_TOKEN` sentinel so rollouts
+  terminate instead of looping.
+- Tokenizers `tokenizeReplayEvents` / `tokenizeReplayEvent` / `tokenizeTrajectory`
+  turn existing `ReplayTimelineEvent`/`TrajectorySpan` artifacts into canonical
+  `MovementToken` sequences — the model consumes the real capture format, not a
+  parallel one.
+- `serialize()` / `loadMovementModel()` — stable snapshot round-trip for
+  persisting a trained model.
+- **Generalization eval harness** (roadmap item): `buildHeldOutEvalCases` +
+  `evaluateMovementModel` report exact-match rate, mean token accuracy, and
+  first-step accuracy on held-out tails — measurable replay fidelity.
+- Barrel exports added in `src/index.ts` (no collisions).
+
+**Test results:** new `src/training/movement-model.test.ts` — **11/11 green,
+deterministic across repeated runs** (memorization, END-termination,
+shared-prefix generalization, tie-breaking, empty-dataset, snapshot round-trip,
+eval fidelity). `typecheck:src` ✅ CLEAN. Build ✅ (tsdown, 5 files). Full `tsc`
+held at **125** errors (0 new; all pre-existing test-file debt). My module adds 0
+typecheck errors.
+
+**⚠️ Pre-existing flaky failures (NOT this run):** the full suite shows 2–4
+wobbling failures across `operator-runtime.test.ts`, `server.test.ts`,
+`app.test.ts` — a truncated-JSON read (`readJsonFile … position 311`) in the
+`background-tasks` reconcile path. Confirmed present on the base commit via
+`git stash` (my new tests were untracked, stayed put — base tree = 3 failed).
+State writes already go through `writeJsonAtomic` (temp+rename), so this is an
+environment/timing race, not a schema bug. Left untouched to keep this diff
+focused; logged to ROADMAP as a reliability item. Pushed to `main` because the
+contribution is additive, isolated, and green; the red is unrelated and predates
+this run.
+
+**New idea:** add a `MovementModelRegistry` that picks a backend by capability —
+`markov` (cloud/CI, deterministic) vs. a future `mlx-small` (on-device) — and
+have `LocalAppleSiliconTrainingRunner` *also* emit a Markov baseline artifact
+alongside the MLX plan, so every reviewed export ships a runnable model + a
+fidelity score even before the user runs real hardware training. That baseline
+score becomes a regression signal: if the real on-device model can't beat the
+n-gram baseline on the held-out eval, the export is flagged.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

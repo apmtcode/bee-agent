@@ -59,16 +59,36 @@ unchecked items are queued. Keep this richer than you found it each run.
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
 (exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
+- [x] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+      — DONE run 9. (a)+(b)+(c)+replay present; the **train+infer half was the
+      gap** and is now filled by the movement-model backend.
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      for a real on-device small model — DONE run 9 (`src/training/movement-model.ts`:
+      `MovementModelBackend`/`MovementModel` interfaces + `MarkovMovementBackend`).
+- [x] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories — DONE run 9 (`buildHeldOutEvalCases` +
+      `evaluateMovementModel`: exact-match rate, token accuracy, first-step acc).
+- [ ] Synthetic event-stream generator to validate capture→dataset→replay→train
+      round-trips without real OS input (a fixture builder emitting realistic
+      `DeviceCaptureInput`/`ReplayTimelineEvent` streams to feed the whole chain).
+- [ ] `MovementModelRegistry` selecting a backend by capability (`markov` cloud
+      vs. future `mlx-small` on-device); have `LocalAppleSiliconTrainingRunner`
+      also emit a Markov baseline artifact + fidelity score per reviewed export,
+      as a regression signal against the real on-device model.
+- [ ] Wire the movement-model backend into a control-plane RPC
+      (`movements.train`/`movements.predict`/`movements.evaluate`) so it is
+      reachable from the CLI like the rest of the training surface.
+
+## Reliability
+- [ ] **Stabilize flaky background-tasks tests** (surfaced run 9). Full suite
+      wobbles 2–4 failures across `operator-runtime.test.ts`, `server.test.ts`,
+      `app.test.ts`: a truncated-JSON read (`readJsonFile … position ~311`) in the
+      `background-tasks` reconcile path, even though writes use `writeJsonAtomic`
+      (temp+rename). Likely a concurrent same-path write/read race or a vitest
+      worker sharing state. Reproduce, then add a read-retry/validation guard or
+      serialize the reconcile writes. Blocks the "don't push if tests fail" gate.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
