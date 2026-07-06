@@ -62,13 +62,37 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
+      for a real on-device small model. **DONE run 9** — `MovementModelBackend`
+      interface + deterministic `NgramMovementBackend` (Markov + Katz backoff)
+      in `src/training/movement-model.ts`; closes the train→infer loop in CI.
 - [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      round-trips without real OS input. (Partial: run 9 added
+      `buildMovementDataset`/`buildTrajectoryMovementSequence` + hand-built
+      sequences in tests; still want a richer parameterized generator.)
+- [x] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories. **DONE run 9** —
+      `evaluateNextTokenAccuracy` (teacher-forced next-token accuracy; 100% on
+      train = reproduction, held-out = generalization).
+- [ ] `MovementModelRegistry` keyed by backend name so `training/job-store` can
+      persist which backend trained a job and reload the right `fromSerialized`.
+- [ ] `replay-fidelity` CLI command: train the n-gram model on reviewed exports
+      and print per-session reproduction accuracy — an offline dataset-quality
+      signal before kicking off a real mlx/axolotl on-device run.
+- [ ] Wire the n-gram backend into the training pipeline as a `dry-run` mode of
+      `LocalAppleSiliconTrainingRunner` (produce a serialized model + eval report
+      alongside the launch script) so every job has a cloud-verifiable baseline.
+
+## Test hardening (pre-existing, surfaced run 9)
+- [ ] Fix env/timing-dependent failures in `operator-runtime.test.ts`
+      (`getBackgroundTaskExecutionState` returns `undefined` — relies on spawned
+      shell-process/PID state that differs in the cloud sandbox),
+      `server.test.ts`, and `app.test.ts` (background/monitor/cron commands).
+      These fail on clean HEAD (verified via `git stash -u`) — NOT caused by the
+      movement-model work. Likely need an injectable clock/spawn seam so the
+      background-task lifecycle is deterministic in CI. Restore a full-suite
+      green gate.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

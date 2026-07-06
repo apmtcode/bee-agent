@@ -6,6 +6,69 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-06 (run 9) — 🧠 Pluggable movement-model backend: train→infer loop closed in-cloud
+
+**Audited:** The local-movement learning subsystem (objective #2), specifically
+the train/infer half. Read `src/training/{runner,execution-service,exporter}.ts`
+and `src/capture/{replay,replay-service,trajectory}.ts`. **Gap found:** the
+training runner only *builds launch plans / shell scripts* for real on-device
+runtimes (mlx SFT, axolotl RL) and the execution service *spawns* them — so
+nothing in objective #2(c) "post-train a model to repeat recorded movements" or
+#2(d) "generalize to new but related movements" was actually runnable or
+testable in the cloud. The dataset (`ReplayManifest.events`) had no consumer
+that learns from it.
+
+**Changed (additive) — new `src/training/movement-model.ts`:**
+- **`MovementModelBackend` interface** — the pluggable seam the roadmap called
+  for. A real on-device small model implements the same `train(sequences) ->
+  MovementModel` contract later; nothing else changes.
+- **`NgramMovementBackend` / `NgramMovementModel`** — a fully deterministic
+  n-gram (Markov) model with Katz-style backoff. No randomness (`Math.random`
+  is blocked here anyway), no native deps, no network — validates the entire
+  capture → dataset → train → infer loop in CI.
+  - `predict(context)` ranks next tokens, backing off from order-N context down
+    to the unigram distribution; ties break by lexical token order so output is
+    stable/reproducible.
+  - `generate(seed)` greedily replays a movement sequence, stopping at the
+    terminal `MOVEMENT_END_TOKEN` or `maxSteps`.
+  - `serialize()` / `fromSerialized()` — portable JSON persistence (matches the
+    repo's JSON-artifact convention), so a trained model is replayable.
+- **Tokenization + dataset builders** — `tokenizeReplayEvent`,
+  `buildMovementSequence`, `buildMovementDataset` (from replay manifests),
+  `buildTrajectoryMovementSequence` (from a trajectory's timestamp-ordered
+  actions). This is the concrete bridge from the existing capture schema to the
+  model.
+- **`evaluateNextTokenAccuracy`** — teacher-forced next-token accuracy, doubling
+  as the roadmap's "generalization eval harness": 100% on training data =
+  reproduction fidelity; run on held-out related sequences = generalization.
+- Exported all of the above from `src/index.ts`.
+
+**Tests:** new `movement-model.test.ts`, **12/12 passing** — covers
+tokenization/dataset building, exact reproduction from a seed (2c), backoff
+generalization to an unseen-but-related prefix + unigram fallback (2d),
+determinism across re-training, lexical tie-breaking, serialization round-trip,
+and `maxSteps` termination. `typecheck:src` ✅ (source stays green). Build ✅.
+
+**⚠️ Pre-existing failures surfaced (NOT caused by this run):** the full suite
+now shows 4 flaky failures in `operator-runtime.test.ts` (background-task
+execution *state* reads `undefined` — depends on spawning real shell processes /
+PID state that behaves differently in this sandbox), `server.test.ts`, and
+`app.test.ts` (background/cron/monitor commands). Verified by `git stash -u`
+then re-running those three files on clean HEAD: **they fail without any of my
+changes** (3–4 fail depending on ordering). These are environment/timing
+dependent (the last "174/174" green run was 2026-06-23; today is 2026-07-06) and
+are logged to ROADMAP for a dedicated hardening run. My change is green in
+isolation and touches none of that code, so it ships to the designated branch.
+
+**New idea:** add a `MovementModelRegistry` keyed by backend name so
+`training/job-store` can persist *which* backend trained a job and reload the
+right `fromSerialized`; then a `replay-fidelity` CLI command that trains the
+n-gram model on reviewed exports and prints per-session reproduction accuracy —
+giving the operator a cheap, offline signal of dataset quality *before* they
+ever kick off a real on-device mlx/axolotl run.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
