@@ -59,16 +59,36 @@ unchecked items are queued. Keep this richer than you found it each run.
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
 (exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
-      objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
-      deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
+- [x] Inventory what `src/capture` + `src/training` already implement vs. the
+      objective's five pieces (2026-07-06, run 9): capture/schema/dataset/replay
+      exist; train+infer was the gap (runner only emitted launch scripts).
+- [x] Pluggable local-model backend interface for the training runner with a
+      deterministic mock backend — DONE run 9. `src/training/movement-model.ts`:
+      `MovementModelBackend`/`TrainedMovementModel` seam + `MarkovMovementBackend`
+      (back-off n-gram; exact replay + goal-similarity generalization; snapshot
+      round-trip). 12 tests. Seam documented for a real on-device small model.
 - [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      round-trips without real OS input. (Partly covered: movement-model tests
+      synthesize gesture trajectories; a first-class generator producing raw
+      device/os/browser capture inputs is still open.)
+- [x] Generalization eval harness — DONE run 9 (`evaluateReplayFidelity`:
+      exact-match rate + positional token accuracy on held-out sequences). Next:
+      wire it into a training-job post-step so every job reports fidelity.
+- [ ] Feed the trained movement model into a real inference/replay executor so a
+      generated `MovementSequence` drives the existing replay engine end-to-end.
+
+## Reliability
+- [ ] **Atomic shell JSON writes (pre-existing suite red, root-caused run 9).**
+      `renderLaunchScript` in `src/harness/background-tasks.ts:757` (and the twin
+      in `src/training/runner.ts:188`) writes the state file via a non-atomic
+      `printf … > stateFile` redirection. When a task runs under a *real* `spawn`
+      (as `operator-runtime.test.ts` "starts, syncs, recovers…" does), the shell
+      write races the JS `writeState`/`readState`, and a mid-write read throws
+      `SyntaxError … in JSON at position N`. Deterministically fails that test;
+      `app.test.ts` (2) + `server.test.ts` (1) are the order-dependent siblings.
+      Fix: emit `> stateFile.tmp && mv stateFile.tmp stateFile` (POSIX-atomic),
+      ideally via a shared `renderAtomicJsonWrite()` shell snippet reused by both
+      launch-script renderers. Then the full `npm test` goes green again.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

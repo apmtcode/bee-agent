@@ -6,6 +6,60 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-06 (run 9) — Movement-model backend: learn → replay → generalize (objective 2c+2d)
+
+**Audited:** The local-movement learning subsystem (`src/capture` + `src/training`)
+against objective #2's five pieces. Capture (recorder, device/os/browser
+adapters), schema (`trajectory.ts`), dataset (`exporter.ts` → reviewed export),
+and replay (`replay.ts`) all exist. The **train/infer** piece was a stub: the
+runner only *generates* MLX/Axolotl launch scripts for the user's Apple-Silicon
+box — nothing actually learns from the dataset, and there was no pluggable
+backend nor any cloud-runnable model. That was the top queued roadmap item.
+
+**Changed (additive, new module — no existing code touched):**
+`src/training/movement-model.ts` + tests:
+- **Dataset representation** (`MovementToken`/`MovementSequence`/`MovementDataset`)
+  and two derivers — `deriveMovementDatasetFromTrajectories` (maps action
+  metadata → gesture/target/direction tokens) and `deriveMovementDatasetFromExport`
+  (reconstructs sequences from reviewed replay timelines).
+- **Pluggable backend seam** `MovementModelBackend` / `TrainedMovementModel` — a
+  real on-device small model (MLX/llama.cpp) can implement the same shape later.
+- **`MarkovMovementBackend`** — a deterministic, dependency-free mock that learns
+  a **variable-order back-off n-gram** over movement tokens. It gives (2c) *exact
+  replay* (a known goal reproduces the highest-reward recorded sequence) and (2d)
+  *generalization* (a novel-but-related goal seeds a start token by goal-keyword
+  Jaccard similarity, then greedily walks learned transitions with back-off —
+  composing a valid movement that converges on the learned terminal action). No
+  randomness, no clock → fully reproducible in cloud/CI. Snapshot
+  serialize/`restoreMovementModel` round-trips for persistence.
+- **`evaluateReplayFidelity`** — held-out generalization eval harness (exact-match
+  rate + positional token accuracy).
+
+**Test results:** new `movement-model.test.ts` **12/12 ✅** (derive, learn stats,
+exact replay, higher-reward tie-break, generalization to unseen "reply message",
+cold-start, predictNext, determinism, snapshot round-trip, fidelity harness).
+Build ✅. `typecheck:src` ✅ (all source still clean). Barrel exports added.
+
+**Pre-existing suite red (NOT from this run — reproduced on the base commit via
+`git stash`):** full `npm test` shows 3 failing tests that predate this change:
+`operator-runtime.test.ts` "starts, syncs, recovers…" is **deterministic** —
+root-caused to a real bug: the test uses a *real* `spawn` (no mock), so
+`startBackgroundTask` runs the shell `renderLaunchScript`, which writes the state
+file via a **non-atomic** `printf … > stateFile` redirection
+(`background-tasks.ts:757`), racing the JS `writeState`/`readState` → truncated
+JSON (`SyntaxError … position 311`). `app.test.ts` (2, order-dependent) and
+`server.test.ts` (1) round out the red. Fix queued in ROADMAP. Because these are
+independent and pre-existing, this run's green, isolated deliverable is pushed to
+the assigned feature branch.
+
+**New idea:** the shell state-writer bug is the same *class* as `writeJsonAtomic`
+(temp-file + atomic rename) but leaked into the launch-script template. Extract a
+single `renderAtomicJsonWrite(payloadVar, destPath)` shell snippet used by BOTH
+`background-tasks.ts` and `training/runner.ts` so every on-disk JSON write —
+JS or shell — is atomic by construction, killing this corruption class repo-wide.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
