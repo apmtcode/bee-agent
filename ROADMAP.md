@@ -4,6 +4,18 @@ Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
 ## Foundations / DX
+- [ ] **🔴 TOP PRIORITY — fix pre-existing flaky integration failure.** 3 tests
+      (`operator-runtime`, `cli/app`, `control-plane/server`) fail
+      non-deterministically (run 8 logged 174/174; run 9's base shows 3 red).
+      Diagnosed run 9: `operator-runtime.test.ts` starts a **real `tail -f`
+      subprocess** whose bash launch script writes single-line state JSON via
+      printf/sed, and `recoverBackgroundTasks` reads it **mid-write** → JSON
+      `SyntaxError` at ~col 312. Fix options: (a) have the recovery read path
+      (`readJsonFile`/`BackgroundTaskExecutionService.readState`) tolerate a
+      transient parse failure with a single short retry (careful: don't mask real
+      corruption); (b) make the test not spawn a live long-running process, or
+      settle it before recovery; (c) write subprocess state atomically like
+      `writeJsonAtomic` instead of printf/sed. Prefer (c)+(b).
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`
@@ -62,13 +74,27 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      for a real on-device small model. **DONE run 9** — `MovementModelBackend`
+      interface + `MarkovMovementBackend` (order-k Markov + stupid-backoff) in
+      `src/training/movement-model.ts`. Reproduces recorded sequences (obj c),
+      generalizes via backoff (obj d), deterministic, `toJSON`/`fromJSON`.
+- [x] Synthetic event-stream generator to validate capture→dataset→replay
+      round-trips without real OS input. **DONE run 9** —
+      `synthesizeMovementSequences` (deterministic, seed-offset disjoint splits).
+- [x] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories. **DONE run 9** — `evaluateMovementModel`
+      (top-1 accuracy, generalization/backoff rate, mean confidence).
+- [ ] Wire the movement model into the runner/execution-service: pick backend by
+      `RlTrainingConfig`/`SftTrainingConfig`, persist the trained model (`toJSON`)
+      as a job artifact, and expose train/infer over the control-plane RPC surface.
+- [ ] Replay-fidelity reward for the RL runner: reuse `evaluateMovementModel` as a
+      deterministic in-process reward so `reward-model: replay-manifest` has a
+      concrete implementation, not just an external hook.
+- [ ] Richer tokenization: keep an argument "slot" alongside the structural verb
+      token so generalization can be measured *with* and *without* literals, and so
+      a real backend can condition on both.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

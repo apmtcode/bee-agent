@@ -6,6 +6,70 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-06 (run 9) — Movement-model backend: local model that learns + generalizes movements
+
+**Audited:** The movement-learning subsystem (standing objective #2). Traced the
+full pipeline: capture (`recorder`, `os-observer`, `device-adapter`,
+`browser-adapter`) → `TrajectorySpan` → `buildReplayManifest` → reviewed export →
+`LocalAppleSiliconTrainingRunner`. **Key gap found:** the runner only *emits a
+bash launch script* for external MLX/Axolotl — there is no in-repo model that
+actually (c) learns to repeat recorded movements or (d) generalizes to new ones,
+and nothing in the train/infer path is exercisable in the cloud. This is exactly
+the "pluggable local-model backend + generalization eval" pair the roadmap
+queued.
+
+**Changed (additive, new files):**
+- **`src/training/movement-model.ts`** — a dependency-free, fully deterministic
+  train/infer layer behind a pluggable interface:
+  - `MovementModelBackend` interface (`train(dataset, {order}) → TrainedMovementModel`)
+    so the real on-device MLX backend can drop in later behind the same seam.
+  - `MarkovMovementBackend` / `MarkovMovementModel` — an order-k Markov model with
+    **stupid-backoff**. It genuinely learns transition frequencies, **reproduces**
+    a recorded sequence exactly via greedy `generate()` (objective c), and
+    **generalizes** to unseen prefixes by backing off to shorter matched suffixes
+    (objective d). Deterministic tie-breaking (count desc, then lexical) → identical
+    datasets always give identical models (reproducible cloud tests). `toJSON`/
+    `fromJSON` round-trip for persistence.
+  - Tokenizers (`tokenizeReplayEvent`, `tokenizeTrajectory`) that normalize events
+    to **structural** tokens (`action:device:tapped`), dropping literal args so
+    "tapped Submit"/"tapped Cancel" collapse to one family — the mechanism that
+    makes generalization possible. Dataset builders `datasetFromReplayManifests`
+    (actions-only by default) and `datasetFromTrajectories`.
+  - `evaluateMovementModel` — a **generalization eval harness** measuring top-1
+    next-movement accuracy, backoff/generalization rate, and mean confidence on
+    held-out sequences.
+  - `synthesizeMovementSequences` — a deterministic (no-RNG, seed-offset) synthetic
+    generator producing disjoint train/held-out splits so the whole
+    capture→dataset→train→eval loop is validated without real OS input.
+- **`src/index.ts`** — barrel-exported the new surface (values + types).
+- **`src/training/movement-model.test.ts`** — 18 tests: tokenization, dataset
+  builders, exact reproduction, determinism, tie-breaking, backoff generalization,
+  a synthetic train/held-out generalization eval (>0.6 accuracy on unseen tails),
+  serialization round-trip, and edge cases (empty model, maxSteps bound).
+
+**Test results:** `typecheck:src` ✅ (source stays fully green). Build ✅. New
+module **18/18** green in isolation. Full suite **192 tests, 189 pass**.
+
+**⚠️ Pre-existing flaky failure (NOT introduced by this run):** 3 integration
+tests fail (`operator-runtime`, `app`, `control-plane server`) — confirmed by
+`git stash` that they fail identically on the clean base (174→171 with the same 3
+red). Root cause diagnosed: `operator-runtime.test.ts` spawns a **real `tail -f`
+subprocess** whose bash launch script writes *single-line* state JSON via
+printf/sed; `recoverBackgroundTasks` then reads that file **mid-write** →
+`SyntaxError` at "line 1 col ~312". It is timing-dependent (run 8 logged a clean
+174/174), so it surfaces only when the read races the subprocess write. Left
+unfixed this run to avoid a hasty change to shared read/spawn code; queued as the
+**top-priority** roadmap item with the diagnosis.
+
+**New idea:** a **replay-fidelity reward** for the RL runner — reuse
+`evaluateMovementModel` as an in-process, deterministic reward signal (predict the
+held-out next movement; reward = confidence/accuracy) so the RL config's
+`reward-model: replay-manifest` has a concrete, testable implementation instead of
+only an external hook. This closes the loop between the recorded dataset and the
+policy objective entirely inside bee-agent.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
