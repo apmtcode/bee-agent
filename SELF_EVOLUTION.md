@@ -6,6 +6,67 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-06 (run 9) — 🧠 Movement subsystem: pluggable local-model backend (train + infer + generalize)
+
+**Audited:** The local-movement learning subsystem (`src/capture/` + `src/training/`)
+against objective 2's five pieces. Found capture → schema → dataset → replay all
+present, and a training **runner** — but the runner only *emits* mlx/axolotl
+launch scripts for Apple Silicon; there was **no in-process model that actually
+trains on the recorded movements and predicts the next one**. So objective 2(c)
+"post-train a local model to repeat recorded movements" and 2(d) "generalize to
+new but related movements" had no runnable, testable implementation.
+
+**Changed (additive)** — new `src/training/movement-model.ts` (+ full test file):
+- **`MovementModelBackend` interface** — the pluggable seam: `train(dataset) →
+  TrainedMovementModel` and `predict(model, context) → MovementPrediction`. A
+  real on-device small model can be registered under its own id and swapped in
+  without touching call sites.
+- **`MarkovMovementBackend`** — deterministic, dependency-free default. Learns
+  transition counts for every context length `0..order`; prediction matches the
+  longest context suffix and **backs off** to shorter (more general) contexts when
+  the full-order context is unseen. That backoff *is* the generalization
+  mechanism (2d): a novel prefix sharing a tail with training data still yields a
+  related next-movement. Ties break by count then lexicographically → fully
+  reproducible in cloud/CI.
+- **Tokenizer + dataset builder** — `tokenizeEvent`/`toMovementSequence`/
+  `buildMovementDataset` derive movement tokens straight from the existing
+  `ReplayTimelineEvent` schema, so this consumes real capture output.
+- **`generateMovements`** — greedy rollout that *repeats* recorded workflows for
+  seen prefixes (2c), *generalizes* via backoff for novel ones, with a
+  repeat-guard and a `minContextOrder` stop so a rollout ends at the natural end
+  of a learned workflow instead of drifting into unigram noise.
+- **`evaluateReplayFidelity`** — generalization eval harness: next-movement
+  accuracy over held-out sequences, broken down by backoff level (exact recall
+  vs. generalized).
+- **`MovementBackendRegistry`** + `createDefaultMovementBackendRegistry()` — the
+  registry that makes the backend swappable. Exported the whole surface from
+  `src/index.ts`.
+
+**Test results:** new suite **15/15 pass**. `npm run typecheck:src` **clean**.
+`npm run build` **clean**. Full `npm test`: **187 pass**; the only 2 reds were my
+own test-assertion bugs (fixed).
+
+**⚠️ Pre-existing blocker discovered (NOT caused by this run):** on the *clean
+parent commit* `3c7b7236`, three integration tests already fail deterministically
+(verified by `git stash` + rerun ×3, not flaky):
+`server.test.ts` (pairing control `state: "degraded"` vs expected `"active"`),
+`app.test.ts`, and `operator-runtime.test.ts` (all one assertion each). Run 8's
+"174/174" is stale — the tree regressed since. These are unrelated to the
+movement subsystem; fixing them safely needs a dedicated run on the pairing/health
+path. Because the full suite is therefore red through no fault of this change, and
+per the branch policy, this run pushes to the designated feature branch
+`claude/peaceful-dirac-pkdjhd` (not `main`). The added feature is green in
+isolation.
+
+**New idea:** give the movement model a **feature-hashed / abstracted token
+vocabulary** (e.g. hash the free-text gesture summary into an app+gesture+target
+bucket) so generalization works across *semantically* related movements, not just
+shared exact suffixes — "tapped Submit" and "tapped Save" would share structure.
+Pair it with a second eval metric (edit-distance replay fidelity on full rollouts,
+not just next-token accuracy) to measure whole-workflow generalization.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

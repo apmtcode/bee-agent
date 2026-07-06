@@ -4,6 +4,15 @@ Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
 ## Foundations / DX
+- [ ] **🔴 Fix 3 pre-existing deterministic integration-test failures** (found
+      run 9, present on clean parent `3c7b7236`, not flaky — verified via
+      `git stash` + rerun ×3). These block a green `main` push independent of any
+      new feature:
+  - `control-plane/server.test.ts`: pairing control resolves `state: "degraded"`
+    where the test expects `"active"` (health/heartbeat path).
+  - `cli/app.test.ts` + `orchestrator/operator-runtime.test.ts`: one assertion
+    each, likely the same pairing/health root cause cascading.
+  Fix on a dedicated run touching the pairing/health code, not the tests.
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`
@@ -62,13 +71,25 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
+      for a real on-device small model. (2026-07-06, run 9) —
+      `src/training/movement-model.ts`: `MovementModelBackend` interface +
+      deterministic `MarkovMovementBackend` (backoff n-gram) + swappable
+      `MovementBackendRegistry`. Trains on real `ReplayTimelineEvent`s, predicts
+      next movement, rolls out workflows (`generateMovements`). 15/15 tests.
 - [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      round-trips without real OS input. (Note: run 9's tests hand-build
+      manifests; a reusable generator with configurable branching/noise is still
+      queued and would strengthen the generalization evals.)
+- [~] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories. Run 9 added `evaluateReplayFidelity`
+      (next-movement accuracy + backoff-level breakdown). Still to add:
+      whole-rollout edit-distance fidelity, and feed it a synthetic generator.
+- [ ] Semantic/abstracted movement token vocabulary (feature-hash the free-text
+      gesture summary into app+gesture+target buckets) so generalization spans
+      *related* movements ("tapped Submit" ↔ "tapped Save"), not just shared exact
+      suffixes. Pluggable tokenizer seam on the backend.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
