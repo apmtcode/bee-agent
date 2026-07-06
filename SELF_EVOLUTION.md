@@ -6,6 +6,58 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-06 (run 9) — Fix launch-script JSON corruption (bad `shellQuote` + broken `sed` pid), harden bg-task tests
+
+**Audited:** The test suite, which had **3 failing tests** at baseline
+(server.test, app.test, operator-runtime.test) — the log's "174/174" was from an
+environment where child-process spawning silently no-op'd. This cloud env *can*
+spawn, so the background-task launch scripts actually run, exposing **two latent
+production bugs** plus a test-hermeticity gap.
+
+**Root causes found & fixed (real reliability bugs, not test bugs):**
+1. `shellQuote` in `src/harness/background-tasks.ts` escaped embedded single
+   quotes as `"'"'"'` (six chars, the leading `'` mistyped as `"`) instead of the
+   portable `'\''` idiom. It injected a **stray `"` for every single quote** in
+   the input, so any background-task command containing single quotes
+   (`printf 'x'`, `git commit -m '…'`, …) produced a **malformed `state.json`**
+   that crashed `readState` with a JSON `SyntaxError`. Fixed to `'\''` and
+   exported the function. (`src/training/runner.ts` had the *correct* 5-char
+   `'"'"'` idiom — left untouched.)
+2. The initial running-state line built JSON via
+   `printf '%s' <payload> | sed "s/\"$$\"/$$/g"`. Inside bash double quotes the
+   embedded `"$$"` **closed the quotes and `$$` expanded**, so the substitution
+   became `s/<pid>/<pid>/g` and never replaced the `"$$"` placeholder — leaving
+   `"pid":"$$"` (a *string*) in state. Downstream `isProcessRunning(state.pid)`
+   then mis-fired → spurious `missing-process` degradation. Fixed with two `-e`
+   expressions and a single-quoted pattern (`-e 's/"\$\$"/'"$$"'/g'`) so the pid
+   becomes numeric.
+
+**Hermeticity (test-only):** the background-task *bookkeeping* tests drive
+execution state explicitly via `writeState`; a real launch script writing
+`state.json` asynchronously **races** those writes (the degradation check at
+`server.ts:2174` reads the state *file*). Injected a no-op
+`backgroundTaskSpawnProcess` into the runtime (operator-runtime.test) and the 3
+server.test runtimes so no real script runs — deliberate degradation scenarios
+still work because they call `writeState` directly. app.test is left as-is (its
+`sleep 5` keeps the process genuinely alive within the test window; verified 5/5).
+
+**Added:** `src/harness/shell-quote.test.ts` — a bash round-trip property test
+(11 nasty inputs incl. single/double quotes, `$$`, backticks, unicode) asserting
+`printf '%s' <shellQuote(x)>` returns `x` verbatim, plus a direct escaping
+assertion. Guards the whole launch-script family against this bug class.
+
+**Test results:** **186/186** passing (was 3 failing), verified **deterministic**
+(full suite 2×, server.test 3×, app.test 5×). Build ✅. `typecheck:src` ✅. Full
+`tsc` **125** (unchanged — new test file is clean, no regression).
+
+**New idea:** the initial-state write is still fragile shell string-munging. The
+*completion* state is already written by a robust Python `json.dumps` helper —
+port that same helper to the **initial** running-state write in both
+`background-tasks.ts` and `training/runner.ts`, deleting the `printf | sed`
+pipeline entirely. `runner.ts` still carries the identical broken `sed` pid
+substitution (no test spawns it today) — fix it in the same pass and add a
+training-execution spawn test so it's covered.
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

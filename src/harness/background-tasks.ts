@@ -754,7 +754,7 @@ function renderLaunchScript(task: BackgroundTaskRecord): string {
     "set -euo pipefail",
     `mkdir -p $(dirname ${quotedStatePath}) $(dirname ${quotedOutputFile})`,
     "started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-    `printf '%s' ${quotedStatePayload} | sed "s/__OPENCLAW_STARTED_AT__/$started_at/g; s/\"\$\$\"/$$/g" > ${quotedStatePath}`,
+    `printf '%s' ${quotedStatePayload} | sed -e "s/__OPENCLAW_STARTED_AT__/$started_at/g" -e 's/"\\$\\$"/'"$$"'/g' > ${quotedStatePath}`,
     `printf '%s\n' "starting ${task.kind} ${task.id}" >> ${quotedOutputFile}`,
     `if cd ${quotedCwd} && bash -lc ${quotedCommand} >> ${quotedOutputFile} 2>&1; then`,
     "  completed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
@@ -793,6 +793,15 @@ function renderStateWriterPython(status: BackgroundTaskExecutionState["status"])
   ];
 }
 
-function shellQuote(value: string): string {
-  return `'${value.replaceAll(`'`, `"'"'"'`)}'`;
+/**
+ * Wrap a string in single quotes so bash treats it as a literal, escaping any
+ * embedded single quotes using the portable `'\''` idiom (close quote, escaped
+ * quote, reopen quote). The previous implementation emitted `"'"'"'` — which is
+ * `'\''` with the leading quote mistyped as a double quote — and injected a
+ * stray `"` for every single quote in the input, corrupting the JSON that the
+ * launch script writes for any command containing single quotes (e.g.
+ * `printf 'x'`). See shell-quote.test.ts.
+ */
+export function shellQuote(value: string): string {
+  return `'${value.replaceAll(`'`, `'\\''`)}'`;
 }

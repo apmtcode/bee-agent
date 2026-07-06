@@ -45,6 +45,21 @@ unchecked items are queued. Keep this richer than you found it each run.
       have the engine run it as a per-run pre-push self-check.
 - [ ] Add a minimal CI workflow mirroring `verify` for human-opened PRs.
 
+## Reliability
+- [x] **Fix launch-script `state.json` corruption** (2026-07-06, run 9). Two bugs:
+      `shellQuote` mis-escaped single quotes (stray `"` → invalid JSON); the
+      initial-state `sed "$$"` pid substitution was broken by bash quote nesting
+      (string pid → spurious `missing-process`). Added `shell-quote.test.ts`.
+- [ ] Replace the `printf '%s' <payload> | sed` initial-state write in
+      `background-tasks.ts` **and** `training/runner.ts` with the robust Python
+      `json.dumps` writer already used for completion state — removes the last of
+      the fragile shell JSON munging. `runner.ts` still has the identical broken
+      `sed "$$"` pid substitution (untested); fix + add a training-execution spawn
+      test in the same pass.
+- [ ] Audit remaining tests that spawn real child processes (app.test's
+      `sleep 5` remote tasks) and make them hermetic via an injected spawn so the
+      suite is deterministic regardless of whether a shell is present.
+
 ## Capability parity (audit reference agents → port gaps)
 - [ ] Build a "capability inventory" generator: enumerate bee-agent's exported
       RPC/tool surface (`src/index.ts`) and diff it against `openclaw`,
