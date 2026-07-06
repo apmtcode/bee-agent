@@ -423,6 +423,31 @@ export type {
   SftTrainingConfig,
 } from "./training/job-manifest.js";
 export {
+  buildMovementDataset,
+} from "./training/movement-dataset.js";
+export type {
+  BuildMovementDatasetOptions,
+  MovementContext,
+  MovementDataset,
+  MovementExample,
+  MovementStep,
+} from "./training/movement-dataset.js";
+export {
+  DeterministicSequenceModelBackend,
+  MovementModelTrainer,
+  MovementPolicy,
+  MOVEMENT_SLOT_FIELDS,
+} from "./training/movement-model.js";
+export type {
+  MovementModelBackend,
+  MovementPrediction,
+  MovementPredictionMode,
+  MovementSlot,
+  MovementSlotField,
+  MovementTrainingConfig,
+  SerializedMovementModel,
+} from "./training/movement-model.js";
+export {
   FileTrainingJobStore,
 } from "./training/job-store.js";
 export type {

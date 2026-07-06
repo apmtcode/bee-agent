@@ -6,6 +6,64 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-06 (run 9) — Movement subsystem: in-process train+infer model (repeat + generalize)
+
+**Audited:** Standing objective #2 (local-movement learning) vs. the training
+code. Runs 2–8 all paid down typecheck debt; meanwhile the *model* half of the
+movement subsystem was never built. `src/training/runner.ts` only renders an
+*external* launch script (mlx/axolotl) — there was **no in-process model that
+learns from the recorded dataset and does inference**, so objective #2 items (c)
+"repeat the recorded movements" and (d) "generalize to new but related
+movements" were entirely unimplemented. The roadmap explicitly queued a
+"pluggable local-model backend interface with a deterministic mock backend."
+
+**Changed (additive — 3 new source modules + 2 test files):**
+- `src/training/movement-dataset.ts`: a JSON-serializable, backend-agnostic
+  **`MovementDataset`** schema (`context -> ordered steps` examples) and
+  `buildMovementDataset(trajectories)` that derives it from recorded
+  `TrajectorySpan`s. Honours the reviewed-export gate (reviewedOnly default) and
+  reads redacted review data so training never exceeds what a human approved.
+- `src/training/movement-model.ts`: the **pluggable `MovementModelBackend`
+  interface** (`train(dataset) -> SerializedMovementModel`, `predict(model,
+  query) -> MovementPrediction`) — the documented seam for a real on-device small
+  model — plus a bundled **`DeterministicSequenceModelBackend`**. Training indexes
+  examples and *induces variable slots*: within a group sharing app+platform+
+  gesture-shape, any step field that varies across examples becomes a slot.
+  Inference finds the nearest recorded movement (weighted-Jaccard context
+  similarity, hard-gated on app/platform) and either **repeats** it verbatim
+  (exact match, confidence 1) or **generalizes** — replaying the steps with
+  induced slots filled from `query.slots` (a target/value the model has never
+  seen), leaving never-varied fields untouched. Below the generalize threshold →
+  `mode: "unknown"`. Ships `MovementModelTrainer` + a serializable
+  `MovementPolicy` handle (`.infer()`, `fromSerialized()`).
+- `src/training/movement-test-utils.ts`: a **synthetic device-event generator**
+  (`syntheticDeviceTrajectory`) shaped exactly like `DeviceCaptureAdapter` output,
+  so capture→dataset→train→infer round-trips run deterministically with no OS.
+- Barrel exports added to `src/index.ts`.
+
+**Test results:** 2 new test files, **10/10 passing** (repeat, slot-induction +
+generalization to an unseen recipient, no-substitution of never-varied fields,
+unknown on incompatible app, unknown below threshold, JSON round-trip identity).
+Build ✅. `typecheck:src` ✅ (source stays clean). Full suite: **181/184**.
+
+**Pre-existing blocker (NOT from this run):** 3 tests fail —
+`operator-runtime.test.ts` (recoverBackgroundTasks), `server.test.ts`,
+`app.test.ts` (background/monitor). Root cause: they spawn real bash+sed+date
+launch scripts and re-parse the state JSON those scripts write; in this sandbox
+the substitution yields malformed JSON ("Expected ',' or '}' … position 311").
+Verified pre-existing: the failure reproduces with my barrel edit reverted, and
+my new files live in `src/training/` and are not imported by those modules. It is
+a shell-portability issue in already-committed launch-script generation, unrelated
+to this additive change. Logged to ROADMAP as its own item.
+
+**New idea:** a *generalization eval harness* — hold out one recorded target per
+shape group, train on the rest, and assert the model reconstructs the held-out
+movement when given only the query slot. Turns "does it generalize?" into a
+measured fidelity score per run instead of a hand-written assertion, and gives the
+pluggable backend a scoreboard a real on-device model can be graded against.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

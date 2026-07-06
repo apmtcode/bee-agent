@@ -62,13 +62,28 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      for a real on-device small model. **DONE run 9** —
+      `src/training/movement-model.ts` (`MovementModelBackend` interface +
+      `DeterministicSequenceModelBackend` with data-induced slot generalization +
+      `MovementModelTrainer`/`MovementPolicy`), fed by
+      `src/training/movement-dataset.ts`. Implements objective #2 (c) repeat + (d)
+      generalize, in-process, no OS.
+- [x] Synthetic event-stream generator to validate capture→dataset→replay
+      round-trips without real OS input. **DONE run 9** —
+      `src/training/movement-test-utils.ts` `syntheticDeviceTrajectory()` emits
+      `DeviceCaptureAdapter`-shaped spans; used by the movement tests.
+- [ ] Generalization eval harness: hold out one recorded target per shape group,
+      train on the rest, and measure replay fidelity when the held-out movement is
+      requested via query slots. Produces a per-run score the pluggable backend can
+      be graded against (foundation now exists in `movement-model.ts`).
+- [ ] Wire the movement model into the control-plane RPC surface (`trajectories.*`
+      family) + a CLI command so an operator can train a policy from reviewed
+      trajectories and dry-run inference locally.
+- [ ] Real on-device backend behind `MovementModelBackend` (e.g. a small MLX/gguf
+      policy) — the deterministic backend is the reference/mock; document the seam
+      and a conformance test both backends must pass.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
@@ -80,6 +95,14 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Barrel-collision lint: scan `src/index.ts` re-exports for names exported
       from more than one module and flag them, so duplicate-identifier debt is
       caught at authoring time instead of accumulating silently.
+- [ ] **Launch-script portability bug (blocks 3 tests in this sandbox).**
+      `operator-runtime.test.ts` (recoverBackgroundTasks), `server.test.ts`, and
+      `app.test.ts` (background/monitor) spawn real bash+sed+date launch scripts
+      and re-parse the state JSON they write; the substitution yields malformed
+      JSON here ("Expected ',' or '}' … position 311"). Make state-file writing
+      robust (write JSON from Node/python rather than sed-substituting a template
+      string, or quote-escape correctly) so recovery is shell/date-independent.
+      Pre-existing (surfaced run 9); not caused by the movement-model work.
 - [ ] Per-module typecheck ratchet: record each module's current `tsc` error
       count to a baseline file and fail if a module regresses above it. Lets the
       engine pay debt down module-by-module without one green-gate blocking
