@@ -6,6 +6,61 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-06 (run 9) — Pluggable movement-model backend + Markov reference + generalisation eval (objective #2 c/d)
+
+**Audited:** The local-movement learning subsystem (`src/capture/` + `src/training/`)
+against standing objective #2. Found the pipeline covered capture → schema →
+dataset → replay (parts a/b) and produced an *on-device training plan*
+(`runner.ts` emits an MLX/axolotl launch script), but had **no backend that
+actually trains or infers** — so objective #2's parts (c) "post-train a local
+model to repeat movements" and (d) "generalize to new but related movements"
+were entirely unvalidated in the cloud. This was the top queued item under the
+movement subsystem in ROADMAP.
+
+**Changed (additive, `src/training/model-backend.ts` + test):**
+- Defined the `MovementModelBackend` interface (`train` / `predictNext` /
+  `generate`) and JSON-serialisable `TrainedMovementModel`, `MovementDataset`,
+  `MovementSequence`, `MovementPrediction` types — the documented seam where a
+  real on-device small model drops in.
+- Implemented `MarkovMovementBackend`, a deterministic, dependency-free
+  reference backend: a variable-order Markov model with stupid-backoff. It
+  memorises recorded movement sequences (part c — `generate` reproduces a
+  recording exactly via argmax) **and generalises** (part d — an unseen context
+  backs off to the longest matching suffix, down to the unconditional
+  distribution, so new-but-related prefixes still predict sensible next moves).
+- Added `buildMovementDataset()` + `tokenizeReplayEvent()` to turn replay
+  manifests (in-memory or exported) into tokenised sequences (actions by
+  default; kinds filter configurable), closing capture→dataset→train→infer.
+- Added `evaluateReplayFidelity()` — a generalisation eval harness scoring
+  top-1 next-movement accuracy on held-out sequences (ROADMAP eval item).
+- Exported all of the above from `src/index.ts`.
+
+**Test results:** new `model-backend.test.ts` — **12/12 passing** (tokenisation,
+dataset build, memorise-and-repeat, backoff generalisation, unconditional
+fallback, empty-model safety, fidelity eval incl. held-out related sequence).
+`npm run build` ✅. `npm run typecheck:src` ✅ (source stays clean). Full
+`npm test` = **183 passed / 3 failed** — the 3 failures are **pre-existing and
+unrelated** (confirmed: they fail identically on clean `HEAD` via `git stash`).
+
+**Pre-existing blocker found (logged to ROADMAP):** `app.test.ts`,
+`server.test.ts`, and `operator-runtime.test.ts` each have a test that fails
+because `FileBackgroundTaskStore.startBackgroundTask()` → `launch()` **spawns a
+real child process** (`spawn(launchScriptPath)` at `background-tasks.ts:173`)
+whose embedded state-writer races the test's own `writeState()` on the same
+state file → `SyntaxError: … after property value in JSON`. The fix seam
+already exists (the constructor takes an injectable `spawnProcess`, line 158) —
+tests should pass a mock instead of spawning `tail -f`. Not touched this run to
+keep the diff focused; it is not caused by this change.
+
+**New idea:** now that a backend can score fidelity, add a **capability
+regression gate for the movement subsystem** — a fixed synthetic corpus +
+`evaluateReplayFidelity` threshold asserted in CI, so any future backend (incl.
+the real on-device one) is held to a measurable generalisation bar rather than
+just "it runs". Second idea: a `NgramFrequency` vs `MarkovBackoff` A/B in the
+eval harness to demonstrate the pluggability of the interface end-to-end.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

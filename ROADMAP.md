@@ -62,13 +62,39 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
+      for a real on-device small model. **DONE run 9** —
+      `src/training/model-backend.ts`: `MovementModelBackend` interface +
+      `MarkovMovementBackend` (variable-order Markov w/ stupid-backoff). Trains &
+      infers in-process; generalises via backoff (objective #2 c/d). 12 tests.
 - [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      round-trips without real OS input. (Partly served by run 9's
+      `buildMovementDataset` + hand-built sequences in tests; still want a
+      parameterised generator that emits `ReplayTimelineEvent[]` with realistic
+      timing/branching for larger corpora.)
+- [x] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories. **DONE run 9** — `evaluateReplayFidelity()`
+      scores top-1 next-movement accuracy on held-out sequences.
+- [ ] **Movement-subsystem capability regression gate:** a fixed synthetic
+      corpus + `evaluateReplayFidelity` threshold asserted in CI, so any future
+      backend (incl. the real on-device model) must clear a measurable
+      generalisation bar, not just "it runs".
+- [ ] Wire `MarkovMovementBackend` into the training runner / execution service
+      as the default cloud/CI backend, so `LocalAppleSiliconTrainingRunner`'s
+      real MLX/axolotl plan and the in-process reference backend sit behind one
+      selectable `MovementModelBackend` seam.
+
+## Known blockers (pre-existing, unrelated to current work)
+- [ ] **Real-process race in background-task tests** (found run 9). Three tests
+      — `cli/app.test.ts`, `control-plane/server.test.ts`,
+      `orchestrator/operator-runtime.test.ts` — fail deterministically because
+      `FileBackgroundTaskStore.startBackgroundTask()` → `launch()` spawns a real
+      child process (`spawn(launchScriptPath)`, `background-tasks.ts:173`) whose
+      state-writer races the test's own `writeState()` → JSON parse error. Fix:
+      inject a mock via the already-existing `spawnProcess` constructor seam
+      (`background-tasks.ts:158`) in these tests instead of spawning `tail -f`.
+      Blocks a clean full-suite green gate.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
