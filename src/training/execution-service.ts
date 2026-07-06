@@ -83,10 +83,20 @@ export class LocalTrainingExecutionService {
       return undefined;
     }
 
-    return await readJsonFile<TrainingExecutionState | undefined>(
-      path.join(this.rootDir, job.execution.stateFile),
-      undefined,
-    );
+    try {
+      return await readJsonFile<TrainingExecutionState | undefined>(
+        path.join(this.rootDir, job.execution.stateFile),
+        undefined,
+      );
+    } catch (error) {
+      if (error instanceof SyntaxError) {
+        // A crashed or still-writing training process can leave a torn or
+        // partially-written state file. Treat an unparseable state the same as
+        // a missing one so status reads degrade gracefully instead of throwing.
+        return undefined;
+      }
+      throw error;
+    }
   }
 
   async readLog(

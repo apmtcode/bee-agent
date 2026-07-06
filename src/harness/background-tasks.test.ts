@@ -370,4 +370,48 @@ describe("BackgroundTaskExecutionService", () => {
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
   });
+
+  it("tolerates a torn or corrupt state file instead of throwing", async () => {
+    const rootDir = await makeTempDir();
+    const filePath = path.join(rootDir, "background-tasks.json");
+    // Process already finished; missing state must reconcile to "unchanged".
+    const store = new FileBackgroundTaskStore(filePath, () => ({ pid: 4242, unref() {} }), () => false);
+    const task = await store.start({
+      sessionId: "sess-corrupt",
+      title: "Emit lines",
+      command: 'printf "line-1\\nline-2\\n"',
+      cwd: rootDir,
+    });
+    await store.executionService.writeState(task, {
+      version: 1,
+      taskId: task.id,
+      kind: task.kind,
+      status: "completed",
+      pid: 4242,
+      startedAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      completedAt: "2026-01-01T00:00:00.000Z",
+      exitCode: 0,
+      outputFile: task.execution.outputFile,
+      cwd: task.cwd,
+      command: task.command,
+    });
+    const completed = await store.sync(task.id);
+    expect(completed?.status).toBe("completed");
+
+    // Simulate a half-written / quote-corrupted initial state landing on disk
+    // (the shell writer's failure mode) while the task record is still tracked.
+    const statePath = path.join(rootDir, task.execution.stateFile);
+    await fs.writeFile(statePath, '{"version":1,"command":"printf "line-1\\n"', "utf8");
+
+    // Reading the corrupt state must degrade to "no state", not throw.
+    await expect(store.executionService.readState(task)).resolves.toBeUndefined();
+    // ...and recovery must reconcile the already-completed task without throwing.
+    const recovered = await store.recoverBySession("sess-corrupt");
+    expect(recovered).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ task: expect.objectContaining({ id: task.id, status: "completed" }), changed: false }),
+      ]),
+    );
+  });
 });

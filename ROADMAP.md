@@ -62,13 +62,42 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      for a real on-device small model. **DONE run 9** — `src/training/movement-model.ts`:
+      `MovementModelBackend` + `MovementModelRegistry` + a deterministic
+      seeded-sampling `NGramMovementBackend`; JSON-serialized model artifact.
+- [x] Synthetic event-stream generator to validate capture→dataset→replay
+      round-trips without real OS input. **DONE run 9** —
+      `generateSyntheticMovementDataset` (seeded, related workflows w/ noise).
+- [x] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories. **DONE run 9** — `evaluateMovementModel`
+      (top-1/top-K next-movement accuracy; test asserts held-out beats chance).
+- [ ] Behavior-cloning adapter: map `MovementModelState.generate()` tokens back
+      through the capture tokenizer into concrete `DeviceCaptureInput` gestures so
+      a trained model can *drive* the replay engine (schema→train→**act**). Add a
+      per-sequence "novelty score" (fraction of n-grams unseen verbatim in
+      training) to quantify generalization vs. memorization.
+- [ ] Wire a real on-device backend (MLX/GGUF small policy) behind
+      `MovementModelBackend`; keep `NGramMovementBackend` as the CI/mock default.
+
+## Reliability / test hygiene
+- [x] Fix the background-task launch-script `sed` pid substitution
+      (`s/"$$"/$$/g` → `s/\"\$\$\"/$$/g`) so `pid:"$$"` is replaced with the real
+      PID; make initial-state writes atomic; make `readState` tolerant of
+      torn/corrupt state files. **DONE run 9.**
+- [ ] `server.test.ts` "handles session … orchestration methods" is
+      **pre-existing failing** (date/timing-dependent): it starts a real `sleep 5`
+      background task but mocks `isProcessRunning: () => false`, so once the state
+      file lands `deriveRemoteDiagnostics` correctly flags `missing-process` and
+      control degrades (expected `active`/`mixed`). Fix the *test* (stub the spawn
+      **and** have `isProcessRunning` report the active task alive, or don't let
+      inventory read a mid-flight running task), not the product logic. Scoped,
+      remote-control-subsystem work — do it deliberately in its own run.
+- [ ] Audit the remaining reference-agent launch scripts (`src/training/runner.ts`
+      shares the same sed/atomic pattern) and apply the same atomic-write +
+      escaping hardening; add a unit test that runs the generated bash and asserts
+      the emitted state JSON parses with an integer pid.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

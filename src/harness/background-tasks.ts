@@ -231,10 +231,20 @@ export class BackgroundTaskExecutionService {
   }
 
   async readState(task: BackgroundTaskRecord): Promise<BackgroundTaskExecutionState | undefined> {
-    return await readJsonFile<BackgroundTaskExecutionState | undefined>(
-      path.join(this.rootDir, task.execution.stateFile),
-      undefined,
-    );
+    try {
+      return await readJsonFile<BackgroundTaskExecutionState | undefined>(
+        path.join(this.rootDir, task.execution.stateFile),
+        undefined,
+      );
+    } catch (error) {
+      if (error instanceof SyntaxError) {
+        // A crashed or still-writing background process can leave a torn or
+        // partially-written state file. Treat an unparseable state the same as
+        // a missing one so recovery reconciles instead of throwing.
+        return undefined;
+      }
+      throw error;
+    }
   }
 
   async writeOutput(task: BackgroundTaskRecord, content: string): Promise<void> {
@@ -754,7 +764,9 @@ function renderLaunchScript(task: BackgroundTaskRecord): string {
     "set -euo pipefail",
     `mkdir -p $(dirname ${quotedStatePath}) $(dirname ${quotedOutputFile})`,
     "started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-    `printf '%s' ${quotedStatePayload} | sed "s/__OPENCLAW_STARTED_AT__/$started_at/g; s/\"\$\$\"/$$/g" > ${quotedStatePath}`,
+    // Write the initial state atomically (temp file + rename) so a concurrent
+    // reader/recovery never observes a torn, half-written state file.
+    `printf '%s' ${quotedStatePayload} | sed "s/__OPENCLAW_STARTED_AT__/$started_at/g; s/\\"\\$\\$\\"/$$/g" > ${quotedStatePath}.tmp && mv ${quotedStatePath}.tmp ${quotedStatePath}`,
     `printf '%s\n' "starting ${task.kind} ${task.id}" >> ${quotedOutputFile}`,
     `if cd ${quotedCwd} && bash -lc ${quotedCommand} >> ${quotedOutputFile} 2>&1; then`,
     "  completed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
@@ -776,20 +788,29 @@ function renderLaunchScript(task: BackgroundTaskRecord): string {
 function renderStateWriterPython(status: BackgroundTaskExecutionState["status"]): string[] {
   return [
     "import json",
+    "import os",
     "import pathlib",
     "import sys",
     "state_path = pathlib.Path(sys.argv[1])",
     "pid = int(sys.argv[2])",
     "timestamp = sys.argv[3]",
     "exit_code = int(sys.argv[4])",
-    "state = json.loads(state_path.read_text())",
+    // Tolerate a torn/corrupt initial state instead of crashing the writer,
+    // otherwise a completed task could be stranded in 'running' forever.
+    "try:",
+    "    state = json.loads(state_path.read_text())",
+    "except Exception:",
+    "    state = {}",
     `state['status'] = '${status}'`,
     "state['pid'] = pid",
     "state['updatedAt'] = timestamp",
     "state['completedAt'] = timestamp",
     "state['exitCode'] = exit_code",
     `state['error'] = None if '${status}' == 'completed' else f'background task exited non-zero ({exit_code})'`,
-    "state_path.write_text(json.dumps(state, indent=2) + '\\n')",
+    // Atomic write: temp file + rename, so readers never see a partial state.
+    "tmp_path = state_path.with_name(state_path.name + '.tmp')",
+    "tmp_path.write_text(json.dumps(state, indent=2) + '\\n')",
+    "os.replace(tmp_path, state_path)",
   ];
 }
 

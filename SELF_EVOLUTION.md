@@ -6,6 +6,75 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-06 (run 9) — 🧠 Pluggable movement-model backend (train + generalize) + real launch-script bug fixed
+
+**Audited:** Standing objective #2 (local-movement learning) and the training
+subsystem. `src/training/` produced *launch scripts* for external tools
+(mlx/axolotl) but had **no in-process model** that could actually learn from
+recorded movements and reproduce/generalize them — objective #2(c)/(d) and the
+top movement roadmap item were unmet. Also ran the suite on a fresh checkout and
+found **pre-existing** failures triggered by the environment date/timing (run 8's
+"174/174" no longer holds on 2026-07-06).
+
+**Changed (additive):**
+- **`src/training/movement-model.ts` (new):** a pluggable local-model backend for
+  the movement subsystem — the seam objective #2 asks for.
+  - `MovementModelBackend` interface (`train`/`predictNext`/`generate`) +
+    `MovementModelRegistry` so a real on-device small model can drop in.
+  - `NGramMovementBackend`: a deterministic n-gram (Markov) sequence model with
+    backoff and **seeded** temperature sampling (mulberry32 — no `Math.random`,
+    reproducible in CI). It **reproduces** recorded workflows (greedy argmax) and
+    **generalizes** (composes learned transitions into new-but-grounded
+    sequences).
+  - `tokenizeMovement` + dataset builders from trajectories / replay manifests
+    (bridges the existing capture schema → a learnable token stream).
+  - `evaluateMovementModel` (top-1/top-K next-movement accuracy = the
+    generalization eval harness) and `generateSyntheticMovementDataset` (seeded
+    synthetic streams so the whole capture→train→generate→eval loop validates
+    with **no real OS input**, as required in the cloud).
+  - `save/loadMovementModel` — the model artifact is plain JSON, loadable on the
+    local device. Exported the whole surface from `src/index.ts`.
+- **Real production bug fixed — `src/harness/background-tasks.ts` launch script:**
+  the initial-state writer used `sed "…; s/\"\$\$\"/$$/g"` built in a JS template
+  literal; `\"`/`\$` **collapsed** so the generated bash was `s/"$$"/$$/g` — the
+  unescaped quotes broke the sed double-quoted script and `pid:"$$"` was **never
+  substituted**. Result: state files carried `pid:"$$"` (a string), so
+  `isProcessRunning` failed and healthy background tasks were misclassified
+  **missing-process**, degrading remote/platform control. Fixed the escaping
+  (`\\"\\$\\$\\"` → literal `s/\"\$\$\"/$$/g`), made the initial state write
+  **atomic** (`> tmp && mv`) so readers never see a torn file, made the Python
+  completion writer tolerant of a corrupt prior state and **atomic**
+  (`os.replace`), and made `readState` (background-tasks **and** training
+  execution-service) treat an unparseable state file as "no state" instead of
+  throwing — recovery is now resilient to crashed/mid-write processes.
+- **Test hardening:** added a regression test for the resilient/atomic state read;
+  gave the manually-state-driven operator-runtime background-task test a no-op
+  spawn stub (it drove every transition via `writeState`, but a real detached
+  `tail -f` process was racing and clobbering that state).
+
+**Test results:** source typecheck (`typecheck:src`) ✅ CLEAN. Build ✅. Tests
+**189/190** — my 15 movement-model tests + the new background-task regression all
+green; the **sed fix cleared the pre-existing `app.test.ts` failure** and the
+spawn stub cleared `operator-runtime.test.ts`. Net **pre-existing deterministic
+failures 2 → 1**. The one remaining (`server.test.ts` "handles session … and
+orchestration methods") is **pre-existing and unrelated** (verified on a pristine
+base checkout): `deriveRemoteDiagnostics` legitimately flags a `status:"running"`
+task whose pid `isProcessRunning` reports dead as `missing-process`; that test
+starts a real `sleep 5` and mocks `isProcessRunning: () => false`, so once the
+(now-reliably-written) state file lands, the task is flagged and control degrades.
+The product logic is correct — it's a timing/mock mismatch in the remote-control
+test. Logged to ROADMAP for a scoped follow-up; not chased this run to avoid
+unbounded edits to an unrelated subsystem.
+
+**New idea:** the movement backend is deliberately pluggable and JSON-serialized.
+Next, add a **behavior-cloning adapter** that maps `MovementModelState.generate()`
+output back through the capture tokenizer into concrete `DeviceCaptureInput`
+gestures, closing the loop so a trained model can *drive* the replay engine
+(schema→train→**act**), plus a "novelty score" per generated sequence (fraction of
+n-grams unseen verbatim in training) to quantify generalization vs. memorization.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
