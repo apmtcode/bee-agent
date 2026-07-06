@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -369,5 +370,46 @@ describe("BackgroundTaskExecutionService", () => {
     await expect(fs.readFile(path.join(rootDir, task.execution.launchScript), "utf8")).resolves.toContain("bash -lc");
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
+  });
+
+  it("runs the real launch script and writes valid JSON state for a quote-containing command", async () => {
+    const hasToolchain = (() => {
+      try {
+        execFileSync("bash", ["-lc", "command -v python3"], { stdio: "ignore" });
+        return true;
+      } catch {
+        return false;
+      }
+    })();
+    if (!hasToolchain) {
+      // No bash/python3 available (some CI images); the wrapper is exercised by
+      // the round-trip assertions below only when the toolchain exists.
+      return;
+    }
+
+    const rootDir = await makeTempDir();
+    // A command that embeds single quotes — the exact shape that used to corrupt
+    // the wrapper's state JSON (spurious double-quote injection) and never
+    // substitute the pid.
+    const command = "printf \"hello from 'quoted' task\\n\"";
+    // Spawn synchronously so the assertions observe the completed state without
+    // polling. Returns a placeholder pid; the wrapper records the real one.
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"), (scriptPath, _args, options) => {
+      execFileSync("bash", [scriptPath], { cwd: options.cwd, stdio: "ignore" });
+      return { pid: 9999, unref() {} };
+    });
+
+    const task = await store.start({ title: "Quoted", command, cwd: rootDir, kind: "task" });
+
+    const raw = await fs.readFile(path.join(rootDir, task.execution.stateFile), "utf8");
+    const parsed = JSON.parse(raw) as BackgroundTaskExecutionState;
+    expect(parsed.command).toBe(command);
+    expect(typeof parsed.pid).toBe("number");
+    expect(parsed.pid).toBeGreaterThan(0);
+    expect(parsed.status).toBe("completed");
+    expect(parsed.exitCode).toBe(0);
+
+    const output = await store.executionService.readOutput(task);
+    expect(output).toContain("hello from 'quoted' task");
   });
 });

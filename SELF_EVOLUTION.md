@@ -6,6 +6,69 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-06 (run 9) — 🐛 Real bug: background-task launch wrapper corrupted its own state JSON
+
+**Audited:** Project health first. `npm test` was **171/174 (3 failing)** — a
+regression from run 8's clean 174/174. All three failures
+(`operator-runtime`, `server`, `app` tests) traced to one place:
+`readJsonFile` throwing `SyntaxError: Expected ',' or '}'` while recovering a
+background task. Dumped the raw on-disk `state.json` and found it malformed:
+`"command":"printf "line-1..."` (unescaped quotes) and `"pid":"$$"`
+(unsubstituted).
+
+**Root cause — two genuine runtime bugs in `renderLaunchScript`
+(`src/harness/background-tasks.ts`), not test bugs:**
+1. **`shellQuote` used a wrong POSIX single-quote escape** — `"'"'"'` (a bad
+   rotation) instead of `'\''`. Every single quote in a shell-quoted value got a
+   spurious `"` injected. Verified by reconstructing in bash: the buggy quoting
+   turned `printf 'line-1\nline-2\n'` into `printf "'line-1...`. This corrupted
+   **both** the executed command *and* the JSON state payload the wrapper writes,
+   so any task whose command (or cwd) contained a single quote produced an
+   unparseable `state.json`, and recovery crashed.
+2. **The pid was never substituted.** The init line
+   `printf '%s' … | sed "…; s/\"\$\$\"/$$/g"` emits bash where the pattern's
+   embedded `"` close the double-quoted sed arg and the `$$` expands early — so
+   the sed program became `s/<pid>/<pid>/g`, a no-op, leaving `pid:"$$"`. Every
+   recovered task got a *string* pid, breaking liveness checks.
+
+**Fix (additive, correctness):**
+- Corrected `shellQuote` to the standard `'\''` escaping (one-line change; all
+  other wrapper quoting relies on it).
+- Replaced the fragile `printf|sed` init with a **python init-state writer**
+  (`renderInitStateWriterPython`) mirroring the existing completion writer:
+  fields pass as shell-quoted argv, python JSON-encodes them and writes a real
+  numeric pid. Eliminates the sed-quoting hazard entirely.
+- **Root-caused the test flakiness too:** these tests construct the runtime with
+  the *default real spawner*, so `startBackgroundTask` launched detached
+  bash+python subprocesses that raced the tests' explicit `writeState()` calls
+  (and leaked, e.g. a `sleep 5`). Made them hermetic by injecting a no-op
+  `backgroundTaskSpawnProcess` in the affected tests (`operator-runtime`,
+  `server` ×3 runtimes, `session-stream` ×2). Added a **testability seam** to
+  `OperatorCliApp` (`backgroundTaskSpawnProcess` / `backgroundTaskIsProcessRunning`
+  options, mirroring the earlier `configHome` seam) so `app.test.ts` can be
+  hermetic without leaking real processes.
+- **New regression test** (`background-tasks.test.ts`): runs the *real* launch
+  script for a single-quote-containing command and asserts the resulting
+  `state.json` is valid JSON with the command preserved, a numeric pid, and
+  `status: completed` (guarded with a bash/python3 availability check).
+
+**Test results:** `npm test` **175/175** (was 171/174), **stable across 6
+consecutive full runs** (previously flaky 2-in-4). Build ✅. `typecheck:src`
+✅ (exit 0). Full `tsc` **125 → 125** (no regression; touched source files
+clean).
+
+**New idea:** the background-task wrapper is a growing shell/python template
+assembled by string concatenation — exactly the surface that hid these two bugs.
+Add a golden-file test that snapshots `renderLaunchScript` output for a set of
+adversarial commands (single quotes, double quotes, newlines, `$`/backticks,
+unicode) and *executes* each in a sandbox, asserting valid terminal state. That
+turns "shell-quoting correctness" into a covered invariant instead of a
+rediscovered outage. Longer term, consider emitting the whole wrapper as a
+single `python3` program (it's already a dependency) to retire bash-quoting
+fragility for good.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

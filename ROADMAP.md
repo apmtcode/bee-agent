@@ -4,6 +4,21 @@ Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
 ## Foundations / DX
+- [x] **Fix background-task launch-wrapper corruption** (2026-07-06, run 9). Two
+      real runtime bugs in `renderLaunchScript`: `shellQuote` used a wrong POSIX
+      single-quote escape (injected a spurious `"` into every quoted value,
+      corrupting the executed command *and* the JSON `state.json`), and the pid
+      was never substituted (`sed` quoting collapse → `pid:"$$"`). Rewrote the
+      init-state writer in python; corrected `shellQuote`; added a real-execution
+      regression test + an `OperatorCliApp` spawn-injection seam; de-flaked the
+      affected tests. `npm test` 171/174 → **175/175**, stable ×6.
+- [ ] **Golden-file wrapper test**: snapshot + execute `renderLaunchScript`
+      output for adversarial commands (single/double quotes, newlines, `$`,
+      backticks, unicode) and assert a valid terminal `state.json`. Makes
+      shell-quoting correctness a covered invariant. (New, run 9.)
+- [ ] **Consider emitting the launch wrapper as a single `python3` program**
+      instead of assembled bash+sed+heredocs — retires bash-quoting fragility
+      (python3 is already required by the wrapper). (New, run 9.)
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`

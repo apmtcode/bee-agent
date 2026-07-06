@@ -189,6 +189,8 @@ describe("OperatorControlPlaneSessionStream", () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
       backgroundTaskIsProcessRunning: () => false,
+      // Deterministic: never launch a real detached subprocess for the task.
+      backgroundTaskSpawnProcess: () => ({ pid: 4321, unref() {} }),
     });
     const server = new OperatorControlPlaneServer({ runtime });
     const stream = new OperatorControlPlaneSessionStream(server);
@@ -279,6 +281,8 @@ describe("OperatorControlPlaneSessionStream", () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
       backgroundTaskIsProcessRunning: () => false,
+      // Deterministic: never launch a real detached subprocess for the monitor.
+      backgroundTaskSpawnProcess: () => ({ pid: 4321, unref() {} }),
     });
     const server = new OperatorControlPlaneServer({ runtime });
     const stream = new OperatorControlPlaneSessionStream(server);

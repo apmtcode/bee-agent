@@ -531,6 +531,11 @@ describe("StandaloneOperatorRuntime", () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
       backgroundTaskIsProcessRunning: () => false,
+      // Inject a no-op spawner so the store/recovery logic under test is fully
+      // deterministic. Otherwise the real launch script runs as a detached
+      // subprocess and races the explicit writeState() calls below, making the
+      // observed state environment-dependent.
+      backgroundTaskSpawnProcess: () => ({ pid: 4321, unref() {} }),
     });
     const session = await runtime.startSession({ title: "Tasks", agentId: "main" });
 
