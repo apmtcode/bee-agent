@@ -59,16 +59,45 @@ unchecked items are queued. Keep this richer than you found it each run.
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
 (exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
-      objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Inventory what `src/capture` + `src/training` already implement vs. the
+      objective's five pieces (2026-07-06, run 9). Gap found: capture/schema/
+      dataset/replay existed; the train/infer piece only produced *launch scripts*
+      for on-device MLX/axolotl — no in-process learnable policy. Closed below.
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      for a real on-device small model — DONE run 9 (`src/training/movement-policy.ts`:
+      `MovementPolicyBackend` + `MovementPolicyBackendRegistry` +
+      `NGramMovementBackend` reference/mock with stupid-backoff; serialize/load).
+- [x] Synthetic event-stream generator to validate capture→dataset→replay
+      round-trips without real OS input — DONE run 9
+      (`generateSyntheticMovementDataset`, seeded mulberry32, wall-clock-free)
+      plus capture-type adapters (`movementTrajectoryFromSpan/Replay`).
+- [x] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories — DONE run 9 (`evaluateMovementPolicy`:
+      teacher-forced top-1 next-movement accuracy + coverage).
+- [ ] **On-policy replay-fidelity success gate**: after a real training job
+      completes, load its produced model behind `MovementPolicyModel` and run
+      `evaluateMovementPolicy` on the job's held-out replay manifests; persist
+      accuracy/coverage into the job state and treat "training done" as
+      contingent on clearing a threshold.
+- [ ] Wire a real on-device small-model backend (implements
+      `MovementPolicyBackend`) behind the registry, reusing the runner's
+      MLX/axolotl launch plan as its `train()`; keep `ngram` as the CI default.
+- [ ] Richer tokenization: bucketed pointer coordinates / key modifiers as
+      optional token fields (the schema already carries `value`), with an
+      ablation in the eval harness.
+
+## Test health / hermeticity
+- [ ] **Make remote-status tests hermetic w.r.t. the wall clock** (surfaced run
+      9). 4 tests green on 2026-06-23 fail by 2026-07-06: `app.test.ts`,
+      `control-plane/server.test.ts`, `orchestrator/operator-runtime.test.ts`.
+      `sessions.remoteStatus` returns `control.state="degraded"` with no `reason`
+      (the `activeRun.status==="paused"` branch in
+      `deriveRemoteControlStatus`, server.ts:2112) — the active run is being
+      auto-paused during status derivation under the `isProcessRunning:()=>false`
+      mock, gated by something that drifts with real time. Inject a clock / freeze
+      time in these tests (or the runtime's staleness checks) so the suite is
+      date-independent.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

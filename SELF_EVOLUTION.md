@@ -6,6 +6,79 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-06 (run 9) — 🧠 In-process, pluggable movement-policy learning (train + infer + generalize, cloud-runnable)
+
+**Audited:** Standing objective #2 (local-movement learning subsystem) against
+what `src/capture/` + `src/training/` actually implement. Finding: capture →
+schema → dataset → replay exist, and `src/training/runner.ts` builds *launch
+plans/scripts* for real on-device MLX/axolotl — but there was **no in-process,
+backend-pluggable engine that actually learns a movement policy and does
+inference**. So objective #2 pieces (c) "post-train a local model to repeat the
+recorded movements" and (d) "generalize to new-but-related movements" could not
+be exercised or tested in the cloud at all. That is the highest-value gap (this
+is the project's *raison d'être*, and runs 2–8 were all typecheck-debt paydown).
+
+**Changed (additive, new files only — nothing existing touched except the
+`src/index.ts` barrel):**
+- **`src/training/movement-policy.ts`** — the cloud-runnable core:
+  - A channel-typed movement event schema (`MovementEvent`:
+    pointer/keyboard/window/tool/observation), `MovementTrajectory`,
+    `MovementDataset`, and a deterministic tokenizer.
+  - **`MovementPolicyBackend`** interface (pluggable seam) +
+    **`MovementPolicyBackendRegistry`** — a real on-device small model drops in
+    by implementing `train()`/`load()` and registering.
+  - **`NGramMovementBackend`** — the deterministic reference/mock backend: an
+    n-gram policy with **stupid-backoff** smoothing. Learning = successor-
+    frequency counts at every context order; inference = argmax successor of the
+    longest matching context, backing off to shorter contexts (and finally the
+    global unigram). The backoff is precisely what **generalizes to unseen-but-
+    related** movement sequences. Deterministic lexical tie-break; round-trip
+    `serialize()`/`load()` so a "trained model" persists.
+  - `predict()` / `rollout()` (autoregressive replay) / **`evaluateMovementPolicy()`**
+    — a generalization eval harness (teacher-forced top-1 next-movement accuracy +
+    coverage on held-out data).
+- **`src/training/movement-dataset.ts`** — integration + fixtures: adapters from
+  the existing capture types (`movementTrajectoryFromSpan`,
+  `movementTrajectoryFromReplay`, `movementDatasetFromSpans`) and a **seeded,
+  wall-clock-free synthetic event-stream generator**
+  (`generateSyntheticMovementDataset`, mulberry32 PRNG — no `Math.random`, no
+  `Date`) that samples/perturbs named UI flows so the whole loop is testable.
+- **`src/index.ts`** — exported the full surface.
+
+**Test results:** new **`src/training/movement-policy.test.ts`** — **15 tests,
+all passing** (tokenizer determinism, learning, rollout replay, backoff
+generalization, empty-model safety, serialize/load round-trip, deterministic tie-
+break, registry, eval scoring >0.7 on held-out + trained-beats-empty baseline,
+and the capture-type adapters). `typecheck:src` ✅ CLEAN. `npm run build` ✅.
+Full suite **185 passing / 189** (was 170/174 — **+15 new, all green**).
+
+**⚠️ Pre-existing blocker discovered (NOT caused by this run):** the 4 failing
+tests are present at `HEAD` *without* this change (confirmed via `git stash`).
+They are **wall-clock/environment-sensitive** — run 8 (2026-06-23) recorded
+174/174, but today (2026-07-06) 4 tests in `app.test.ts` / `server.test.ts` /
+`operator-runtime.test.ts` fail. Root cause narrowed: `sessions.remoteStatus`
+returns `control.state = "degraded"` **with no `reason`** for a session whose
+active run/background task were just started — and the only degraded-without-
+reason path in `deriveRemoteControlStatus` (`src/control-plane/server.ts:2112`)
+is the `activeRun.status === "paused"` branch. So the active run is being
+**auto-paused** during status derivation (likely background-task
+missing-process reconciliation under the test's `isProcessRunning: () => false`
+mock, gated by something that has drifted with real time). Documented as a
+ROADMAP item to make these tests hermetic w.r.t. the wall clock. Because my
+change is green in isolation and adds no regression, I pushed the focused
+feature to the designated branch rather than `wip/self-evolve`.
+
+**New idea:** now that a policy can `predict`/`rollout`, add an **on-policy
+replay-fidelity metric** to `LocalTrainingExecutionService` — after a real
+training job "completes", load the produced model behind the same
+`MovementPolicyModel` interface and run `evaluateMovementPolicy` against the
+job's held-out replay manifests, writing the accuracy/coverage into the job
+state. That closes the loop: training isn't "done" until the learned policy
+demonstrably reproduces the recorded movements above a threshold — a concrete,
+testable success gate for the whole subsystem.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
