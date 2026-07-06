@@ -3,6 +3,26 @@
 Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
+## Reliability / test hermeticity
+- [x] **Fix `shellQuote` POSIX escaping** (2026-07-06, run 9) — was `"'"'"'`,
+      corrupted state JSON for any single-quoted background command.
+- [x] **Atomic launched state writes** (2026-07-06, run 9) — shell `mv -f` +
+      Python `os.replace()` so readers never see a truncated file.
+- [x] Thread `backgroundTaskSpawnProcess`/`backgroundTaskIsProcessRunning`
+      through `OperatorCliApp` (2026-07-06) — hermetic-test seam.
+- [ ] **De-flake `server.test.ts` + `app.test.ts`** background-task integration
+      cases. They launch real `sleep 5` / `printf` subprocesses whose recovery
+      outcome (running vs missing-process) races the subprocess's state write
+      and feeds platform-aggregate `control.state` (active↔degraded↔mixed).
+      Replace real spawns with a controllable mock (spawn + liveness) whose
+      values satisfy each assertion; expect a cascade through the aggregate
+      states, so adjust carefully. The app seam is already in place.
+- [ ] Unit-test `shellQuote` directly against adversarial inputs (`'`, `"`, `$`,
+      newlines, backticks) — catch shell-escaping regressions at the function
+      level, not via a flaky integration test.
+- [ ] Extract a shared `renderAtomicJsonWrite(path, payload)` helper so every
+      generated launch/state writer is atomic-by-construction.
+
 ## Foundations / DX
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.

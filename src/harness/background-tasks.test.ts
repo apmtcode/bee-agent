@@ -370,4 +370,49 @@ describe("BackgroundTaskExecutionService", () => {
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
   });
+
+  // Regression: the launched state writers must be POSIX-safe and atomic.
+  // A command containing single quotes previously corrupted shellQuote's
+  // output (a stray `"` leaked in), so the launch script emitted unparseable
+  // JSON; the state was also written non-atomically, so a concurrent reader
+  // could observe a truncated file. This drives the *real* subprocess pipeline
+  // end-to-end and asserts the persisted state parses and round-trips exactly.
+  it("launches a real process with a single-quoted command and writes valid, atomic state JSON", async () => {
+    const rootDir = await makeTempDir();
+    // Default (real) spawn + liveness so the detached launch script actually runs.
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"));
+    const command = "printf 'quoted %s\\n' 'ok'";
+    const task = await store.start({
+      sessionId: "sess-quote",
+      title: "Quoted command",
+      command,
+      cwd: rootDir,
+      kind: "task",
+    });
+
+    // Poll until the subprocess reaches a terminal state (deterministic wait,
+    // not a fixed sleep). Every read must parse — a corrupt/partial file would
+    // throw here and fail the test, which is exactly the regression we guard.
+    const service = store.executionService;
+    let state: BackgroundTaskExecutionState | undefined;
+    const deadline = Date.now() + 10_000;
+    while (Date.now() < deadline) {
+      state = await service.readState(task);
+      if (state && (state.status === "completed" || state.status === "failed")) {
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+
+    expect(state).toBeDefined();
+    expect(state?.status).toBe("completed");
+    // The single-quoted command must survive shellQuote intact (byte-for-byte).
+    expect(state?.command).toBe(command);
+    expect(state?.exitCode).toBe(0);
+    // Re-read the raw file directly: it must be complete, parseable JSON.
+    const raw = await fs.readFile(path.join(rootDir, task.execution.stateFile), "utf8");
+    expect(() => JSON.parse(raw)).not.toThrow();
+    // And the command actually ran, producing the expected output.
+    await expect(service.readOutput(task, {})).resolves.toContain("quoted ok");
+  });
 });

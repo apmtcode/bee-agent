@@ -530,6 +530,11 @@ describe("StandaloneOperatorRuntime", () => {
   it("starts, syncs, recovers, lists, and cancels background tasks", async () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
+      // Suppress the real detached launch process so this test's manually
+      // written execution states are authoritative. A real subprocess would
+      // asynchronously rewrite the state file (running → completed), racing the
+      // assertions below and making them flaky.
+      backgroundTaskSpawnProcess: () => ({ pid: 4321, unref() {} }),
       backgroundTaskIsProcessRunning: () => false,
     });
     const session = await runtime.startSession({ title: "Tasks", agentId: "main" });

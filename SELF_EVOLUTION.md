@@ -6,6 +6,63 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-06 (run 9) — 🐞 Root-caused a real bug: `shellQuote` corrupted background-task state JSON
+
+**Audited:** The test suite's health (step 5 of the procedure). Found the suite
+is **flaky** — 2–4 failures per run across `operator-runtime.test.ts`,
+`server.test.ts`, `app.test.ts` (prior runs' "174/174" was a lucky pass). The
+dominant symptom was a `SyntaxError: Expected ',' or '}' … at position 311
+(line 1 column 312)` thrown by `readJsonFile` while recovering background tasks.
+
+**Root cause (a genuine production bug, not a test bug):** `shellQuote()` in
+`src/harness/background-tasks.ts` escaped embedded single quotes with the string
+`"'"'"'` — one leading `"` too many. The POSIX-safe form is `'"'"'` (close the
+quote, emit `"'"`, reopen). Verified in bash: `shellQuote("a'b")` produced
+`a"'b` (a stray `"`) instead of `a'b`. The launched task's state writer builds a
+single-line JSON payload and pipes it through this quoting, so **any background
+command containing a single quote** (e.g. `printf 'ok'`) wrote a state file with
+an unescaped `"` → unparseable JSON. Because a real detached subprocess writes
+that file asynchronously, a concurrent `recover*` read intermittently hit it —
+hence the flakiness. Fixed the escaping (canonical `'"'"'`).
+
+**Also fixed (defense-in-depth, same file):** the state writers were **not
+atomic**. The shell writer did `printf … > state.json` (truncate-then-write) and
+the Python completion writer did `write_text()` — both let a concurrent reader
+observe a half-written file. Made both write to a unique temp path then
+`mv -f` / `os.replace()` into place (atomic rename).
+
+**Test isolation (additive seam):** threaded `backgroundTaskSpawnProcess` /
+`backgroundTaskIsProcessRunning` through `OperatorCliAppOptions`
+(`src/cli/app.ts`) — the runtime already accepted them — so tests can suppress
+real detached OS processes. Applied a no-op spawn to the
+`operator-runtime.test.ts` background-task test, which manually manages its own
+states; it is now **deterministic (10/10 runs green)**.
+
+**New regression test** (`src/harness/background-tasks.test.ts`): drives the
+*real* launch pipeline with a single-quoted command (`printf 'quoted %s\n'
+'ok'`), polls to terminal state, and asserts the persisted state parses, the
+command round-trips byte-for-byte, and the output is correct. Confirmed it
+**fails on the pre-fix `shellQuote` and passes after** — a true guard.
+
+**Test results:** Build ✅. `typecheck:src` ✅ (exit 0). Suite **174 → 175 tests**
+(+1 regression). Flakiness **2–4 failures → 1–2**, and the parse-crash class is
+eliminated. The residual 1–2 are pre-existing timing coupling in
+`server.test.ts` / `app.test.ts`: they launch real `sleep 5` / `printf`
+subprocesses and then assert on platform-aggregate control state derived from
+background-task recovery — the recovery outcome races the subprocess's state
+write. De-flaking them needs per-test spawn/liveness mocks whose values match
+each assertion (the aggregate `control.state` cascades: active↔degraded↔mixed),
+which is a larger, careful diff — queued in ROADMAP with the seam now in place.
+
+**New idea:** add a `writeShellFileAtomic` shell snippet + a shared
+`renderAtomicJsonWrite(path, payload)` helper so *every* generated launch/state
+writer is atomic-by-construction, and unit-test `shellQuote` directly against a
+table of adversarial inputs (embedded `'`, `"`, `$`, newlines, backticks) so a
+regression in shell-escaping is caught at the function level, not only via a
+flaky integration test.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
