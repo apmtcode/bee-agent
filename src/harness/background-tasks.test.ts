@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -5,6 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   BackgroundTaskExecutionService,
   FileBackgroundTaskStore,
+  createInertBackgroundSpawn,
   type BackgroundTaskExecutionState,
 } from "./background-tasks.js";
 
@@ -369,5 +371,31 @@ describe("BackgroundTaskExecutionService", () => {
     await expect(fs.readFile(path.join(rootDir, task.execution.launchScript), "utf8")).resolves.toContain("bash -lc");
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
+  });
+
+  it("renders a launch script that writes valid JSON state for commands with quotes and newlines", async () => {
+    const rootDir = await makeTempDir();
+    // A command carrying single quotes AND embedded newlines — exactly the shape
+    // that previously produced malformed state JSON (unescaped quotes) and a
+    // literal "$$" pid because of the fragile `printf | sed` state writer.
+    const command = "printf 'line-1\nline-2\n'";
+    const store = new FileBackgroundTaskStore(
+      path.join(rootDir, "background-tasks.json"),
+      createInertBackgroundSpawn(),
+    );
+    const task = await store.start({ title: "Quoted command", command, cwd: rootDir });
+
+    // Execute the rendered launch script the same way `launch()` would (cwd is
+    // the store root), synchronously so there is no race with the read below.
+    const scriptPath = path.join(rootDir, task.execution.launchScript);
+    execFileSync("bash", [scriptPath], { cwd: rootDir, stdio: "ignore" });
+
+    const raw = await fs.readFile(path.join(rootDir, task.execution.stateFile), "utf8");
+    const state = JSON.parse(raw) as BackgroundTaskExecutionState;
+    expect(state.command).toBe(command);
+    expect(state.status).toBe("completed");
+    expect(typeof state.pid).toBe("number");
+    expect(Number.isFinite(state.pid)).toBe(true);
+    expect(state.taskId).toBe(task.id);
   });
 });

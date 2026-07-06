@@ -6,6 +6,61 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-06 (run 9) — Fix two real launch-script bugs + kill background-task test flakiness (4 flaky failures → 175/175)
+
+**Audited:** Project health via the actual test suite. Found the suite was
+**non-deterministic** — repeated `npm test` runs gave 2, 3, or 4 failures. The
+prior log's "174/174" was stale for this environment; at the pristine last commit
+the suite was **4 failed / 46 passed** for the three background-task-heavy files.
+
+**Root cause (two real bugs, one test-design flaw):**
+1. **`shellQuote` was broken** (`src/harness/background-tasks.ts`). Its POSIX
+   single-quote escape emitted `"'"'"'` instead of the correct `'"'"'`. Verified
+   by round-trip: `printf 'hi there'` came back as `printf "'hi there"'`. This
+   silently **mis-executes any background command containing a single quote** and
+   **corrupts the launch script's JSON state** into unparseable text — the source
+   of the intermittent `SyntaxError: … in JSON at position 311` crash.
+2. **The initial "running" state was written by a fragile `printf '%s' … | sed`
+   pipeline.** The `s/"\$\$"/$$/g` step meant to substitute the shell PID never
+   matched (`$` is a regex end-anchor), so `pid` was persisted as the literal
+   string `"$$"` and recovery could never reconcile the real process.
+3. **Tests spawned real detached `bash` processes** (incl. `sleep 5`) whose async
+   state writes raced with the tests' own `writeState` calls — so which assertion
+   failed shifted with scheduling/CPU load (the flakiness).
+
+**Changed (additive, `src/`):**
+- Fixed `shellQuote` to `'"'"'`; round-trips clean for quotes, newlines,
+  backslashes, mixed quotes.
+- Rewrote the initial-state write to use a Python `json.dumps` heredoc
+  (`renderInitialStateWriterPython`) — same robust mechanism the completion
+  writer already used — passing the base payload + `$started_at` + `$$` as
+  arguments. Valid JSON, real numeric pid, no text surgery.
+- Added `createInertBackgroundSpawn()` (exported) — a deterministic spawn that
+  hands back a synthetic pid without launching an OS process — and plumbed
+  `backgroundTaskSpawnProcess` / `backgroundTaskIsProcessRunning` through
+  `OperatorCliApp` so the CLI is testable without real children.
+- Injected the inert spawn into every background-task-starting test
+  (operator-runtime, control-plane server incl. the `sleep 5` circuit-breaker
+  runtime, and the CLI app; app's live-task test also marks the process alive so
+  `watch-active`/`task-stop` drive a running task deterministically).
+- New test in `background-tasks.test.ts` that **renders and runs the real launch
+  script** for a command with single quotes + newlines and asserts the resulting
+  `state.json` is valid JSON, preserves the exact command, and has a numeric pid
+  — locking in both bug fixes.
+- Added an `npm run verify` script (`typecheck:src && build && test`) as the
+  canonical pre-push gate.
+
+**Test results:** `npm run verify` ✅. Full suite **175/175, deterministic
+across 6 consecutive runs** (was 4 flaky failures). `typecheck:src` ✅, build ✅.
+
+**New idea (next run):** add a test-setup guard that makes the *default*
+background spawn throw under `VITEST`/`NODE_ENV=test` unless a spawn is explicitly
+injected — so the detached-process race can never silently return. Pair it with a
+property test that fuzzes `shellQuote` through a real shell round-trip, turning
+"escaping is correct" into a structural invariant instead of a spot check.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

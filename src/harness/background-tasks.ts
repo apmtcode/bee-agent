@@ -108,6 +108,21 @@ export type SpawnBackgroundProcess = (
 
 export type IsProcessRunning = (pid: number) => boolean;
 
+/**
+ * A deterministic {@link SpawnBackgroundProcess} that hands back a synthetic PID
+ * without ever spawning a real OS process. Use it in tests and simulations so
+ * `startBackgroundTask` produces a valid "running" record without launching a
+ * detached child that would race with manually-written execution state.
+ */
+export function createInertBackgroundSpawn(startPid = 100000): SpawnBackgroundProcess {
+  let nextPid = startPid;
+  return () => {
+    const pid = nextPid;
+    nextPid += 1;
+    return { pid, unref() {} };
+  };
+}
+
 export type BackgroundTaskRecoveryReason =
   | "unchanged"
   | "state-running"
@@ -729,20 +744,22 @@ function applyExecutionState(task: BackgroundTaskRecord, state: BackgroundTaskEx
   };
 }
 
-function renderLaunchScript(task: BackgroundTaskRecord): string {
+export function renderLaunchScript(task: BackgroundTaskRecord): string {
   const quotedStatePath = shellQuote(task.execution.stateFile);
   const quotedOutputFile = shellQuote(task.execution.outputFile);
   const quotedCwd = shellQuote(task.cwd);
   const quotedCommand = shellQuote(task.command);
+  // The base payload carries only the static fields. `pid`, `startedAt` and
+  // `updatedAt` are injected by Python from the shell's real PID and timestamp
+  // so we never do fragile text substitution (which broke on `$` regex anchors)
+  // or embed unescaped JSON into a shell `printf | sed` pipeline (which
+  // corrupted commands containing quotes or newlines into invalid JSON).
   const quotedStatePayload = shellQuote(
     JSON.stringify({
       version: 1,
       taskId: task.id,
       kind: task.kind,
       status: "running",
-      pid: "$$",
-      startedAt: "__OPENCLAW_STARTED_AT__",
-      updatedAt: "__OPENCLAW_STARTED_AT__",
       outputFile: task.execution.outputFile,
       cwd: task.cwd,
       command: task.command,
@@ -754,7 +771,9 @@ function renderLaunchScript(task: BackgroundTaskRecord): string {
     "set -euo pipefail",
     `mkdir -p $(dirname ${quotedStatePath}) $(dirname ${quotedOutputFile})`,
     "started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-    `printf '%s' ${quotedStatePayload} | sed "s/__OPENCLAW_STARTED_AT__/$started_at/g; s/\"\$\$\"/$$/g" > ${quotedStatePath}`,
+    `python3 - ${quotedStatePath} ${quotedStatePayload} "$started_at" $$ <<'PY'`,
+    ...renderInitialStateWriterPython(),
+    "PY",
     `printf '%s\n' "starting ${task.kind} ${task.id}" >> ${quotedOutputFile}`,
     `if cd ${quotedCwd} && bash -lc ${quotedCommand} >> ${quotedOutputFile} 2>&1; then`,
     "  completed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
@@ -771,6 +790,20 @@ function renderLaunchScript(task: BackgroundTaskRecord): string {
     "fi",
     "",
   ].join("\n");
+}
+
+function renderInitialStateWriterPython(): string[] {
+  return [
+    "import json",
+    "import pathlib",
+    "import sys",
+    "state_path = pathlib.Path(sys.argv[1])",
+    "state = json.loads(sys.argv[2])",
+    "state['startedAt'] = sys.argv[3]",
+    "state['updatedAt'] = sys.argv[3]",
+    "state['pid'] = int(sys.argv[4])",
+    "state_path.write_text(json.dumps(state, indent=2) + '\\n')",
+  ];
 }
 
 function renderStateWriterPython(status: BackgroundTaskExecutionState["status"]): string[] {
@@ -794,5 +827,7 @@ function renderStateWriterPython(status: BackgroundTaskExecutionState["status"])
 }
 
 function shellQuote(value: string): string {
-  return `'${value.replaceAll(`'`, `"'"'"'`)}'`;
+  // POSIX-safe single-quote escaping: close the quote, emit a double-quoted
+  // literal single quote, then reopen. The sequence for one `'` is `'"'"'`.
+  return `'${value.replaceAll(`'`, `'"'"'`)}'`;
 }

@@ -38,8 +38,10 @@ unchecked items are queued. Keep this richer than you found it each run.
     `skills.executable.*`, `push.subscriptions.*`, `trajectories.*`, `replays.*`,
     `cron.runs`/misc — plus a few genuine test-only typings. Map the rest, then
     fix residual test-only typings.
-- [ ] Add a `verify` npm script (`typecheck && build && test`) and have the
-      engine run it as a pre-push self-check each cycle.
+- [x] Add a `verify` npm script (`typecheck:src && build && test`) — DONE run 9.
+      The engine now runs `npm run verify` as its pre-push self-check each cycle.
+      (Uses `typecheck:src`, the green source gate, not the full `typecheck`
+      which still includes remaining test-file debt.)
 - [x] Interim **source-only typecheck gate** — DONE run 7. `tsconfig.src.json`
       (excludes `**/*.test.ts`) + `typecheck:src` script; passes (exit 0). Next:
       have the engine run it as a per-run pre-push self-check.
@@ -69,6 +71,33 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
       round-trips without real OS input.
 - [ ] Generalization eval harness: measure replay fidelity on held-out but
       related synthetic trajectories.
+
+## Reliability / test hygiene
+- [x] Fix `shellQuote` in `src/harness/background-tasks.ts` — DONE run 9. The
+      POSIX single-quote escape was malformed (`"'"'"'` instead of `'"'"'`), so
+      any background-task command containing a single quote was mis-executed and
+      the launch script's JSON state payload was corrupted into invalid JSON.
+- [x] Make the background-task launch script write its initial "running" state
+      via Python `json.dumps` (like the completion writer) instead of a fragile
+      `printf | sed` pipeline — DONE run 9. The old `s/"$$"/pid/` sed step never
+      matched (`$` is a regex anchor), so `pid` was persisted as the literal
+      string `"$$"`; recovery could never match the real process.
+- [x] Deterministic background-task tests — DONE run 9. Added
+      `createInertBackgroundSpawn()` and plumbed `backgroundTaskSpawnProcess`
+      through `OperatorCliApp`, so tests no longer spawn real detached `bash`
+      (incl. `sleep 5`) children that raced with manually-written state. Cleared
+      4 flaky failures; full suite is 175/175 across repeated runs.
+- [ ] **Enforce no-real-spawn in tests:** add a tiny test setup that fails if a
+      background-task test constructs a runtime without an injected spawn (guard
+      against reintroducing the detached-process race). Or make the default spawn
+      throw when `NODE_ENV==='test'` / `VITEST` is set unless explicitly opted in.
+- [ ] Property/fuzz test for `shellQuote`: round-trip arbitrary strings (quotes,
+      newlines, `$`, backticks, backslashes) through `printf '%s'` in a real
+      shell and assert equality, so escaping regressions are caught structurally.
+- [ ] Audit the other `nowIso()`/`Date.now()` sites (there are ~13 copies) for
+      test-timing sensitivity; consider a single injectable clock so time-based
+      state machines (circuit breaker, cron) are deterministic without spawn
+      contention masking races.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
