@@ -1019,6 +1019,9 @@ describe("OperatorControlPlaneServer", () => {
     const breakerRuntime = new StandaloneOperatorRuntime({
       rootDir: breakerRootDir,
       backgroundTaskIsProcessRunning: () => false,
+      // Mock the spawn so no real detached launch script runs and races the
+      // manual writeState calls below — the test controls task state entirely.
+      backgroundTaskSpawnProcess: () => ({ pid: 4242, unref() {} }),
     });
     const breakerServer = new OperatorControlPlaneServer({ runtime: breakerRuntime });
     const breakerOne = await breakerServer.handle({

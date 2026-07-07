@@ -44,6 +44,19 @@ unchecked items are queued. Keep this richer than you found it each run.
       (excludes `**/*.test.ts`) + `typecheck:src` script; passes (exit 0). Next:
       have the engine run it as a per-run pre-push self-check.
 - [ ] Add a minimal CI workflow mirroring `verify` for human-opened PRs.
+- [x] Fix corrupt initial `state.json` from the background-task launch script
+      (`printf|sed` mangled JSON on quotes/`$`/newlines + left `"pid":"$$"`) —
+      DONE run 9, replaced with a Python `json` writer that receives the bash
+      `$$` pid. Also de-raced two tests via the `backgroundTaskSpawnProcess` mock.
+- [ ] **Same latent bug in `training/runner.ts`**: `renderLaunchScript` still
+      builds the initial training `state.json` via `printf '%s' … | sed
+      "…s/\"\$\$\"/\$\$/g"`. Not exercised in CI (the training script is written,
+      not executed), but it will corrupt state for commands with quotes/`$` on a
+      real device. Port the same Python-`json`-writer fix used in
+      `harness/background-tasks.ts`.
+- [ ] Audit remaining runtime tests that spawn **real** detached launch scripts
+      (`app.test.ts` still does) and inject `backgroundTaskSpawnProcess` so none
+      race their own manual state writes — closes a class of flakiness.
 
 ## Capability parity (audit reference agents → port gaps)
 - [ ] Build a "capability inventory" generator: enumerate bee-agent's exported
@@ -62,13 +75,25 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      for a real on-device small model. — DONE run 9 (`training/movement-model.ts`:
+      `MovementModelBackend` seam + `MarkovMovementBackend` order-N model with
+      Katz backoff; repeats recorded movements and generalizes to related ones).
+- [x] Synthetic event-stream generator to validate capture→dataset→replay
+      round-trips without real OS input. — DONE run 9
+      (`training/movement-synthetic.ts`: deterministic point-and-click/form-fill/
+      copy-paste grammars → `ReplayTimelineEvent`/`ReplayManifest`).
+- [x] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories. — DONE run 9 (`evaluateMovementModel`:
+      held-out top-1 next-movement accuracy + mean log-prob).
+- [ ] Observation-conditioned movement policy: extend `MovementSequence` with an
+      optional goal/observation `context` and key transitions on it, so the model
+      generalizes per-intent (e.g. "login form visible" → form-fill family) rather
+      than as a pure autoregressive prior.
+- [ ] Ship a `MarkovMovementBackend` "smoke model" from
+      `LocalAppleSiliconTrainingRunner` alongside every mlx/axolotl plan, so a
+      reviewed export is immediately replayable before on-device training runs.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

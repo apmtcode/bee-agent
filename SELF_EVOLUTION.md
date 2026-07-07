@@ -6,6 +6,73 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-07 (run 9) — 🧠 In-process movement-model backend (train + generalize) + fixed a real launch-script JSON bug that had turned the suite red
+
+**Audited:** Standing objective #2 (local-movement learning). Recent runs (5–8)
+ground entirely on control-plane typecheck debt; the movement subsystem's
+*model* side had no cloud-runnable path — `training/runner.ts` only emits
+external mlx/axolotl launch scripts that can't execute or be validated in CI.
+Also discovered the test suite was **red at HEAD** (3 files failing) — the last
+run logged 174/174, but the environment moved on and latent bugs surfaced.
+
+**Changed (additive):**
+- **New `src/training/movement-model.ts`** — the pluggable backend seam objective
+  #2(c)/(d) needs:
+  - `MovementModelBackend` interface (real on-device models drop in behind it).
+  - `tokenizeEvents`/`tokenizeReplayManifest` — turn `ReplayTimelineEvent`s into a
+    discrete movement-token stream (`action:mouse.click`, …) with `<bos>`/`<eos>`.
+  - `MarkovMovementBackend` — a deterministic, dependency-free order-N Markov
+    model with add-alpha smoothing and **Katz-style backoff**: it *repeats*
+    recorded movements (greedy generate) and *generalizes* to unseen-but-related
+    contexts by backing off to shorter contexts. `predictNext`, `generate`
+    (greedy or seeded-sampling via an in-house xorshift PRNG — no global RNG),
+    `scoreSequence`, and `stats`.
+  - `evaluateMovementModel` — generalization eval harness (held-out top-1
+    next-movement accuracy + mean log-prob), directly feeding the roadmap's
+    fidelity metric.
+- **New `src/training/movement-synthetic.ts`** — deterministic synthetic movement
+  streams (point-and-click / form-fill / copy-paste grammars) so the whole
+  capture→dataset→train→infer loop is validated with no real OS input.
+- **New `src/training/movement-model.test.ts`** — 15 tests: tokenization,
+  replay fidelity, backoff generalization, determinism, seeded sampling,
+  pluggability, and the synthetic learn→eval loop (>0.9 held-out accuracy).
+- Barrel exports for all of the above in `src/index.ts`.
+
+**Real bug fixed (this is why the suite was red):**
+`src/harness/background-tasks.ts` wrote a background task's initial `state.json`
+by piping a JSON blob through `printf '%s' … | sed "…s/\"\$\$\"/\$\$/g"`. When a
+command contained quotes/`$`/newlines the `sed` step corrupted the JSON **and**
+left `"pid":"$$"` unsubstituted — so recovery's `readState` threw a
+`SyntaxError`. Replaced the fragile pipeline with the same robust Python `json`
+writer already used for completion/failure state, and — critically — pass the
+**bash launch-script PID (`$$`)**, which stays alive for the task's duration, not
+the transient Python writer's own pid (my first cut used `os.getpid()`, which
+made every task look like a dead process → false "missing-process" → degraded).
+This fixed `operator-runtime` and `app` tests.
+
+**Test-determinism fix:** two tests (`server.test.ts` breaker, `operator-runtime`)
+spawned **real detached launch scripts** that raced their own manual
+`writeState`/`writeOutput` calls. They only "passed" before because the broken
+launch script never wrote valid state. Injected the existing
+`backgroundTaskSpawnProcess` mock so no real script runs and the test owns task
+state — faithful to intent, now deterministic.
+
+**Test results:** `typecheck:src` ✅ (exit 0). Build ✅. `npm test` ✅
+**189/189, stable across 5 consecutive full runs** (was 3 files / 3 tests red at
+HEAD). Full `tsc` unchanged at **125** (all in test files; the new module + test
+add zero errors).
+
+**New idea:** the movement model is currently sequence-only (which movement
+follows which). Next, condition generation on an *intent/observation prefix*
+(e.g. "the screen shows a login form" → predict the form-fill movement family) —
+i.e. an observation-conditioned policy rather than a pure autoregressive prior.
+The `MovementSequence` schema already carries `id`; add an optional `context`
+(goal/observation tokens) and let the backend key transitions on it, giving true
+task-conditioned generalization. Also: wire `LocalAppleSiliconTrainingRunner` to
+emit a `MarkovMovementBackend` "smoke model" alongside the mlx/axolotl plan so
+every reviewed export ships an immediately-runnable baseline the user can replay
+before the heavyweight on-device train finishes.
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
