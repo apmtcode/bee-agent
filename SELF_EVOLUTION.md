@@ -6,6 +6,68 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-07 (run 9) — 🐝 Movement-learning: pluggable local model backend (train + predict + generalize)
+
+**Audited:** Standing objective #2 (local-movement learning subsystem). Inventoried
+what `src/capture` + `src/training` already implement against the objective's five
+pieces: capture (recorder/os-observer/device-adapter/browser-adapter ✅), event
+**schema** (`TrajectoryObservation`/`TrajectoryAction` ✅), **dataset** (reviewed
+export manifest ✅), **replay** (`buildReplayManifest` ✅), and **train/infer**.
+The gap: the training layer only builds *launch plans/scripts* for real on-device
+MLX/axolotl runs (`runner.ts`) — there was **no in-process model** that can actually
+learn a movement sequence and predict/generalize. So objective #2(c) "post-train a
+model to repeat the recorded movements" and #2(d) "generalize to new-but-related
+movements" could not be exercised or tested in the cloud at all.
+
+**Changed (additive):** new `src/training/movement-model.ts` — the pluggable
+local-model seam the objective calls for:
+- `MovementModelBackend` / `MovementModel` interfaces (backend is swappable; a real
+  on-device small model drops in behind the same API).
+- `MarkovMovementBackend` — a deterministic, dependency-free back-off n-gram model
+  over movement tokens. Back-off is what gives **generalization**: a prefix never
+  seen at full order still predicts from lower-order stats (2d).
+- Tokenization (`tokenizeAction`) that canonicalizes actions into stable,
+  generalizable tokens (`device:swipe-up`, `os:window-opened`), `toMovementSequence`,
+  and `buildMovementDataset` (approved-only + min-length filters) to turn the
+  existing capture pipeline output into a training dataset.
+- `createSeededRng` (mulberry32) so sampled rollouts are reproducible — the module
+  never touches `Math.random`. `serialize`/`deserializeMovementModel` for persistence.
+- `evaluateMovementModel` — a generalization eval harness scoring next-token accuracy
+  **and** whole-sequence replay fidelity on held-out synthetic sequences.
+- Exported the whole surface from `src/index.ts`.
+
+**Tests:** new `movement-model.test.ts`, **18 tests** covering the full loop on
+synthetic event streams — exact replay of a recorded movement (2c), next-move
+prediction, generalization to a novel-but-related prefix via backoff (2d), seeded
+reproducible sampling, serialize round-trip, degenerate-loop termination, and the
+eval harness (perfect accuracy on memorized, >0.5 on held-out related). All 18 ✅.
+`npm run build` ✅. `npm run typecheck:src` ✅ (source stays fully green).
+
+**Pre-existing blocker (NOT caused by this change — verified on the base tree):**
+1–2 background-task **integration** tests now flake red. Root cause diagnosed:
+`StandaloneOperatorRuntime` background tasks launch a **real detached shell process**
+whose state-writer (`printf '%s' <json> | sed …` in `background-tasks.ts` /
+`runner.ts`) (a) emits **invalid JSON** when the task command contains quotes/
+newlines (e.g. `printf 'line-1\nline-2\n'` → `"command":"printf "line-1…` → JSON
+parse crash in `readState`), and (b) **races** the tests' own `writeState` fixtures.
+It passes on fast/unloaded machines (hence the historical 174/174), fails under load
+/ as time passed. I attempted a hermeticity seam (`backgroundTaskSpawnProcess`
+injection on `OperatorCliApp`, no-op spawn in the affected tests) but reverted it:
+it cleanly fixes the *state-simulating* tests (operator-runtime, server) yet breaks
+the app-level **integration** test, which genuinely needs the real process to run
+`printf ok` and produce output. A correct fix needs (1) production-side robust JSON
+state-writing (python heredoc, not sed) and (2) proper subprocess-output
+synchronization in the integration test. Queued in ROADMAP as high priority.
+
+**New idea:** an **online-adaptation** layer for the movement model — keep the
+serialized n-gram counts on disk and let each newly-recorded (approved) trajectory
+*increment* them incrementally (a `MovementModel.observe(sequence)`), so the local
+policy improves continuously between full retrains. Pair it with a drift metric
+(KL between the pre/post distributions) to decide when a full on-device retrain is
+actually worth launching.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

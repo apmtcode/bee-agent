@@ -59,16 +59,42 @@ unchecked items are queued. Keep this richer than you found it each run.
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
 (exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
-      objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
-      deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+- [x] Inventory what `src/capture` + `src/training` already implement vs. the
+      objective's five pieces — DONE run 9. Gap was the train/infer piece: only
+      launch-plan generation existed, no in-process model.
+- [x] Pluggable local-model backend interface with a deterministic backend —
+      DONE run 9 (`src/training/movement-model.ts`: `MovementModelBackend` /
+      `MovementModel` interfaces + `MarkovMovementBackend`; real on-device model
+      drops in behind the same API). Trains, predicts, generalizes via back-off.
+- [~] Synthetic event-stream generator to validate capture→dataset→replay
+      round-trips. Partial: `movement-model.test.ts` uses inline synthetic
+      sequences + `buildMovementDataset`. Next: promote a reusable exported
+      generator (parametric workflows, branching, noise) for broader fuzzing.
+- [x] Generalization eval harness — DONE run 9 (`evaluateMovementModel`:
+      next-token accuracy + whole-sequence replay fidelity on held-out related
+      synthetic trajectories).
+- [ ] **Online adaptation**: `MovementModel.observe(sequence)` to incrementally
+      update the serialized n-gram counts per newly-approved trajectory, plus a
+      KL-drift metric to decide when a full on-device retrain is worthwhile.
+- [ ] Wire `movement-model` train/infer into the runtime as a real capability
+      (RPC/CLI): train from approved trajectories, then predict/roll-out next
+      movements as an operator suggestion.
+
+## Test reliability (high priority — pre-existing, surfaced run 9)
+- [ ] **Fix flaky background-task tests.** `StandaloneOperatorRuntime` background
+      tasks launch a *real detached shell process* in tests; its state-writer
+      (`printf '%s' <json> | sed …` in `background-tasks.ts` + `runner.ts`)
+      produces **invalid JSON** when the task command contains quotes/newlines
+      and **races** the tests' `writeState` fixtures. Fails under load / over
+      time (passed historically on fast machines). Two-part fix:
+  - Production: write the initial "running" state via a Python heredoc that
+    `json.dumps` a dict (as the completion writer already does) instead of the
+    fragile `printf | sed` template — guarantees valid JSON for any command.
+  - Tests: add a `backgroundTaskSpawnProcess` hermeticity seam to
+    `OperatorCliApp` (mirrors `configHome`) and inject a no-op spawn in the
+    *state-simulating* tests (operator-runtime, server); for the app-level
+    *integration* test, keep the real spawn but poll/await output instead of
+    reading immediately. (Seam attempted + reverted run 9 — see SELF_EVOLUTION.)
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
