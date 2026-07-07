@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { spawn } from "node:child_process";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   BackgroundTaskExecutionService,
@@ -369,5 +370,69 @@ describe("BackgroundTaskExecutionService", () => {
     await expect(fs.readFile(path.join(rootDir, task.execution.launchScript), "utf8")).resolves.toContain("bash -lc");
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
+  });
+
+  // Regression guard: actually EXECUTE a rendered launch script (the normal tests
+  // inject a fake spawn, so the real sed/shellQuote/atomic-write path is never
+  // exercised). This catches two historical bugs:
+  //   1. The launch script's `sed` left `"pid":"$$"` (a string) in the state file
+  //      because the `$$` placeholder was mis-escaped for bash, so a live task's
+  //      pid was non-numeric and `isProcessRunning` always returned false.
+  //   2. A broken `shellQuote` turned single quotes in the command into double
+  //      quotes, corrupting the JSON payload written to the state file.
+  it("executes the launch script and writes a valid running state with a numeric pid", async () => {
+    const rootDir = await makeTempDir();
+    let launchedPid = 0;
+    const store = new FileBackgroundTaskStore(
+      path.join(rootDir, "background-tasks.json"),
+      (command, _args, options) => {
+        const child = spawn(command, [], {
+          cwd: options.cwd,
+          env: options.env,
+          stdio: "ignore",
+          detached: true,
+        });
+        child.unref();
+        launchedPid = child.pid ?? 0;
+        return { pid: child.pid, unref: () => child.unref() };
+      },
+    );
+
+    // The command embeds a single quote so a broken shellQuote would corrupt the
+    // JSON payload; the long sleep keeps the task in its sed-written "running"
+    // state long enough to read it deterministically.
+    const command = "sleep 5 # keep-alive 'quoted'";
+    const task = await store.start({ title: "Live task", command, cwd: rootDir, kind: "task" });
+
+    const statePath = path.join(rootDir, task.execution.stateFile);
+    let raw = "";
+    for (let attempt = 0; attempt < 150; attempt += 1) {
+      try {
+        const candidate = await fs.readFile(statePath, "utf8");
+        if (candidate.trim()) {
+          raw = candidate;
+          break;
+        }
+      } catch {
+        // state file not written yet
+      }
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+
+    // Kill the detached process group before asserting so the temp dir is clean.
+    if (launchedPid > 0) {
+      try {
+        process.kill(-launchedPid, "SIGKILL");
+      } catch {
+        // already gone
+      }
+    }
+
+    expect(raw).not.toBe("");
+    const parsed = JSON.parse(raw) as BackgroundTaskExecutionState; // valid JSON => shellQuote is correct
+    expect(parsed.status).toBe("running");
+    expect(typeof parsed.pid).toBe("number"); // numeric pid => sed `$$` substitution is correct
+    expect(Number.isFinite(parsed.pid) && parsed.pid > 0).toBe(true);
+    expect(parsed.command).toBe(command); // command round-trips through shellQuote intact
   });
 });

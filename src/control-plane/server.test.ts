@@ -84,6 +84,12 @@ describe("OperatorControlPlaneServer", () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir,
       backgroundTaskIsProcessRunning: () => false,
+      // Hermetic: don't launch a real detached process. The real launch script
+      // writes a "running" state file asynchronously, which would race this
+      // test's injected always-dead liveness and non-deterministically flag a
+      // live task as missing-process. Task state here is driven only by the
+      // store record and explicit writeState calls.
+      backgroundTaskSpawnProcess: () => ({ pid: 424242, unref: () => {} }),
       delivery: new OperatorDeliveryService(rootDir, {
         sendBrowserPush: async () => {},
       }),
@@ -953,6 +959,9 @@ describe("OperatorControlPlaneServer", () => {
     const driftingRuntime = new StandaloneOperatorRuntime({
       rootDir: driftingRootDir,
       backgroundTaskIsProcessRunning: () => false,
+      // Hermetic: task state is driven only by explicit writeState calls, not a
+      // real racing launch script (see note on the first runtime above).
+      backgroundTaskSpawnProcess: () => ({ pid: 424242, unref: () => {} }),
     });
     const driftingServer = new OperatorControlPlaneServer({ runtime: driftingRuntime });
     const driftingBootstrap = await driftingServer.handle({
@@ -1019,6 +1028,9 @@ describe("OperatorControlPlaneServer", () => {
     const breakerRuntime = new StandaloneOperatorRuntime({
       rootDir: breakerRootDir,
       backgroundTaskIsProcessRunning: () => false,
+      // Hermetic: task state is driven only by explicit writeState calls, not a
+      // real racing launch script (see note on the first runtime above).
+      backgroundTaskSpawnProcess: () => ({ pid: 424242, unref: () => {} }),
     });
     const breakerServer = new OperatorControlPlaneServer({ runtime: breakerRuntime });
     const breakerOne = await breakerServer.handle({

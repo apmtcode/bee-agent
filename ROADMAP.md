@@ -70,6 +70,22 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Generalization eval harness: measure replay fidelity on held-out but
       related synthetic trajectories.
 
+## Reliability / correctness (background-task + training pipelines)
+- [x] Fix broken `sed` `$$` escaping in the launch scripts (`background-tasks.ts`
+      + `training/runner.ts`) that left `"pid":"$$"` (string) in state files —
+      DONE run 9. A live task was misdetected as `missing-process`.
+- [x] Fix broken `shellQuote` in `background-tasks.ts` (`"'"'"'` → `'"'"'`) that
+      corrupted JSON payloads for commands containing single quotes — DONE run 9.
+- [x] Make shell-side state writes atomic (temp + `mv`/`os.replace`) to prevent
+      torn reads — DONE run 9.
+- [x] Add a regression test that actually executes a rendered launch script and
+      asserts a valid-JSON state file with a numeric pid — DONE run 9.
+- [ ] Run the suite twice (or randomized order) in the engine's pre-push gate so
+      timing-sensitive races surface locally instead of on the next machine.
+- [ ] "Launch-script lint": execute every rendered launch/training script
+      template against a throwaway dir and assert a valid-JSON state file, making
+      the sed/quote/atomic surface a guarded contract instead of hand-audited bash.
+
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in

@@ -531,6 +531,11 @@ describe("StandaloneOperatorRuntime", () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
       backgroundTaskIsProcessRunning: () => false,
+      // Hermetic: don't launch a real detached process. Its launch script writes
+      // state asynchronously, which would race the explicit writeState calls
+      // below and non-deterministically clobber the simulated state. Task state
+      // here is driven only by the store record and explicit writeState calls.
+      backgroundTaskSpawnProcess: () => ({ pid: 424242, unref: () => {} }),
     });
     const session = await runtime.startSession({ title: "Tasks", agentId: "main" });
 

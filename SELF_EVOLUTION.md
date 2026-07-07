@@ -6,6 +6,63 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-07 (run 9) — 🐛 Fixed 3 real background-task bugs; suite red→green + regression guard
+
+**Audited:** Ran the suite on a clean checkout and found it **RED (3–4 failing
+tests)** despite run 8 reporting 174/174 — a machine-timing flip that exposed
+latent bugs. Root-caused all failures in the background-task launch pipeline
+(`src/harness/background-tasks.ts`) with a mirror in `src/training/runner.ts`.
+
+**Three genuine production bugs fixed (not test hacks):**
+1. **Broken `sed` `$$` escaping.** The launch script rendered
+   `sed "…; s/"$$"/$$/g"` — the `\"\$\$\"` in the TS *template literal* had its
+   backslashes consumed by JS, so bash saw an unescaped `"` and mis-parsed the
+   program, leaving `"pid":"$$"` (a **string**) in the state file. Then
+   `isProcessRunning("$$")` → `Number.isFinite` false → **false**, so a live
+   `running` task was misdetected as `missing-process`, tripping the automatic
+   platform breaker to `control=degraded`. Fixed by doubling the backslashes
+   (`s/\\"\\$\\$\\"/$$/g`) so the rendered bash is `s/\"\$\$\"/$$/g` and the pid
+   becomes numeric. Timing-dependent: only bites when the launch script wins the
+   race to write its (broken) state before reconcile — which is why run 8's
+   machine got lucky.
+2. **Broken `shellQuote`.** `background-tasks.ts` escaped `'` as `"'"'"'`
+   (6 chars) instead of the POSIX `'"'"'` (5 chars) — so a command containing a
+   single quote (e.g. `printf 'line-1\nline-2\n'`) had its quotes turned into
+   double quotes, corrupting the JSON payload → torn/invalid state file
+   (`SyntaxError … in JSON`). Matched it to the training runner's already-correct
+   form.
+3. **Non-atomic shell-side state writes.** The launch script's `sed > file` and
+   the python completion writer's `write_text` both truncate-then-write, so a
+   concurrent reader (or the Node atomic writer) could observe a torn file.
+   Made both atomic (write to `…launch.tmp`/`.state.<pid>.tmp` + `mv`/`os.replace`),
+   mirroring `writeJsonAtomic`.
+
+**Test hardening (existing injection seam, not rewrites):** three integration
+runtimes injected `backgroundTaskIsProcessRunning: () => false` *and* started
+**real** detached processes, so the real launch script's async state write raced
+the tests' explicit `writeState` calls — the true source of the flake. Added
+`backgroundTaskSpawnProcess: () => ({ pid, unref })` (a no-op spawn) at the 4
+racy construction sites so task state is driven only by explicit writes.
+
+**New regression test** (`background-tasks.test.ts`): the normal tests inject a
+fake spawn, so the real sed/shellQuote/atomic path was *never executed*. Added a
+test that **actually runs a rendered launch script** (`sleep`-based to hold the
+`running` state) and asserts the state file is valid JSON with a **numeric pid**
+and a single-quote-containing command preserved verbatim. Verified it FAILS when
+either the `sed` or `shellQuote` fix is reverted.
+
+**Test results:** clean-checkout **3–4 failing → 175/175 passing**, deterministic
+across 6 consecutive full runs. Build ✅. `typecheck:src` ✅ (source stays clean).
+Full `tsc` unchanged at **125** (test-file only — no regression). Pushed to
+`main`.
+
+**New idea:** add a `pretest`/CI step that runs the suite **twice** (or with a
+randomized-order flag) so timing-sensitive races surface in the engine's own
+pre-push gate instead of on the next run's machine. Longer term: a tiny
+"launch-script lint" that executes each rendered script template against a
+throwaway dir and asserts a valid-JSON state file — turning the whole
+sed/quote/atomic surface into a guarded contract rather than hand-audited bash.
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
