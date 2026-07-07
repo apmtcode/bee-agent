@@ -4,6 +4,20 @@ Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
 ## Foundations / DX
+- [x] **Green the suite in the cloud env** (2026-07-07, run 9). Baseline was 3
+      failing/flaky. Fixed 3 real launcher bugs (`shellQuote` 6→5-char POSIX
+      escape; pid placeholder never substituted; non-atomic state writes),
+      hardened `readJsonFile` against torn reads (+`src/shared/fs.test.ts`), and
+      made 3 integration tests deterministic via the `backgroundTaskSpawnProcess`
+      mock. Now 179/179, stable ×3.
+- [ ] **Launcher shell-generation guard** (new, run 9): a unit test that renders
+      `renderLaunchScript` for commands containing `'`, `"`, `$` and asserts the
+      emitted `printf|sed` payload `JSON.parse`s with a numeric pid — so quoting
+      regressions are caught at authoring time, not by a slow-env flake.
+- [ ] **Shared `renderAtomicJsonWrite()` helper** (new, run 9): factor the
+      atomic-write + placeholder-substitution shell out of both
+      `background-tasks.ts` and `training/runner.ts` so they can't diverge again
+      (the `shellQuote` bug lived in only one copy).
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`

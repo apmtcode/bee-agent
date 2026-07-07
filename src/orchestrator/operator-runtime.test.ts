@@ -528,8 +528,14 @@ describe("StandaloneOperatorRuntime", () => {
   });
 
   it("starts, syncs, recovers, lists, and cancels background tasks", async () => {
+    // Inject a deterministic spawn so no real detached OS process races the
+    // test by writing its own launcher state after we manage state explicitly.
+    // This test verifies reconcile/recover/list/cancel logic; real spawning is
+    // covered by background-tasks.test.ts.
+    let nextPid = 4200;
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
+      backgroundTaskSpawnProcess: () => ({ pid: (nextPid += 1), unref() {} }),
       backgroundTaskIsProcessRunning: () => false,
     });
     const session = await runtime.startSession({ title: "Tasks", agentId: "main" });

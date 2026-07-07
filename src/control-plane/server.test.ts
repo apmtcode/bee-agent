@@ -81,8 +81,14 @@ const exportManifest: ReviewedExportManifest = {
 describe("OperatorControlPlaneServer", () => {
   it("handles session, transcript, approval, trajectory, memory, and orchestration methods", async () => {
     const rootDir = await makeTempDir();
+    // Inject a deterministic spawn so background tasks don't launch real
+    // detached OS processes whose asynchronous launcher state writes would race
+    // the assertions below (e.g. a `sleep 5` task flipping remote diagnostics
+    // from active to missing-process once its "running" state file lands).
+    let nextPid = 4200;
     const runtime = new StandaloneOperatorRuntime({
       rootDir,
+      backgroundTaskSpawnProcess: () => ({ pid: (nextPid += 1), unref() {} }),
       backgroundTaskIsProcessRunning: () => false,
       delivery: new OperatorDeliveryService(rootDir, {
         sendBrowserPush: async () => {},
@@ -950,8 +956,10 @@ describe("OperatorControlPlaneServer", () => {
     });
 
     const driftingRootDir = await makeTempDir();
+    let driftingPid = 5200;
     const driftingRuntime = new StandaloneOperatorRuntime({
       rootDir: driftingRootDir,
+      backgroundTaskSpawnProcess: () => ({ pid: (driftingPid += 1), unref() {} }),
       backgroundTaskIsProcessRunning: () => false,
     });
     const driftingServer = new OperatorControlPlaneServer({ runtime: driftingRuntime });
@@ -1016,8 +1024,10 @@ describe("OperatorControlPlaneServer", () => {
     });
 
     const breakerRootDir = await makeTempDir();
+    let breakerPid = 6200;
     const breakerRuntime = new StandaloneOperatorRuntime({
       rootDir: breakerRootDir,
+      backgroundTaskSpawnProcess: () => ({ pid: (breakerPid += 1), unref() {} }),
       backgroundTaskIsProcessRunning: () => false,
     });
     const breakerServer = new OperatorControlPlaneServer({ runtime: breakerRuntime });

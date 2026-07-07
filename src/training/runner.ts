@@ -171,7 +171,7 @@ function renderLaunchScript(execution: LocalTrainingExecution, plan: TrainingJob
       version: 1,
       jobId: plan.jobId,
       status: "running",
-      pid: "$$",
+      pid: "__OPENCLAW_PID__",
       startedAt: "__OPENCLAW_STARTED_AT__",
       updatedAt: "__OPENCLAW_STARTED_AT__",
       logFile: execution.logFile,
@@ -185,7 +185,10 @@ function renderLaunchScript(execution: LocalTrainingExecution, plan: TrainingJob
     "set -euo pipefail",
     `mkdir -p ${shellQuote(execution.artifactDir)} $(dirname ${quotedLogFile}) $(dirname ${quotedStatePath})`,
     "started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-    `printf '%s' ${quotedStatePayload} | sed "s/__OPENCLAW_STARTED_AT__/$started_at/g; s/\"\$\$\"/$$/g" > ${quotedStatePath}`,
+    // Write the initial state atomically (temp + rename), substituting the
+    // timestamp and the quoted pid placeholder with an unquoted numeric pid.
+    // The sed quotes are escaped so they don't close the shell double-quote.
+    `printf '%s' ${quotedStatePayload} | sed -e "s/__OPENCLAW_STARTED_AT__/$started_at/g" -e "s/\\"__OPENCLAW_PID__\\"/$$/g" > ${quotedStatePath}.$$.tmp && mv -f ${quotedStatePath}.$$.tmp ${quotedStatePath}`,
     `printf '%s\n' "starting ${plan.mode} training for ${plan.jobId}" >> ${quotedLogFile}`,
     `if ${quotedCommand} >> ${quotedLogFile} 2>&1; then`,
     "  completed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
@@ -207,6 +210,7 @@ function renderLaunchScript(execution: LocalTrainingExecution, plan: TrainingJob
 function renderStateWriterPython(status: TrainingExecutionState["status"]): string[] {
   return [
     "import json",
+    "import os",
     "import pathlib",
     "import sys",
     "state_path = pathlib.Path(sys.argv[1])",
@@ -220,7 +224,10 @@ function renderStateWriterPython(status: TrainingExecutionState["status"]): stri
     "state['completedAt'] = timestamp",
     "state['exitCode'] = exit_code",
     `state['error'] = None if '${status}' == 'completed' else 'training process exited non-zero'`,
-    "state_path.write_text(json.dumps(state, indent=2) + '\\n')",
+    // Atomic write: temp sibling + os.replace so readers never see torn JSON.
+    "tmp_path = state_path.with_name(state_path.name + '.' + str(pid) + '.tmp')",
+    "tmp_path.write_text(json.dumps(state, indent=2) + '\\n')",
+    "os.replace(tmp_path, state_path)",
   ];
 }
 

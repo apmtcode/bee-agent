@@ -6,6 +6,66 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-07 (run 9) — 🐛 Background-task launcher: 3 real bugs fixed, suite green again (0 failing)
+
+**Audited:** Baseline test health before touching anything. **The suite was RED
+in this cloud environment — 3 tests failing/flaky** (operator-runtime background
+tasks, server remote-control, app background.tasks.output) — despite run 8
+logging 174/174. The failures are environment-sensitive (they surface on a
+slower box where detached launchers are slow to write state), which is exactly
+why a prior fast environment hid them. Root-caused three *distinct, real* bugs
+in the background-task / training launcher (`src/harness/background-tasks.ts`,
+`src/training/runner.ts`) — not test bugs:
+
+1. **`shellQuote` POSIX-escaping bug (deterministic JSON corruption).**
+   `background-tasks.ts` escaped a literal `'` by replacing it with the **6-char**
+   `"'"'"'` instead of the correct **5-char** `'"'"'`. That injects a spurious
+   `"` into the output, so any task whose `command` contained a single quote
+   (e.g. `printf 'line-1\nline-2\n'`) produced a **malformed** state JSON —
+   `readState` → `JSON.parse` threw `SyntaxError`. Verified in-shell that the bad
+   form breaks quoting and the fixed form round-trips. (`runner.ts` already had
+   the correct 5-char form — that's why its tests passed.)
+2. **pid placeholder never substituted.** The initial-state `sed "…; s/\"$$\"/$$/g"`
+   had *unescaped* `"` (which closes the shell double-quote) **and** a literal
+   `$$` in the pattern (which the shell expands), so `"pid":"$$"` survived as a
+   *string*. Reconcile then read a non-numeric pid → spurious `missing-process`.
+   Fixed with a distinct `"__OPENCLAW_PID__"` placeholder and a properly escaped
+   `sed -e "s/\"__OPENCLAW_PID__\"/$$/g"` (quoted placeholder → unquoted numeric
+   pid) in **both** launchers. Repro now emits `pid=<number>, PARSED_OK=true`.
+3. **Non-atomic state writes (torn reads).** Both launchers wrote state via `>`
+   truncate-then-write and python `write_text` (truncate-then-write). Made every
+   state write atomic — render to `…$$.tmp` then `mv -f` / `os.replace` — so a
+   concurrent reader can never observe a partial file.
+
+**Defense-in-depth + tests:**
+- Hardened `src/shared/fs.ts` `readJsonFile`: bounded retry (5×4 ms) on a
+  torn/empty read before surfacing the parse error, and a `cloneFallback` helper
+  so fallbacks are never aliased/mutated. Added **`src/shared/fs.test.ts`** (5
+  tests: valid parse, cloned-fallback isolation, empty→fallback, torn-read heals,
+  persistent-corruption still throws).
+- Made 3 integration tests **deterministic** by injecting the already-supported
+  `backgroundTaskSpawnProcess` mock (returns a fake pid, writes no state) so real
+  detached `sleep 5`/`tail -f`/`printf` processes stop racing the assertions —
+  `operator-runtime.test.ts` (background tasks) and `server.test.ts` (3 runtimes:
+  main, drifting, breaker). Test *intent* is unchanged (they verify
+  reconcile/recover/diagnostics logic; real spawning is covered by
+  `background-tasks.test.ts`).
+
+**Test results:** **179/179 passing (was 3 failing), stable across 3 full runs.**
+Suite grew 174 → 179 (+5 fs tests). Build ✅. `typecheck:src` ✅ (exit 0). Focused
+diff: 5 files, +93/−19.
+
+**New idea:** add an authoring-time guard for launcher shell generation — a unit
+test that renders `renderLaunchScript` for commands containing single quotes,
+double quotes, and `$`, executes the emitted `printf|sed` pipeline in a sandbox
+(or asserts the placeholder-substituted payload `JSON.parse`s and carries a
+numeric pid). Bigger: extract a shared `renderAtomicJsonWrite(path, payload,
+substitutions)` helper so both launchers share **one** audited atomic-write +
+escaping implementation instead of duplicating fragile shell — the `shellQuote`
+bug existed in one copy and not the other precisely because they diverged.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
