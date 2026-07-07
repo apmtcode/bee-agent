@@ -6,6 +6,69 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-07 (run 9) — 🧠 Movement policy: pluggable local model backend + n-gram inference
+
+**Audited:** The local-movement learning subsystem (standing objective #2).
+Inventoried `src/capture/` (recorder, adapters, trajectory schema, replay,
+consent, ingestion) and `src/training/` (exporter, job-store/manifest, runner,
+execution-service). Finding: the pipeline covers **capture → schema → dataset →
+external training-script generation**, but the *train/infer* half (objective
+#2c/#2d) was a stub — `runner.ts` only shells out to MLX/axolotl (cannot run in
+the cloud), and **nothing consumed a dataset to actually predict or generate
+movements**. There was also no pluggable model-backend seam and no
+generalization eval — both explicit ROADMAP items.
+
+**Changed (additive, new module `src/training/movement-policy.ts`):**
+- **`MovementAction`/`MovementSequence`/`MovementDataset`** — a distilled,
+  replayable action-sequence dataset, plus `buildMovementDataset(trajectories)`
+  which extracts timestamp-ordered movement runs from `TrajectorySpan`s
+  (honoring review redaction, skipping rejected/empty), and `movementToken()`
+  for deterministic tokenization.
+- **`MovementModelBackend` interface + `MovementModelRegistry`** — the pluggable
+  seam: register a real on-device small model under a new id; select via
+  `registry.train(id, dataset)`. Documented as the drop-in point.
+- **`NgramMovementBackend`** — a deterministic default backend (a runnable
+  "trained model" for the cloud/CI). It memorizes movement transitions at every
+  context length and uses longest-match with **back-off**: exact recorded
+  prefixes → exact recall (**repeat recorded movements**, #2c); novel prefixes
+  that share a shorter suffix → most-likely continuation (**generalize to
+  new-but-related movements**, #2d). Fully deterministic (argmax, lexical tie-
+  break — no RNG), with `generate()`, `predictNext()`, and JSON `serialize()`.
+- **`evaluateMovementPolicy()`** — the generalization eval harness: top-1 replay
+  fidelity on held-out sequences, counting back-off (generalized) predictions.
+- Barrel exports in `src/index.ts` (values + types).
+- **Tests** (`movement-policy.test.ts`, 9 cases): dataset extraction/ordering,
+  exact replay, back-off generalization, determinism, end-sentinel termination,
+  eval fidelity, and pluggable-backend swap.
+
+**Test results:** new suite ✅ **9/9**. `typecheck:src` ✅ (source stays clean).
+Build ✅ (tsdown, 5 files, 545 kB). Full `npm test` **180/183** — the **3
+failures are PRE-EXISTING and unrelated**: verified by stashing all my changes
+and re-running (same 3 files red on a clean tree). They live in
+`operator-runtime.test.ts` (`recoverBackgroundTasks`), `app.test.ts` (session/
+cron cmds), `server.test.ts` (orchestration methods). Root symptom: a
+`SyntaxError: Expected ',' or '}' … at position 311 (line 1 column 312)` when a
+background-task **state file** is read during recovery. Note the JSON is
+*single-line* — but `writeJsonAtomic` emits pretty-printed multi-line JSON, so
+the corrupt state is written by a **different** (compact-JSON) writer in the
+recovery/state path, not by the atomic writer. This is a real regression to
+isolate next run (the prior "174/174" predates it — likely introduced by a
+local sibling run). Logged to ROADMAP as top priority.
+
+**Pushed to** the designated feature branch `claude/peaceful-dirac-nhgfeu`
+(not main), since the baseline is pre-existing red through no fault of this
+change and the branch mandate is explicit.
+
+**New idea:** a **movement-policy inference RPC + CLI verb** (`movement.predict`
+/ `movement.generate`) wired through the control-plane so bee-agent can, given a
+trained `MovementPolicyModel` snapshot, suggest or auto-execute the next
+gesture in a live session — closing the loop from recording → training →
+*acting*. Pair it with a confidence gate (only auto-execute when
+`prediction.probability ≥ threshold` and `contextOrder == order`, i.e. exact
+recall) so generalization stays advisory until reviewed.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

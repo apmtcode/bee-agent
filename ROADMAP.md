@@ -3,6 +3,24 @@
 Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
+## 🔴 Regressions (top priority)
+- [ ] **Background-task state JSON corruption** (found run 9). 3 pre-existing
+      test failures — `operator-runtime.test.ts` (`recoverBackgroundTasks`),
+      `app.test.ts` (session/cron cmds), `server.test.ts` (orchestration). All
+      surface `SyntaxError: Expected ',' or '}' … at position 311 (line 1 column
+      312)` reading a background-task **state file** during recovery. The bad
+      JSON is *single-line*, but `writeJsonAtomic` writes multi-line pretty JSON
+      → the culprit is `background-tasks.ts:738` `renderLaunchScript`, which
+      bakes a **compact single-line** `JSON.stringify` state payload into a bash
+      script and rewrites it via `sed "s/__OPENCLAW_STARTED_AT__/…/; s/\"$$\"/…/"`
+      before the spawned process writes the state file. A recovery re-launch runs
+      that script and the `sed`/substitution (or command/path chars) corrupts the
+      JSON near col 312. Repro: `npx vitest run
+      src/orchestrator/operator-runtime.test.ts`. Fix options: (a) make the
+      spawned process write state via a small node/`writeJsonAtomic` step instead
+      of `printf|sed`, or (b) escape the sed replacement + payload robustly. Prior
+      "174/174" predates this — likely introduced by a sibling local run.
+
 ## Foundations / DX
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
@@ -59,16 +77,27 @@ unchecked items are queued. Keep this richer than you found it each run.
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
 (exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
-      objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
-      deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
+- [x] Inventory what `src/capture` + `src/training` already implement vs. the
+      objective's five pieces — DONE run 9. Gap was the train/infer half:
+      capture→schema→dataset→external-script existed; nothing consumed a dataset
+      to predict/generate movements.
+- [x] Pluggable local-model backend interface with a deterministic backend
+      (cloud/CI-runnable) and a documented seam for a real on-device small model
+      — DONE run 9 (`src/training/movement-policy.ts`: `MovementModelBackend` +
+      `MovementModelRegistry` + `NgramMovementBackend`).
+- [x] Generalization eval harness: replay fidelity on held-out related
+      trajectories — DONE run 9 (`evaluateMovementPolicy`).
 - [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      round-trips without real OS input (a reusable generator module; run 9's
+      tests hand-build sequences inline — extract a shared generator next).
+- [ ] **Movement inference RPC/CLI** (`movement.predict`/`movement.generate`):
+      wire `MovementPolicyModel` through the control-plane so a live session can
+      suggest/auto-execute the next gesture. Confidence-gate auto-execution
+      (`probability ≥ threshold` AND `contextOrder == order`, i.e. exact recall)
+      so generalized guesses stay advisory until reviewed.
+- [ ] Persist/load `MovementModelSnapshot` to disk (train once, infer later) and
+      have the training runner emit a snapshot as a cloud-verifiable artifact
+      alongside the MLX/axolotl launch scripts.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
