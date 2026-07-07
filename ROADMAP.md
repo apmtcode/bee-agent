@@ -44,6 +44,12 @@ unchecked items are queued. Keep this richer than you found it each run.
       (excludes `**/*.test.ts`) + `typecheck:src` script; passes (exit 0). Next:
       have the engine run it as a per-run pre-push self-check.
 - [ ] Add a minimal CI workflow mirroring `verify` for human-opened PRs.
+- [ ] **Investigate 3 pre-existing suite failures** (surfaced run 9, present on a
+      clean tree so unrelated to the movement-model work): `operator-runtime.test.ts`
+      (background-task recovery → `SyntaxError: Expected ',' or '}'` JSON parse),
+      `app.test.ts`, `server.test.ts`. Run 8 logged 174/174 on 2026-06-23, so these
+      regressed between then and 2026-07-07 — likely a fixture/serialization or
+      date-sensitive assertion. Bisect and fix before resuming test-typecheck debt.
 
 ## Capability parity (audit reference agents → port gaps)
 - [ ] Build a "capability inventory" generator: enumerate bee-agent's exported
@@ -59,16 +65,30 @@ unchecked items are queued. Keep this richer than you found it each run.
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
 (exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
-      objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [~] Inventory what `src/capture` + `src/training` already implement vs. the
+      objective's five pieces (capture → schema → dataset → replay → train/infer).
+      Run 9 finding: capture (recorder/adapters/consent/ingestion), schema
+      (`trajectory.ts`), dataset (`exporter.ts` → `ReviewedExportManifest` +
+      `ReplayManifest`), replay (`replay.ts`/`replay-service.ts`) all exist. The
+      **train/infer** piece existed only as an external launch plan (`runner.ts`
+      shells to mlx/axolotl) — no in-process learnable model until run 9.
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      for a real on-device small model — DONE run 9 (`src/training/movement-model.ts`:
+      `MovementModelBackend` + registry, `MarkovMovementBackend` default).
+- [x] Synthetic event-stream generator to validate capture→dataset→replay
+      round-trips without real OS input — DONE run 9 (seeded, `Math.random`-free
+      generator in `movement-model.test.ts`; snapshot round-trip covered).
+- [x] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories — DONE run 9 (`evaluateMovementModel`:
+      accuracy + mean P(target) + perplexity; beats-chance test on held-out set).
+- [ ] **Model-guided replay engine**: feed `TrainedMovementModel.generate()` back
+      through `ReplayRuntimeService` to *drive* actions, with a divergence guard
+      that halts when live observations stop matching the model's expected context.
+- [ ] Wire `probabilityOf()` as the RL reward signal the axolotl plan already
+      references (`--reward-model replay-manifest`), replacing the external stub.
+- [ ] Richer tokenizer: bucket action `summary` (not just `tool`) into learnable
+      sub-tokens so the model captures *parameterized* movements, not just types.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

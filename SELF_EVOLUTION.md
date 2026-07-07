@@ -6,6 +6,64 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-07 (run 9) — Movement subsystem: pluggable trainable model (learn→repeat→generalize)
+
+**Audited:** Standing objective #2 (local-movement learning) vs. what `src/training`
+actually implements. Finding: the whole pipeline (`exporter` → `job-manifest` →
+`runner`) only **builds a launch plan + bash script** that shells out to external
+on-device trainers (`mlx_lm.lora` / `axolotl`). That path *only runs on the user's
+real machine* — so parts (c) "post-train a local model to repeat the recorded
+movements" and (d) "generalize to related movements" had **no in-process, testable
+implementation at all**. This is the first ROADMAP item under the subsystem
+("pluggable local-model backend … with a deterministic mock backend so cloud/CI
+tests pass").
+
+**Changed (additive) — new `src/training/movement-model.ts`:**
+- `MovementModelBackend` interface + a pluggable registry
+  (`registerMovementBackend`/`getMovementBackend`/`listMovementBackends`), so a
+  real on-device small model can be dropped in under the same seam and selected by
+  id. `markov` is registered as `DEFAULT_MOVEMENT_BACKEND_ID`.
+- `MarkovMovementBackend`: a **deterministic** order-N Markov model with
+  stupid-backoff. `train()` learns transition counts over movement tokens;
+  `predictNext()`/`generate()` do greedy, reproducible rollouts (ties broken
+  lexicographically — no `Math.random`, so cloud runs are stable). Backoff is what
+  gives **generalization**: an unseen order-N context falls back to shorter
+  suffixes and still yields the most-likely related movement.
+- Consumes the **real dataset shape** — `extractMovementSequences()` pulls per-
+  trajectory action-token sequences straight from `ReplayManifest.events` (the
+  format `exporter.ts` already emits), with a pluggable `MovementActionTokenizer`.
+- `snapshot()` / `restoreMovementModel()` — serializable, replayable model state.
+- `evaluateMovementModel()` — the **generalization eval harness** (teacher-forced
+  next-token accuracy + mean P(target) + perplexity over held-out trajectories).
+- Barrel exports added in `src/index.ts`.
+
+**Tests:** new `movement-model.test.ts` (12 tests) — extraction/tokenizer,
+repeat-recorded-sequence via rollout, generalize-via-backoff, deterministic
+tie-break, snapshot round-trip, perfect-fidelity on a learnable cycle, beats-chance
+on held-out synthetic streams (incl. a seeded, `Math.random`-free synthetic
+event-stream generator), and the pluggable registry. **12/12 pass.**
+`typecheck:src` ✅ (exit 0). Build ✅ (543.87 kB).
+
+**⚠️ Pre-existing test failures (NOT from this run):** the full suite has **3
+failing tests** in `operator-runtime.test.ts` (background-task recovery →
+`SyntaxError: Expected ',' or '}'` JSON parse), `app.test.ts`, and
+`server.test.ts`. Verified identical (3 failed / 47 passed in those 3 files) on a
+**truly clean tree** with my files stashed away — so they are independent of this
+change and predate it (run 8 logged 174/174, so they regressed sometime between
+2026-06-23 and now; the JSON-parse symptom smells like a fixture/serialization or
+date-sensitive issue). My change is strictly additive and fully green. Pushed to
+the designated feature branch `claude/peaceful-dirac-5k7tgy` (not `main`).
+
+**New idea:** now that a trained model can `predictNext`, close the loop with a
+**model-guided replay engine** — feed the model's `generate()` output back through
+`ReplayRuntimeService` to *drive* actions (not just score them), and add a
+"divergence guard" that halts replay when the live observation stream stops
+matching the model's expected context (safety rail for on-device autonomy). Also:
+wire `probabilityOf()` in as the RL reward signal the `runner`'s axolotl plan
+already references as `--reward-model replay-manifest`.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
