@@ -6,6 +6,57 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-07 (run 9) — Fix a real shell-quoting bug + non-atomic state writes; de-flake the suite
+
+**Audited:** The actual `npm test` result on this machine — the log claimed
+174/174 but the suite was **flaky** (4→5→3 failures across runs) in
+`operator-runtime.test.ts`, `app.test.ts`, and `server.test.ts`. Instrumented
+`readJsonFile` to capture the corrupt payload and traced it to the background-task
+launcher.
+
+**Root causes found (two genuine production bugs, not test bugs):**
+1. **Broken single-quote escape** in `src/harness/background-tasks.ts`
+   `shellQuote()` — it replaced `'` with `"'"'"'` (an extra leading `"`) instead
+   of the correct POSIX `'"'"'` (the sibling `src/training/runner.ts` had it
+   right). Any background-task **command containing a single quote** — e.g. the
+   ubiquitous `printf 'x'` — produced a **malformed shell string**, so the launch
+   script wrote **corrupt JSON** to `state.json` (unescaped newlines, mangled
+   quotes → `SyntaxError: Expected ',' or '}'`). Whichever write (the corrupt
+   shell one vs. the test's valid one) won the race decided pass/fail → flaky.
+2. **Non-atomic state writes** in both launchers. The shell wrote state via a
+   `>` redirect and the Python completion-writer via `write_text` — both
+   truncate-in-place, so a concurrent reader could see a torn file. Switched both
+   to write-temp-then-rename (`mv`/`Path.replace`), matching `writeJsonAtomic`.
+
+**Changed:**
+- `src/harness/background-tasks.ts`: fixed `shellQuote`; made the shell + Python
+  state writes atomic.
+- `src/training/runner.ts`: same atomic-write hardening (latent, same class).
+- `src/cli/app.ts`: added an optional `backgroundTaskSpawnProcess` /
+  `backgroundTaskIsProcessRunning` **passthrough** on `OperatorCliAppOptions`
+  (forwarded to the runtime) — a clean testability seam; production behaviour
+  unchanged (defaults to real `spawn`).
+- Tests: made the four spawn-racing tests deterministic by injecting a no-op
+  launcher (no real launch-script process racing the state file) with an
+  appropriate liveness probe — `operator-runtime.test.ts`, `app.test.ts` (×2),
+  `server.test.ts` (main + drifting + breaker runtimes). Updated
+  `runner.test.ts`'s launch-script assertion to the atomic-write form.
+- **New regression test** (`background-tasks.test.ts`): runs the real launch
+  script for a single-quoted command end-to-end, waits for terminal state, and
+  asserts `state.json` is valid, parseable JSON with the command intact.
+  Verified it fails (same `SyntaxError`) when the escape bug is reintroduced.
+
+**Test results:** flakiness **eliminated** — **175/175 passing, 12+ consecutive
+clean runs** (was 4–5 flaky failures). Build ✅. `typecheck:src` ✅ (exit 0).
+Full `tsc` steady at **125** (test-only debt, unchanged).
+
+**New idea:** the whole class of flakiness came from tests spawning **real OS
+processes** and racing their async state writes. Add a tiny shared test helper
+`makeDeterministicRuntime()` (no-op launcher + configurable liveness) so future
+background-task tests can't reintroduce this, and a lint/grep guard in the engine
+that flags a `new StandaloneOperatorRuntime`/`OperatorCliApp` in a test that
+calls `startBackgroundTask` without injecting `backgroundTaskSpawnProcess`.
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

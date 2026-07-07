@@ -370,4 +370,43 @@ describe("BackgroundTaskExecutionService", () => {
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
   });
+
+  // Regression: the launch script embeds the command inside a JSON state
+  // payload and single-quotes it for the shell. A buggy single-quote escape
+  // (or a non-atomic state write) used to emit corrupt JSON to state.json
+  // whenever the command itself contained a single quote — which is the common
+  // case (`printf 'x'`). Run the real launch script end-to-end and require the
+  // resulting state file to be valid, parseable JSON with the command intact.
+  it("writes valid JSON state for a command containing single quotes", async () => {
+    const rootDir = await makeTempDir();
+    // Default (real) spawn so the actual launch script executes.
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"));
+    const command = "printf 'quoted-value\\n'";
+    const task = await store.start({ title: "Quoted command", command, cwd: rootDir, kind: "task" });
+
+    // Wait for a terminal state so we never read a mid-flight write.
+    const statePath = path.join(rootDir, task.execution.stateFile);
+    let raw: string | undefined;
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      try {
+        raw = await fs.readFile(statePath, "utf8");
+        const parsed = JSON.parse(raw) as BackgroundTaskExecutionState;
+        if (parsed.status === "completed" || parsed.status === "failed") {
+          break;
+        }
+      } catch {
+        // File may not exist yet, or be a transient parse miss; retry.
+      }
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+
+    expect(raw).toBeDefined();
+    // The state must be valid JSON (the whole point of the regression) and
+    // preserve the exact command, quotes and all.
+    const state = JSON.parse(raw as string) as BackgroundTaskExecutionState;
+    expect(state.taskId).toBe(task.id);
+    expect(state.status).toBe("completed");
+    expect(state.command).toBe(command);
+    await expect(store.executionService.readOutput(task)).resolves.toContain("quoted-value");
+  });
 });

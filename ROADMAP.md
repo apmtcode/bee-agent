@@ -4,6 +4,14 @@ Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
 ## Foundations / DX
+- [x] **De-flake the test suite** (2026-07-07, run 9). Root-caused intermittent
+      failures to a real bug: `background-tasks.ts` `shellQuote` used a broken
+      single-quote escape (`"'"'"'` vs. correct `'"'"'`), so any command with a
+      `'` wrote corrupt JSON to `state.json`; plus non-atomic state writes in
+      both launchers. Fixed the escape, made writes atomic (temp+rename), added a
+      testability seam on `OperatorCliApp`, injected deterministic launchers into
+      the racing tests, and added an end-to-end regression test. Suite now
+      **175/175, deterministic**.
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`
@@ -84,3 +92,13 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
       count to a baseline file and fail if a module regresses above it. Lets the
       engine pay debt down module-by-module without one green-gate blocking
       progress, and prevents backsliding while the total is still > 0.
+- [ ] **Deterministic background-task test harness** (from run 9): add a shared
+      `makeDeterministicRuntime()` helper (no-op launcher + configurable liveness
+      probe) and an engine grep-guard that flags any test constructing a runtime
+      / `OperatorCliApp` and calling `startBackgroundTask` without injecting
+      `backgroundTaskSpawnProcess` — so real-process spawn races can't creep back
+      into the suite.
+- [ ] **Flaky-test detector in the pre-push self-check**: run the suite N times
+      (or `vitest --retry=0` with a repeat) and fail the run if results differ
+      between iterations, so nondeterminism is caught the run it's introduced
+      rather than masked by a single lucky pass.
