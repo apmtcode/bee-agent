@@ -400,6 +400,33 @@ export type {
   LocalTrainingRuntime,
   TrainingJobPlan,
 } from "./training/runner.js";
+export {
+  MOVEMENT_END_TOKEN,
+  MOVEMENT_START_TOKEN,
+  MarkovMovementBackend,
+  buildMovementDatasetFromReplays,
+  buildMovementDatasetFromTrajectories,
+  evaluateMovementModel,
+  generateMovementSequence,
+  generateSyntheticMovementDataset,
+  slugifyMovementSummary,
+  splitMovementDataset,
+  tokenizeMovementAction,
+} from "./training/movement-model.js";
+export type {
+  MarkovMovementArtifact,
+  MovementDataset,
+  MovementEvalReport,
+  MovementGenerationOptions,
+  MovementGenerationResult,
+  MovementModelArtifact,
+  MovementModelBackend,
+  MovementPrediction,
+  MovementSequence,
+  MovementToken,
+  MovementTrainOptions,
+  SyntheticMovementOptions,
+} from "./training/movement-model.js";
 export type {
   ExportedMemoryReference,
   ExportedPromotedSkill,

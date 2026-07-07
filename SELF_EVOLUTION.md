@@ -6,6 +6,69 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-07 (run 9) — 🧠 Movement-model backend: in-process train → repeat → generalize
+
+**Audited (standing objective #2):** `src/training/` and `src/capture/`. Found the
+subsystem could capture, schematize, dataset-ify, and replay movements, and could
+emit on-device training *plans* (`runner.ts` → mlx/axolotl shell commands) — but
+had **no in-process model that actually learns from the dataset**. Pieces (c)
+"post-train a model to repeat recorded movements" and (d) "generalize to new but
+related movements" were unvalidatable in the cloud/CI because the only "training"
+path shells out to Apple-Silicon runtimes that don't exist here.
+
+**Changed (additive) — new `src/training/movement-model.ts` (+ barrel exports):**
+- **Pluggable backend seam** `MovementModelBackend<A>` — `train(dataset)` /
+  `predictNext(artifact, context)`. This is the documented plug point for a real
+  on-device small model (the interface docs spell out the async-train / sync-infer
+  contract); the training runner's shell plan remains the *execution* side.
+- **`MarkovMovementBackend`** — a deterministic, dependency-free reference
+  backend: an order-N Markov model with **stupid-backoff**. Repeats recorded
+  sequences exactly, and **generalizes** — a novel-but-related prefix backs off to
+  shorter learned contexts instead of failing. Artifact is plain JSON (persistable
+  next to a training job, reloadable for inference).
+- **Tokenizer** `tokenizeMovementAction({tool,summary})` → stable `tool:slug`
+  tokens; **dataset builders** from trajectory spans *and* replay manifests
+  (`buildMovementDatasetFrom{Trajectories,Replays}`) so it consumes the real
+  capture shapes.
+- **Generation** (`generateMovementSequence`, START/END sentinels, `maxSteps`
+  termination guard) and a **generalization eval harness**
+  (`evaluateMovementModel` → next-token accuracy, exact-sequence match, mean
+  prefix match).
+- **Synthetic event-stream generator** (`generateSyntheticMovementDataset`,
+  seeded LCG — reproducible in CI) that random-walks a canonical UI workflow
+  chain so trained/held-out walks share learnable sub-paths, plus
+  `splitMovementDataset` for train/held-out folds.
+
+**Test results:** new `movement-model.test.ts` — **16/16 pass**. Measured on
+held-out synthetic trajectories (seed 11, order 2): next-token accuracy **0.82**,
+mean prefix match **0.91** — i.e. the model genuinely generalizes to related
+movements it never trained on. `npm run typecheck:src` ✅ (source stays green).
+Full `tsc` **125 → 125** (no new debt). Build ✅.
+
+**⚠️ Pre-existing blocker (NOT introduced this run — HIGH PRIORITY next):** the
+full suite has **3 failing tests** that fail on a clean checkout too (verified via
+`git stash`): `operator-runtime.test.ts` (recover background tasks),
+`server.test.ts`, `app.test.ts`. Root cause is date/environment-sensitive and
+deterministic *now* (all 174 passed on 2026-06-23; 3 fail on 2026-07-07 with **no
+code change**). The `operator-runtime` failure is a `SyntaxError` reading a
+background-task **state file** — malformed JSON on *line 1* (single-line), so it's
+NOT written by `writeJsonAtomic` (which emits pretty multi-line + atomic rename).
+It comes from the **shell-based state writer** in
+`src/harness/background-tasks.ts` `renderLaunchScript` (`printf '%s' <json> | sed
+… > statefile` in a spawned process). Next run should isolate and fix that writer
+(likely have the spawned script write valid JSON deterministically / avoid the
+sed-substitution fragility), which should clear all 3. Pushed to the designated
+feature branch so the green feature isn't stranded behind an unrelated
+pre-existing failure.
+
+**New idea:** now that inference is in-process, add a **replay-vs-model fidelity
+gate** — wire `evaluateMovementModel` into the training job lifecycle so a trained
+artifact is scored against a held-out fold and the job is marked
+`degraded` if next-token accuracy drops below a configurable floor. That turns
+"did the model actually learn the movements?" into a measured, regression-tracked
+property instead of a hope, and gives the eventual real on-device backend an
+objective acceptance criterion.
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
