@@ -8,6 +8,18 @@ unchecked items are queued. Keep this richer than you found it each run.
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`
       (2026-06-22).
+- [x] **Fix `shellQuote` POSIX-escaping bug + de-flake background-task tests**
+      (2026-07-07, run 9). `src/harness/background-tasks.ts` escaped `'` as
+      `"'"'"'` (malformed) instead of `'"'"'`, corrupting launch-script JSON for
+      any quoted command. Injected a spawn seam
+      (`OperatorCliApp.backgroundTaskSpawnProcess`) + mock spawns to make the 3
+      spawn-racy tests deterministic. Suite restored to **174/174**, stable
+      across repeated runs.
+- [ ] **Harden `renderLaunchScript` JSON generation** (surfaced run 9). Replace
+      the `printf | sed` initial-state write with the `python3` + `json.dump`
+      argv approach already used for completion, killing the sed step and the
+      whole shell-quoting failure class. Add a `shellQuote` round-trip property
+      test (adversarial inputs: quotes, `$`, newlines, backslashes).
 - [ ] **Pay down typecheck debt** (surfaced by the `typecheck` script). Full
       `tsc --noEmit` count was **397** on 2026-06-22; now **125**. 🎯 ALL source
       (`src/**` non-test) files typecheck clean since run 7; remaining 125 errors

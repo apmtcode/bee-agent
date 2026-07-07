@@ -6,6 +6,61 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-07 (run 9) — Fix a real shell-quoting bug + make background-task tests hermetic (green suite restored)
+
+**Audited:** Project health. `npm test` was **3 failing / 171 passing** on the
+committed HEAD (`3c7b7236`) — a regression from run 8's claimed 174/174, caused
+by nondeterministic real-process spawning in unit tests plus a latent quoting
+bug. Root-caused all three before touching anything.
+
+**Root cause #1 — genuine correctness/security bug (`src/harness/background-tasks.ts`).**
+`shellQuote()` used a **malformed** POSIX single-quote escape: it replaced each
+`'` with `"'"'"'` (leading `"`) instead of the correct `'"'"'` (which must *close*
+the surrounding single-quote first). For any command/path/cwd containing a `'`,
+this corrupted the generated launch script: `printf 'x'` became `printf "'x"'`,
+which in turn wrote **invalid JSON** to the task's `state.json` (via the
+`printf | sed` payload step), so every subsequent `readState()` threw
+`SyntaxError` and background-task recovery/sync crashed. The sibling copy in
+`src/training/runner.ts` already had the correct form — only this one was wrong.
+Fixed to `'"'"'` with an explanatory comment. Verified byte-for-byte with a
+standalone repro (`printf '%s' <quoted>` round-trips arbitrary values now).
+
+**Root cause #2 — flaky tests from real OS spawns.** `StandaloneOperatorRuntime`
+spawns a real `bash` launch script per background task. Three tests
+(`operator-runtime`, `control-plane/server`, `cli/app`) start tasks and then
+assert on recovery/health/stop, but the launch script writes `running`/`completed`
+state **asynchronously**, racing the tests' own manual state. With
+`isProcessRunning: () => false`, a still-`running` state file is read as
+`background task missing-process`, which degrades remote-control health
+(`control=degraded` instead of `active`/`mixed`) — exactly the observed diffs.
+
+**Changed (additive):**
+- `src/harness/background-tasks.ts`: corrected `shellQuote` (the real fix).
+- `src/cli/app.ts`: `OperatorCliApp` now forwards optional
+  `backgroundTaskSpawnProcess` / `backgroundTaskIsProcessRunning` to its runtime
+  (dependency-injection seam for tests; production default unchanged = real spawn).
+- Tests only: injected a deterministic mock spawn (`() => ({ pid, unref })`) into
+  the four runtimes/apps that start background tasks, so state is under test
+  control. The one test that genuinely needs process *output* keeps the task
+  "alive" (`isProcessRunning: () => true`) and writes its output explicitly.
+
+**Test results:** `npm test` **174/174** green, and **deterministic across 3
+consecutive full runs** (previously order/load-dependent). `typecheck:src` ✅
+(exit 0). `build` ✅. No source file regressed; `background-tasks.ts` change is
+one line of logic.
+
+**New idea (queued to ROADMAP):** the `printf | sed` JSON-payload construction in
+`renderLaunchScript` is inherently fragile — it hand-rolls JSON escaping through
+two shell layers. Replace the initial `running`-state write with the same
+`python3 -c 'json.dump(...)'` mechanism already used for the completion write
+(pass fields via argv, not string interpolation), eliminating the sed step and
+the whole class of quoting bugs. Also add a tiny property-style test that feeds
+`shellQuote` adversarial inputs (embedded quotes, `$`, newlines, `\`) and asserts
+`bash -c "printf '%s' <quoted>"` round-trips exactly — so this regression cannot
+silently return.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
