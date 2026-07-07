@@ -59,16 +59,41 @@ unchecked items are queued. Keep this richer than you found it each run.
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
 (exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
-      objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
-      deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+- [x] Inventory what `src/capture` + `src/training` already implement vs. the
+      objective's five pieces (2026-07-07, run 9): capture (recorder/adapters),
+      schema (`TrajectorySpan`/`ReplayTimelineEvent`), dataset (exporter →
+      `ReviewedExportManifest`), replay (`buildReplayManifest`/replay-service),
+      train (`runner.ts` mlx/axolotl plans). **Gap found & filled: inference.**
+- [x] Pluggable local-model backend interface with a deterministic mock backend
+      (2026-07-07, run 9): `MovementModelBackend` + `NGramMovementBackend` +
+      `MovementInferenceEngine` in `src/training/movement-model.ts`. Documented
+      seam for a real on-device small model.
+- [x] Generalization eval harness (seed form, 2026-07-07, run 9):
+      `MovementInferenceEngine.evaluateNextStep` — leave-one-position-out
+      next-step label accuracy on held-out synthetic sequences. Next: measure
+      full-rollout fidelity (edit distance) vs. ground-truth trajectories.
+- [ ] Synthetic event-stream **generator** (a reusable fixture factory that emits
+      parameterized `TrajectorySpan`/replay streams) to exercise
+      capture→dataset→replay→infer round-trips at scale — tests currently
+      hand-build small sequences.
+- [ ] Online replay-fidelity feedback loop: after a rolled-out movement executes,
+      capture the (predicted vs actual) delta as a new reviewed trajectory,
+      re-fit incrementally, and track `evaluateNextStep` accuracy over time. Add a
+      confidence threshold so `predictNext` *abstains* (asks the operator) on
+      low-confidence generalizations rather than guessing.
+- [ ] Real on-device backend: implement `MovementModelBackend` against a small
+      local model (behind the existing pluggable seam) for when bee-agent runs
+      locally; keep `NGramMovementBackend` as the CI default.
+
+## Known broken tests (this cloud environment)
+- [ ] **Background-task state fixture emits invalid JSON.** In this container,
+      3 tests fail (`operator-runtime.test.ts`, `control-plane/server.test.ts`,
+      `cli/app.test.ts`) with `SyntaxError: Expected ',' or '}'` from
+      `readJsonFile` (`src/shared/fs.ts:17`) while reconciling a background-task
+      state file — an unsubstituted shell-template PID (`"$$"`) reaches the JSON
+      parser (~position 311). Pre-existing (fails on clean HEAD; prior runs on
+      other machines reported 174/174). Fix the fixture/launch-script templating so
+      the state file is valid JSON regardless of `$$` substitution.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

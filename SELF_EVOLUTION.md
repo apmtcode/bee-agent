@@ -6,6 +6,57 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-07 (run 9) — Movement inference engine: predict + generalize movements (objective #2 part d)
+
+**Audited:** The local-movement learning subsystem (`src/capture/` + `src/training/`)
+against the standing objective's five pieces. Found the pipeline had
+capture → schema → dataset → replay → *on-device training-plan generation*
+(`runner.ts` emits mlx/axolotl launch scripts) but **no inference/generalization
+side** — nothing consumed learned movement data to *predict the next movement*.
+Objective #2 parts (c) "repeat the recorded movements" and (d) "generalize to
+perform new but related movements" had no code path. Also a queued ROADMAP item:
+"pluggable local-model backend interface … with a deterministic mock backend."
+
+**Changed (additive) — new `src/training/movement-model.ts`:**
+- `MovementModelBackend` — the pluggable model seam (fit / predictNext). This is
+  what a real on-device small model implements when bee-agent runs locally.
+- `NGramMovementBackend` — a fully deterministic mock backend (order-N n-gram with
+  stupid-backoff over canonical movement labels). Backoff is what makes it
+  *generalize*: a new-but-related prefix it never saw at full length still gets a
+  prediction from the longest shared sub-context. Ties broken deterministically
+  (count → label → summary) so tests are reproducible. Zero OS/ML deps → cloud-safe.
+- `MovementInferenceEngine` — fit, `predictNext`, `rollout` (seed → predicted
+  movement sequence, with terminal-label / max-repeat guards), and
+  `evaluateNextStep` (leave-one-position-out next-step accuracy — a seed
+  generalization-eval harness).
+- Adapters `sequenceFromTrajectory` / `sequenceFromReplay` (+ batch variants)
+  turning existing `TrajectorySpan` / `ReplayManifest` data into training
+  sequences. Barrel-exported all of it from `src/index.ts`.
+- `src/training/movement-model.test.ts` — 10 tests over synthetic event streams:
+  exact replay, generalization via backoff, unconditional fallback, untrained
+  no-op, terminal-label stop, runaway-loop guard, next-step accuracy, and the
+  three adapters.
+
+**Test results:** `typecheck:src` ✅ CLEAN. Build ✅. New tests ✅ **10/10**.
+Full suite **181/184** — the **3 failures are PRE-EXISTING and unrelated** to this
+run (confirmed by re-running the suite with my changes stashed: same failures on
+clean HEAD). Root cause: `operator-runtime`/`server`/`app` background-task tests
+read a state fixture that contains an unsubstituted shell-template PID (`"$$"`),
+so `readJsonFile` throws `SyntaxError: Expected ',' or '}'` at parse position ~311.
+This is an environment/fixture bug in this cloud container (prior runs on other
+machines reported 174/174), not a regression — my diff is source-additive only
+(one new module + barrel exports). Logged as a fix target in ROADMAP.
+
+**New idea:** an **online replay-fidelity feedback loop** — when a rolled-out
+movement is executed and its real outcome captured, feed the (predicted vs actual)
+delta back as a new reviewed trajectory so `evaluateNextStep` accuracy is tracked
+over time and the backend can be re-fit incrementally. Combined with a
+confidence threshold, the engine can *abstain* (ask the operator) instead of
+guessing when `predictNext` confidence is low — a safety valve for the
+generalization path.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

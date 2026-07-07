@@ -423,6 +423,22 @@ export type {
   SftTrainingConfig,
 } from "./training/job-manifest.js";
 export {
+  MovementInferenceEngine,
+  NGramMovementBackend,
+  canonicalMovementLabel,
+  sequenceFromReplay,
+  sequenceFromTrajectory,
+  sequencesFromReplays,
+  sequencesFromTrajectories,
+} from "./training/movement-model.js";
+export type {
+  MovementModelBackend,
+  MovementPrediction,
+  MovementRolloutOptions,
+  MovementSequence,
+  MovementToken,
+} from "./training/movement-model.js";
+export {
   FileTrainingJobStore,
 } from "./training/job-store.js";
 export type {
