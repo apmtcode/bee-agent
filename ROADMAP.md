@@ -62,13 +62,39 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
+      for a real on-device small model. **DONE run 9** —
+      `src/training/movement-policy.ts`: `MovementPolicyBackend` seam +
+      `MarkovMovementBackend` (variable-order backoff Markov) that learns from a
+      dataset, repeats recorded sequences, and generalizes novel prefixes via
+      backoff. Wired to captured spans via `movementDatasetFromSpans`. 9 tests.
 - [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
+      round-trips without real OS input. (Partial: `movementDatasetFromSpans`
+      turns captured spans into a training dataset; still want a generator that
+      *synthesizes* structured event streams to feed capture from scratch.)
 - [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      related synthetic trajectories. **Next up (run 9 idea):** train/held-out
+      split + edit-distance rollout fidelity score, so generalization is a
+      tracked metric not a one-off assertion.
+- [ ] `target`-abstracting token mode for the movement backend
+      (`gesture+direction` tokens, target predicted separately) so it generalizes
+      the movement *pattern* across differing UI element names. (run 9 idea.)
+
+## Known blockers (pre-existing, discovered run 9)
+Three tests fail on a **clean HEAD** (verified by stashing run-9's diff — same 3
+fail without it; they also fail in isolation, so not flakiness). They predate
+run 9 and are unrelated to the movement subsystem. Fix in a dedicated run:
+- [ ] `operator-runtime.test.ts` "starts, syncs, recovers…background tasks":
+      `recoverBackgroundTasks` → `readJsonFile` throws `SyntaxError: Expected ','
+      or '}' after property value … at position 311` reading a written state
+      file. Likely a background-task state-serialization bug (`src/harness/
+      background-tasks.ts` `writeState`/`readState`), data/env-dependent. Highest
+      priority — smells like a real correctness bug, not a stale expectation.
+- [ ] `server.test.ts` "handles session…and orchestration methods": a
+      `toMatchObject` result-shape drift (expected 2 props, actual 10).
+- [ ] `app.test.ts` "supports session lifecycle…": status string reports
+      `control=mixed`, test expects `control=active`.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

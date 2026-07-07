@@ -6,6 +6,64 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-07 (run 9) — Movement-policy backend: in-process learn + repeat + generalize
+
+**Audited:** Standing objective #2(c)(d) — "post-train a local model on recorded
+movements to repeat them, and generalize to new but related movements." The
+capture side (`src/capture/*`) and the training *plumbing* (`src/training/*`)
+were rich, but `runner.ts` only emits mlx/axolotl launch scripts that require a
+real Apple-silicon machine. **Nothing in the repo could actually learn from a
+movement dataset or predict a next movement in-process**, so objective #2's
+learn/repeat/generalize behaviour was entirely untestable in the cloud — the one
+part the roadmap flagged as the next increment ("pluggable local-model backend …
+with a deterministic mock backend").
+
+**Changed (additive, new files only + one barrel export block):**
+- **`src/training/movement-policy.ts`** — a pluggable `MovementPolicyBackend`
+  seam (`train` / `loadModel`) returning a serializable `MovementPolicyModel`
+  (`predictNext` / `generate` / `serialize`), plus a real reference
+  implementation `MarkovMovementBackend`. It's a genuine variable-order backoff
+  Markov model over movement tokens (`gesture|target|direction`, with START/END
+  sentinels): argmax rollout **repeats** recorded sequences deterministically
+  (lexical tie-break for reproducibility); unseen high-order contexts **back off**
+  to lower order — the textbook n-gram **generalization** — down to the unigram
+  marginal (`order: 0`). A neural/on-device backend can implement the same
+  interface without touching callers (the documented seam).
+- Ties it to the real capture pipeline: `movementStepFromAction` (normalizes
+  device `metadata.gesture`, browser `metadata.action`, or the tool name) and
+  `movementDatasetFromSpans` (timestamp-ordered steps per `TrajectorySpan`,
+  skipping movement-less spans).
+- Exported all of it from `src/index.ts`.
+- **`src/training/movement-policy.test.ts`** — 9 tests: repeat single/dominant
+  path, generalize-by-backoff (asserts `order === 1` on a novel order-2 prefix),
+  unigram fallback (`order === 0`), END-terminated rollout + `maxSteps`,
+  serialize/loadModel prediction-parity, action→step derivation across
+  device/browser/generic, span→dataset ordering, empty-span skip.
+
+**Test results:** new suite **9/9 ✅**. `npm run build` ✅. `npm run typecheck:src`
+✅ (source stays fully green). Full `npm test`: **180 passed, 3 failed** — the 3
+failures are **pre-existing on the clean HEAD** (verified by stashing this run's
+diff: the same 3 fail without my change; they also fail in isolation, so not
+flakiness). They are unrelated subsystems: (1)
+`operator-runtime.test.ts` recover-background-tasks — `readJsonFile` hits
+`SyntaxError: Expected ',' or '}'` at pos 311 parsing a written state file
+(background-task state serialization bug, data/env-dependent); (2)
+`server.test.ts` orchestration — a `toMatchObject` result-shape drift; (3)
+`app.test.ts` — status string `control=mixed` vs expected `control=active`.
+Logged to ROADMAP as a red-suite blocker for a future run. My change adds no
+failures and touches none of those paths, so it is pushed to the designated
+feature branch (`claude/peaceful-dirac-spoiek`), not `main`.
+
+**New idea:** add a **generalization eval harness** that splits a synthetic
+movement dataset into train/held-out-related sets, trains the backend, and
+scores rollout fidelity (edit distance to the held-out target sequence) — turning
+"does it generalize?" into a tracked metric instead of a hand-written assertion.
+Second idea: a `target`-abstracting token mode (`gesture+direction` only, target
+predicted separately) so the model generalizes the *movement pattern* across
+differing UI element names — the next fidelity lever after backoff.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
