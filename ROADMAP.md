@@ -57,18 +57,43 @@ unchecked items are queued. Keep this richer than you found it each run.
 
 ## Local-movement learning subsystem
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
-device/os/browser adapters, consent store, ingestion) and `src/training/`
-(exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
-      objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
-      deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+device/os/browser adapters, consent store, ingestion), `src/training/`
+(exporter, job store/manifest, runner, execution service — *external* mlx/axolotl
+launch plans), and `src/movement/` (run 9: in-process pluggable train/infer +
+synthetic corpus + generalization eval). Next increments:
+- [x] Inventory `src/capture` + `src/training` vs. the objective's five pieces
+      — DONE run 9 (capture/schema/dataset/replay scaffolded; train/infer was
+      external-only, so the in-process backend was the gap).
+- [x] Pluggable local-model backend interface with a deterministic mock backend
+      (so cloud/CI tests pass) + documented seam for a real on-device model —
+      DONE run 9 (`MovementModelBackend` + `NgramMovementBackend`, back-off
+      n-gram over structural movement tokens; serialize/load round-trip).
+- [x] Synthetic event-stream generator to validate the loop without real OS
+      input — DONE run 9 (`src/movement/synthetic.ts`, seeded mulberry32,
+      train/held-out split with remapped targets).
+- [x] Generalization eval harness: replay fidelity on held-out related
+      trajectories — DONE run 9 (`evaluateMovementModel`: accuracy, top-K, and
+      back-off-only `generalizedAccuracy`).
+- [ ] **Behavior-cloning replay driver:** consume a `TrainedMovementModel` and
+      drive the (mock) device/browser adapters step-by-step to *re-perform* a
+      trajectory — closes record → train → **act** end-to-end with a mock
+      actuator so it runs in CI.
+- [ ] **Class-backoff token hierarchy** (gesture-kind → gesture-family → any) so
+      the model generalizes even when a whole gesture kind is novel; report the
+      abstraction level each prediction used.
+- [ ] Real on-device small-model backend implementing `MovementModelBackend`
+      (behind the same interface the runner's mlx/axolotl plans target).
+
+## Test health
+- [ ] **Triage 3 pre-existing suite failures** (surfaced run 9; fail on a fully
+      clean tree, so they regressed the run-8 "174/174" note). All in files no
+      recent run touched: `app.test.ts` (×2 — `control=active` platform-control
+      status; a background-task id assertion), `server.test.ts` (×1 —
+      orchestration result shape returning 10 keys where the test expects 2),
+      `operator-runtime.test.ts` (×1 — background-task cancel returns
+      `undefined`). They involve detached background-task/cron timing + result-map
+      shapes; determine flaky-under-parallelism vs. genuine regression, then fix
+      so the suite is green and the engine's pre-push gate is trustworthy again.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
