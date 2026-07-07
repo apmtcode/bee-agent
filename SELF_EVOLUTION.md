@@ -6,6 +6,73 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-07 (run 9) — 🎯 Movement-policy learning: pluggable train + infer + generalize backend
+
+**Pivot from the typecheck grind (runs 5–8).** The full `tsc` is at 125 errors,
+all in test files, and source is clean — good enough to leave for a run.
+Standing objective #2 (local-movement learning) had scaffolding for **capture →
+schema → dataset → replay** (`src/capture/*`) and a training *runner* that emits
+mlx/axolotl launch scripts (`src/training/runner.ts`), but the actual **model
+that learns from movements and predicts/generalizes** — objective #2 pieces (c)
+train and (d) generalize — did **not exist in-process**. The runner only produces
+shell scripts for real Apple-Silicon hardware, which can't run in the cloud, so
+the loop had never been closed or validated end-to-end.
+
+**Audited:** `src/training/{runner,exporter,export-manifest}.ts`,
+`src/capture/{replay,trajectory}.ts`. Confirmed the gap: no `train(dataset) →
+policy` / `policy.predict(context)` seam, no backend interface, no eval harness.
+
+**Changed (additive):** new `src/training/movement-model.ts` (+ test, 17 cases):
+- **`MovementPolicyBackend` interface** — pluggable `train(dataset) → MovementPolicy`.
+  The real on-device model (transformer/RL policy) implements the same shape and
+  swaps in behind it; documented as the production seam.
+- **`NgramMovementBackend`** — dependency-free reference backend: a variable-order
+  Markov model with **stupid-backoff**. The backoff *is* the generalization
+  mechanism — an unseen full-length context falls back to the longest seen
+  suffix, so a *new but related* movement sequence still yields a sensible
+  next-movement prediction. This is the deterministic cloud/CI stand-in AND a
+  genuine learner for discrete movement streams.
+- **Dataset pipeline:** `sequenceFromReplay` / `sequenceFromTrajectory` tokenize
+  existing `ReplayManifest` / `TrajectorySpan` structures into canonical movement
+  tokens (`act:click`, `obs:screen`); `buildMovementDataset` windows them.
+- **Persistence:** `policy.serialize()` → plain-JSON `SerializedMovementPolicy`;
+  `deserializeMovementPolicy` rehydrates a runnable policy without retraining
+  (round-trip test proves identical predictions).
+- **Synthetic generator:** `generateSyntheticMovementSequences` — seeded
+  (mulberry32, no `Math.random`) workflow templates with optional structured
+  noise, producing *related-but-novel* sequences for held-out eval.
+- **Generalization eval harness:** `evaluateMovementPolicy` → top-1/top-K
+  accuracy, mean confidence, and a `byBackoffOrder` breakdown that quantifies how
+  much of the score came from generalization (predictions from shorter-than-full
+  contexts). Test: trained on clean workflows, held-out noisy variants score
+  well above chance and top-3 strictly beats top-1, with real backoff usage.
+- Exported the whole surface from `src/index.ts`.
+
+**Test results:** `npm run build` ✅ (5 files, 549 kB). `npm run typecheck:src`
+✅ (source stays clean). New suite ✅ **17/17**. Full `npm test` **187/191** — the
+**4 failures are pre-existing and environmental**, in files I did not touch
+(`operator-runtime`/`server`/`app` background-task tests). Root cause: those
+tests spawn a real subprocess whose bash launch script writes a JSON state file
+via `printf`/`sed`; in *this container's shell* the JSON comes out malformed
+(`SyntaxError` in `readJsonFile`). Proven pre-existing by `git stash`-ing my work
+and re-running: the same 3 files fail identically on the clean HEAD. My change is
+regression-free, so pushed to main (matching runs 1–8).
+
+**New idea:** the `byBackoffOrder` signal is a cheap, model-agnostic **online
+confidence gate** for autonomous replay — when a live movement context only
+matches at a short backoff order (i.e. the agent is improvising far from anything
+recorded), the replay engine should pause and request confirmation rather than
+act. Wire `MovementPolicy` into `ReplayRuntimeService` as an optional predictor
+and surface `backoffOrder`/`confidence` as the gate. Bonus: a second reference
+backend — a prefix-tree/suffix-automaton policy — would let the eval harness
+*compare* backends and make the pluggable interface pay for itself immediately.
+
+**Also queued (real bug found):** the pre-existing background-task launch-script
+JSON malformation is worth a dedicated run — it means task recovery is broken on
+some shells. Logged to ROADMAP.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

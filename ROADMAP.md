@@ -59,16 +59,37 @@ unchecked items are queued. Keep this richer than you found it each run.
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
 (exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
-      objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
-      deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+- [x] Inventory what `src/capture` + `src/training` already implement vs. the
+      objective's five pieces (2026-07-07, run 9). Gap found & closed: capture →
+      schema → dataset → replay existed; **train + infer** did not (runner only
+      emits mlx/axolotl shell scripts, uninstantiable in-process).
+- [x] Pluggable local-model backend interface (`MovementPolicyBackend`) with a
+      deterministic reference backend (`NgramMovementBackend`, variable-order
+      Markov + stupid-backoff) and a documented seam for a real on-device model
+      (2026-07-07, run 9). `src/training/movement-model.ts`.
+- [x] Synthetic event-stream generator (`generateSyntheticMovementSequences`,
+      seeded, structured noise) to validate the capture→train→generalize loop
+      without real OS input (2026-07-07, run 9).
+- [x] Generalization eval harness (`evaluateMovementPolicy`: top-1/top-K
+      accuracy + `byBackoffOrder` generalization breakdown) (2026-07-07, run 9).
+- [ ] **Wire `MovementPolicy` into `ReplayRuntimeService`** as an optional
+      predictor and use `backoffOrder`/`confidence` as an online confidence gate:
+      when a live context only matches at a short backoff order (improvising far
+      from anything recorded), pause replay and request confirmation.
+- [ ] Second reference backend (prefix-tree / suffix-automaton) so the eval
+      harness can *compare* backends and the pluggable interface pays off.
+- [ ] Bridge `ReviewedExportManifest.replays` → `MovementDataset` directly (an
+      exporter helper), so a reviewed export can be trained on with one call.
+
+## Known bugs (found while self-evolving)
+- [ ] **Background-task launch-script JSON malformation** (surfaced run 9). The
+      `operator-runtime`/`server`/`app` background-task tests spawn a real
+      subprocess whose bash launch script writes its state file via
+      `printf`/`sed`; on some shells the JSON is malformed and `readJsonFile`
+      throws `SyntaxError`, breaking task recovery. Pre-existing (fails on clean
+      HEAD in this container). Harden the state-file writer to emit valid JSON
+      shell-independently (write via `python3 -c`/here-doc instead of `sed`), and
+      make `readJsonFile` recovery-tolerant. Dedicated run.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
