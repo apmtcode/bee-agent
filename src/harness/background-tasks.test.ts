@@ -370,4 +370,33 @@ describe("BackgroundTaskExecutionService", () => {
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
   });
+
+  it("renders a launch script whose state JSON survives commands containing single quotes", async () => {
+    const rootDir = await makeTempDir();
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"), () => ({ pid: 2222, unref() {} }));
+    // A command with embedded single quotes AND newlines is exactly what broke
+    // the previous shellQuote: the initial state file (written by printf|sed)
+    // came out as invalid JSON, so readState() threw a SyntaxError on recovery.
+    const task = await store.start({
+      title: "Quoted command",
+      command: "printf 'line-1\nline-2\n'",
+      cwd: rootDir,
+    });
+
+    const script = await fs.readFile(path.join(rootDir, task.execution.launchScript), "utf8");
+    const { execFileSync } = await import("node:child_process");
+    execFileSync("bash", [path.join(rootDir, task.execution.launchScript)], { cwd: rootDir });
+
+    const stateRaw = await fs.readFile(path.join(rootDir, task.execution.stateFile), "utf8");
+    const state = JSON.parse(stateRaw) as BackgroundTaskExecutionState;
+    expect(state.command).toBe("printf 'line-1\nline-2\n'");
+    expect(state.status).toBe("completed");
+    expect(state.exitCode).toBe(0);
+    // Sanity: the rendered script kept the quoted command intact for `bash -lc`.
+    expect(script).toContain("bash -lc");
+
+    // And the execution service can read that state back without throwing.
+    const service = new BackgroundTaskExecutionService(rootDir, () => ({ pid: 2222, unref() {} }));
+    await expect(service.readState(task)).resolves.toMatchObject({ status: "completed", exitCode: 0 });
+  });
 });

@@ -1,4 +1,5 @@
-import { execFile } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -9,6 +10,29 @@ import { OperatorCliApp, parseSlashCommand } from "./app.js";
 
 const tempDirs: string[] = [];
 const execFileAsync = promisify(execFile);
+
+// Deterministic background-task spawn for tests that assert on real launch-script
+// output while expecting the task to remain active. A real detached process
+// writes output AND a terminal state file asynchronously, so assertions race
+// both (flaky under parallel test load). Here we run the launch script to
+// completion synchronously (materializing the output file), then remove the
+// state file it wrote so the task keeps its recorded `running` status until the
+// test explicitly stops it. Returns a non-existent pid so stop() hits ESRCH,
+// which it swallows.
+const runLaunchScriptOutputOnly = (
+  command: string,
+  args: string[],
+  options: { cwd: string; env: NodeJS.ProcessEnv },
+): { pid: number; unref(): void } => {
+  try {
+    execFileSync("bash", [command, ...args], { cwd: options.cwd, env: options.env, stdio: "ignore" });
+  } catch {
+    // A non-zero command exit is fine; we only need the output side effect.
+  }
+  // run.sh and state.json are siblings in the task directory.
+  fsSync.rmSync(path.join(path.dirname(command), "state.json"), { force: true });
+  return { pid: 999_001, unref() {} };
+};
 
 async function makeTempDir(): Promise<string> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "operator-cli-app-"));
@@ -801,7 +825,18 @@ describe("OperatorCliApp", () => {
 
   it("supports session lifecycle, transcript, approvals, pairing, config, and prompt commands", async () => {
     const rootDir = await makeTempDir();
-    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    // Deterministic background-task seams: never launch a real detached process
+    // (it would race this test's own state writes). Freshly-started tasks read
+    // their recorded `running` status (so control is `active`) until we later
+    // persist a `running` state with a dead pid and sync it, at which point
+    // isProcessRunning=false surfaces the missing process as a degraded control.
+    const app = new OperatorCliApp({
+      rootDir,
+      cwd: rootDir,
+      currentDate: "2026-05-25",
+      backgroundTaskSpawnProcess: () => ({ pid: 4242, unref() {} }),
+      backgroundTaskIsProcessRunning: () => false,
+    });
     const firstSession = await app.runtime.startSession({ title: "first", cwd: rootDir, agentId: "operator-cli" });
     const secondSession = await app.runtime.startSession({ title: "second", cwd: rootDir, agentId: "operator-cli" });
 
@@ -1063,7 +1098,21 @@ describe("OperatorCliApp", () => {
 
   it("supports background and monitor task commands plus cron commands", async () => {
     const rootDir = await makeTempDir();
-    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    // Deterministic spawn: materialize the launch script's output file so the
+    // view/watch assertions see it, but leave the task in its `running` record
+    // state (write no state file) so it stays active until we stop it below.
+    // A real detached process writes output and state asynchronously, racing
+    // these assertions — flaky under parallel test load.
+    const app = new OperatorCliApp({
+      rootDir,
+      cwd: rootDir,
+      currentDate: "2026-05-25",
+      backgroundTaskSpawnProcess: runLaunchScriptOutputOnly,
+      // The spawned task has no state file (see runLaunchScriptOutputOnly), so
+      // treat it as live: sync must not reconcile the `running` record to failed
+      // before the test explicitly stops it.
+      backgroundTaskIsProcessRunning: () => true,
+    });
     const session = await app.runtime.startSession({ title: "CLI ops", cwd: rootDir, agentId: "operator-cli" });
 
     const startOutput = await app.dispatchSlashCommand(

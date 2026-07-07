@@ -6,6 +6,57 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-07 (run 9) — 🐛 Correctness fix: `shellQuote` corrupted every quoted background-task command
+
+**Audited:** Repo health as the entry gate. `npm test` was **3 failing / 171
+passing** on a clean tree (the log's "174/174" no longer held in this
+environment). Traced all three failures to the background-task subsystem.
+
+**Root-cause bug found (high value):** `shellQuote` in
+`src/harness/background-tasks.ts` used the **wrong** POSIX single-quote escape —
+it replaced `'` with `"'"'"'` instead of `'"'"'`. The reversed ordering injects
+a spurious `"`, so the rendered launch script (and the initial `printf | sed`
+state-file payload) became **invalid** for *any* command/cwd containing a single
+quote. Concretely, `printf 'line-1\nline-2\n'` produced a `state.json` that threw
+`SyntaxError: Expected ',' or '}'` when `readState()` parsed it on recovery — a
+crash on a huge fraction of real shell commands. The sibling implementation in
+`src/training/runner.ts` already had the correct `'"'"'`, confirming this was a
+typo, not a design choice. Verified via a round-trip harness: buggy fails on
+every quoted input; fixed round-trips `printf 'x'`, `a'b`, `echo 'hi' && ls`, etc.
+
+**Changed:**
+- **`src/harness/background-tasks.ts`** (product): fixed `shellQuote` to `'"'"'`
+  with an explanatory comment. One-line behavioural fix.
+- **`src/cli/app.ts`** (product, additive test seam): added optional
+  `backgroundTaskSpawnProcess` / `backgroundTaskIsProcessRunning` to
+  `OperatorCliAppOptions`, threaded into the runtime. Defaults preserve
+  production behaviour (real `spawn` / `process.kill(pid,0)`); tests inject
+  deterministic stand-ins. Mirrors the existing `configHome` isolation pattern.
+- **Tests made hermetic** (the 3 failures + 1 latent flake all spawned *real*
+  detached processes that raced the tests' own `writeState` calls —
+  nondeterministic under parallel load): injected a no-op spawn into the
+  runtime/server/app
+  constructions in `operator-runtime.test.ts`, `server.test.ts` (3 sites), and
+  `app.test.ts`. Added a `background-tasks.test.ts` regression that renders the
+  launch script for a quoted+multiline command, executes it, and asserts the
+  resulting `state.json` parses and reads back as `completed`. For the
+  background/monitor CLI test, added a `runLaunchScriptOutputOnly` spawn stub
+  that materializes output synchronously but leaves the task `running`.
+
+**Test results:** **175/175 passing, 8× consecutive** (was 171/174, flaky).
+`typecheck:src` CLEAN. Build ✅. Full `tsc` still **125** (all pre-existing
+test-file debt; no new errors introduced).
+
+**New idea:** the whole class of flakiness here is "test spawns a real OS process
+and races its async side effects." Add a shared test helper module
+(`src/harness/testing/background-spawn.ts`) exporting `noopSpawn`,
+`syncLaunchSpawn`, and `outputOnlySpawn` stubs so future background-task tests
+opt into determinism by construction instead of each rediscovering the race — and
+consider a lint that flags a `StandaloneOperatorRuntime`/`OperatorCliApp`
+constructed in a test file *without* an injected `backgroundTaskSpawnProcess`.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

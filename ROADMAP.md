@@ -3,6 +3,23 @@
 Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
+## Correctness / reliability
+- [x] **Fix `shellQuote` in `src/harness/background-tasks.ts`** (2026-07-07,
+      run 9). It used the reversed single-quote escape (`"'"'"'` instead of
+      `'"'"'`), injecting a spurious `"` and corrupting the rendered launch
+      script + initial state JSON for **any** command/cwd containing a single
+      quote — `readState()` then threw on the malformed JSON. Matched the correct
+      sibling impl in `training/runner.ts`. Added a launch-script regression test.
+- [x] **Make background-task tests hermetic** (2026-07-07, run 9). Several tests
+      spawned real detached processes that raced their own `writeState` calls
+      (flaky under parallel load). Added an injectable
+      `backgroundTaskSpawnProcess` seam to `OperatorCliApp` and injected no-op /
+      output-only spawns across the affected tests. Suite is 175/175, 8× stable.
+- [ ] **Shared background-spawn test stubs.** Extract `noopSpawn` /
+      `syncLaunchSpawn` / `outputOnlySpawn` into a reusable testing helper so new
+      background-task tests get determinism by construction, plus a lint that
+      flags a runtime/app built in a test without an injected spawn.
+
 ## Foundations / DX
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
