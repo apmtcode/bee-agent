@@ -6,6 +6,71 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-07 (run 9) — 🔴→🟢 Reliable green gate: fixed 2 real concurrency/quoting bugs in background-task launcher
+
+**Audited:** The engine's own verification gate. Found the suite was **flaky**,
+not green — repeated `npm test` runs gave **3–4 failures out of 174**, varying
+run-to-run (`3 failed`, then `4 failed`, then `3`…). A flaky gate silently
+undermines the entire self-evolution loop: step 5 ("don't push if tests fail")
+can't be trusted when "fail" is a coin flip. Root-caused every failure to the
+background-task subsystem (`src/harness/background-tasks.ts`).
+
+**Two genuine production bugs found & fixed (not test bugs):**
+1. **Non-atomic / malformed state-file writes.** The launch script built the
+   initial `running` state by `JSON.stringify`-ing in TS, shell-quoting it, and
+   piping `printf '<json>' | sed '<substitute placeholders>' > state.json`. Two
+   defects: (a) the `sed` pipeline **mangled any command containing quotes or
+   backslashes into invalid JSON** (e.g. `printf 'line-%s\n'` → an unescaped
+   `"'...` mid-string → `SyntaxError: Expected ',' or '}'` when `readState()`
+   parsed it), and (b) the write was non-atomic (`>` truncates in place), so a
+   concurrent `readState()`/`sync()`/`remoteStatus()` could read a half-written
+   file. **Fix:** build the state JSON in **python from discrete argv**
+   (`json.dumps` escapes arbitrary content safely) and write via a per-process
+   temp file + `os.replace()` (atomic rename), mirroring `writeJsonAtomic()` in
+   `shared/fs.ts`. Extracted a shared `renderAtomicStateWriteTail()` used by both
+   the initial and terminal python writers.
+2. **Broken `shellQuote()`.** It escaped a single quote as `"'"'"'` (6 chars,
+   starts with `"`) instead of the correct POSIX idiom `'"'"'` (5 chars). Any
+   command/path/cwd containing a `'` was corrupted → the task launched broken and
+   exited non-zero (`unexpected EOF while looking for matching '`). Latent
+   because the existing real-execution tests happened to use quote-free commands
+   (`sleep 5`, `printf ok`). **Fix:** correct the replacement sequence; verified
+   the output round-trips through `bash`.
+
+**Test determinism (make the gate trustworthy):** the three failing *integration*
+tests (`operator-runtime`, `server`, `app`) spawned **real detached subprocesses
+they never reaped** while asserting on transient lifecycle state — so a real
+`sleep 5`/`printf` race decided pass/fail, and leaked files broke temp-dir
+teardown (`ENOTEMPTY`). They already injected `backgroundTaskIsProcessRunning`
+but forgot a spawn mock. Added a deterministic `noopBackgroundSpawn` (stable fake
+pid, launches nothing) to the runtime constructions that drive execution state
+explicitly. Real-subprocess execution is still covered — by the new deterministic
+harness tests below, which run real bash/python and *wait* for terminal state.
+
+**Tests added** (`src/harness/background-tasks.test.ts`, 174→177):
+- concurrency stress: hammer `readState()` while a real subprocess runs — must
+  never throw (regression for the JSON-corruption crash);
+- single-quote command: a real `printf 'quoted-%s\n' ok` must complete cleanly
+  and round-trip verbatim into the state file (regression for `shellQuote`);
+- structural guard: rendered launch script must use `json.dumps` + `os.replace`,
+  never a `| sed` pipeline.
+
+**Results:** full suite **177/177, green on 8/8 consecutive runs** (was 3–4
+flaky failures on every run). `operator-runtime` 12/12, `server` 15/15, `app`
+15/15 in isolation. Build ✅. `typecheck:src` ✅ (exit 0). Additive, reversible.
+
+**New idea:** add a lightweight **flake-detector** to the engine's pre-push
+self-check — run `vitest run` 3× (or `--retry=0` with a repeat) and treat *any*
+variation in pass count as a red gate, not just a single failing run. Today's
+flakiness passed the naive one-shot gate for 8 prior runs precisely because a
+single run sometimes happened to be green. A repeat-run gate would have surfaced
+this immediately. Bigger idea: a `spawnProcess`-injection lint — flag any test
+that constructs a runtime/store which can spawn real background processes without
+providing a deterministic spawn mock, so real-subprocess nondeterminism can't
+re-enter the suite.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

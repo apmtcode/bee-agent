@@ -8,6 +8,23 @@ unchecked items are queued. Keep this richer than you found it each run.
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`
       (2026-06-22).
+- [x] **Reliable green test gate** (2026-07-07, run 9) — the suite was flaky
+      (3–4 varying failures/run), which silently defeats the "don't push if tests
+      fail" guardrail. Fixed two real bugs in `src/harness/background-tasks.ts`:
+      (a) the launch script built the initial state JSON via `printf|sed`, which
+      mangled quote/backslash-bearing commands into invalid JSON and wrote
+      non-atomically → `readState()` crashed on partial/malformed files; now
+      built in python from argv and written via temp-file + `os.replace()`;
+      (b) `shellQuote()` used the wrong single-quote escape (`"'"'"'` vs `'"'"'`),
+      breaking any command/path with a `'`. Made the 3 racy integration tests
+      deterministic with a `noopBackgroundSpawn` and added real-execution harness
+      tests that wait for terminal state. Suite now 177/177, green 8/8 runs.
+- [ ] **Flake-detector pre-push self-check**: run `vitest run` ≥3× and treat any
+      variation in pass count (not just an outright failure) as a red gate. The
+      run-9 flakiness slipped through 8 prior single-shot gates.
+- [ ] **Spawn-injection lint**: flag tests that build a runtime/store able to
+      spawn real background processes without a deterministic spawn mock, so
+      real-subprocess nondeterminism can't re-enter the suite.
 - [ ] **Pay down typecheck debt** (surfaced by the `typecheck` script). Full
       `tsc --noEmit` count was **397** on 2026-06-22; now **125**. 🎯 ALL source
       (`src/**` non-test) files typecheck clean since run 7; remaining 125 errors

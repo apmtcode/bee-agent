@@ -370,4 +370,90 @@ describe("BackgroundTaskExecutionService", () => {
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
   });
+
+  it("renders a launch script that writes execution state atomically", async () => {
+    const rootDir = await makeTempDir();
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"), () => ({ pid: 1212, unref() {} }));
+    const task = await store.start({
+      title: "Atomic guard",
+      command: "printf 'ok'",
+      cwd: rootDir,
+    });
+
+    const script = await fs.readFile(path.join(rootDir, task.execution.launchScript), "utf8");
+    // State JSON must be constructed in python from argv (json.dumps escapes
+    // arbitrary command content safely) rather than shell-quoted through a
+    // printf|sed pipeline that could emit malformed JSON.
+    expect(script).not.toContain("| sed ");
+    expect(script).toContain("json.dumps(state, indent=2)");
+    // Every state write must land via an atomic temp file + os.replace() so a
+    // concurrent readState() never sees a truncated or malformed file.
+    expect(script).toContain("os.replace(state_tmp, state_path)");
+  });
+});
+
+describe("background task state atomicity", () => {
+  // Regression for the flaky "Expected ',' or '}' after property value in JSON"
+  // crash: a readState()/sync() concurrent with the launch script's own state
+  // write used to observe a truncated file. All writers now rename atomically,
+  // so hammering readState() while a real subprocess runs must never throw.
+  it("never observes a partially-written state file under concurrent reads", async () => {
+    const rootDir = await makeTempDir();
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"));
+
+    const task = await store.start({
+      title: "Concurrent read stress",
+      command: "for i in 1 2 3 4 5; do echo line-$i; done; sleep 0.15",
+      cwd: rootDir,
+      kind: "task",
+    });
+
+    const deadline = Date.now() + 5000;
+    let sawTerminal = false;
+    let reads = 0;
+    while (Date.now() < deadline) {
+      // getExecutionState → sync → readState is exactly the production read path
+      // that used to crash on a half-written file. It must always resolve.
+      const state = await store.executionService.readState(task);
+      reads += 1;
+      if (state && (state.status === "completed" || state.status === "failed")) {
+        sawTerminal = true;
+        break;
+      }
+    }
+
+    expect(reads).toBeGreaterThan(0);
+    expect(sawTerminal).toBe(true);
+    const finalState = await store.executionService.readState(task);
+    expect(finalState?.status).toBe("completed");
+    expect(finalState?.exitCode).toBe(0);
+  });
+
+  // Regression for shellQuote(): a command containing single quotes must launch
+  // and complete cleanly. The old escape sequence corrupted such commands into
+  // invalid shell, so the task exited non-zero ("unexpected EOF").
+  it("runs commands that contain single quotes without corrupting them", async () => {
+    const rootDir = await makeTempDir();
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"));
+
+    const task = await store.start({
+      title: "Quoted command",
+      command: "printf 'quoted-%s\\n' ok; sleep 0.1",
+      cwd: rootDir,
+      kind: "task",
+    });
+
+    const deadline = Date.now() + 5000;
+    let finalState = await store.executionService.readState(task);
+    while (Date.now() < deadline && (!finalState || finalState.status === "running")) {
+      finalState = await store.executionService.readState(task);
+    }
+
+    expect(finalState?.status).toBe("completed");
+    expect(finalState?.exitCode).toBe(0);
+    // The command must round-trip verbatim into the state file.
+    expect(finalState?.command).toBe("printf 'quoted-%s\\n' ok; sleep 0.1");
+    const output = await store.executionService.readOutput(task);
+    expect(output).toContain("quoted-ok");
+  });
 });

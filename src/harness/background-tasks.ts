@@ -734,37 +734,35 @@ function renderLaunchScript(task: BackgroundTaskRecord): string {
   const quotedOutputFile = shellQuote(task.execution.outputFile);
   const quotedCwd = shellQuote(task.cwd);
   const quotedCommand = shellQuote(task.command);
-  const quotedStatePayload = shellQuote(
-    JSON.stringify({
-      version: 1,
-      taskId: task.id,
-      kind: task.kind,
-      status: "running",
-      pid: "$$",
-      startedAt: "__OPENCLAW_STARTED_AT__",
-      updatedAt: "__OPENCLAW_STARTED_AT__",
-      outputFile: task.execution.outputFile,
-      cwd: task.cwd,
-      command: task.command,
-    }),
-  );
+  const quotedTaskId = shellQuote(task.id);
+  const quotedKind = shellQuote(task.kind);
 
   return [
     "#!/usr/bin/env bash",
     "set -euo pipefail",
-    `mkdir -p $(dirname ${quotedStatePath}) $(dirname ${quotedOutputFile})`,
+    `state_path=${quotedStatePath}`,
+    `output_file=${quotedOutputFile}`,
+    'mkdir -p "$(dirname "$state_path")" "$(dirname "$output_file")"',
     "started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-    `printf '%s' ${quotedStatePayload} | sed "s/__OPENCLAW_STARTED_AT__/$started_at/g; s/\"\$\$\"/$$/g" > ${quotedStatePath}`,
-    `printf '%s\n' "starting ${task.kind} ${task.id}" >> ${quotedOutputFile}`,
-    `if cd ${quotedCwd} && bash -lc ${quotedCommand} >> ${quotedOutputFile} 2>&1; then`,
+    // Build the initial running-state JSON in python from argv rather than
+    // shell-quoting a pre-rendered JSON blob through printf|sed. The old
+    // pipeline corrupted commands containing quotes/backslashes into invalid
+    // JSON; passing values as discrete argv and letting json.dumps escape them
+    // is bulletproof. python writes atomically (temp + os.replace), so a
+    // concurrent readState() never observes a truncated or malformed file.
+    `python3 - "$state_path" ${quotedTaskId} ${quotedKind} $$ "$started_at" "$output_file" ${quotedCwd} ${quotedCommand} <<'PY'`,
+    ...renderInitialStateWriterPython(),
+    "PY",
+    `printf '%s\n' "starting ${task.kind} ${task.id}" >> "$output_file"`,
+    `if cd ${quotedCwd} && bash -lc ${quotedCommand} >> "$output_file" 2>&1; then`,
     "  completed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-    `  python3 - ${quotedStatePath} $$ "$completed_at" 0 <<'PY'`,
+    `  python3 - "$state_path" $$ "$completed_at" 0 <<'PY'`,
     ...renderStateWriterPython("completed"),
     "PY",
     "else",
     "  exit_code=$?",
     "  completed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-    `  python3 - ${quotedStatePath} $$ "$completed_at" "$exit_code" <<'PY'`,
+    `  python3 - "$state_path" $$ "$completed_at" "$exit_code" <<'PY'`,
     ...renderStateWriterPython("failed"),
     "PY",
     '  exit "$exit_code"',
@@ -773,9 +771,44 @@ function renderLaunchScript(task: BackgroundTaskRecord): string {
   ].join("\n");
 }
 
+// Emits the atomic write-and-rename tail shared by every python state writer:
+// json.dumps escapes arbitrary content safely, and os.replace() swaps the file
+// in a single atomic step so readers never see a partial write.
+function renderAtomicStateWriteTail(): string[] {
+  return [
+    "state_tmp = state_path.with_name(state_path.name + f'.tmp.{os.getpid()}')",
+    "state_tmp.write_text(json.dumps(state, indent=2) + '\\n')",
+    "os.replace(state_tmp, state_path)",
+  ];
+}
+
+function renderInitialStateWriterPython(): string[] {
+  return [
+    "import json",
+    "import os",
+    "import pathlib",
+    "import sys",
+    "state_path = pathlib.Path(sys.argv[1])",
+    "state = {",
+    "    'version': 1,",
+    "    'taskId': sys.argv[2],",
+    "    'kind': sys.argv[3],",
+    "    'status': 'running',",
+    "    'pid': int(sys.argv[4]),",
+    "    'startedAt': sys.argv[5],",
+    "    'updatedAt': sys.argv[5],",
+    "    'outputFile': sys.argv[6],",
+    "    'cwd': sys.argv[7],",
+    "    'command': sys.argv[8],",
+    "}",
+    ...renderAtomicStateWriteTail(),
+  ];
+}
+
 function renderStateWriterPython(status: BackgroundTaskExecutionState["status"]): string[] {
   return [
     "import json",
+    "import os",
     "import pathlib",
     "import sys",
     "state_path = pathlib.Path(sys.argv[1])",
@@ -789,10 +822,14 @@ function renderStateWriterPython(status: BackgroundTaskExecutionState["status"])
     "state['completedAt'] = timestamp",
     "state['exitCode'] = exit_code",
     `state['error'] = None if '${status}' == 'completed' else f'background task exited non-zero ({exit_code})'`,
-    "state_path.write_text(json.dumps(state, indent=2) + '\\n')",
+    ...renderAtomicStateWriteTail(),
   ];
 }
 
 function shellQuote(value: string): string {
-  return `'${value.replaceAll(`'`, `"'"'"'`)}'`;
+  // POSIX-safe single-quoting: close the quote, emit an escaped quote via a
+  // double-quoted section, then reopen — i.e. each ' becomes '"'"'. (The prior
+  // replacement started with a double quote, "'"'"', which produced malformed
+  // output and broke any command/path/cwd containing a single quote.)
+  return `'${value.replaceAll("'", `'"'"'`)}'`;
 }

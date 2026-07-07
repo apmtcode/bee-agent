@@ -15,6 +15,16 @@ async function makeTempDir(): Promise<string> {
   return dir;
 }
 
+// Deterministic no-op spawn: returns a stable fake pid and launches no real
+// process. Background-task lifecycle tests drive execution state explicitly via
+// writeState/writeOutput, so a real detached subprocess only adds nondeterminism
+// (racing state writes) and leaks files that break temp-dir teardown (ENOTEMPTY).
+let fakePidCounter = 900000;
+function noopBackgroundSpawn(): { pid: number; unref(): void } {
+  fakePidCounter += 1;
+  return { pid: fakePidCounter, unref() {} };
+}
+
 function buildHookCaptureCommand(outputFile: string): string {
   const script = [
     "import fs from 'node:fs';",
@@ -530,6 +540,7 @@ describe("StandaloneOperatorRuntime", () => {
   it("starts, syncs, recovers, lists, and cancels background tasks", async () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
+      backgroundTaskSpawnProcess: noopBackgroundSpawn,
       backgroundTaskIsProcessRunning: () => false,
     });
     const session = await runtime.startSession({ title: "Tasks", agentId: "main" });
