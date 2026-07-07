@@ -4,6 +4,16 @@ Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
 ## Foundations / DX
+- [ ] **⚠️ TOP: triage 3 pre-existing suite failures** (surfaced run 9, red on a
+      clean tree — not caused by run 9's additive change). Deterministic in both
+      parallel and `--no-file-parallelism` runs; regressed since run 8's 174/174
+      on 2026-06-23. Suspected date-sensitive fixtures (each suite hardcodes
+      15–21 `2026-…` timestamps; clock is now 2026-07-07). Files/symptoms:
+      `cli/app.test.ts` (`control=mixed` expected `control=active`; +1 cron/bg
+      case); `control-plane/server.test.ts` (orchestration result shape:
+      10-key result vs 2-key expectation); `orchestrator/operator-runtime.test.ts`
+      (`SyntaxError` parsing a background-task execution-state file). Fix these
+      before the suite can be a green push gate again.
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`
@@ -62,13 +72,20 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
-      deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
+- [x] Pluggable local-model backend interface — DONE run 9.
+      `MovementModelBackend` in `src/training/movement-policy.ts` with the
+      deterministic `NearestNeighborMovementBackend` (CI-safe) and a documented
+      seam for a real on-device small model (proven by a custom-backend test).
+- [x] Movement **inference** pipeline (objective #2 c/d) — DONE run 9.
+      `MovementPolicyEngine.predictNext`/`predictSequence` recalls recorded
+      movements and `generalizeSummary` rewrites them for new-but-related foci.
 - [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      round-trips without real OS input. (Now also feeds the movement-policy
+      trainer — generate labelled trajectories to exercise predict/generalize.)
+- [ ] Generalization eval harness: hold out one trajectory, train the policy on
+      the rest, roll out `predictSequence` from its start state, and score
+      edit-distance vs the actual action sequence — a run-over-run regression
+      metric and an objective bar for the real on-device backend to beat.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

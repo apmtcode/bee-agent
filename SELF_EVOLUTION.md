@@ -6,6 +6,64 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-07 (run 9) — 🧠 Movement inference pipeline: predict + generalize (objective #2 c/d)
+
+**Audited:** The local-movement learning subsystem (standing objective #2)
+against its five required pieces. Inventory of `src/capture/` +
+`src/training/`: capture (recorder, os/device/browser adapters, consent) ✅,
+event/trajectory schema ✅, dataset/export (`exporter.ts` → `ReviewedExportManifest`
+with per-trajectory `replays`) ✅, replay engine (`replay.ts`/`replay-service.ts`) ✅,
+training *launch* (`runner.ts` builds MLX/axolotl plans) ✅. **Gap found:** nothing
+consumed a *learned* dataset to **predict the next movement** — objective #2's
+parts (c) "repeat recorded movements" and (d) "generalize to new but related
+movements" had no code. Training could be launched but its output was never
+turned back into actions.
+
+**Changed (additive, greenfield):** new `src/training/movement-policy.ts` — a
+movement *inference* pipeline that closes the capture→train→**act** loop:
+- `MovementModelBackend` interface — the pluggable seam a real on-device small
+  model (loading weights from the runner's output) plugs into.
+- `NearestNeighborMovementBackend` — a fully **deterministic** reference backend
+  (token-set Jaccard similarity, lexicographic tie-break, no randomness) so the
+  whole pipeline is exercised in the cloud/CI with zero OS access or weights.
+- `extractTransitions(manifest)` — mines `(preceding-window context → next
+  action)` transitions from a reviewed export's `replays`.
+- `generalizeSummary()` — rewrites a recalled action to a new focus (swaps the
+  recalled focus token present in the summary for the live focus's keyword):
+  this is part (d), generalization, made concrete and testable.
+- `MovementPolicyEngine` — trains a (pluggable) backend from an export and
+  predicts single steps (`predictNext`) or an **autoregressive rollout**
+  (`predictSequence`, feeding each prediction back into the context window).
+- Barrel exports added to `src/index.ts` (7 values + 6 types).
+
+**Test results:** new `movement-policy.test.ts` — **19/19 passing** (recall of an
+exact recorded action, generalization to a new-but-related focus, minConfidence
+gating, determinism, rollout, and a custom-backend stub proving the real-model
+seam). `npm run typecheck:src` ✅ **exit 0** (all source still typechecks clean).
+`npm run build` ✅.
+
+**⚠️ Pre-existing suite failures (NOT caused by this change):** full `npm test`
+is **190 passing / 3 failing** — deterministic in both parallel and
+`--no-file-parallelism` runs. Verified by `git stash` that the *same 3 files*
+fail on a clean tree without my change (`app.test.ts` `control=mixed` vs
+`control=active`; `server.test.ts` orchestration result-shape mismatch;
+`operator-runtime.test.ts` a `SyntaxError` parsing a background-task state file).
+These regressed since run 8 (which recorded 174/174 on 2026-06-23); the suites
+carry 15–21 hardcoded `2026-…` timestamps each, so the most likely cause is
+date-sensitive fixtures now that the clock is 2026-07-07. Because the suite is
+red for reasons unrelated to this run, I pushed the (isolated, green) work to the
+designated feature branch `claude/peaceful-dirac-6h2ro2` — **not** to main — and
+queued the triage as the top ROADMAP item.
+
+**New idea:** a **replay-fidelity generalization eval harness** — hold out one
+recorded trajectory, train the policy on the rest, roll out `predictSequence`
+from the held-out start state, and score edit-distance between predicted and
+actual action sequences. That turns "does it generalize?" into a regression
+metric the engine can track run-over-run, and gives the eventual real on-device
+backend an objective bar to beat the deterministic baseline.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

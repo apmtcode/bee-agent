@@ -423,6 +423,23 @@ export type {
   SftTrainingConfig,
 } from "./training/job-manifest.js";
 export {
+  MovementPolicyEngine,
+  NearestNeighborMovementBackend,
+  contextTokens,
+  extractTransitions,
+  generalizeSummary,
+  jaccardSimilarity,
+  tokenize,
+} from "./training/movement-policy.js";
+export type {
+  MovementContext,
+  MovementModelBackend,
+  MovementPolicyEngineOptions,
+  MovementPredictionSource,
+  MovementTransition,
+  PredictedMovement,
+} from "./training/movement-policy.js";
+export {
   FileTrainingJobStore,
 } from "./training/job-store.js";
 export type {
