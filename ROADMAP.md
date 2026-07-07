@@ -59,16 +59,42 @@ unchecked items are queued. Keep this richer than you found it each run.
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
 (exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
-      objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
-      deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+- [x] Inventory `src/capture` + `src/training` vs. the objective's five pieces
+      (2026-07-07, run 9). Gap found: capture→schema→dataset→replay existed, but
+      train/infer stopped at *plan generation* (`runner.ts` emits shell scripts
+      for on-device MLX/axolotl) — no in-process learnable model.
+- [x] Pluggable local-model backend interface for the training runner with a
+      deterministic backend (so cloud/CI tests pass) and a documented seam for a
+      real on-device small model — DONE run 9 (`src/training/movement-model.ts`:
+      `MovementModelBackend`/`MovementPolicy`/`MovementModelArtifact` +
+      `DeterministicNGramBackend`).
+- [x] Synthetic event-stream generator to validate capture→dataset→replay
+      round-trips without real OS input — DONE run 9
+      (`generateSyntheticMovementTrajectories`, seeded LCG + workflow grammar).
+- [x] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories — DONE run 9 (`evaluateMovementPolicy`,
+      splits accuracy into exact-memory vs generalized/backoff hits).
+- [ ] Imitation-vs-generalization scorecard: each engine run holds out 20% of
+      reviewed trajectories, trains `DeterministicNGramBackend`, and appends
+      `{exactMemoryHits, generalizedHits, accuracy}` to a metrics file — the
+      first quantitative self-evolution KPI for objective #2d.
+- [ ] Config-driven backend selection (`movement.backend: "deterministic-ngram"
+      | "mlx-local"`) so the runner picks the in-process learner for eval and the
+      on-device backend for real training behind one `MovementModelBackend`.
+- [ ] Wire the movement model into the training runner/execution-service so a
+      reviewed export can be trained + evaluated in-process (cloud path) in
+      addition to the shell-plan (on-device) path.
+
+## Test health (discovered run 9)
+- [ ] **Fix 3 pre-existing, time/environment-dependent test failures** (surfaced
+      2026-07-07; repo unchanged since run 8's 174/174, so wall-clock time is the
+      only changed variable). Focused fix = inject/freeze a clock (and a
+      pid-liveness seam) in these tests, no source behaviour change:
+  - `operator-runtime.test.ts:605` — `recoverBackgroundTasks` depends on whether
+    a hard-coded pid (`5678`) is alive in the container → flaky.
+  - `server.test.ts:719` + `app.test.ts:906/1098` — gateway heartbeat
+    staleness/quarantine asserted against `Date.now()` with stale Jan-2026
+    fixtures.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

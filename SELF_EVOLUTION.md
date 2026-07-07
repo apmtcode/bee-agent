@@ -6,6 +6,74 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-07 (run 9) — 🧠 In-process movement model: learn → repeat → generalize
+
+**Audited:** The local-movement learning subsystem (standing objective #2) end to
+end — `src/capture/` (schema, recorder, replay, trajectory) and `src/training/`
+(exporter → dataset, runner, job store). Found the loop stops at "plan": the
+`LocalAppleSiliconTrainingRunner` only emits **shell launch scripts** for real
+on-device MLX/axolotl jobs, which cannot run in the cloud. There was **no
+in-process model** — nothing that actually learns from a reviewed movement
+dataset, repeats recorded movements (objective #2c), or generalizes to new but
+related movements (objective #2d). So the whole capture→dataset→train→infer→eval
+loop was untestable here.
+
+**Changed (additive) — new `src/training/movement-model.ts` (+ full test):**
+a pluggable, deterministic, dependency-free learner:
+- **Tokenization + dataset builder.** `buildMovementSequence` interleaves a
+  trajectory's observations/actions in ts order (obs-before-act tie-break,
+  matching `replay.ts`), honoring the reviewer's redacted view like the exporter.
+  `buildMovementDataset` emits one supervised example per action
+  (`context → nextAction`) plus a sorted vocabulary.
+- **Pluggable backend contract.** `MovementModelBackend` (`train`/`restore`) +
+  `MovementPolicy` (`predict`/`serialize`) + a JSON-serializable
+  `MovementModelArtifact` that round-trips to disk like the rest of the repo — a
+  documented seam so a real on-device small model can drop in later.
+- **`DeterministicNGramBackend`** (default + cloud/CI mock): learns backoff
+  n-gram counts over movement tokens. **Memorizes** recorded sequences exactly
+  (full-order context match → 100% replay = objective #2c) and **generalizes**
+  to unseen contexts by backing off to shorter contexts down to the marginal
+  action distribution (objective #2d). Deterministic tie-break (max count, then
+  lexicographic) → same dataset yields byte-identical artifacts.
+- **Generalization eval harness.** `evaluateMovementPolicy` measures next-action
+  replay fidelity on held-out trajectories and splits accuracy into
+  `exactMemoryHits` vs `generalizedHits` with a per-backoff-order breakdown.
+- **Synthetic generator.** `generateSyntheticMovementTrajectories` (seeded LCG,
+  no `Math.random`) draws from a small UI "workflow grammar" with perturbation,
+  so held-out streams share local structure but differ globally — the exact
+  new-but-related regime #2d targets. Validates the whole loop without real OS
+  input. Exported all of the above from the barrel `src/index.ts`.
+
+**Test results:** new `movement-model.test.ts` ✅ **10/10** (memorization =
+100% replay; held-out generalization >0.6 accuracy with real backoff hits;
+artifact `restore(serialize())` reproduces identical predictions; empty-dataset
+and unseen-context fallbacks; synthetic determinism). `typecheck:src` ✅ CLEAN.
+Build ✅. Full suite **181/184**.
+
+**⚠️ Pre-existing failures discovered (NOT caused by this run).** On a *clean*
+checkout (my files removed) the suite shows **3 failures / 171 pass** — they
+pre-date this change and are **time/environment-dependent**: the repo is
+unchanged since run 8 (2026-06-23, logged 174/174 green), so wall-clock time
+(now 2026-07-07) is the only changed variable. Localized:
+- `operator-runtime.test.ts:605` — `recoverBackgroundTasks` "missing-process"
+  vs "unchanged": depends on whether a hard-coded pid (`5678`) is *alive in the
+  container* → flaky (observed 3 vs 4 failures across runs).
+- `server.test.ts:719` + `app.test.ts:906/1098` — gateway heartbeat
+  staleness/quarantine ("control=active"/"quarantined") asserted against
+  `Date.now()`; the fixtures' Jan-2026 timestamps are now months stale.
+These belong to a separate, focused fix (inject a clock / freeze time in these
+tests) — out of scope for this additive movement-model change; queued in ROADMAP.
+
+**New idea:** an **imitation-vs-generalization scorecard** the engine emits each
+run — take the current reviewed trajectories, hold out 20%, train the
+`DeterministicNGramBackend`, and record `{exactMemoryHits, generalizedHits,
+accuracy}` to an append-only metrics file. Rising `generalizedHits` at fixed
+accuracy is a direct, quantitative signal that the movement subsystem is getting
+better at objective #2d over time — the first *measurable* self-evolution KPI.
+Second idea: make backend selection config-driven (`movement.backend:
+"deterministic-ngram" | "mlx-local"`) so the runner can pick the in-process
+learner for eval and the on-device backend for real training behind one contract.
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
