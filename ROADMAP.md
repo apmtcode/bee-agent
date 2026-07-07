@@ -44,6 +44,13 @@ unchecked items are queued. Keep this richer than you found it each run.
       (excludes `**/*.test.ts`) + `typecheck:src` script; passes (exit 0). Next:
       have the engine run it as a per-run pre-push self-check.
 - [ ] Add a minimal CI workflow mirroring `verify` for human-opened PRs.
+- [ ] **Investigate 3 env-sensitive test failures** surfaced run 9 (were 174/174
+      at run 8; now 3 fail on a clean baseline too): `app.test.ts`,
+      `server.test.ts`, `operator-runtime.test.ts` all spawn real OS background
+      processes and assert PID liveness, which behaves differently in the
+      sandboxed cloud container. Make the background-task store injectable/mockable
+      so these tests are hermetic (like the run-1 `configHome` fix) instead of
+      depending on real process spawning.
 
 ## Capability parity (audit reference agents → port gaps)
 - [ ] Build a "capability inventory" generator: enumerate bee-agent's exported
@@ -59,16 +66,31 @@ unchecked items are queued. Keep this richer than you found it each run.
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
 (exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
-      objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Inventory what `src/capture` + `src/training` already implement vs. the
+      objective's five pieces (2026-07-07, run 9): capture→schema→dataset→replay
+      all exist; the training runner only *builds MLX/axolotl launch plans*, so
+      the actual learn/repeat/generalize model (2c/2d) was the gap — now filled.
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      for a real on-device small model (2026-07-07, run 9):
+      `MovementModelBackend` + deterministic back-off n-gram `MarkovMovementBackend`
+      in `src/training/movement-model.ts`.
+- [x] Synthetic event-stream generator to validate capture→dataset→replay
+      round-trips without real OS input (2026-07-07, run 9):
+      `synthesizeMovementSequences` (seeded LCG, no `Math.random`).
+- [x] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories (2026-07-07, run 9): `evaluateMovementModel`
+      + `splitMovementDataset` in `src/training/movement-eval.ts` (next-move
+      accuracy, top-k, per-backoff-order, isolated generalization accuracy).
+- [ ] **Round-trip fidelity metric**: feed a model-generated movement sequence
+      back through the replay engine (`replay-service`) vs. the recorded
+      trajectory and score edit-distance/coverage — one trackable number the
+      training runner can gate on before promoting a locally-trained adapter.
+- [ ] Wire `MarkovMovementBackend` in as the deterministic baseline/reward model
+      the axolotl RL plan (`runner.ts`) references, so the on-device RL run has an
+      instant, dependency-free scorer to bootstrap from.
+- [ ] Real on-device backend implementing `MovementModelBackend` (small local
+      model, e.g. via MLX) behind the same interface, selected by config.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

@@ -6,6 +6,66 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-07 (run 9) — 🧠 Movement learning core: in-process train → repeat → generalize
+
+**Audited:** The local-movement subsystem (standing objective #2) end-to-end.
+`src/capture/` covers capture → schema (`TrajectorySpan`, `ReplayTimelineEvent`)
+→ dataset (`exporter.ts` → `ReviewedExportManifest`) → replay; `src/training/`
+covers export + a `LocalAppleSiliconTrainingRunner` that only *builds MLX/axolotl
+launch plans/scripts*. **Gap found:** objective 2(c) "post-train a model to
+repeat the recorded movements" and 2(d) "generalize to related movements" had no
+runnable implementation — the runner shells out to tooling that can't execute in
+the cloud, so nothing could actually learn from a dataset or be tested here.
+
+**Changed (additive, two new source modules + tests):**
+- `src/training/movement-model.ts` — the learning core:
+  - Tokenizer (`normalizeMovementSummary`/`actionToMovementToken`) that collapses
+    volatile digits (coordinates, indices) so *related* movements share a token —
+    the substrate for generalization.
+  - `extractMovementSequences`/`buildMovementDataset` turn reviewed replay
+    manifests into per-trajectory `MovementSequence`s.
+  - **Pluggable backend seam:** `MovementModelBackend` (train → `MovementModel`
+    with `predictNext`/`generate`), documented as the swap point for a real
+    on-device small model.
+  - **Deterministic reference backend** `MarkovMovementBackend`: a back-off
+    n-gram (Markov) model. Learns transition counts at every order; at inference
+    tries the longest matching context and **backs off** to shorter history when
+    the exact context is unseen — so an unseen-but-related prefix still yields the
+    globally-consistent next movement. Fully deterministic (count→lexical
+    tie-break) for reproducible training + stable CI. Start contexts are
+    START-padded identically at train and inference so boundary n-grams stay
+    reachable.
+  - `synthesizeMovementSequences` — seeded (LCG, no `Math.random`) synthetic
+    movement generator: the cloud-safe stand-in for real OS capture.
+- `src/training/movement-eval.ts` — generalization eval harness
+  (`evaluateMovementModel`): next-movement accuracy, top-k, per-backoff-order
+  breakdown, and an isolated **generalization accuracy** on backed-off (unseen)
+  contexts; plus `splitMovementDataset` (deterministic train/holdout split).
+- Exported all of the above from `src/index.ts`.
+
+**Test results:** `typecheck:src` ✅ (source stays fully green). Build ✅.
+New tests **16/16 pass** (`movement-model.test.ts`, `movement-eval.test.ts`) —
+covering tokenization, exact replay via `generate()`, deterministic prediction,
+backoff generalization on unseen contexts, and above-baseline held-out accuracy.
+Full suite **187/190**. ⚠️ The 3 failures (`app.test.ts`,
+`server.test.ts`, `operator-runtime.test.ts`) are **pre-existing and
+environment-specific** — verified by `git stash`: they fail identically on the
+clean baseline (they spawn real OS background processes and assert PID liveness,
+which this sandboxed cloud container handles differently). They are NOT touched
+by this change (pure additive: 2 new files + barrel exports). Per the designated-
+branch instructions this run pushes to `claude/peaceful-dirac-fdkujr`.
+
+**New idea:** now that a real model can predict/generate movement token
+sequences, add a **round-trip fidelity metric** that feeds a model-generated
+sequence back through the replay engine (`replay-service`) against the recorded
+trajectory and scores edit-distance/coverage — turning "does it repeat the
+movement?" into a single trackable number the training runner can gate on before
+promoting a locally-trained adapter. Second idea: wire `MarkovMovementBackend` in
+as the deterministic *reward/baseline* model the axolotl RL plan references,
+so the on-device RL run has an instant, dependency-free scorer to bootstrap from.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
