@@ -734,27 +734,21 @@ function renderLaunchScript(task: BackgroundTaskRecord): string {
   const quotedOutputFile = shellQuote(task.execution.outputFile);
   const quotedCwd = shellQuote(task.cwd);
   const quotedCommand = shellQuote(task.command);
-  const quotedStatePayload = shellQuote(
-    JSON.stringify({
-      version: 1,
-      taskId: task.id,
-      kind: task.kind,
-      status: "running",
-      pid: "$$",
-      startedAt: "__OPENCLAW_STARTED_AT__",
-      updatedAt: "__OPENCLAW_STARTED_AT__",
-      outputFile: task.execution.outputFile,
-      cwd: task.cwd,
-      command: task.command,
-    }),
-  );
+  const quotedTaskId = shellQuote(task.id);
+  const quotedKind = shellQuote(task.kind);
 
   return [
     "#!/usr/bin/env bash",
     "set -euo pipefail",
     `mkdir -p $(dirname ${quotedStatePath}) $(dirname ${quotedOutputFile})`,
     "started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-    `printf '%s' ${quotedStatePayload} | sed "s/__OPENCLAW_STARTED_AT__/$started_at/g; s/\"\$\$\"/$$/g" > ${quotedStatePath}`,
+    // Write the initial "running" state via Python's json.dumps so that
+    // commands/paths containing quotes or newlines are always escaped
+    // correctly. The prior `printf | sed` approach produced invalid JSON
+    // whenever the payload contained shell-significant characters.
+    `python3 - ${quotedStatePath} ${quotedTaskId} ${quotedKind} ${quotedOutputFile} ${quotedCwd} ${quotedCommand} $$ "$started_at" <<'PY'`,
+    ...renderInitialStateWriterPython(),
+    "PY",
     `printf '%s\n' "starting ${task.kind} ${task.id}" >> ${quotedOutputFile}`,
     `if cd ${quotedCwd} && bash -lc ${quotedCommand} >> ${quotedOutputFile} 2>&1; then`,
     "  completed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
@@ -771,6 +765,28 @@ function renderLaunchScript(task: BackgroundTaskRecord): string {
     "fi",
     "",
   ].join("\n");
+}
+
+function renderInitialStateWriterPython(): string[] {
+  return [
+    "import json",
+    "import pathlib",
+    "import sys",
+    "state_path = pathlib.Path(sys.argv[1])",
+    "state = {",
+    "    'version': 1,",
+    "    'taskId': sys.argv[2],",
+    "    'kind': sys.argv[3],",
+    "    'status': 'running',",
+    "    'pid': int(sys.argv[7]),",
+    "    'startedAt': sys.argv[8],",
+    "    'updatedAt': sys.argv[8],",
+    "    'outputFile': sys.argv[4],",
+    "    'cwd': sys.argv[5],",
+    "    'command': sys.argv[6],",
+    "}",
+    "state_path.write_text(json.dumps(state, indent=2) + '\\n')",
+  ];
 }
 
 function renderStateWriterPython(status: BackgroundTaskExecutionState["status"]): string[] {
@@ -794,5 +810,10 @@ function renderStateWriterPython(status: BackgroundTaskExecutionState["status"])
 }
 
 function shellQuote(value: string): string {
-  return `'${value.replaceAll(`'`, `"'"'"'`)}'`;
+  // Wrap in single quotes and escape any embedded single quote with the
+  // canonical POSIX sequence `'\''` (close-quote, escaped literal quote,
+  // reopen-quote). The previous `"'"'"'` sequence was malformed — it did not
+  // close the leading quote — so a command containing a single quote was
+  // reconstructed incorrectly by `bash -lc`.
+  return `'${value.replaceAll(`'`, `'\\''`)}'`;
 }

@@ -1,7 +1,18 @@
+import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+
+function hasCommand(command: string): boolean {
+  try {
+    return spawnSync(command, ["--version"], { stdio: "ignore" }).status === 0;
+  } catch {
+    return false;
+  }
+}
+
+const canRunLaunchScript = hasCommand("bash") && hasCommand("python3");
 import {
   BackgroundTaskExecutionService,
   FileBackgroundTaskStore,
@@ -159,6 +170,54 @@ describe("FileBackgroundTaskStore", () => {
       signal: "SIGTERM",
     });
   });
+
+  it.runIf(canRunLaunchScript)(
+    "executes the real launch script and writes valid state JSON for commands containing quotes",
+    async () => {
+      const rootDir = await makeTempDir();
+      const filePath = path.join(rootDir, "background-tasks.json");
+      // A command containing single AND double quotes previously corrupted the
+      // state file, which was built with `printf | sed` string munging. The
+      // launch script now serialises state via Python's json.dumps.
+      const command = `echo "hello 'world'"`;
+      let launchScriptPath = "";
+      const store = new FileBackgroundTaskStore(
+        filePath,
+        (scriptPath) => {
+          launchScriptPath = scriptPath;
+          return { pid: 4242, unref() {} };
+        },
+        () => true,
+      );
+
+      const task = await store.start({
+        sessionId: "sess-real",
+        title: "Quoted command",
+        command,
+        cwd: rootDir,
+        kind: "task",
+      });
+
+      // Run the generated launch script for real, to completion.
+      execFileSync("bash", [launchScriptPath], { cwd: rootDir, stdio: "ignore" });
+
+      const stateRaw = await fs.readFile(path.join(rootDir, task.execution.stateFile), "utf8");
+      expect(() => JSON.parse(stateRaw)).not.toThrow();
+      const state = JSON.parse(stateRaw);
+      expect(state).toMatchObject({
+        version: 1,
+        taskId: task.id,
+        kind: "task",
+        status: "completed",
+        exitCode: 0,
+        command,
+      });
+      expect(typeof state.pid).toBe("number");
+
+      const output = await store.executionService.readOutput(task, { lineLimit: 0 });
+      expect(output).toContain(`hello 'world'`);
+    },
+  );
 
   it("recovers running tasks from persisted state after restart", async () => {
     const rootDir = await makeTempDir();

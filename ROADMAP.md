@@ -70,6 +70,23 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Generalization eval harness: measure replay fidelity on held-out but
       related synthetic trajectories.
 
+## Reliability / correctness (run 9)
+- [x] **Robust background-task state serialization** — `renderLaunchScript` now
+      writes the initial `state.json` via Python `json.dumps` instead of
+      `printf | sed`, so commands containing quotes/newlines no longer corrupt
+      the state file (2026-07-07, run 9).
+- [x] **Fix `shellQuote` single-quote escaping** — was `"'"'"'` (malformed),
+      now canonical POSIX `'\''`; commands with `'` now round-trip through
+      `bash -lc` (2026-07-07, run 9).
+- [x] **De-flake background-task tests** — inject a mock `spawnProcess` so tests
+      no longer race a real detached subprocess; added a real launch-script
+      integration test (2026-07-07, run 9).
+- [ ] **Flake sentinel** in the pre-push self-check: run the suite ≥3× (or with
+      `--sequence.shuffle`) to surface nondeterministic tests before push.
+- [ ] **Test-race lint**: flag any test constructing `StandaloneOperatorRuntime`
+      / `FileBackgroundTaskStore` without a mock `spawnProcess` (real detached
+      subprocess in a test = built-in race).
+
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in

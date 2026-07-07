@@ -6,6 +6,55 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-07 (run 9) — Fixed two real background-task bugs + de-flaked the suite (172→175 green)
+
+**Audited:** Suite health. The prior run logged 174/174, but a fresh checkout
+had **3 failing tests** (`operator-runtime.test.ts`, `app.test.ts` ×2 root cause,
+`server.test.ts`) — all in the background-task path. Ran each in isolation vs.
+under parallel load to separate deterministic bugs from races.
+
+**Two genuine source bugs fixed (`src/harness/background-tasks.ts`):**
+1. **Invalid state JSON.** `renderLaunchScript` built the initial `state.json`
+   with `printf '%s' <json> | sed …` string-munging. Whenever a task's `command`
+   contained shell-significant characters (quotes, newlines — e.g. the test's
+   `printf 'line-1\nline-2\n'`), the emitted JSON was **corrupt**, so recovery's
+   `JSON.parse` threw (`Expected ',' or '}' … position 311`). Replaced with a
+   Python `json.dumps` writer (consistent with the existing completed/failed
+   writers), passing every field as a shell-quoted `argv` — escaping is now
+   correct by construction. Added `renderInitialStateWriterPython()`.
+2. **Malformed `shellQuote`.** The single-quote escape was `"'"'"'`, which never
+   closes the leading quote, so any command containing a `'` was reconstructed
+   *incorrectly* by `bash -lc` (`unexpected EOF while looking for matching '`).
+   Fixed to the canonical POSIX `'\''`. Invisible until now because **no passing
+   test had ever executed the launch script** with a quoted command.
+
+**Test reliability (de-flaked):** `operator-runtime.test.ts` and
+`server.test.ts` built runtimes with the *real* spawn and started real detached
+subprocesses (`tail -f`, `sleep 5`) whose async initial-state write raced with —
+and clobbered — the state the tests write by hand (intermittent failures under
+load; masked before by bug #1 crashing first). Injected a no-op
+`backgroundTaskSpawnProcess` so those tests are deterministic.
+
+**New coverage:** added a real end-to-end launch-script test in
+`background-tasks.test.ts` that *executes* the generated script via bash+python3
+with a `echo "hello 'world'"` command and asserts `state.json` is valid JSON and
+round-trips the command + output. First test to actually run the launch script;
+`it.runIf`-guarded to skip if bash/python3 are absent.
+
+**Test results:** full suite **172–174/174 (flaky) → 175/175**, green **5/5**
+consecutive full runs and 5/5 isolated `server.test.ts` runs. `typecheck:src`
+CLEAN, build ✅, full `tsc` **125** (unchanged — all test-file debt; no new
+errors introduced).
+
+**New idea:** a **flake sentinel** in the per-run pre-push self-check — run the
+suite ≥3× (or with `--sequence.shuffle`) so nondeterministic tests surface
+before push instead of on the next checkout; plus a tiny lint that flags any test
+constructing `StandaloneOperatorRuntime`/`FileBackgroundTaskStore` without
+injecting a mock `spawnProcess` (a real detached subprocess in a test is a
+built-in race). Would have caught today's regression at authoring time.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
