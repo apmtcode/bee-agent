@@ -6,6 +6,69 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-07 (run 9) — Pluggable movement-model backend + deterministic in-memory learner (objective #2 c+d)
+
+**Audited:** The local-movement learning subsystem (`src/capture/` + `src/training/`)
+against objective #2's five pieces. Capture → schema → dataset → replay were
+scaffolded, and `src/training/runner.ts` prepares a real on-device launch plan
+(mlx/axolotl). **Gap:** there was *no model backend interface and no inference
+path* — nothing that actually consumes recorded movements to (c) *repeat* them or
+(d) *generalize*, and nothing exercisable in the cloud/CI (the runner only emits a
+shell launch script for Apple-silicon hardware we don't have here).
+
+**Changed (additive):** new `src/training/movement-model.ts`:
+- `MovementModelBackend` interface — the pluggable seam. `train(dataset)` →
+  `MovementModel`; `load(snapshot)` reconstructs from a persisted snapshot. A real
+  mlx/axolotl backend implements the *same* interface; call sites depend only on
+  the interface.
+- `InMemoryMovementModelBackend` / `InMemoryMovementModel` — a deterministic,
+  dependency-free n-gram sequence model with stupid-backoff. **Exact recall**
+  (objective 2c): a recorded prefix's highest-order context uniquely determines
+  the continuation, so movements replay verbatim. **Generalization** (objective
+  2d): an unseen high-order context backs off to shared shorter contexts, so a
+  new-but-related prefix still yields a plausible continuation. Ties broken by
+  (count desc, token asc) → fully reproducible across runs/machines.
+- `MovementModelBackendRegistry` + `createDefaultMovementBackendRegistry()` so
+  backends are selectable by id (real vs. mock) at runtime.
+- Dataset builders wiring it to the existing pipeline: `datasetFromReplayManifests`
+  (from replay timelines, transcripts dropped), `datasetFromTrajectories`
+  (observations+actions, ts-ordered), `movementEventFromTimeline`.
+- `evaluateMovementModel()` — a replay-fidelity/generalization eval harness
+  (matched/total/fidelity on held-out sequences).
+- Serialization (`MovementModelSnapshot`) survives a JSON boundary → the
+  persistence/hand-off seam for real trained artifacts.
+- Exported the surface from `src/index.ts`.
+
+**Test results:** new `src/training/movement-model.test.ts` — **14/14 passing**
+(exact recall, deterministic prefix continuation, backoff generalization,
+maxSteps bound, snapshot round-trip incl. JSON boundary, cross-backend snapshot
+rejection, registry, dataset builders, eval harness). `typecheck:src` ✅ (source
+stays fully green). Build ✅. My change introduces **no new failures**.
+
+**⚠️ Pre-existing blocker found (NOT caused by this change):** the full
+`npm test` is **not green** — 3 test files fail on a clean HEAD (verified by
+stashing this change): `operator-runtime.test.ts`, `server.test.ts`,
+`app.test.ts`. Root cause traced: the **background-task launch shell script**
+(`src/harness/background-tasks.ts`) writes `state.json` by string-interpolating
+the task command **without JSON-escaping** and leaves an unsubstituted
+`"pid":"$$"`. Dumped the offending file:
+`{…,"pid":"$$",…,"command":"printf "'line-1\nline-2\n"'"}` — invalid JSON, so
+`readJsonFile` throws during recovery. Environment-dependent (run 8's shell
+substituted `$$`; this cloud shell does not). Because the suite is red for
+reasons outside this additive change, per the branch rules I pushed to the
+designated feature branch `claude/peaceful-dirac-omx7ln` (NOT `main`), keeping
+`main` untouched. Fix queued as a high-priority ROADMAP item (own focused diff:
+JSON-serialize the state payload with a `python3 -c 'json.dumps'`/proper escaping
+instead of shell string interpolation).
+
+**New idea:** an **abstraction/slot layer** for the movement model — tokenize
+events into `(verb, slot)` pairs (e.g. `menu.open <TARGET>`) so generalization
+can transfer across *arguments*, not just shared literal sub-sequences. The
+current n-gram generalizes on shared literal context; a slotted encoding would
+let "open the Edit menu" inherit the continuation learned from "open the File
+menu." Pluggable as an alternative `MovementModelBackend`, evaluated with the same
+`evaluateMovementModel` harness on held-out slot-varied trajectories.
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

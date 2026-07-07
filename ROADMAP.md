@@ -58,17 +58,45 @@ unchecked items are queued. Keep this richer than you found it each run.
 ## Local-movement learning subsystem
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
-(exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
-      objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
-      deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
+(exporter, job store/manifest, runner, execution service, **movement-model
+backend**). Next increments:
+- [~] Inventory what `src/capture` + `src/training` already implement vs. the
+      objective's five pieces (capture → schema → dataset → replay → train/infer).
+      Done for train/infer (run 9): capture/schema/dataset/replay were scaffolded;
+      the missing piece was the model backend + inference path — now built.
+- [x] **Pluggable local-model backend interface** with a deterministic mock
+      backend (so cloud/CI tests pass) and a documented seam for a real on-device
+      model — DONE run 9 (`src/training/movement-model.ts`:
+      `MovementModelBackend` + `InMemoryMovementModelBackend` n-gram/backoff +
+      registry + snapshot persistence; 14 tests).
+- [ ] Wire a real mlx/axolotl `MovementModelBackend` implementation that loads the
+      artifact produced by `LocalAppleSiliconTrainingRunner` and runs inference
+      behind the same interface (documented seam; on-device only).
+- [ ] **Slotted `(verb, slot)` movement encoding** as an alternative backend so
+      generalization transfers across *arguments*, not just shared literal
+      sub-sequences (e.g. "open Edit menu" inherits "open File menu"'s
+      continuation). Evaluate with `evaluateMovementModel` on slot-varied held-out
+      trajectories.
 - [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      round-trips without real OS input (movement-model tests already use
+      hand-built synthetic sequences; generalize into a reusable generator).
+- [~] Generalization eval harness: `evaluateMovementModel()` (run 9) measures
+      matched/total/fidelity on held-out sequences. Next: sweep context lengths and
+      report a generalization curve.
+
+## Correctness / reliability (pre-existing bugs)
+- [ ] **HIGH — background-task `state.json` is written as invalid JSON.** The
+      launch shell script in `src/harness/background-tasks.ts` interpolates the
+      task command into `state.json` without JSON-escaping and leaves an
+      unsubstituted `"pid":"$$"` when the shell doesn't expand it. Result:
+      `readJsonFile` throws during recovery and 3 test files fail
+      (`operator-runtime.test.ts`, `server.test.ts`, `app.test.ts`) on a clean
+      HEAD in this cloud environment (verified run 9 by stashing that run's
+      change). Fix: serialize the state payload via `python3 -c json.dumps`
+      (as `runner.ts` does for its state writer) or otherwise emit properly
+      escaped JSON, and ensure `$$`→pid substitution is robust. This blocks the
+      full-suite green gate; until fixed, additive work pushes to
+      `claude/peaceful-dirac-omx7ln` rather than `main`.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
