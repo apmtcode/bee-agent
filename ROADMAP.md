@@ -62,13 +62,34 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      for a real on-device small model — DONE run 9 (`src/training/movement-model.ts`:
+      `MovementModelBackend` + n-gram Markov backend w/ back-off + `most-frequent`
+      control; `createMovementBackend` registry). Repeat via `replayFidelity`,
+      generalize via suffix back-off.
+- [~] Synthetic event-stream generator to validate capture→dataset→replay
+      round-trips without real OS input — partially covered run 9 (dataset
+      builders + tests use synthetic sequences); still worth a reusable
+      generator that emits full `DeviceCaptureInput`/`TrajectorySpan` streams.
+- [x] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories — DONE run 9 (`evaluateMovementModel`
+      teacher-forced next-token accuracy + `replayFidelity`).
+- [ ] Wire the movement model into the runner/execution service as a selectable
+      `backend: "in-process" | "mlx" | "axolotl"` so the in-process model is a
+      first-class training option (not just a library).
+- [ ] Reward-shaped generalization eval: score by token *prefix* overlap
+      (tool/gesture correct even if target differs) for partial-credit metrics.
+
+## Bug fixes
+- [x] `background-tasks.ts` `renderLaunchScript` wrote initial `state.json` via
+      `printf | sed`, corrupting JSON for commands with quotes/backslashes —
+      FIXED run 9 (Python `json.loads(argv)` writer). This was the root cause of
+      3 pre-existing test failures (operator-runtime, control-plane, cli/app).
+- [ ] `training/runner.ts` `renderLaunchScript` has the **identical** `printf |
+      sed` JSON-escaping bug for training state — port the run-9 Python-writer
+      fix + add a regression test (command with embedded quotes). Not yet
+      test-covered.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

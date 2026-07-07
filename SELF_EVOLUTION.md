@@ -6,6 +6,63 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-07 (run 9) — 🧠 In-process movement model (train→replay→generalize) + fixed launch-script JSON bug
+
+**Audited:** The local-movement learning subsystem (`src/capture/` + `src/training/`)
+against objective #2. Found capture → schema → dataset (exporter) → replay all
+exist, but `training/runner.ts` only *emits* real on-device commands (mlx/axolotl)
+— there was **no in-process model backend** to actually satisfy #2(c) "repeat the
+recorded movements" and #2(d) "generalize to new but related movements", so the
+loop could not be validated in the cloud/CI. Roadmap had this queued
+("Pluggable local-model backend … with a deterministic mock backend").
+
+**Changed — new `src/training/movement-model.ts` (+ tests, + barrel exports):**
+- **Pluggable backend seam:** `MovementModelBackend` interface + `MovementModel`;
+  registry `createMovementBackend("markov" | "most-frequent")`. A real on-device
+  small model can implement the same interface without touching callers; the
+  runner stays the "real hardware" path.
+- **Deterministic n-gram (Markov) backend with back-off** — a legitimate small
+  local model, fully in-process. Learns next-token distributions for every
+  context length 0..order + an `<end>` sentinel; at inference conditions on the
+  longest matching context *suffix*. Ties break lexicographically → deterministic
+  (CI-safe, no RNG). `most-frequent` is an order-0 control baseline.
+- **Repeat (replay):** `replayFidelity(model, seq)` seeds the first token and
+  autoregressively regenerates; a single trained sequence reproduces exactly
+  (fidelity 1.0). **Generalize:** trained on two workflows sharing a middle, the
+  model predicts the shared continuation for a *novel* opener via back-off.
+- **Generalization eval harness:** `evaluateMovementModel(model, heldOut)` =
+  teacher-forced next-token accuracy over held-out synthetic trajectories.
+- **Tokenizer + dataset builders:** `tokenizeAction` (structured `tool:gesture:target`
+  tokens), `datasetFromTrajectories` / `datasetFromReplays` /
+  `datasetFromReviewedExport` — wires the reviewed-export dataset straight into
+  training. All validated with synthetic event streams (no real OS input).
+
+**Also fixed a real pre-existing bug (root-caused this run):** the 3 failing
+suites (operator-runtime, control-plane/server, cli/app — all pre-existing, NOT
+caused by this change; confirmed by `git stash`) traced to
+`renderLaunchScript` in `src/harness/background-tasks.ts`. It wrote the initial
+`state.json` via `printf '%s' <payload> | sed …`, which mangles JSON escaping
+when a task command contains quotes/backslashes/newlines (e.g. `printf
+"line-1\nline-2\n"` → invalid on-disk JSON → `readState` throws
+`SyntaxError: Expected ',' or '}'`). Replaced it with a Python `json.loads(argv)`
+writer mirroring the existing completion writer (pid/timestamps injected from
+argv) — robust escaping, no `sed`, no `"$$"` placeholder trick.
+
+**Test results:** `typecheck:src` ✅ (exit 0). Build ✅ (545 kB). Tests ✅
+**187/187** (174 restored-to-green + 13 new movement-model tests; the suite was
+184/187 before the launch-script fix). Full `tsc` unchanged at **125** (all
+pre-existing test-file debt; the new source + test files are clean).
+
+**New idea:** `src/training/runner.ts` `renderLaunchScript` has the *identical*
+`printf | sed` JSON-escaping pattern for training state — same latent bug, not
+yet test-covered. Next run: port the Python-writer fix there with its own
+regression test (task command with embedded quotes). Bigger idea: a
+"reward-shaped replay" eval that scores generalization not just by exact-token
+match but by token *prefix* overlap (tool/gesture correct even if target
+differs), so partial-credit generalization is measurable.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
