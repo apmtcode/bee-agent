@@ -62,13 +62,39 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      for a real on-device small model. (2026-07-07, run 9) — `MovementModelBackend`
+      + `MarkovMovementBackend` (variable-order Markov, stupid-backoff) in
+      `src/training/movement-model.ts`. Serializable, deterministic, trains +
+      infers + generalizes in-process.
+- [x] Synthetic event-stream generator to validate capture→dataset→replay
+      round-trips without real OS input. (2026-07-07, run 9) —
+      `src/training/movement-synth.ts` (seeded templates + mulberry32 PRNG).
+- [x] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories. (2026-07-07, run 9) —
+      `src/training/movement-eval.ts` (`evaluateMovementModel`, micro/macro acc).
+- [ ] **Cloud dataset-quality pre-flight**: before `LocalAppleSiliconTrainingRunner`
+      emits an MLX/axolotl script, train `MarkovMovementBackend` on the same
+      reviewed-export replays and run `evaluateMovementModel`; if replay fidelity
+      is below a threshold, flag the dataset as too sparse in the job manifest so
+      the user doesn't burn an on-device run on a bad dataset.
+- [ ] Add a second `MovementModelBackend` implementation (e.g. a
+      frequency/positional model or a tiny embedding-KNN) to exercise the
+      interface and give the eval harness a real A/B baseline.
+- [ ] Feed real captured trajectories through `movementSequenceFromTrajectory`
+      and persist trained `MovementModelSnapshot`s alongside training jobs so a
+      model can be reloaded and replayed by the operator runtime.
+
+## Reliability / flaky tests
+- [ ] **Partial-write race in background-task state** (found run 9). Three tests
+      flake non-deterministically (`operator-runtime.test.ts`, `app.test.ts`,
+      `server.test.ts`): `readJsonFile` in `BackgroundTaskExecutionService.readState`
+      throws `JSON SyntaxError` when it reads a state file mid-write. `writeJsonAtomic`
+      is atomic, but some state writer (likely the runner's Python state-writer or a
+      direct `writeFile`) is not. Make every state write atomic (tmp+rename) and/or
+      have `readState` tolerate/retry a transient parse error. Independent of the
+      movement work; fails on the clean tree too.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

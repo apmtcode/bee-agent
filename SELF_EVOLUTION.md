@@ -6,6 +6,62 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-07 (run 9) — Movement-learning: pluggable local-model backend + train/infer/eval (cloud-runnable)
+
+**Audited:** The local-movement learning subsystem (standing objective #2).
+`src/capture/` covers capture→schema→dataset→replay, and `src/training/runner.ts`
+emits MLX/axolotl **launch scripts** — but those only run on the user's Mac.
+There was **no in-process model that could actually train on recorded movements
+and infer/generalize in the cloud**, so pieces (c) "post-train a local model to
+repeat the movements" and (d) "generalize to new but related movements" had zero
+executable, testable implementation. This was the top movement gap in ROADMAP.
+
+**Changed (all additive, new files in `src/training/`):**
+- **`movement-model.ts`** — a pluggable `MovementModelBackend` interface
+  (`train(sequences) → MovementModel`, `load(snapshot)`) with a deterministic
+  default `MarkovMovementBackend`: a variable-order Markov model with
+  stupid-backoff interpolation. An exactly-seen prefix reproduces its recorded
+  continuation (**replay / memorization**); a novel prefix backs off to shorter
+  matching contexts and still predicts a plausible next move (**generalization**).
+  Models are fully serializable (`toJSON()`/`load()`), and byte-deterministic
+  (no RNG, no clock) so they are a stable stand-in for a real on-device model and
+  a baseline to compare a future real backend against. Includes deterministic
+  action→token tokenization (`movementTokenForAction`) that normalizes volatile
+  ids/numbers so structurally identical movements share a token, plus adapters
+  from the existing `TrajectorySpan` / `ReplayManifest` formats
+  (`movementSequenceFromTrajectory`, `movementSequencesFromReplays`).
+- **`movement-eval.ts`** — a generalization / replay-fidelity eval harness
+  (`evaluateMovementModel`) reporting micro- and macro-averaged next-token
+  accuracy over held-out sequences.
+- **`movement-synth.ts`** — a seeded, dependency-free synthetic movement-stream
+  generator (templates + mulberry32 PRNG) so the pipeline is validated on
+  *related* sequence families with **no real OS input**, as the objective requires.
+- Barrel exports for all three added to `src/index.ts`.
+
+**Test results:** new `movement-model.test.ts` — **15/15 pass**, covering the
+pluggable interface, exact replay round-trip, backoff generalization, held-out
+generalization (>60% next-token accuracy on unseen same-family sequences),
+snapshot save/load, deterministic ranking, tokenization, and the synth generator.
+`typecheck:src` ✅ (source stays 100% clean). `npm run build` ✅ (5 files, 548 kB).
+Full `npm test`: my files green; **3 pre-existing FLAKY failures** in
+`operator-runtime.test.ts` / `app.test.ts` / `server.test.ts` — confirmed by
+running them on the clean tree (via `git stash -u`) **without** my change (they
+still fail) and by the non-deterministic count (4 then 3 across two runs). Root
+cause: a partial-write race — `readJsonFile` in `BackgroundTaskExecutionService.
+readState` hits `JSON SyntaxError at position 311` reading a background-task
+state file mid-write. Not caused by this run; logged to ROADMAP as a reliability
+fix.
+
+**New idea:** wire this backend into the real training pipeline as a **cloud
+pre-flight**: before `LocalAppleSiliconTrainingRunner` emits an MLX/axolotl
+script, train the `MarkovMovementBackend` on the same reviewed-export replays and
+run `evaluateMovementModel` — if replay fidelity on the dataset is below a
+threshold the dataset is too sparse/noisy to be worth an on-device training run,
+so surface a warning in the job manifest. Turns the mock backend into a cheap
+dataset-quality gate that runs where bee-agent actually lives (the cloud).
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
