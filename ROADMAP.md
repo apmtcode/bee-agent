@@ -70,6 +70,21 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Generalization eval harness: measure replay fidelity on held-out but
       related synthetic trajectories.
 
+## Reliability / test hygiene
+- [x] **Fix `shellQuote` invalid single-quote escape** (2026-07-07, run 9) — was
+      `"'"'"'`, corrupted background-task `state.json` for any quoted command.
+- [x] **Make background-task launch state write robust** (2026-07-07, run 9) —
+      replaced fragile `printf | sed` with a `python3` heredoc (matches the
+      completion path).
+- [x] **Hermetic background-task tests** (2026-07-07, run 9) — stub the spawn
+      alongside `isProcessRunning`; drive state via `writeState`/`writeOutput`
+      instead of racing real detached processes. Suite now 175/175, flake-free.
+- [ ] **Adversarial launch-script escaping test:** execute `renderLaunchScript`
+      output against a matrix of hostile commands (single/double quotes, `$()`,
+      backticks, newlines, unicode) and assert valid JSON + faithful output.
+- [ ] Consider building the running-state file via a single `python3 -c` fed
+      argv, removing `shellQuote` of the JSON payload from the hot path entirely.
+
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in

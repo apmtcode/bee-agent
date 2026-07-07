@@ -6,6 +6,62 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-07 (run 9) — 🐛 Real bug fix: `shellQuote` corrupted background-task state; suite green + hermetic
+
+**Audited:** The actual test suite health (not just typecheck). Found the repo was
+**not green** on arrival — **3–4 tests failed flakily** (`operator-runtime`,
+`server`, `app` — all background-task paths), contradicting run 8's "174/174".
+Root-caused by capturing the corrupt file a failing `readJsonFile` choked on.
+
+**Two genuine bugs found & fixed in `src/harness/background-tasks.ts`:**
+1. **`shellQuote` produced an invalid POSIX single-quote escape.** It replaced
+   each `'` with `` "'"'"' `` (6 chars) instead of the correct `` '"'"' `` (5
+   chars) — injecting a spurious `"` for *every* single quote in the value.
+   Verified empirically: `printf %s 'a'<buggy>'b'` → `a"'b` vs correct → `a'b`.
+   Any background-task command/path/cwd containing a single quote (e.g.
+   `printf 'line-1\nline-2\n'`) wrote a **corrupt `state.json`**, so later
+   recovery/reconcile threw `SyntaxError: ... in JSON`. One-char class of fix,
+   broad blast radius. This is the crown-jewel fix.
+2. **The initial "running" state was written with a fragile `printf | sed`.** The
+   `sed "s/\"\$\$\"/$$/g"` rendered to shell `s/"$$"/$$/g`, whose `"` prematurely
+   closed the shell double-quote → mangled JSON independent of bug #1. Replaced
+   it with the same robust `python3` heredoc the *completion* path already uses
+   (new `renderRunningStateWriterPython()` patches pid + timestamps into a valid
+   JSON skeleton). No new dependency — completion already required `python3`.
+
+**Hermeticity (tests + one small product seam):**
+- Added a `backgroundTaskSpawnProcess` test seam to `OperatorCliAppOptions`
+  (`src/cli/app.ts`) threaded into the runtime — production default unchanged
+  (real `child_process.spawn`).
+- Paired every test that already stubbed `backgroundTaskIsProcessRunning: () =>
+  false` with a no-op `backgroundTaskSpawnProcess` stub (23 sites across
+  operator-runtime/server/session-stream/gateway-transport tests) so no real
+  detached OS process races with the manually-driven `writeState`/`writeOutput`.
+- Rewrote the racy background half of app.test's "background and monitor" test to
+  drive state deterministically (stub spawn + `isProcessRunning: () => true` +
+  explicit `writeState`/`writeOutput`), matching the monitor half that already
+  did. This test was *inherently* racy at baseline: `background-sync` read
+  whatever the real `printf ok` script happened to have written — sometimes
+  "running" (passes `watch-active`), sometimes "completed" (fails it).
+- **New regression test** (`background-tasks.test.ts`): runs the REAL launch
+  script with a quote-heavy command (`printf '%s' "it's a \"quoted\" line"`) and
+  asserts the persisted `state.json` stays valid JSON with the command intact and
+  the command actually executed. Guards both bugs above.
+
+**Test results:** **175/175 passing, 5× consecutive full-suite runs, zero flakes**
+(was 3–4 failing before). Build ✅. `typecheck:src` ✅ (exit 0, source clean).
+Full `tsc` unchanged at **125** (all in test files; no new errors introduced).
+
+**New idea:** the background-task launch script hand-rolls shell/JSON/python in a
+string template — exactly the kind of thing where a one-char escape bug hides for
+months. Add a tiny `renderLaunchScript` unit test that **executes** the generated
+script against a matrix of adversarial commands (single quotes, double quotes,
+`$()`, backticks, newlines, unicode) and asserts valid JSON + faithful output —
+turning "shell-escaping is fragile" into a caught regression. Longer term,
+consider generating the launch state entirely via a single `python3 -c` invocation
+fed argv (no shell interpolation of the payload at all), removing `shellQuote`
+from the hot path for the state file.
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

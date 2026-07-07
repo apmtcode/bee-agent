@@ -31,6 +31,7 @@ describe("OperatorGatewayTransportConnection", () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
       backgroundTaskIsProcessRunning: () => false,
+      backgroundTaskSpawnProcess: () => ({ pid: 424242, unref() {} }),
     });
     const server = new OperatorControlPlaneServer({ runtime });
     const transport = new InMemoryGatewayTransport();
@@ -146,6 +147,7 @@ describe("OperatorGatewayTransportConnection", () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
       backgroundTaskIsProcessRunning: () => false,
+      backgroundTaskSpawnProcess: () => ({ pid: 424242, unref() {} }),
     });
     const server = new OperatorControlPlaneServer({ runtime });
     const transport = new InMemoryGatewayTransport();
@@ -206,6 +208,7 @@ describe("OperatorGatewayTransportConnection", () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
       backgroundTaskIsProcessRunning: () => false,
+      backgroundTaskSpawnProcess: () => ({ pid: 424242, unref() {} }),
     });
     const server = new OperatorControlPlaneServer({ runtime });
     const firstTransport = new InMemoryGatewayTransport();
@@ -244,6 +247,7 @@ describe("OperatorGatewayTransportConnection", () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
       backgroundTaskIsProcessRunning: () => false,
+      backgroundTaskSpawnProcess: () => ({ pid: 424242, unref() {} }),
     });
     const server = new OperatorControlPlaneServer({ runtime });
     const transport = new InMemoryGatewayTransport();
@@ -294,6 +298,7 @@ describe("OperatorGatewayTransportConnection", () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
       backgroundTaskIsProcessRunning: () => false,
+      backgroundTaskSpawnProcess: () => ({ pid: 424242, unref() {} }),
     });
     const server = new OperatorControlPlaneServer({ runtime });
     const transport = new InMemoryGatewayTransport();
@@ -323,6 +328,7 @@ describe("OperatorGatewayTransportConnection", () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
       backgroundTaskIsProcessRunning: () => false,
+      backgroundTaskSpawnProcess: () => ({ pid: 424242, unref() {} }),
     });
     const server = new OperatorControlPlaneServer({ runtime });
     const created = await server.handle({ method: "pairing.create", params: { remoteSource: "gateway" } });
@@ -355,6 +361,7 @@ describe("OperatorGatewayTransportConnection", () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
       backgroundTaskIsProcessRunning: () => false,
+      backgroundTaskSpawnProcess: () => ({ pid: 424242, unref() {} }),
     });
     const server = new OperatorControlPlaneServer({ runtime });
     const transport = new InMemoryGatewayTransport();
@@ -402,6 +409,7 @@ describe("OperatorGatewayTransportConnection", () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
       backgroundTaskIsProcessRunning: () => false,
+      backgroundTaskSpawnProcess: () => ({ pid: 424242, unref() {} }),
     });
     const server = new OperatorControlPlaneServer({ runtime });
     const firstTransport = new InMemoryGatewayTransport();

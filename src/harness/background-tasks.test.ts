@@ -370,4 +370,49 @@ describe("BackgroundTaskExecutionService", () => {
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
   });
+
+  it("runs a command containing quotes and writes a parseable running/terminal state", async () => {
+    // Regression: shellQuote produced an invalid POSIX single-quote escape
+    // (`"'"'"'` instead of `'"'"'`), and the initial "running" state was written
+    // with a fragile `printf | sed` that broke on embedded quotes. Either bug
+    // corrupted state.json so recovery threw a JSON.parse SyntaxError. Exercise
+    // the REAL launch script (default spawn) with a quote-heavy command and
+    // assert every persisted state stays valid JSON with the command intact.
+    const rootDir = await makeTempDir();
+    const filePath = path.join(rootDir, "background-tasks.json");
+    const store = new FileBackgroundTaskStore(filePath);
+    const command = `printf '%s' "it's a \\"quoted\\" line"`;
+    const task = await store.start({ title: "Quoted command", command, cwd: rootDir, kind: "task" });
+
+    const stateFile = path.join(rootDir, task.execution.stateFile);
+    // Poll until the detached launch script has written a terminal state.
+    let raw = "";
+    let state: BackgroundTaskExecutionState | undefined;
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      try {
+        raw = await fs.readFile(stateFile, "utf8");
+        // The core regression assertion: whatever the script wrote must parse.
+        const parsed = JSON.parse(raw) as BackgroundTaskExecutionState;
+        if (parsed.status === "completed" || parsed.status === "failed") {
+          state = parsed;
+          break;
+        }
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+          throw new Error(`state.json was not valid JSON: ${(error as Error).message}\nraw=${raw}`);
+        }
+      }
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+
+    expect(state, `expected terminal state, last raw=${raw}`).toBeDefined();
+    expect(state?.command).toBe(command);
+    expect(typeof state?.pid).toBe("number");
+    expect(state?.status).toBe("completed");
+    expect(state?.exitCode).toBe(0);
+    // The command must have actually executed and produced its literal output.
+    await expect(fs.readFile(path.join(rootDir, task.execution.outputFile), "utf8")).resolves.toContain(
+      `it's a "quoted" line`,
+    );
+  });
 });
