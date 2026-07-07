@@ -530,6 +530,11 @@ describe("StandaloneOperatorRuntime", () => {
   it("starts, syncs, recovers, lists, and cancels background tasks", async () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
+      // Stub the launcher so no real detached process runs. This test drives
+      // execution state explicitly via writeState/writeOutput; letting a real
+      // bash launch script write the state file concurrently would race those
+      // manual writes and make the recovery assertions flaky.
+      backgroundTaskSpawnProcess: () => ({ pid: 4321, unref: () => {} }),
       backgroundTaskIsProcessRunning: () => false,
     });
     const session = await runtime.startSession({ title: "Tasks", agentId: "main" });

@@ -4,6 +4,17 @@ Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
 ## Foundations / DX
+- [x] **Fix background-task state corruption + de-flake its tests** (2026-07-07,
+      run 9). Launch script wrote `state.json` via `sed`-patched JSON payload —
+      corrupted the file for any command containing a quote and left `pid` as
+      literal `"$$"`; also wrote non-atomically. Rewrote the initial-state write
+      as a Python argv writer and made both writers atomic (temp + `os.replace`).
+      Injected a stub launcher into the 3 flaky recovery tests. Suite 174/174,
+      stable 6/6.
+- [ ] **Launch-script contract test** (from run 9): render `renderLaunchScript`
+      for a command containing `"`, `'`, `\`, `$`, and a newline; execute it and
+      assert `state.json` parses and round-trips the exact command. Guards the
+      Python/shell boundary against regressions.
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`

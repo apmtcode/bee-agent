@@ -6,6 +6,67 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-07 (run 9) — Fix background-task state corruption + de-flake its tests
+
+**Audited:** Repo health on a fresh checkout. `npm test` was **not** 174/174 as
+the run-8 log recorded — **4 tests failed** (server.test, ×2 app.test,
+operator-runtime.test), all tracing to the background-task subsystem. Root-caused
+two distinct, real defects:
+
+1. **Production bug — corrupt state JSON for quoted commands.** The background
+   task launch script (`renderLaunchScript` in `src/harness/background-tasks.ts`)
+   wrote its initial `state.json` by shell-quoting a pre-rendered JSON payload and
+   patching it with `sed`:
+   `printf '%s' <payload> | sed "…; s/\"\$\$\"/$$/g" > state.json`.
+   The `"$$"` half of the sed program lives inside a double-quoted arg but itself
+   contains `"`, so bash split the quoting and the pid substitution silently
+   no-op'd (state kept a literal `"pid":"$$"`), while any task **command
+   containing a quote** (e.g. `printf "line-1\nline-2\n"`) was mangled into
+   invalid JSON. Result in production: `readState`/reconcile/sync throws
+   `SyntaxError` forever for such tasks — they can never be recovered. Captured
+   the actual corrupt file to confirm (`"command":"printf \"'line-1…\"'\"`).
+2. **Non-atomic writes → read/write race.** Both the launch script's initial
+   write (`> state.json`) and the Python completion/failure writer
+   (`state_path.write_text(...)`) truncate-then-write in place, so a concurrent
+   `reconcileTask` reader could observe a half-written file.
+
+**Changed (production, `src/harness/background-tasks.ts`, additive):**
+- Replaced the `sed`-patched JSON payload with a small Python writer
+  (`renderInitialStateWriterPython`) that receives taskId/kind/cwd/command and
+  the real pid + timestamp as **separate argv arguments** and builds the state
+  dict with `json.dumps`. argv values are never re-parsed by the shell or sed, so
+  quotes/backslashes/`$$` in commands can no longer corrupt the file, and the pid
+  is a proper integer. Verified end-to-end by rendering + running the script for a
+  command containing both `"` and `'` → valid JSON, integer pid.
+- Made **both** state writers atomic: render to a sibling `…​.tmp.<pid>` file then
+  `pathlib.Path.replace()` (atomic `os.replace`) it into place.
+
+**Changed (tests — deterministic launcher seam):** the three
+background-task-driven tests injected `backgroundTaskIsProcessRunning: () => false`
+but still spawned a **real** detached bash whose state writes raced the tests'
+manual `writeState`, so the two-phase recovery assertions
+(`missing-process` vs `unchanged`, circuit-breaker `failureCount`) were flaky
+(measured: operator-runtime 1/15, server 5/12). Added
+`backgroundTaskSpawnProcess: () => ({ pid: 4321, unref: () => {} })` to those
+tests (`operator-runtime.test.ts`, ×3 in `server.test.ts`) so no real process
+competes with the manual writes. `app.test.ts` needed **no** change — its
+flakiness was purely the JSON corruption (it uses the real launcher for output),
+and it's now 15/15 green on the production fix alone.
+
+**Test results:** full suite **174/174**, stable **6/6** consecutive `npm test`
+runs (previously 4 failing / intermittent). `typecheck:src` ✅ exit 0. Build ✅.
+Full `tsc` total unchanged at **125** (new stubs are type-clean). No public API
+change; the launcher seam already existed on `StandaloneOperatorRuntime`.
+
+**New idea:** add a **launch-script contract test** — render `renderLaunchScript`
+for a command containing `"`, `'`, `\`, `$`, and a newline, execute it in a temp
+dir with a fake fast command, and assert the resulting `state.json` parses and
+round-trips the exact command string. That would have caught this class of bug at
+authoring time instead of as a date-flaky integration failure, and guards the
+Python/shell boundary against future edits. (Logged to ROADMAP.)
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
