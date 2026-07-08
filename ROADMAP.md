@@ -45,6 +45,24 @@ unchecked items are queued. Keep this richer than you found it each run.
       have the engine run it as a per-run pre-push self-check.
 - [ ] Add a minimal CI workflow mirroring `verify` for human-opened PRs.
 
+## Reliability
+- [x] **Fix launch-script state-writer corruption** (2026-07-08, run 9). Two
+      escaping bugs in the background-task `run.sh` generator produced invalid
+      JSON state files: a malformed single-quote escape in `shellQuote`, and
+      JS-template-collapsed backslashes that stopped the `$$` PID substitution.
+      Both fixed (+ the same sed bug in `training/runner.ts`), with a new
+      regression test that executes the real script. Unit tests missed these
+      because they mock `spawn`.
+- [ ] **Hermetic background-task tests.** `server.test.ts` and `app.test.ts`
+      each spawn *real* detached processes and assert on OS-level liveness /
+      timing, so they fail in constrained sandboxes (this cloud runner) even
+      though the code is correct. Route them through the already-injectable
+      `spawnProcess` / `isProcessRunning` seams (or an `OPENCLAW_FAKE_SPAWN`
+      env flag) so the suite is fully reproducible off the author's machine.
+- [ ] Add an injectable clock to the gateway-health staleness + remote-control
+      derivation so heartbeat-timing tests don't depend on wall-clock elapsed
+      time between assertions.
+
 ## Capability parity (audit reference agents → port gaps)
 - [ ] Build a "capability inventory" generator: enumerate bee-agent's exported
       RPC/tool surface (`src/index.ts`) and diff it against `openclaw`,

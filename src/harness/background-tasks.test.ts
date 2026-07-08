@@ -1,7 +1,11 @@
+import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
+
+const execFileAsync = promisify(execFile);
 import {
   BackgroundTaskExecutionService,
   FileBackgroundTaskStore,
@@ -369,5 +373,42 @@ describe("BackgroundTaskExecutionService", () => {
     await expect(fs.readFile(path.join(rootDir, task.execution.launchScript), "utf8")).resolves.toContain("bash -lc");
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
+  });
+
+  // Regression: the launch script templates the running-state JSON via
+  // `printf | sed`. Two escaping bugs corrupted that file — (1) a malformed
+  // POSIX single-quote escape in shellQuote broke commands containing a `'`,
+  // and (2) the JS template literal collapsed the sed backslashes so the `$$`
+  // PID placeholder was never substituted. Both only surfaced when the launch
+  // script actually ran (unit tests mock spawn), so we execute it for real.
+  it("renders a valid JSON state file when the command contains single quotes", async () => {
+    const rootDir = await makeTempDir();
+    const store = new FileBackgroundTaskStore(
+      path.join(rootDir, "background-tasks.json"),
+      () => ({ pid: 4242, unref() {} }),
+    );
+    const task = await store.start({
+      title: "Quote-heavy command",
+      command: "printf '%s' 'hello world'",
+      cwd: rootDir,
+      kind: "task",
+    });
+
+    const scriptPath = path.join(rootDir, task.execution.launchScript);
+    // The launch script uses paths relative to rootDir, matching how the
+    // service spawns it (cwd = rootDir).
+    await execFileAsync("bash", [scriptPath], { cwd: rootDir });
+
+    const statePath = path.join(rootDir, task.execution.stateFile);
+    const raw = await fs.readFile(statePath, "utf8");
+    // Must parse — before the fix this was malformed JSON.
+    const state = JSON.parse(raw) as BackgroundTaskExecutionState;
+    expect(state.taskId).toBe(task.id);
+    expect(state.command).toBe("printf '%s' 'hello world'");
+    // `$$` was substituted with the real shell PID (a number), not left literal.
+    expect(typeof state.pid).toBe("number");
+    expect(Number.isNaN(state.pid)).toBe(false);
+    expect(state.status).toBe("completed");
+    expect(state.startedAt).not.toContain("__OPENCLAW_STARTED_AT__");
   });
 });

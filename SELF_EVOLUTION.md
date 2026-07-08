@@ -6,6 +6,76 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-08 (run 9) — Fix two launch-script state-writer bugs (reliability)
+
+**Audited:** Ran the suite on this cloud sandbox and found the recorded "174/174"
+no longer held — **3–4 tests failed**. Rather than layer a new capability on top
+of a red suite, I root-caused the failures. Two were pre-existing *code* bugs in
+the background-task launch script, hidden because every unit test **mocks**
+`spawn` — only the integration-style `operator-runtime` test actually executes
+`run.sh`, and it was the one throwing `SyntaxError: … after property value in
+JSON`.
+
+**Root causes (both in the `printf | sed` state-file templating):**
+1. **Malformed POSIX single-quote escape** in `shellQuote`
+   (`src/harness/background-tasks.ts`): it emitted `"'"'"'` instead of the
+   correct `'"'"'`. Any background-task command containing a `'` (e.g.
+   `printf 'line-1\nline-2\n'`) produced an **invalid JSON state file**, which
+   then broke every `readState` during recovery. Confirmed by reproduction in
+   bash+python; the correct idiom already lived in `training/runner.ts`.
+2. **Backslashes collapsed by the JS template literal**: the source wrote
+   `s/\"\$\$\"/$$/g`, but in a backtick template that becomes `s/"$$"/$$/g` in
+   the emitted `run.sh`. The shell then broke the double-quoted sed program at
+   the inner `"` and expanded `$$` on the *pattern* side, so the `"$$"` PID
+   placeholder was **never substituted** — state files carried
+   `"pid":"$$"` (a string), making `isProcessRunning` fail and every task look
+   like `missing-process`. Fixed by doubling the backslashes
+   (`s/\\"\\$\\$\\"/$$/g`) so `run.sh` receives the intended `s/\"\$\$\"/$$/g`.
+   The identical bug existed in `training/runner.ts`; fixed there too.
+
+**Changed (additive/surgical):**
+- `src/harness/background-tasks.ts`: corrected `shellQuote` + the sed escaping.
+- `src/training/runner.ts`: corrected the same sed escaping.
+- `src/harness/background-tasks.test.ts`: **new regression test** that actually
+  executes the generated `run.sh` for a single-quote command and asserts the
+  state file is valid JSON with a numeric (substituted) PID. Verified it *fails*
+  on the pre-fix code and *passes* after — the existing tests couldn't catch
+  this because they mock `spawn`.
+
+**Test results:** the **JSON-corruption crash is gone** — `operator-runtime`'s
+recovery no longer throws `SyntaxError` (the real bug), and the new hermetic
+regression test passes and *fails on the pre-fix code*. Full suite **174 → 175
+tests**. The residual failures are the **non-hermetic process-liveness class**,
+**pre-existing and not regressions** (all were red at baseline, most masked by
+the crash my fix removed):
+- `operator-runtime.test.ts` (`starts, syncs, recovers…`): after the fix its
+  state files carry a real numeric PID, but the test then asserts a task it
+  started via real `spawn` (e.g. `tail -f app.log`, whose child exits when the
+  file is absent) is still seen "unchanged"/running. Whether the child is alive
+  at recovery time is environment/timing-dependent, so it flips to
+  `missing-process` here.
+- `server.test.ts`: same theme — a real `sleep 5` task + `process.kill(pid,0)`
+  liveness feeding the "background task missing-process" diagnostic → `degraded`.
+- `app.test.ts` (load-flake): passes **22/22 in isolation**; only fails under
+  full-suite parallelism when a `printf ok` task completes before `watch-active`
+  reads it. Pure timing.
+A directly-spawned detached `sleep` *is* visible via `process.kill(-pid,0)` in
+this sandbox, so the failures trace to the tests' real *commands* exiting +
+timing, not to a blanket spawn limitation — which is exactly why the hermeticity
+fix below (route through the injectable `spawnProcess`/`isProcessRunning` seams)
+is the right next step. `npm run build` ✅. `npm run typecheck:src` ✅ (exit 0).
+
+**New idea:** the two remaining failures share a root theme — tests that assert
+on **real OS process liveness / real subprocess timing** are non-hermetic and
+break in constrained sandboxes. Add an **injectable clock + process-liveness
+seam** already present in the service (`isProcessRunning` is injectable!) and
+route these two tests through a deterministic fake, so CI is hermetic. Bigger:
+a `verify:hermetic` script that runs the suite with `OPENCLAW_FAKE_SPAWN=1` to
+force all background-task tests onto the mock spawn path — no real processes,
+fully reproducible in any cloud runner.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
