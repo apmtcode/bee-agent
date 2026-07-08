@@ -84,6 +84,10 @@ describe("OperatorControlPlaneServer", () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir,
       backgroundTaskIsProcessRunning: () => false,
+      // No-op spawn: real launch scripts write their own async "running" state,
+      // which races background-task recovery into the control-state assertions
+      // below and makes them nondeterministic.
+      backgroundTaskSpawnProcess: () => ({ pid: 4242, unref: () => {} }),
       delivery: new OperatorDeliveryService(rootDir, {
         sendBrowserPush: async () => {},
       }),
@@ -953,6 +957,9 @@ describe("OperatorControlPlaneServer", () => {
     const driftingRuntime = new StandaloneOperatorRuntime({
       rootDir: driftingRootDir,
       backgroundTaskIsProcessRunning: () => false,
+      // No-op spawn: keep the task's state file controlled by the explicit
+      // writeState calls below rather than the async launch script.
+      backgroundTaskSpawnProcess: () => ({ pid: 4242, unref: () => {} }),
     });
     const driftingServer = new OperatorControlPlaneServer({ runtime: driftingRuntime });
     const driftingBootstrap = await driftingServer.handle({
@@ -1019,6 +1026,11 @@ describe("OperatorControlPlaneServer", () => {
     const breakerRuntime = new StandaloneOperatorRuntime({
       rootDir: breakerRootDir,
       backgroundTaskIsProcessRunning: () => false,
+      // No-op spawn: the real launch script writes its own async "running"
+      // state, which races the explicit writeState calls below and makes the
+      // per-step breaker failure counts nondeterministic. Suppressing the spawn
+      // keeps state files controlled solely by this test.
+      backgroundTaskSpawnProcess: () => ({ pid: 4242, unref: () => {} }),
     });
     const breakerServer = new OperatorControlPlaneServer({ runtime: breakerRuntime });
     const breakerOne = await breakerServer.handle({

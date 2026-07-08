@@ -734,27 +734,19 @@ function renderLaunchScript(task: BackgroundTaskRecord): string {
   const quotedOutputFile = shellQuote(task.execution.outputFile);
   const quotedCwd = shellQuote(task.cwd);
   const quotedCommand = shellQuote(task.command);
-  const quotedStatePayload = shellQuote(
-    JSON.stringify({
-      version: 1,
-      taskId: task.id,
-      kind: task.kind,
-      status: "running",
-      pid: "$$",
-      startedAt: "__OPENCLAW_STARTED_AT__",
-      updatedAt: "__OPENCLAW_STARTED_AT__",
-      outputFile: task.execution.outputFile,
-      cwd: task.cwd,
-      command: task.command,
-    }),
-  );
 
   return [
     "#!/usr/bin/env bash",
     "set -euo pipefail",
     `mkdir -p $(dirname ${quotedStatePath}) $(dirname ${quotedOutputFile})`,
     "started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-    `printf '%s' ${quotedStatePayload} | sed "s/__OPENCLAW_STARTED_AT__/$started_at/g; s/\"\$\$\"/$$/g" > ${quotedStatePath}`,
+    // Write the initial "running" state via python/json rather than a
+    // printf|sed pipeline: shell text substitution corrupts commands that
+    // contain quotes or newlines, producing invalid JSON that later crashes
+    // recovery. python's json.dumps escapes every value safely.
+    `python3 - ${quotedStatePath} "$started_at" $$ <<'PY'`,
+    ...renderInitialStateWriterPython(task),
+    "PY",
     `printf '%s\n' "starting ${task.kind} ${task.id}" >> ${quotedOutputFile}`,
     `if cd ${quotedCwd} && bash -lc ${quotedCommand} >> ${quotedOutputFile} 2>&1; then`,
     "  completed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
@@ -771,6 +763,32 @@ function renderLaunchScript(task: BackgroundTaskRecord): string {
     "fi",
     "",
   ].join("\n");
+}
+
+function renderInitialStateWriterPython(task: BackgroundTaskRecord): string[] {
+  // JSON.stringify output is a valid python literal for strings/ints, so the
+  // task's command/cwd/etc. are embedded safely regardless of quotes/newlines.
+  return [
+    "import json",
+    "import pathlib",
+    "import sys",
+    "state_path = pathlib.Path(sys.argv[1])",
+    "started_at = sys.argv[2]",
+    "pid = int(sys.argv[3])",
+    "state = {",
+    `    "version": 1,`,
+    `    "taskId": ${JSON.stringify(task.id)},`,
+    `    "kind": ${JSON.stringify(task.kind)},`,
+    `    "status": "running",`,
+    `    "pid": pid,`,
+    `    "startedAt": started_at,`,
+    `    "updatedAt": started_at,`,
+    `    "outputFile": ${JSON.stringify(task.execution.outputFile)},`,
+    `    "cwd": ${JSON.stringify(task.cwd)},`,
+    `    "command": ${JSON.stringify(task.command)},`,
+    "}",
+    "state_path.write_text(json.dumps(state, indent=2) + '\\n')",
+  ];
 }
 
 function renderStateWriterPython(status: BackgroundTaskExecutionState["status"]): string[] {

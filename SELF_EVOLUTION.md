@@ -6,6 +6,64 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-08 (run 9) — Fix background-task launch JSON corruption + de-flake the suite
+
+**Audited:** Ran the full suite on a real machine (`npm install` → `npm test`)
+before touching anything, since the pre-push gate (step 5) requires green
+build+tests. Found the suite was **not green** here: 2–3 failing tests per run,
+with the numbers varying run-to-run (a flake signature). Reproduced and traced
+each. All failures were pre-existing on `main` (branch tip == `origin/main`),
+not introduced this run — a genuine, previously-masked defect.
+
+**Root cause (real bug, not a test bug):** `renderLaunchScript` in
+`src/harness/background-tasks.ts` wrote the initial `state.json` for every
+background task by piping a JSON string through a shell `printf … | sed …`
+pipeline. Shell text substitution mangles any command containing quotes or
+newlines: a task with `command: "printf 'line-1\nline-2\n'"` produced
+**invalid JSON** (`"command":"printf \"'line-1\n…\"'"`), which later crashed
+`readJsonFile` during background-task recovery with
+`SyntaxError: Expected ',' or '}'`. The completion writer already used a robust
+`python3 + json.dumps` path; only the *initial* write was fragile.
+
+**Changed (additive, behaviour-preserving):**
+- `src/harness/background-tasks.ts`: replaced the `printf|sed` initial-state
+  write with a `renderInitialStateWriterPython(task)` heredoc that mirrors the
+  existing completion writer. Task fields are embedded as python literals via
+  `JSON.stringify` (valid python for strings/ints), and pid/`started_at` are
+  passed as argv — so quotes/newlines can never corrupt the JSON. Removed the
+  now-dead `__OPENCLAW_STARTED_AT__` placeholder + sed hack.
+- `src/cli/app.ts`: added an additive `runtimeOptions?: Omit<StandaloneOperator
+  Options, "rootDir">` passthrough on `OperatorCliAppOptions`, spread into the
+  `StandaloneOperatorRuntime` constructor. A real testability/extensibility seam
+  (inject a mock background-task spawn or a deterministic liveness check without
+  reaching into the runtime). Covered by a new focused test.
+- **De-flaked the spawn-dependent tests** (they previously relied on real
+  detached launch scripts writing `state.json` asynchronously, racing the
+  tests' explicit `writeState` calls): injected `backgroundTaskSpawnProcess`
+  (and, where the test asserts liveness, a matching `backgroundTaskIsProcess
+  Running`) into the runtimes in `server.test.ts` (main + drifting + breaker),
+  `operator-runtime.test.ts` (bg-task test), and `app.test.ts` (lifecycle test,
+  via the new `runtimeOptions` seam, using pid 4242="alive" / 999999="dead" so
+  fresh tasks read running and explicitly-killed tasks read failed).
+
+**Test results:** before — failing every run (JSON crash was 8/8 deterministic
+in `server.test.ts` here; recovery/control-state races flaked the rest). After —
+`npm run typecheck:src` ✅ (exit 0), `npm run build` ✅, `npm test` **175/175**
+(was 174; +1 new seam test) and **0 failures across 28 consecutive full-suite
+runs** under parallel load. The source fix is the durable win; the test
+injections make the suite deterministic so the pre-push gate is trustworthy.
+
+**New idea (logged to ROADMAP):** a **fault-injection harness** for the
+background-task lifecycle — a small helper that deterministically drives a task
+through crash/partial-write/stale-pid/corrupt-state transitions (using the now
+pluggable spawn + liveness seams) so recovery paths are covered by design
+instead of surfacing as production flakes. Bigger: the `printf|sed` bug shows
+hand-built serialization in shell is a latent hazard — audit the codebase for
+other places that emit JSON/config via string interpolation and route them
+through a single tested serializer.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

@@ -320,6 +320,33 @@ describe("parseSlashCommand", () => {
 });
 
 describe("OperatorCliApp", () => {
+  it("forwards runtimeOptions to the underlying runtime", async () => {
+    const rootDir = await makeTempDir();
+    const spawned: string[] = [];
+    const app = new OperatorCliApp({
+      rootDir,
+      cwd: rootDir,
+      currentDate: "2026-05-25",
+      runtimeOptions: {
+        backgroundTaskIsProcessRunning: () => false,
+        backgroundTaskSpawnProcess: (command) => {
+          spawned.push(command);
+          return { pid: 4242, unref: () => {} };
+        },
+      },
+    });
+    const session = await app.runtime.startSession({ title: "seam", cwd: rootDir, agentId: "operator-cli" });
+    const task = await app.runtime.startBackgroundTask({
+      sessionId: session.id,
+      title: "Injected task",
+      command: "printf hi",
+      kind: "task",
+    });
+    // The injected spawn was used (not the real one) and its pid was recorded.
+    expect(spawned).toHaveLength(1);
+    expect(task.execution.processId).toBe(4242);
+  });
+
   it("dispatches status and runtime-backed commands", async () => {
     const rootDir = await makeTempDir();
     const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
@@ -801,7 +828,21 @@ describe("OperatorCliApp", () => {
 
   it("supports session lifecycle, transcript, approvals, pairing, config, and prompt commands", async () => {
     const rootDir = await makeTempDir();
-    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    const app = new OperatorCliApp({
+      rootDir,
+      cwd: rootDir,
+      currentDate: "2026-05-25",
+      // Deterministic background-task processes: the real launch scripts write
+      // their own async state and race the explicit writeState calls below,
+      // flaking the control-state assertions. A no-op spawn returns pid 4242;
+      // treating exactly that pid as alive means freshly-started tasks read as
+      // running (remote stays active) while tasks this test explicitly marks
+      // with a dead pid (999999) reconcile as failed.
+      runtimeOptions: {
+        backgroundTaskSpawnProcess: () => ({ pid: 4242, unref: () => {} }),
+        backgroundTaskIsProcessRunning: (pid) => pid === 4242,
+      },
+    });
     const firstSession = await app.runtime.startSession({ title: "first", cwd: rootDir, agentId: "operator-cli" });
     const secondSession = await app.runtime.startSession({ title: "second", cwd: rootDir, agentId: "operator-cli" });
 

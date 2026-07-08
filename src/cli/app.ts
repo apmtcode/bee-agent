@@ -9,7 +9,7 @@ import { promisify } from "node:util";
 import { subscribeRuntimeEvents } from "../control-plane/subscriptions.js";
 import { OperatorControlPlaneServer } from "../control-plane/server.js";
 import type { DeliveryTarget } from "../control-plane/delivery.js";
-import { StandaloneOperatorRuntime } from "../orchestrator/operator-runtime.js";
+import { StandaloneOperatorRuntime, type StandaloneOperatorOptions } from "../orchestrator/operator-runtime.js";
 import type { TranscriptRecord } from "../harness/transcript-store.js";
 import {
   OperatorCliConfigLoader,
@@ -121,6 +121,13 @@ export type OperatorCliAppOptions = {
   stdin?: NodeJS.ReadableStream;
   stdout?: NodeJS.WritableStream;
   stderr?: NodeJS.WritableStream;
+  /**
+   * Extra options forwarded to the underlying {@link StandaloneOperatorRuntime}
+   * (everything except `rootDir`, which is derived from this app's `rootDir`).
+   * Lets callers/tests inject seams such as a mock background-task spawn or a
+   * deterministic process-liveness check without reaching into the runtime.
+   */
+  runtimeOptions?: Omit<StandaloneOperatorOptions, "rootDir">;
 };
 
 type OperatorCliWorktreeSession = {
@@ -147,7 +154,7 @@ export class OperatorCliApp {
   readonly teams: FileOperatorCliTeamStore;
 
   constructor(private readonly options: OperatorCliAppOptions) {
-    this.runtime = new StandaloneOperatorRuntime({ rootDir: options.rootDir });
+    this.runtime = new StandaloneOperatorRuntime({ ...options.runtimeOptions, rootDir: options.rootDir });
     this.server = new OperatorControlPlaneServer({ runtime: this.runtime });
     this.teams = new FileOperatorCliTeamStore(options.rootDir);
     this.cwd = options.cwd ?? process.cwd();

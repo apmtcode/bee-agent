@@ -70,6 +70,25 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Generalization eval harness: measure replay fidelity on held-out but
       related synthetic trajectories.
 
+## Reliability / correctness
+- [x] **Fix background-task launch JSON corruption** (2026-07-08, run 9). The
+      launch script wrote the initial `state.json` via `printf|sed`, which
+      corrupted any command containing quotes/newlines into invalid JSON and
+      crashed recovery. Now uses a `python3 + json.dumps` writer mirroring the
+      completion writer. This was a real, suite-failing bug on `main`.
+- [x] **De-flake the spawn-dependent tests** (2026-07-08, run 9). Injected the
+      pluggable `backgroundTaskSpawnProcess`/`backgroundTaskIsProcessRunning`
+      seams so state files are controlled by the tests, not racing detached
+      launch scripts. 0 failures / 28 consecutive full-suite runs.
+- [ ] **Background-task fault-injection harness**: a helper that deterministically
+      drives a task through crash / partial-write / stale-pid / corrupt-state
+      transitions (via the spawn + liveness seams) so recovery paths are covered
+      by design instead of surfacing as production flakes.
+- [ ] **Audit for hand-built serialization**: the `printf|sed` bug shows shell/
+      string-interpolated JSON/config is a latent hazard. Grep the codebase for
+      places that emit JSON via interpolation and route them through one tested
+      serializer.
+
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in
