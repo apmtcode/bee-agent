@@ -6,6 +6,59 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-08 (run 9) — Reliability: made the test suite hermetic (killed real-subprocess races)
+
+**Audited:** Baseline suite health before adding anything. Found the suite was
+**no longer green** — 3 tests failed *deterministically* and a 4th flaked under
+parallel load, despite run 8 recording 174/174. (The last run was 2026-06-23; it
+is now 2026-07-08.)
+
+**Root cause (one, shared):** several tests spawned **real OS subprocesses** via
+`StandaloneOperatorRuntime.startBackgroundTask` (`sleep 5`, `printf ok`, `tail
+-f`, …) without injecting a mock spawn. The launch script writes `state.json` and
+`output.log` **asynchronously**, so those writes race the test's own
+`writeState`/`writeOutput` and the remote-status assertions. Machine timing
+shifted between environments, flipping the races to failures:
+- `server.test.ts` — after a background task's real `state.json` landed,
+  `deriveRemoteDiagnostics` saw `status:"running"` + `isProcessRunning:()=>false`
+  → `background task missing-process` → control `degraded`/`mixed` instead of the
+  expected `active`/intended `mixed`.
+- `app.test.ts` — same, surfacing as `control=mixed` in `platform-list`.
+- `operator-runtime.test.ts` — the real `printf` output clobbered the test's
+  explicit `writeOutput`, so `getBackgroundTaskOutput` returned the launch
+  script's `starting task …` line instead of `line-2`.
+- `app.test.ts` "background and monitor task commands" — genuinely read the real
+  `printf ok` output, flaky under CPU contention.
+
+**Changed:**
+- **New source seam (`src/cli/app.ts`):** `OperatorCliAppOptions` now accepts
+  optional `backgroundTaskSpawnProcess` / `backgroundTaskIsProcessRunning`,
+  threaded into the runtime (spread so production defaults are untouched). The
+  runtime already exposed these; the app hard-coded `{ rootDir }` and gave tests
+  no way to stub the OS interaction. This matches the guardrail: OS-touching
+  features must be injectable with a mock for cloud/CI.
+- **Hermetic tests:** injected deterministic no-op spawns (`() => ({ pid, unref
+  })`) into the 4 affected runtimes/apps; the "background and monitor" test now
+  drives `background-view`/`watch`/`stop` off an explicitly written running
+  state + output (with `isProcessRunning:()=>true` so it stays active for the
+  watch-active assertion; `process.kill` on the fake pid ESRCHs so stop still
+  terminates cleanly).
+
+**Test results:** **12/12 consecutive full-suite runs green — 174/174** (was
+3 deterministic failures + 1 flake). Build ✅. `typecheck:src` ✅. Full `tsc`
+unchanged at **125** (all test-file debt; no new errors). No production behaviour
+change — pure testability seam + test hermeticity.
+
+**New idea:** add an authoring guard so real-subprocess races can't creep back —
+a tiny test (or lint rule) that fails if a `*.test.ts` constructs a
+`StandaloneOperatorRuntime`/`OperatorCliApp` that later calls `startBackgroundTask`
+(or the `background-start`/`monitor-start` commands) without passing
+`backgroundTaskSpawnProcess`. Cheap insurance now that the seam exists. Bonus:
+run the suite ≥5× (or enable `vitest --retry`/`sequence.shuffle`) in the
+per-run self-check so timing flakiness is caught before it becomes a red baseline.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

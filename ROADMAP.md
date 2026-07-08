@@ -4,6 +4,17 @@ Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
 ## Foundations / DX
+- [x] **Test suite hermeticity** (2026-07-08, run 9). Removed real-subprocess
+      races: added `backgroundTaskSpawnProcess`/`backgroundTaskIsProcessRunning`
+      injection to `OperatorCliApp` and stubbed spawns in the 4 background-task
+      tests. Suite went from 3 deterministic failures + 1 flake to 12/12 green.
+- [ ] **No-real-spawn authoring guard.** A test/lint rule that fails if a
+      `*.test.ts` builds a `StandaloneOperatorRuntime`/`OperatorCliApp` that then
+      starts a background task without passing `backgroundTaskSpawnProcess`, so
+      subprocess races can't regress back into the suite (seam now exists).
+- [ ] **Flakiness gate in the per-run self-check.** Run the suite ≥5× (or enable
+      `vitest --retry` / `sequence.shuffle`) so timing-dependent tests are caught
+      before they become a red baseline for the next hourly run.
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`

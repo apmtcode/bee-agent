@@ -83,6 +83,11 @@ describe("OperatorControlPlaneServer", () => {
     const rootDir = await makeTempDir();
     const runtime = new StandaloneOperatorRuntime({
       rootDir,
+      // Deterministic no-op spawn keeps the RPC surface test hermetic: without
+      // it, the `sleep 5` background task below spawns a real subprocess whose
+      // state.json write races the remoteStatus assertions, flipping control
+      // between "active" and "degraded" depending on machine timing.
+      backgroundTaskSpawnProcess: () => ({ pid: 999_002, unref() {} }),
       backgroundTaskIsProcessRunning: () => false,
       delivery: new OperatorDeliveryService(rootDir, {
         sendBrowserPush: async () => {},
@@ -952,6 +957,8 @@ describe("OperatorControlPlaneServer", () => {
     const driftingRootDir = await makeTempDir();
     const driftingRuntime = new StandaloneOperatorRuntime({
       rootDir: driftingRootDir,
+      // No-op spawn so only the explicitly written state files drive diagnostics.
+      backgroundTaskSpawnProcess: () => ({ pid: 999_004, unref() {} }),
       backgroundTaskIsProcessRunning: () => false,
     });
     const driftingServer = new OperatorControlPlaneServer({ runtime: driftingRuntime });
@@ -1018,6 +1025,11 @@ describe("OperatorControlPlaneServer", () => {
     const breakerRootDir = await makeTempDir();
     const breakerRuntime = new StandaloneOperatorRuntime({
       rootDir: breakerRootDir,
+      // No-op spawn: the "mixed" → "degraded" progression below depends on ONLY
+      // the explicitly written state files existing. A real `sleep 5` subprocess
+      // would write its own running-state for every task and degrade all three
+      // at once, collapsing the intended mixed state.
+      backgroundTaskSpawnProcess: () => ({ pid: 999_005, unref() {} }),
       backgroundTaskIsProcessRunning: () => false,
     });
     const breakerServer = new OperatorControlPlaneServer({ runtime: breakerRuntime });

@@ -801,7 +801,18 @@ describe("OperatorCliApp", () => {
 
   it("supports session lifecycle, transcript, approvals, pairing, config, and prompt commands", async () => {
     const rootDir = await makeTempDir();
-    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    const app = new OperatorCliApp({
+      rootDir,
+      cwd: rootDir,
+      currentDate: "2026-05-25",
+      // Deterministic no-op spawn keeps remote control state derivation
+      // hermetic: the `sleep 5`/`printf drift` background tasks below would
+      // otherwise spawn real subprocesses whose state.json writes race the
+      // platform-list/status assertions, flipping control between
+      // "active" and "mixed"/"degraded" depending on machine timing.
+      backgroundTaskSpawnProcess: () => ({ pid: 999_003, unref() {} }),
+      backgroundTaskIsProcessRunning: () => false,
+    });
     const firstSession = await app.runtime.startSession({ title: "first", cwd: rootDir, agentId: "operator-cli" });
     const secondSession = await app.runtime.startSession({ title: "second", cwd: rootDir, agentId: "operator-cli" });
 
@@ -1063,7 +1074,20 @@ describe("OperatorCliApp", () => {
 
   it("supports background and monitor task commands plus cron commands", async () => {
     const rootDir = await makeTempDir();
-    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    // No-op spawn keeps the task lifecycle hermetic: the assertions below drive
+    // background-view/watch on explicitly written output/state rather than
+    // racing a real `printf` subprocess's asynchronous file writes (which flake
+    // under CPU contention when the suite runs in parallel).
+    const app = new OperatorCliApp({
+      rootDir,
+      cwd: rootDir,
+      currentDate: "2026-05-25",
+      backgroundTaskSpawnProcess: () => ({ pid: 999_006, unref() {} }),
+      // Treat the simulated task's pid as live so sync keeps it "running" for
+      // the watch-active assertion; the stop path still terminates cleanly since
+      // process.kill on the fake pid raises ESRCH (handled as already-exited).
+      backgroundTaskIsProcessRunning: () => true,
+    });
     const session = await app.runtime.startSession({ title: "CLI ops", cwd: rootDir, agentId: "operator-cli" });
 
     const startOutput = await app.dispatchSlashCommand(
@@ -1078,6 +1102,21 @@ describe("OperatorCliApp", () => {
     if (!task) {
       throw new Error("expected background task");
     }
+    // Simulate the launch script's output + terminal state deterministically
+    // (the real subprocess is stubbed out via backgroundTaskSpawnProcess above).
+    await app.runtime.backgroundTasks.executionService.writeOutput(task, `starting task ${task.id}\nok\n`);
+    await app.runtime.backgroundTasks.executionService.writeState(task, {
+      version: 1,
+      taskId: task.id,
+      kind: "task",
+      status: "running",
+      pid: task.execution.processId ?? 1234,
+      startedAt: task.execution.startedAt ?? task.updatedAt,
+      updatedAt: task.updatedAt,
+      outputFile: task.execution.outputFile,
+      cwd: task.cwd,
+      command: task.command,
+    });
 
     const listOutput = await app.dispatchSlashCommand({ kind: "background-list" });
     expect(listOutput).toContain(task.id);
