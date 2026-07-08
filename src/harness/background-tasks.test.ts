@@ -370,4 +370,42 @@ describe("BackgroundTaskExecutionService", () => {
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
   });
+
+  // Regression: the real launch script (default spawn) is what actually renders the
+  // shell + sed that write the initial "running" state. Earlier bugs here were
+  // invisible because every other test stubs the spawn. This exercises the genuine
+  // script so a broken pid substitution or single-quote escaping fails loudly.
+  it("emits a valid running-state file (numeric pid, exact command) from the real launch script", async () => {
+    const rootDir = await makeTempDir();
+    // Default spawn + a command containing single quotes AND newlines — the exact
+    // shape that previously corrupted the emitted JSON via faulty shell escaping.
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"));
+    const command = "printf 'line-1\nline-2\n'";
+    const task = await store.start({ title: "Quoted", command, cwd: rootDir, kind: "task" });
+    const statePath = path.join(rootDir, task.execution.stateFile);
+
+    // Poll until the launched script has written its state file.
+    let raw: string | undefined;
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      try {
+        raw = await fs.readFile(statePath, "utf8");
+        break;
+      } catch {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+    }
+    if (raw === undefined) {
+      throw new Error("launch script never wrote a state file");
+    }
+
+    // Must be valid JSON (a half-written or mangled file would throw here).
+    const state = JSON.parse(raw) as BackgroundTaskExecutionState;
+    expect(state.status).toBe("running");
+    expect(typeof state.pid).toBe("number");
+    expect(Number.isFinite(state.pid)).toBe(true);
+    // The single-quoted, multi-line command must survive shell escaping intact.
+    expect(state.command).toBe(command);
+
+    await store.cancel(task.id);
+  });
 });

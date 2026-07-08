@@ -528,8 +528,13 @@ describe("StandaloneOperatorRuntime", () => {
   });
 
   it("starts, syncs, recovers, lists, and cancels background tasks", async () => {
+    let spawnPidSeq = 900000;
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
+      // Hermetic: never launch a real OS process (whose async state writes would
+      // race with the deterministic writeState() calls below). Treat every task's
+      // process as dead so recovery reconciles to missing-process predictably.
+      backgroundTaskSpawnProcess: () => ({ pid: (spawnPidSeq += 1), unref() {} }),
       backgroundTaskIsProcessRunning: () => false,
     });
     const session = await runtime.startSession({ title: "Tasks", agentId: "main" });

@@ -6,6 +6,61 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-08 (run 9) — Fix background-task launch script: 3 latent shell bugs, suite deterministic in cloud
+
+**Audited:** The project's own health gate. On a fresh cloud checkout `npm test`
+was **red** (3 failing, and *flaky* — a different subset failed each run), which
+would block every future run from pushing to `main`. Traced all three failures to
+the background-task **launch script** (`src/harness/background-tasks.ts`), whose
+real shell/sed/python machinery had **never been exercised by a test** — every
+existing test stubs the process spawn, so these bugs were invisible.
+
+**Three genuine, latent bugs fixed (all in `background-tasks.ts`):**
+1. **PID never substituted.** The initial "running" state was written by
+   `sed "…; s/"$$"/$$/g"`. Bash double-quote nesting mangled that expression, so
+   the JSON kept `"pid":"$$"` (a non-numeric string). `isProcessRunning` treats a
+   non-finite pid as dead → **every** task was spuriously reconciled to
+   `missing-process`/`failed` the moment its state file was read. Tests "passed"
+   before only by *winning a race* (reading the not-yet-written state and falling
+   back to the real spawn pid). Fixed with a quoted placeholder
+   (`"__OPENCLAW_PID__"`) and a properly-escaped `sed` that emits a bare number.
+2. **`shellQuote` escaping wrong.** It replaced `'` with `"'"'"'` (6 chars) instead
+   of the correct `'"'"'` (5 chars: close-quote, `"'"`, reopen-quote), turning
+   `a'b` into `a"'b`. Any task whose command/cwd/path contained a single quote
+   produced **corrupt JSON** in its state file (→ `SyntaxError` on read). Verified
+   the corrected sequence round-trips through bash for quotes, embedded newlines,
+   and apostrophes.
+3. **Non-atomic state writes.** Both the `sed > file` redirect and python's
+   `write_text` truncate-in-place, so a concurrent reader could observe a
+   half-written file. Made both atomic (temp + `mv` / `os.replace`).
+
+**Test hermeticity (matches the run-1 `configHome` precedent):** three integration
+runtimes in `server.test.ts`/`operator-runtime.test.ts` injected
+`isProcessRunning: () => false` yet still launched **real** `sleep 5`/`printf`
+processes whose async state writes raced the deterministic assertions. Added the
+existing no-op-spawn stub (`() => ({ pid, unref })`, already standard in
+`background-tasks.test.ts`) so the tests' own `writeState()` calls are the sole
+source of task state. Assertions unchanged.
+
+**New regression test** (`background-tasks.test.ts`): starts a task with a
+single-quoted, multi-line command using the **real** default spawn and asserts the
+emitted state file is valid JSON with a numeric pid and the exact command
+preserved. Confirmed it **fails** against the old buggy `shellQuote` and passes
+after the fix — closing the "no test ever ran the real launch script" gap.
+
+**Test results:** `npm test` **175/175** (174 + new test), **deterministic across
+4 runs** (was 3 flaky failures). `npm run build` ✅. `npm run typecheck:src` ✅
+(exit 0). Full `tsc` total unchanged at **125** (all in test files).
+
+**New idea:** the launch script is generated, security-sensitive shell text that
+was entirely untested. Add a small **"golden launch-script" test** that snapshots
+`renderLaunchScript` output for a representative task (quotes, spaces, `$`, unicode)
+and a `bash -n` syntax-lint of it in CI — so shell-injection/quoting regressions in
+this hand-rolled codegen are caught at authoring time, not by a flaky integration
+test three layers up. (Requires exporting `renderLaunchScript` for test-only use.)
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

@@ -6,6 +6,12 @@ unchecked items are queued. Keep this richer than you found it each run.
 ## Foundations / DX
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
+- [x] **Make the test suite green + deterministic in the cloud** (2026-07-08,
+      run 9). Fixed 3 latent shell bugs in the background-task launch script (pid
+      never substituted; wrong `shellQuote` single-quote escaping corrupting JSON;
+      non-atomic state writes) and injected the standard no-op spawn stub into the
+      3 integration runtimes that were launching real racing processes. 175/175,
+      stable across 4 runs.
 - [x] Make config loading hermetic in tests via an injectable `configHome`
       (2026-06-22).
 - [ ] **Pay down typecheck debt** (surfaced by the `typecheck` script). Full
@@ -84,3 +90,16 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
       count to a baseline file and fail if a module regresses above it. Lets the
       engine pay debt down module-by-module without one green-gate blocking
       progress, and prevents backsliding while the total is still > 0.
+- [ ] **Golden launch-script test** (from run 9): the background-task launch
+      script is generated, security-sensitive shell text that no test exercised
+      directly — 3 real quoting/pid bugs hid there for that reason. Export
+      `renderLaunchScript` for test-only use, snapshot its output for a
+      representative task (single/double quotes, spaces, `$`, unicode), and add a
+      `bash -n` syntax-lint. Catches shell-injection/quoting regressions in the
+      hand-rolled codegen at authoring time instead of via a flaky integration
+      test three layers up.
+- [ ] **Audit for the same `shellQuote`/`$$`-in-`sed` pattern elsewhere.** The
+      broken single-quote escaping and the double-quote-nesting `sed` mistake are
+      easy to have copy-pasted; grep the other reference agents were the source.
+      Grep bee-agent's `src/` for other hand-rolled shell codegen and verify each
+      round-trips a value containing a single quote.
