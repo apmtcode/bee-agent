@@ -6,6 +6,63 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-08 (run 9) — Movement subsystem: pluggable local-model backend + generalization eval
+
+**Audited:** Standing objective #2 (local-movement learning). Inventoried
+`src/capture/` (recorder, replay, trajectory schema, device/os/browser adapters,
+consent) and `src/training/` (exporter → reviewed dataset, job-store/manifest,
+`runner.ts`). Found the capture→schema→dataset→replay pieces exist, but the
+**train + infer** pieces (objective 2c/2d) were missing in-process: `runner.ts`
+only *shells out* to MLX/axolotl, which cannot run in the cloud, so there was no
+testable model that repeats recorded movements or generalizes to new ones.
+
+**Changed (additive, new files only):**
+- `src/training/movement-model.ts` — a **pluggable backend** for the movement
+  model:
+  - `MovementModelBackend` interface (`train(dataset, {order}) -> MovementPolicy`);
+    a real on-device small model implements the same interface and swaps in with
+    zero call-site changes.
+  - `MarkovMovementModelBackend` — a deterministic **back-off n-gram** (cloud/CI
+    safe, no OS/native deps). Full-order context hit ⇒ **exact** reproduction of
+    recorded movements; unseen full context ⇒ **backs off** to shorter shared
+    contexts ⇒ **generalizes** to novel-but-related movements; empty context ⇒
+    global **prior**.
+  - `MovementPolicy.predict()` (returns step + confidence + `source`
+    exact/backoff/prior + `matchedOrder`), `.rollout()` (autoregressive replay),
+    `.toSnapshot()` + `MarkovMovementModelBackend.fromSnapshot()` (persist/reload
+    the trained model as the artifact).
+  - `buildMovementDataset()` — turns `ReplayManifest`/`ExportedReplayManifest`
+    action events into replayable `MovementSequence`s (drops non-action events,
+    groups by trajectory, orders by ts, canonicalizes summaries into verb+target
+    so different targets sharing a verb generalize).
+  - `evaluateMovementPolicy()` — **generalization eval harness**: next-step
+    fidelity on held-out sequences with a `bySource` breakdown + a
+    `generalizationRate` separating memorized replay from generalized movement.
+- `src/training/movement-model.test.ts` — 8 tests over a synthetic event-stream
+  generator: dataset extraction, exact repeat + rollout reproduction, backoff
+  generalization, prior fallback, eval fidelity (perfect on training, measurable
+  generalization on held-out related runs), and snapshot round-trip equality.
+- `src/index.ts` — barrel-exported the new backend, functions, and types.
+
+**Test results:** `npm run typecheck:src` ✅ (exit 0, source stays clean). Build
+✅. New file **8/8** ✅. Full suite **179 passed / 182** — the **3 failures are
+pre-existing on the clean baseline** (verified via `git stash -u`: baseline is
+171/174 with the identical 3 failing). They are an environment-specific race in
+`BackgroundTaskExecutionService.launch()` (a real detached subprocess's
+state-writer races the test's `writeState`, half-written JSON at "position 311")
+— **not** caused by this diff. Logged with a fix plan under "Known pre-existing
+failures" in ROADMAP. Net: +8 passing tests, zero regressions.
+
+**New idea:** wire this Markov policy into `runner.ts`/the execution service as
+the **cloud fallback backend** — when no on-device MLX/axolotl model is present,
+train the in-process policy from the reviewed export and serve `predict()`/
+`rollout()` so the full record→train→replay loop runs end-to-end in the cloud,
+with `toSnapshot()` persisted as the model artifact. Then add a second,
+higher-capacity backend behind the same interface and use `evaluateMovementPolicy`
+as the head-to-head benchmark to *prove* each capability gain numerically.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

@@ -58,17 +58,50 @@ unchecked items are queued. Keep this richer than you found it each run.
 ## Local-movement learning subsystem
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
-(exporter, job store/manifest, runner, execution service). Next increments:
+(exporter, job store/manifest, runner, execution service, **movement-model**).
+Next increments:
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
-      deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+- [x] **Pluggable local-model backend interface + deterministic mock**
+      (2026-07-08, run 9) — `src/training/movement-model.ts`:
+      `MovementModelBackend` interface (`train(dataset) -> MovementPolicy`),
+      `MarkovMovementModelBackend` (back-off n-gram, cloud/CI-safe, no OS/native
+      deps), `MovementPolicy.predict/rollout/toSnapshot`, snapshot round-trip via
+      `fromSnapshot`. A real on-device small model implements the same interface.
+- [x] **Synthetic event-stream generator** (2026-07-08, run 9) — test-side
+      `syntheticReplay()` builds `ReplayManifest`s from action summaries;
+      `buildMovementDataset()` turns replays into replayable `MovementSequence`s.
+      Next: promote the generator to a reusable `src/training` export so eval
+      harnesses beyond the unit tests can share it.
+- [x] **Generalization eval harness** (2026-07-08, run 9) —
+      `evaluateMovementPolicy()` scores next-step fidelity on held-out sequences
+      with a `bySource` (exact/backoff/prior) breakdown + `generalizationRate`,
+      separating memorized replay from generalized movement.
+- [ ] Wire the movement-model policy into the training `runner`/execution flow:
+      when a real on-device backend is unavailable, fall back to the in-process
+      Markov policy so `runBackgroundTask`-style replay works end-to-end in the
+      cloud. Persist `toSnapshot()` output as the trained-model artifact.
+- [ ] Higher-capacity backend behind the same interface (e.g. a smoothed /
+      interpolated n-gram or a tiny embedding-nearest-neighbour policy) and
+      compare on the eval harness to show measurable capability gain.
+- [ ] Feed real capture output (`DeviceCaptureAdapter` gestures) through
+      `buildReplayManifest` → `buildMovementDataset` so the movement model trains
+      on actual mouse/keyboard/window events, not just transcript actions.
+
+## Known pre-existing failures (fix candidates)
+- [ ] **Background-task recovery race** (found run 9). On the clean baseline
+      (origin), 3 tests fail *in the cloud sandbox*: `operator-runtime` "starts,
+      syncs, recovers…", `control-plane/server` orchestration, and `cli/app`
+      lifecycle. Root cause: `BackgroundTaskExecutionService.launch()` spawns a
+      **real detached subprocess** whose bash/python state-writer races the
+      test's explicit `writeState`, yielding a half-written state file that
+      `readJsonFile` rejects ("Expected ',' or '}' … position 311"). The
+      `pid`/`started_at` sed line itself is valid (verified). Fix idea: make the
+      execution service injectable with a deterministic in-memory launcher for
+      tests (like `isProcessRunningImpl` already is), or write state atomically
+      via a temp-file rename in the launch script so partial reads are
+      impossible. Not caused by run 9's diff (movement-model is fully green).
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
