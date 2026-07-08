@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -369,5 +370,45 @@ describe("BackgroundTaskExecutionService", () => {
     await expect(fs.readFile(path.join(rootDir, task.execution.launchScript), "utf8")).resolves.toContain("bash -lc");
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
+  });
+
+  it("emits valid state.json even when the command contains quotes and newlines", async () => {
+    const rootDir = await makeTempDir();
+    // Drive the generated launch script for real (via bash) instead of mocking
+    // the spawn, so we exercise the shell/python state writer end-to-end. A
+    // command containing double quotes and newlines used to corrupt state.json
+    // through the old printf|sed pipeline; base64+python3 must keep it valid.
+    const store = new FileBackgroundTaskStore(
+      path.join(rootDir, "background-tasks.json"),
+      (command, _args, options) => {
+        execFileSync("bash", [command], { cwd: options.cwd, stdio: "ignore" });
+        return { pid: 4321, unref() {} };
+      },
+      () => false,
+    );
+
+    // Double quotes plus a newline-producing format string are exactly what
+    // corrupted the emitted JSON under the previous printf|sed pipeline.
+    const hostileCommand = `printf "%s\\n" "quoted value"`;
+    const task = await store.start({
+      sessionId: "sess-hostile",
+      title: "Quoted command",
+      command: hostileCommand,
+      cwd: rootDir,
+      kind: "task",
+    });
+
+    const raw = await fs.readFile(path.join(rootDir, task.execution.stateFile), "utf8");
+    const parsed = JSON.parse(raw) as BackgroundTaskExecutionState; // must not throw
+    expect(parsed.taskId).toBe(task.id);
+    expect(parsed.command).toBe(hostileCommand);
+    expect(parsed.status).toBe("completed");
+    expect(typeof parsed.pid).toBe("number");
+
+    // The store must be able to reconcile the externally-written state.
+    await expect(store.getExecutionState(task.id)).resolves.toMatchObject({
+      taskId: task.id,
+      status: "completed",
+    });
   });
 });

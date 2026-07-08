@@ -6,6 +6,65 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-08 (run 9) — 🐛 Fix background-task/training state-file corruption; green + de-flaked the suite
+
+**Audited:** Test health first. On a clean checkout the suite was **flaky-red**
+— 3 tests failed (`operator-runtime`, `cli/app`, `control-plane/server`), and
+re-runs gave 3–4 different failures. Prior runs logged "174/174", so this was a
+real regression surfaced only now (the failing paths spawn *real* background
+processes, whose timing is environment-dependent).
+
+**Root cause (a genuine latent bug, not a test bug):** both
+`src/harness/background-tasks.ts` and `src/training/runner.ts` generated their
+launch scripts' **initial `state.json` via a `printf '%s' '<json>' | sed
+"…s/\"\$\$\"/$$/g"` pipeline.** Two defects:
+1. The `\"` in the sed program emits a literal `"` that *prematurely closes
+   bash's double-quoted sed argument*, so the `"$$"`→pid substitution silently
+   became a no-op (`s/<pid>/<pid>/`).
+2. For any task **command containing quotes or newlines**, the shell/`sed`
+   round-trip mangled the JSON string escaping, writing **invalid JSON** to
+   `state.json`. When the runtime later `readState()`'d it, `JSON.parse` threw
+   (`SyntaxError: Expected ',' or '}'…`) and crashed recovery/reconcile. I
+   confirmed this by capturing the corrupt file (`"command":"printf "'…`).
+
+**Changed (additive, root-cause fix):**
+- Both launch-script generators now write the initial running state with a
+  **`python3` heredoc that decodes a base64-encoded JSON payload** (built in TS
+  via `Buffer.from(JSON.stringify(...)).toString("base64")`) and stamps in
+  `pid`/`startedAt`/`updatedAt`. base64 is shell-safe (alphabet has no quotes),
+  so arbitrary command strings can never corrupt the emitted JSON. The `sed`
+  line and the `pid:"$$"` placeholder hack are gone. This mirrors the existing
+  robust completion-writer python already in both files.
+- **New end-to-end regression test** (`background-tasks.test.ts`): drives the
+  *real* generated script via `bash` for a command with double quotes + a
+  newline-producing `printf`, then asserts `state.json` parses and round-trips
+  the command verbatim (`status: completed`). The old mock-spawn tests never
+  executed the script, which is why the bug hid.
+- **De-flaked three control-plane/orchestration tests** that were accidentally
+  launching real detached processes while manually driving execution state (a
+  race). Injected a deterministic mock spawn: `operator-runtime.test.ts` and the
+  3 runtimes in `server.test.ts` now pass `backgroundTaskSpawnProcess`. For that
+  I made `OperatorCliApp` forward optional `backgroundTaskSpawnProcess` /
+  `backgroundTaskIsProcessRunning` to its runtime (production default unchanged),
+  and `app.test.ts` uses `(pid) => pid === 4242` to keep the live "sleep 5" task
+  running while the pid-999999 rewrite is detected as a dead process.
+- Fixed `runner.test.ts` assertion to match the new `python3 - '<statePath>'`
+  writer instead of the removed `> '<statePath>'` redirect.
+
+**Test results:** **175/175 passing, deterministic across 5 full runs** (was
+3-of-174 flaky-failing). `typecheck:src` ✅ clean. Build ✅. Net +1 test.
+
+**New idea:** the two `renderLaunchScript` implementations (background-tasks and
+training runner) are now near-identical (base64 payload → python state writer,
+completion python writer, `shellQuote`). Extract a shared
+`src/shared/launch-script.ts` helper (`renderStateWriteStep`, `shellQuote`,
+`encodeStatePayloadBase64`) so the next state-file field/format change is made
+once and can't drift between the two subsystems — and add a tiny "generated
+script emits valid JSON for a quote/newline command" property test that both
+call sites share.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

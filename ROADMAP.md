@@ -4,6 +4,17 @@ Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
 ## Foundations / DX
+- [x] **Fix background-task/training state-file JSON corruption** (2026-07-08,
+      run 9). The launch-script `printf|sed` state writer produced invalid JSON
+      for any command containing quotes/newlines, crashing `readState`. Replaced
+      with a base64→`python3` writer in both `background-tasks.ts` and
+      `training/runner.ts`; added an end-to-end regression test that runs the
+      real script; de-flaked 3 tests by injecting a deterministic mock spawn.
+      Suite now 175/175 deterministic.
+- [ ] **Extract shared `src/shared/launch-script.ts`** — the two
+      `renderLaunchScript` impls (background-tasks, training runner) are now
+      near-identical (base64 payload → python state writer + `shellQuote`).
+      Deduplicate so state-file format changes are made once and can't drift.
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`
