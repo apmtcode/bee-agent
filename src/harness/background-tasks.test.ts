@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -369,5 +370,31 @@ describe("BackgroundTaskExecutionService", () => {
     await expect(fs.readFile(path.join(rootDir, task.execution.launchScript), "utf8")).resolves.toContain("bash -lc");
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
+  });
+
+  // Regression: the launch script embeds task.command / cwd / paths into a shell
+  // pipeline and into a JSON state payload via shellQuote(). A stray quote in the
+  // escaper corrupted any single-quote-containing command, producing invalid JSON
+  // that broke `readState` and task recovery. Execute the real launch script and
+  // assert the persisted state round-trips.
+  it("round-trips single-quoted commands through the launch script and persisted state", async () => {
+    const rootDir = await makeTempDir();
+    // No-op spawn: we drive the rendered launch script ourselves, synchronously.
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"), () => ({ pid: 4242, unref() {} }));
+    const command = "printf 'quoted hello'";
+    const task = await store.start({ title: "Quoted command", command, cwd: rootDir });
+
+    const scriptPath = path.join(rootDir, task.execution.launchScript);
+    const run = spawnSync("bash", [scriptPath], { cwd: rootDir, encoding: "utf8" });
+    // With the escaper bug the initial state.json is invalid JSON, so the script's
+    // `python3 json.loads(...)` finalizer throws and bash exits non-zero.
+    expect(run.status).toBe(0);
+
+    const raw = await fs.readFile(path.join(rootDir, task.execution.stateFile), "utf8");
+    const state = JSON.parse(raw) as BackgroundTaskExecutionState; // must be valid JSON
+    expect(state.command).toBe(command);
+    expect(state.taskId).toBe(task.id);
+    expect(state.status).toBe("completed");
+    await expect(fs.readFile(path.join(rootDir, task.execution.outputFile), "utf8")).resolves.toContain("quoted hello");
   });
 });

@@ -740,7 +740,7 @@ function renderLaunchScript(task: BackgroundTaskRecord): string {
       taskId: task.id,
       kind: task.kind,
       status: "running",
-      pid: "$$",
+      pid: "__OPENCLAW_PID__",
       startedAt: "__OPENCLAW_STARTED_AT__",
       updatedAt: "__OPENCLAW_STARTED_AT__",
       outputFile: task.execution.outputFile,
@@ -754,7 +754,12 @@ function renderLaunchScript(task: BackgroundTaskRecord): string {
     "set -euo pipefail",
     `mkdir -p $(dirname ${quotedStatePath}) $(dirname ${quotedOutputFile})`,
     "started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-    `printf '%s' ${quotedStatePayload} | sed "s/__OPENCLAW_STARTED_AT__/$started_at/g; s/\"\$\$\"/$$/g" > ${quotedStatePath}`,
+    // Replace placeholders in the JSON payload. `__OPENCLAW_PID__` (quoted in the
+    // payload) becomes the launcher's real numeric pid — the quotes are dropped so
+    // the field is a JSON number. The placeholder is metachar-free, unlike the old
+    // `"$$"` pattern whose `$` was parsed as a regex end-of-line anchor and never
+    // matched, leaving `pid` as the literal string "$$".
+    `printf '%s' ${quotedStatePayload} | sed "s/__OPENCLAW_STARTED_AT__/$started_at/g; s/\"__OPENCLAW_PID__\"/$$/g" > ${quotedStatePath}`,
     `printf '%s\n' "starting ${task.kind} ${task.id}" >> ${quotedOutputFile}`,
     `if cd ${quotedCwd} && bash -lc ${quotedCommand} >> ${quotedOutputFile} 2>&1; then`,
     "  completed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
@@ -794,5 +799,10 @@ function renderStateWriterPython(status: BackgroundTaskExecutionState["status"])
 }
 
 function shellQuote(value: string): string {
-  return `'${value.replaceAll(`'`, `"'"'"'`)}'`;
+  // POSIX single-quote escaping: to embed a `'` inside a single-quoted string,
+  // close the quote, emit an escaped quote via a double-quoted `'`, then reopen:
+  // `'` -> `'"'"'`. The previous sequence (`"'"'"'`) had a stray leading `"`,
+  // which corrupted any command/cwd/path containing a single quote — breaking the
+  // launch script and the JSON state payload it writes (and thus task recovery).
+  return `'${value.replaceAll(`'`, `'"'"'`)}'`;
 }

@@ -3,6 +3,24 @@
 Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
+## Reliability / correctness
+- [x] **Fix `shellQuote` single-quote escaping** (2026-07-08, run 9) —
+      `'` → `'"'"'` (was `"'"'"'`, a stray leading `"`). The bug corrupted the
+      launch script + its JSON state payload for any command/cwd/path containing a
+      `'`, crashing task recovery.
+- [x] **Fix launch-script pid substitution** (2026-07-08, run 9) — placeholder
+      `__OPENCLAW_PID__` instead of `"$$"` (whose `$` was a sed end-of-line anchor
+      that never matched, leaving `pid` as the literal string `"$$"`).
+- [x] **De-race the background-task integration tests** (2026-07-08, run 9) —
+      threaded a spawn seam through `OperatorCliApp` and injected an inert spawn so
+      tests no longer launch real detached subprocesses that overwrite asserted
+      state. Suite now deterministic (8/8 clean full runs).
+- [ ] **Launch-script contract/fuzz test** — render `renderLaunchScript` for a
+      battery of adversarial commands (quotes, `$VAR`, backticks, newlines,
+      unicode, `&&`/`;`), assert `bash -n` validity and that the executed script's
+      state file parses with `command` round-tripped verbatim. Would have caught
+      both bugs above at authoring time.
+
 ## Foundations / DX
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.

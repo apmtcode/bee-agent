@@ -6,6 +6,68 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-08 (run 9) — 🐛 Two real launch-script bugs fixed + de-raced background-task tests
+
+**Audited:** Ran the suite fresh in this container and found **3 tests red** at run
+start (`operator-runtime.test.ts`, `server.test.ts`, `app.test.ts`) — a regression
+vs run 8's green report. Root cause was *not* my changes (they were red on `main`
+before I touched anything); it was **latent bugs in the background-task launch
+script** (`src/harness/background-tasks.ts`) that only surface when the launch
+script actually executes a real subprocess (which these tests do, via the default
+real `spawn`). Two genuine source bugs + a test-design race:
+
+**Bug 1 — `shellQuote` corrupted every single-quote-containing value (real
+correctness bug).** POSIX single-quote escaping should turn `'` into `'"'"'`
+(close-quote, `"'"`, reopen). The code used `"'"'"'` — a stray leading `"`. Any
+command/cwd/path with a `'` was mis-quoted, so the JSON *state payload* the launch
+script writes became invalid JSON → `readState` threw → **task recovery crashed**
+(the observed `SyntaxError: Expected ',' or '}' … position 311`). Verified via a
+shell round-trip: `printf 'hi'` → buggy `printf "'hi"'` vs fixed `printf 'hi'`.
+
+**Bug 2 — pid placeholder never substituted (real robustness bug).** The running
+state wrote `"pid":"$$"` and relied on `sed "…; s/\"\$\$\"/$$/g"` to swap in the
+real pid. In the sed *regex* `$` is an end-of-line anchor, so `"$$"` never matched
+— `pid` persisted as the literal string `"$$"`, which downstream recovery reads as
+a non-numeric pid → "process no longer running" → spurious failure. Replaced with a
+metachar-free placeholder `__OPENCLAW_PID__` (quoted in the payload; the sed drops
+the quotes so the field becomes a JSON number). Verified mid-flight: running state
+now shows `"pid": 27676`.
+
+**Test race (test-quality fix).** The 3 integration tests inject
+`backgroundTaskIsProcessRunning: () => false` but left the **real `spawn`** in
+place, so a detached launch script asynchronously overwrote the very state the
+tests then assert on — nondeterministic (failed ~half of full-suite runs).
+- Threaded a `backgroundTaskSpawnProcess` / `backgroundTaskIsProcessRunning` seam
+  through `OperatorCliApp` (additive `OperatorCliAppOptions` fields → runtime),
+  mirroring the seam the runtime/store already expose.
+- Injected an inert spawn (`() => ({ pid: 4242, unref() {} })`) into the four racy
+  constructions (operator-runtime ×1, server ×3, app ×2). The `app.ts:1071` flow
+  genuinely needs a *live running* task with `ok` output for `watch-active`, so it
+  also gets `isProcessRunning: () => true` + explicitly seeded output/running state
+  (matching the monitor branch already in that test).
+
+**New test:** `background-tasks.test.ts` — "round-trips single-quoted commands
+through the launch script and persisted state": renders + executes the real launch
+script for `printf 'quoted hello'` and asserts the persisted state is valid JSON,
+`command` round-trips, status is `completed`, and output contains the text. This
+deterministically guards Bug 1 (script exits non-zero on the corrupt-JSON path).
+
+**Test results:** **175/175 passing** (was 174 + my new test), **deterministic
+across 8 consecutive full-suite runs** (previously 1 flaky failure/run).
+`typecheck:src` ✅ (source stays clean). `npm run build` ✅. Full `tsc` total
+holds at **125** (all in test files; my edits added none).
+
+**New idea:** background-task launches are effectively untested for *shell
+correctness* because tests stub the spawn. Add a tiny **launch-script contract
+test** that renders `renderLaunchScript` for a battery of adversarial commands
+(single/double quotes, `$VAR`, backticks, newlines, unicode, `&&`/`;`) and asserts
+(a) the rendered script is valid `bash -n` syntax and (b) executing it yields a
+state file that parses and whose `command` field equals the input verbatim. That
+turns "shell-quoting is hard" into a fuzzed, regression-guarded invariant — and
+would have caught both bugs above at authoring time.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
