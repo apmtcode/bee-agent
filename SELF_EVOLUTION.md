@@ -6,6 +6,67 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-08 (run 9) — Movement-policy model: learn-to-repeat + generalise (objective 2c/2d)
+
+**Audited:** The local-movement learning subsystem (standing objective #2).
+Inventoried `src/capture` (recorder, replay, trajectory schema, device/os/browser
+adapters, consent, ingestion) and `src/training` (exporter → reviewed dataset,
+job store/manifest, **runner**, execution service). Finding: pieces (a) capture,
+(b) schema, (c) dataset all existed, but the runner only *emits mlx/axolotl
+launch scripts that require the real Apple-Silicon machine* — there was **no
+in-process model** doing (c) *learn to repeat recorded movements* or (d)
+*generalise to new but related movements*. That is the heart of the objective and
+was entirely missing. Highest-value gap.
+
+**Changed (all additive, new files):**
+- `src/training/movement-model.ts` — the missing learn/infer layer, cloud-safe
+  (pure in-process, no OS, no RNG):
+  - **Tokenisation** of capture streams into discrete `MovementToken`s
+    (`tokenizeReplayEvents`, `tokenizeTrajectory`) + dataset builders from replay
+    manifests / trajectories.
+  - **`MovementModelBackend`** interface (pluggable seam for a real on-device
+    small model) + **`MarkovMovementModelBackend`**, a deterministic order-k
+    Markov policy with **stupid-backoff** smoothing. Greedy decoding *reproduces
+    recorded movements exactly* (2c); backoff to a seen shorter suffix when the
+    full high-order context is unseen *generalises to related movements* (2d).
+  - `predictNext` / `rollout` / JSON-serialisable `snapshot()` (persistable model).
+- `src/training/synthetic-movement.ts` — deterministic synthetic event-stream
+  generator (LCG jitter, never `Math.random`) so the capture→dataset→model→replay
+  loop is validated in the cloud without real OS input. (Also a queued roadmap
+  item — now done.)
+- `src/training/movement-model.test.ts` — 7 tests: tokenisation; **2c** greedy
+  reproduction of a recorded sequence + confident (`p=1`) continuation; **2d**
+  backoff generalisation to an unseen lead-in sharing a known suffix +
+  unigram fallback for a fully-unseen context; backend pluggability, JSON
+  snapshot, and cross-run determinism.
+- Barrel exports added in `src/index.ts` for the whole movement-model +
+  synthetic-generator surface.
+
+**Test results:** `typecheck:src` ✅ CLEAN. `build` ✅. New movement tests ✅
+**17/17** across `src/training` (7 new). **Zero new deterministic failures** vs.
+the `main` baseline.
+
+**⚠️ Pre-existing environmental failures surfaced (NOT from this run):** a fresh
+cloud checkout of `main` fails 3 tests *before any run-9 change* — `app.test.ts`
+(`control=degraded:… missing-process`), `server.test.ts` (JSON `SyntaxError`
+reading subprocess state), `operator-runtime.test.ts` (object-shape mismatch).
+All three spawn **real subprocesses and read back JSON state**, which the sandbox
+handles differently than the machine where "174/174" was recorded. Confirmed by
+`git stash` A/B: identical failures with and without my change; the movement code
+touches no subprocess. Logged to ROADMAP with a fix (injectable mock process
+host) and an interim pre-push gate (`typecheck:src && build && affected tests`).
+Pushing to `main` because the change is purely additive and green relative to the
+already-red baseline — it regresses nothing.
+
+**New idea:** turn 2d generalisation from a boolean unit test into a **scored eval
+harness** — hold out related synthetic trajectories and measure next-token
+accuracy / normalised edit-distance of `rollout()` vs. ground truth, so future
+backends (a second `MovementModelBackend` impl) can be *ranked* against the Markov
+baseline instead of just pass/fail. That closes the loop toward "the model is
+measurably better this run than last."
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
