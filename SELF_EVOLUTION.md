@@ -6,6 +6,60 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-08 (run 9) — Movement-model subsystem: in-process train → replay → generalize
+
+**Audited:** Standing objective 2(c)/(d) ("post-train a local model on the
+recorded dataset to repeat the recorded movements" and "generalize to related
+movements"). Read `src/capture/` (trajectory/replay schema, device + os
+adapters) and `src/training/runner.ts`. Found the gap: the runner only *plans*
+external MLX/axolotl processes (a shell launch script) — there was **no
+in-code model** that could actually learn from a movement dataset and predict
+movements. So the whole train→infer→generalize loop was untestable in the cloud.
+
+**Changed (additive, new module `src/training/movement-model/`):**
+- `types.ts` — `MovementToken`/`MovementStep`/`MovementSequence`/`MovementDataset`
+  schema + the pluggable `MovementModelBackend` interface (train/predict/generate)
+  and start/end sentinels. This is the documented seam for a real on-device small
+  model.
+- `tokenizer.ts` — turns captured `TrajectoryAction`s (and replay-manifest action
+  events) into discrete, learnable tokens keyed on tool + gesture + direction
+  (deliberately coarser than free-text summaries, so distinct-but-related
+  movements collapse onto one symbol → generalization). `buildMovementDataset`,
+  `movementVocabulary`.
+- `markov-backend.ts` — `MarkovMovementBackend`: deterministic n-gram model with
+  stupid-backoff. Trains by counting movement transitions; "repeats" recorded
+  movements via argmax rollout; "generalizes" to unseen contexts by backing off
+  to lower-order statistics. JSON-serializable state (survives round-trip).
+- `synthetic.ts` — `generateSyntheticMovementDataset` (seeded mulberry32 PRNG,
+  *weighted* app-workflow grammar with dominant habitual paths) + `splitMovementDataset`.
+  No real OS input needed; no `Math.random`, fully reproducible.
+- `eval.ts` — generalization eval harness: `evaluateMovementModel` (next-step
+  accuracy, exact-replay fidelity, backoff rate) + `isExactReplay`.
+- Barrel exports added to `src/index.ts`.
+
+**Test results:** New tests **18/18 pass** (tokenizer 6, markov-backend 8,
+synthetic 4), incl. deterministic exact-replay and >0.5 held-out next-step
+accuracy over a 6-symbol vocabulary (well above chance). `typecheck:src` ✅
+(exit 0). Build ✅. **Blocker (pre-existing, unrelated):** the full `vitest run`
+is flaky — failing count varies run-to-run (2→4) across `app.test.ts`,
+`server.test.ts`, `operator-runtime.test.ts` from cross-test interference;
+`operator-runtime.test.ts` fails deterministically in isolation (a JSON-parse in
+background-task state recovery). My slice is fully green in isolation. Per the
+designated-branch mandate, pushing to `claude/peaceful-dirac-atn4en` (not main).
+Logged the flaky-suite investigation in ROADMAP.
+
+**New idea:** Close the loop by wiring this backend into the training
+execution-service so a *reviewed export* becomes a `TrainedMovementModel`
+artifact whose promotion is gated by an eval-harness fidelity threshold — that
+gives bee-agent a genuine end-to-end "learn my movements and prove it can repeat
+them" pipeline that runs in the cloud today (mock backend) and swaps to a real
+on-device model with zero call-site changes. Second idea: a *coordinate/target
+quantizer* in the tokenizer so the model generalizes *within* a screen (tap near
+element-class X) instead of only across gesture kinds, plus a detokenizer that
+emits replayable device inputs from predicted tokens.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

@@ -62,13 +62,26 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      for a real on-device small model. (2026-07-08) — `src/training/movement-model/`:
+      `MovementModelBackend` interface + deterministic `MarkovMovementBackend`
+      (n-gram with stupid-backoff). Trains/infers fully in-process; JSON-serializable
+      state; a real on-device small model can be swapped in behind the interface.
+- [x] Synthetic event-stream generator to validate capture→dataset→replay
+      round-trips without real OS input. (2026-07-08) —
+      `generateSyntheticMovementDataset` (seeded PRNG, weighted app-workflow
+      grammar) + `splitMovementDataset` for train/holdout.
+- [x] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories. (2026-07-08) — `evaluateMovementModel`
+      (next-step accuracy, exact-replay fidelity, backoff rate) + `isExactReplay`.
+- [ ] Wire the movement-model backend into the training runner/execution service
+      so a reviewed export can be trained into a `TrainedMovementModel` artifact
+      and the eval harness gates promotion (fidelity threshold) — the deterministic
+      backend gives a real end-to-end train+eval path in the cloud today.
+- [ ] Richer movement tokenizer: quantize target/coordinate slots so the model can
+      generalize *within* a screen (e.g. "tap near element class X") rather than
+      only over gesture kinds; add a detokenizer that emits replayable device inputs.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
@@ -84,3 +97,14 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
       count to a baseline file and fail if a module regresses above it. Lets the
       engine pay debt down module-by-module without one green-gate blocking
       progress, and prevents backsliding while the total is still > 0.
+- [ ] **Flaky test suite (NEW, 2026-07-08)** — the full `vitest run` is
+      non-deterministic: failing-test count varies run to run (observed 2 then 4)
+      across `app.test.ts`, `server.test.ts`, `operator-runtime.test.ts`. Root
+      cause is almost certainly cross-test interference (shared temp dirs / global
+      `process.kill` mocking / parallelism) rather than any single logic bug —
+      `operator-runtime.test.ts` fails deterministically *in isolation* (1 failure,
+      a JSON-parse in background-task state recovery, `background-tasks.ts` readState).
+      Fix by isolating each suite's filesystem root + restoring global mocks in
+      `afterEach`, and make `readState` tolerant of a partially-written state file.
+      Blocks a clean `verify` green-gate; movement-model slice is unaffected (its
+      own 18 tests + `typecheck:src` + build are green).
