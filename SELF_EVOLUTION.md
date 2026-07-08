@@ -6,6 +6,62 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-08 (run 9) — Reliability: fix background-task launch script corruption + torn state writes (red baseline → green & stable)
+
+**Audited:** Project health first (`npm test`) — found the baseline was **RED**:
+4 failing tests across `operator-runtime`, `server`, and `app` suites, all in the
+background-task subsystem. Prior logs claimed 174/174, so this was a real
+regression surfaced by this environment (slower `python3` startup widened a
+latent race). Root-caused two genuine **source bugs** in
+`src/harness/background-tasks.ts`, plus a test-design race:
+
+1. **`shellQuote` used a mis-rotated escape.** It replaced `'` with `"'"'"'`
+   (6 chars, leading `"`) instead of the canonical POSIX `'\''`. For any value
+   containing a single quote it injected a spurious `"` — e.g. the command
+   `printf 'line-1\nline-2\n'` became `printf "'line-1…"'`, so the spawned
+   `bash -lc` hit `unexpected EOF while looking for matching '` and the task
+   exited non-zero. This corrupted **every** quoted command/path the launch
+   script emitted. Fixed to `'\''` (verified: `X'Y` → `'X'\''Y'` → `X'Y`).
+
+2. **The launch script wrote `state.json` non-atomically** and built it by
+   `printf | sed`-munging a pre-embedded JSON blob (with a fragile `"$$"`→pid
+   substitution). A concurrent `sync`/`reconcile` reader could observe a torn,
+   half-written document → `SyntaxError: Expected ',' or '}'` (the baseline's
+   `background.tasks.sync` returned `ok:false`). Rewrote both writers to build
+   the JSON in Python from `argv` (no shell/JSON embedding, no `sed`) and write
+   via temp-file + `os.replace` (atomic rename). State is now always valid JSON
+   and readers never see a partial file.
+
+3. **Test races (test-only):** several suites spawned *real* `sleep`/`printf`
+   subprocesses while also driving state manually via `writeState`, so the
+   subprocess's async init/finalize write clobbered the test's authored state
+   (e.g. an extra `missing-process` skewed the breaker count 2/2→3/3). Injected
+   the already-supported `backgroundTaskSpawnProcess` no-op mock at the 3 sites
+   that pair it with `backgroundTaskIsProcessRunning: () => false` (they simulate
+   the lifecycle by hand, so a real subprocess is pure noise).
+
+**Added:** a deterministic **real-spawn** end-to-end test
+(`background-tasks.test.ts`) that runs an actual command containing single quotes
+*and* a newline, polls for the launch script's own finalize write, and asserts
+valid `completed`/exit-0 state, an intact `command` field, and exact output —
+directly guarding both source fixes against regression.
+
+**Test results:** baseline **4 failed / 170 passed** → **175/175 passing**
+(+1 new test). Stress-verified stability: **16/16** consecutive full-suite runs
+green (was ~1-in-3 flaky mid-fix). `typecheck:src` ✅. Build ✅. Full `tsc`
+debt unchanged at **125** (all test-file typings, per ROADMAP).
+
+**New idea:** the launch script is bespoke bash+python emitted as a string with
+no direct unit coverage of its *rendered* form. Add a tiny "golden script" test
+that snapshots `renderLaunchScript(sampleTask)` and shell-lints it (e.g. asserts
+balanced quoting / runs `bash -n`), so shell-injection or quoting regressions are
+caught at authoring time rather than only via a flaky live spawn. Longer term:
+add the queued `verify` script (`typecheck:src && build && test`) and have the
+engine run it as the pre-push gate — this run's red baseline would have been
+caught immediately by such a gate.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

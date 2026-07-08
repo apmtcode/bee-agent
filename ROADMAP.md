@@ -70,6 +70,23 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Generalization eval harness: measure replay fidelity on held-out but
       related synthetic trajectories.
 
+## Reliability
+- [x] **Fix background-task launch-script corruption + torn state writes**
+      (2026-07-08, run 9). `shellQuote` used a mis-rotated escape (`"'"'"'` →
+      canonical `'\''`) that injected a spurious `"` into any quoted
+      command/path; and the launch script wrote `state.json` non-atomically via
+      `printf|sed` JSON-munging, so concurrent `sync`/`reconcile` reads saw torn
+      JSON. Now: Python builds the JSON from `argv` and writes temp-file +
+      `os.replace`. Added a deterministic real-spawn E2E guard test. Red baseline
+      (4 failing) → 175/175, 16/16 stable.
+- [ ] **Golden launch-script test:** snapshot `renderLaunchScript(sampleTask)`
+      and shell-lint it (`bash -n`, balanced-quote assertion) so shell-quoting /
+      injection regressions are caught at authoring time, not via a live spawn.
+- [ ] Make `readJsonFile` optionally resilient to a transient parse failure
+      (bounded retry) as defense-in-depth for any *other* non-atomic writer that
+      may appear — the launch script is now atomic, but the shared util is the
+      single choke point every store reads through.
+
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in

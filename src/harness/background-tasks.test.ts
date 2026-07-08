@@ -370,4 +370,43 @@ describe("BackgroundTaskExecutionService", () => {
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
   });
+
+  it("runs a real command with quotes/newlines and records valid completed state", async () => {
+    const rootDir = await makeTempDir();
+    const filePath = path.join(rootDir, "background-tasks.json");
+    // Real spawn (no mock): exercises the generated bash launch script end-to-end.
+    // The command embeds single quotes AND a literal newline — the exact shape
+    // that a mis-escaped shellQuote or non-atomic state write corrupts.
+    const store = new FileBackgroundTaskStore(filePath);
+    const task = await store.start({
+      title: "Emit lines",
+      command: "printf 'alpha\nbeta\n'",
+      cwd: rootDir,
+      kind: "task",
+    });
+
+    // Poll for the launch script's own finalize write (never a torn read).
+    let state: BackgroundTaskExecutionState | undefined;
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      state = await store.executionService.readState(task);
+      if (state && state.status !== "running") {
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+
+    expect(state).toBeDefined();
+    expect(state?.status).toBe("completed");
+    expect(state?.exitCode).toBe(0);
+    // The command round-trips intact through the shell layer (no spurious quotes).
+    expect(state?.command).toBe("printf 'alpha\nbeta\n'");
+
+    // Reconcile agrees, and the captured output is exactly what the command wrote.
+    await expect(store.sync(task.id)).resolves.toMatchObject({
+      id: task.id,
+      status: "completed",
+      execution: { exitCode: 0 },
+    });
+    await expect(store.getOutput(task.id, 2)).resolves.toBe("alpha\nbeta");
+  });
 });

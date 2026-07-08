@@ -530,6 +530,10 @@ describe("StandaloneOperatorRuntime", () => {
   it("starts, syncs, recovers, lists, and cancels background tasks", async () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
+      // Simulate the task lifecycle deterministically via writeState() below; a
+      // mock spawn keeps a real subprocess from writing its own init/finalize
+      // state that would race those manual writes.
+      backgroundTaskSpawnProcess: () => ({ pid: 515151, unref() {} }),
       backgroundTaskIsProcessRunning: () => false,
     });
     const session = await runtime.startSession({ title: "Tasks", agentId: "main" });
