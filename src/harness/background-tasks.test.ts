@@ -370,4 +370,58 @@ describe("BackgroundTaskExecutionService", () => {
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
   });
+
+  it("writes the state file atomically from the launch script (temp + rename)", async () => {
+    const rootDir = await makeTempDir();
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"), () => ({ pid: 2222, unref() {} }));
+    const task = await store.start({ title: "Watch", command: "printf 'ok'", cwd: rootDir, kind: "monitor" });
+    const script = await fs.readFile(path.join(rootDir, task.execution.launchScript), "utf8");
+
+    // The initial "running" state must land via a temp file + atomic rename,
+    // never a bare truncating redirect onto the live state path — otherwise a
+    // concurrent recovery scan can read a half-written, unparseable file.
+    expect(script).toContain(".tmp.$$");
+    expect(script).toMatch(/mv -f .*\.tmp\.\$\$ /);
+    expect(script).not.toMatch(/g" > '[^']*state\.json'\n/);
+    // The python terminal-state writer must also replace atomically.
+    expect(script).toContain("os.replace(tmp_path, state_path)");
+  });
+
+  it("tolerates a corrupt state file during recovery instead of aborting the sweep", async () => {
+    const rootDir = await makeTempDir();
+    const filePath = path.join(rootDir, "background-tasks.json");
+    const store = new FileBackgroundTaskStore(filePath, () => ({ pid: 4321, unref() {} }), (pid) => pid === 4321);
+
+    const poison = await store.start({ sessionId: "sess-x", title: "Corrupt", command: "printf 'x'", cwd: rootDir, kind: "task" });
+    const healthy = await store.start({ sessionId: "sess-x", title: "Healthy", command: "printf 'y'", cwd: rootDir, kind: "monitor" });
+
+    // Simulate a half-written state file (legacy non-atomic write caught mid-truncate).
+    const poisonStatePath = path.join(rootDir, poison.execution.stateFile);
+    await fs.mkdir(path.dirname(poisonStatePath), { recursive: true });
+    await fs.writeFile(poisonStatePath, '{"version":1,"taskId":"', "utf8");
+
+    // A valid running state for the sibling so it can still be recovered.
+    await store.executionService.writeState(healthy, {
+      version: 1,
+      taskId: healthy.id,
+      kind: "monitor",
+      status: "running",
+      pid: 4321,
+      startedAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      outputFile: healthy.execution.outputFile,
+      cwd: rootDir,
+      command: healthy.command,
+    });
+
+    // readState degrades the corrupt file to undefined rather than throwing.
+    await expect(store.executionService.readState(poison)).resolves.toBeUndefined();
+
+    // The whole-session sweep completes and still recovers the healthy sibling.
+    const recovered = await store.recoverBySession("sess-x");
+    expect(recovered).toHaveLength(2);
+    expect(recovered).toEqual(
+      expect.arrayContaining([expect.objectContaining({ task: expect.objectContaining({ id: healthy.id }), reason: "state-running" })]),
+    );
+  });
 });

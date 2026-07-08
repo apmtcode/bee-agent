@@ -70,6 +70,24 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Generalization eval harness: measure replay fidelity on held-out but
       related synthetic trajectories.
 
+## Reliability
+- [x] **Atomic background-task state writes** (2026-07-08, run 9). The launched
+      shell/python wrote `state.json` via truncate-then-write, so a concurrent
+      `recoverBySession` scan could read a half-written file and throw. Now
+      temp-file + atomic rename (`mv -f` / `os.replace`), and `readState`
+      tolerates a corrupt/partial file instead of aborting the session sweep.
+- [x] **Deterministic test suite** (2026-07-08, run 9). Three integration tests
+      launched *real* detached `bash` processes that raced their own
+      `writeState`/`readState` assertions (2–4 non-deterministic failures per
+      full run). Injected a no-op spawn stub (via the now-plumbed
+      `OperatorCliAppOptions.backgroundTaskSpawnProcess`); suite is 176/176, 5×
+      with zero flakes.
+- [ ] **Flake guard in the pre-push self-check**: run the suite ≥3× (or add a
+      `test:repeat` script) each engine cycle so re-introduced flakiness is
+      caught the run it lands. Plus a grep guard flagging any test that
+      constructs the runtime/app and starts background tasks without injecting
+      `backgroundTaskSpawnProcess`.
+
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in

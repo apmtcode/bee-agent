@@ -6,6 +6,59 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-08 (run 9) — Reliability: atomic background-task state writes + deterministic suite
+
+**Audited:** The build/test gate itself. Found the suite is **flaky on a clean
+checkout** — full `npm test` returned 2–4 failures per run, non-deterministically,
+across `operator-runtime.test.ts`, `server.test.ts`, and `app.test.ts`. Two
+distinct root causes, both real bugs (not test noise):
+
+1. **Non-atomic state writes (production bug).** The background-task launch
+   script (`renderLaunchScript`) wrote its state file via a truncating shell
+   redirect (`… > state.json`) and the python terminal-state writer via
+   `write_text` — both truncate-then-write. A concurrent `recoverBySession`
+   scan could read a half-written file → `SyntaxError` in `readJsonFile`,
+   aborting recovery of every sibling task in the session.
+2. **Real detached processes racing test assertions (cloud/OS-isolation
+   violation).** Three integration tests constructed the runtime/app **without**
+   injecting a spawn stub, so `startBackgroundTask` launched real `bash`
+   processes. Those wrote state files asynchronously, racing the tests' explicit
+   `writeState`/`readState` assertions — which are written assuming *no* state
+   file exists until the test writes one (e.g. `background.tasks.state` →
+   NOT_FOUND immediately after start). Whoever won the race decided pass/fail.
+
+**Changed (additive):**
+- `src/harness/background-tasks.ts`: both launched-script writes now go to a
+  pid-unique temp path + atomic rename (`mv -f` in shell, `os.replace` in
+  python). Hardened `BackgroundTaskExecutionService.readState` to degrade a
+  malformed/partial state file to `undefined` (routes through the missing-state
+  reconciliation path) instead of throwing and aborting the whole sweep —
+  scoped to `readState`, not the shared `readJsonFile`, so real config
+  corruption is still surfaced.
+- `src/cli/app.ts`: plumbed `backgroundTaskSpawnProcess` /
+  `backgroundTaskIsProcessRunning` through `OperatorCliAppOptions` into the
+  runtime (the runtime already accepted them; the app hard-wired the real
+  spawn). Makes the app's process backend injectable — a real capability, not
+  just a test seam.
+- Tests: injected a deterministic no-op spawn stub into the three flaky
+  constructions (`operator-runtime`, `server` ×3 runtimes, `app` ×2) and seeded
+  the one output the stubbed launch no longer produces. Added two regression
+  tests: launch-script writes state atomically (temp + rename / `os.replace`),
+  and recovery tolerates a corrupt state file while still recovering siblings.
+
+**Test results:** full `npm test` **176/176, 5× consecutively, zero flakes**
+(was 2–4 failing per run). `typecheck:src` ✅ CLEAN. Build ✅. Full `tsc`
+unchanged at **125** (all test-file debt; no new errors introduced).
+
+**New idea:** add a `test:repeat` script (`vitest run --retry=0` invoked N times,
+or a tiny loop) and have the engine run the suite ≥3× in its pre-push
+self-check, so re-introduced flakiness is caught the same run it lands instead
+of silently degrading the push gate for future runs. Deeper: a lint/grep guard
+that flags any `new StandaloneOperatorRuntime`/`new OperatorCliApp` in a `*.test.ts`
+that starts background tasks without injecting `backgroundTaskSpawnProcess`.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
