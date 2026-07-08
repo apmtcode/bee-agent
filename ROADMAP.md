@@ -59,16 +59,31 @@ unchecked items are queued. Keep this richer than you found it each run.
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
 (exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
-      objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
-      deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
+- [x] Inventory what `src/capture` + `src/training` already implement vs. the
+      objective's five pieces (2026-07-08, run 9): record→schema→dataset→replay→
+      training-*plan* were all present; the missing piece was **train/infer** —
+      an actual in-process policy. Filled below.
+- [x] Pluggable local-model backend interface for the training runner with a
+      deterministic mock backend (2026-07-08, run 9). `MovementPolicyBackend` +
+      `MarkovMovementBackend` (variable-order Markov w/ Katz backoff) in
+      `src/training/movement-policy.ts`; `createMovementBackend()` is the
+      documented seam for a real on-device small model (MLX/ONNX/llama.cpp).
+- [x] Generalization eval harness (2026-07-08, run 9): `evaluateMovementFidelity`
+      scores tail reconstruction from a seed prefix on held-out sequences.
 - [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      round-trips without real OS input (adapters
+      `movementSequenceFromReplay`/`movementSequenceFromTrajectory` now exist;
+      still want a generator that emits realistic mouse/keyboard/window streams).
+- [ ] Wire the movement policy into a training-job mode: let a reviewed export
+      train a `markov` policy and persist `serialize()` output as a job artifact,
+      so `LocalAppleSiliconTrainingRunner` has a cloud-runnable sibling.
+- [ ] **Injectable `ProcessLiveness` port** for background-task recovery (real
+      `process.kill(pid,0)` + deterministic test double). Almost certainly the
+      root cause of the 3 pre-existing env-sensitive test failures
+      (operator-runtime/app/server: "missing-process" → `control=degraded`).
+- [ ] Make `BackgroundTaskExecutionService.readState` tolerate a
+      truncated/corrupt state file (recoverable sentinel, not a throw) so
+      `recoverBackgroundTasks` behaves as its test intends.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

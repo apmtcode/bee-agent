@@ -6,6 +6,61 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-08 (run 9) — Movement-policy backend: repeat + generalize recorded movements
+
+**Audited:** The local-movement learning subsystem (standing objective #2). The
+`src/capture/*` → `src/training/exporter.ts` → `src/training/runner.ts` pipeline
+was rich on the *record → dataset → training-plan* side, but the training side
+only emitted MLX/axolotl **launch scripts** for real Apple-Silicon runs — there
+was **no in-process model that actually learns a movement policy and does
+inference**. That is exactly objective #2(c)/#2(d) ("post-train a local model to
+repeat the recorded movements, and generalize to new but related movements") and
+the top movement item in ROADMAP ("Pluggable local-model backend interface …
+with a deterministic mock backend so cloud/CI tests pass").
+
+**Changed (additive) — new `src/training/movement-policy.ts`:**
+- `MovementPolicyBackend` interface (`train()` → `TrainedMovementPolicy`,
+  `load()`), plus `MovementDataset`/`MovementSequence` types — the pluggable seam
+  for real on-device backends (MLX/ONNX/llama.cpp).
+- `MarkovMovementBackend` / `MarkovMovementPolicy`: a **deterministic,
+  dependency-free variable-order Markov model with Katz-style backoff**. Counts
+  transitions for every context length `0..order`; at inference the longest
+  matching suffix wins and *backs off* to shorter suffixes when the exact context
+  was never seen — which is what lets it **generalize** a recorded movement to a
+  related prefix. Greedy argmax with a stable `count desc, token asc` tie-break →
+  fully reproducible **repeat** and **generalize**. Reward-weighted training,
+  `serialize()`/`load()` for on-disk persistence, and an END-sentinel so rollouts
+  terminate cleanly.
+- `createMovementBackend(kind)` factory (documented seam; unknown kind throws),
+  `movementSequenceFromReplay` / `movementSequenceFromTrajectory` /
+  `movementTokenForEvent` adapters from the existing replay/trajectory types, and
+  `evaluateMovementFidelity()` — a generalization eval that scores tail
+  reconstruction from a seed prefix (replay-fidelity metric).
+- Exported the full surface from `src/index.ts`.
+
+**Test results:** new `movement-policy.test.ts` — **13/13 pass** (exact repeat,
+backoff generalization, deterministic tie-break, reward weighting,
+serialize/load round-trip, empty-model stop, extraction adapters, fidelity eval,
+unknown-backend throw). `typecheck:src` ✅ (exit 0, source stays clean). Build ✅
+(tsdown, 5 files). Full `npm test`: **184 passed, 3 failed** — the 3 failures are
+**pre-existing** (verified by reverting this run's source: same 3 fail at HEAD)
+and **environment-sensitive**, all in files this run did not touch:
+`operator-runtime.test.ts` / `app.test.ts` / `server.test.ts` — background-task
+PID-liveness reports "missing-process" → gateway `control=degraded` in this
+container, plus a corrupt-JSON recovery expectation. Logged to ROADMAP as a
+follow-up; not a regression from this run.
+
+**New idea:** make background-task liveness **injectable** (a `ProcessLiveness`
+port with a real `process.kill(pid, 0)` impl and a deterministic test double),
+so the recovery/gateway-control tests stop depending on ambient container PID
+state — this is almost certainly the root cause of the 3 pre-existing failures
+and would let the engine restore a true green `npm test`. Second idea: harden
+`readJsonFile` recovery paths (or `BackgroundTaskExecutionService.readState`) to
+tolerate a truncated/corrupt state file by returning a recoverable sentinel
+instead of throwing, matching what `recoverBackgroundTasks` clearly intends.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
