@@ -58,17 +58,47 @@ unchecked items are queued. Keep this richer than you found it each run.
 ## Local-movement learning subsystem
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
-(exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
+(exporter, job store/manifest, runner, execution service, **movement-model**).
+Next increments:
+- [x] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+      — DONE run 9. Gap found: capture→schema→dataset→replay existed; the
+      train+infer stage was only shell-command emission (MLX/Axolotl), so it
+      couldn't run in the cloud.
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      for a real on-device small model — DONE run 9 (`src/training/movement-model.ts`:
+      `MovementModelBackend` + deterministic `NgramMovementBackend`).
+- [x] Synthetic event-stream generator to validate capture→dataset→replay
+      round-trips without real OS input — DONE run 9
+      (`generateSyntheticMovementSequences`, seeded LCG).
+- [x] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories — DONE run 9 (`evaluateMovementModel`:
+      next-token accuracy, perplexity, exact-replay rate).
+- [ ] **Reward-weighted training mode** for the movement model — weight each
+      sequence by its trajectory `outcome.reward` (already in the schema) so the
+      model prefers *successful* movements, not merely frequent ones. A weighted-
+      increment extension of the n-gram counts; pairs with the RL replay-reward.
+- [ ] Wire the movement model into a real pipeline step: have the training
+      `execution-service`/runner produce a `MovementDataset` from the reviewed
+      export and persist a serialized `NgramMovementBackend` model as a cloud-
+      runnable *baseline* artifact alongside the MLX/Axolotl launch script.
+- [ ] Second backend behind the seam (e.g. a small logistic/embedding next-action
+      classifier) to prove the interface generalizes beyond n-grams.
+
+## Discovered bugs (fix in a dedicated run)
+- [ ] **Background-task state-file JSON corruption** — 3 test files
+      (`orchestrator/operator-runtime.test.ts`, `cli/app.test.ts`,
+      `control-plane/server.test.ts`) fail on the **clean baseline** with
+      `SyntaxError: Expected ',' or '}' after property value in JSON` from
+      `readJsonFile` (`src/shared/fs.ts:17`) via
+      `BackgroundTaskExecutionService.readState` /
+      `FileBackgroundTaskStore.reconcileTask`. Reproduces without any run-9
+      changes (verified via `git stash`). Likely a malformed state write (the
+      `sed`-based launch-script state writer in `runner.ts::renderLaunchScript`,
+      or a partial/racy write in `background-tasks.ts::writeState`). Investigate
+      the exact byte at the reported position, add a tolerant read + a regression
+      test, then fix the writer.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

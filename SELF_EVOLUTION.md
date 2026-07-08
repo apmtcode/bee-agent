@@ -6,6 +6,60 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-08 (run 9) — Movement-model backend: closes the train→infer→eval loop in-process
+
+**Audited:** Standing objective #2 (local-movement learning subsystem) instead of
+continuing the typecheck grind (runs 2–8 were all typecheck debt). Inventoried
+`src/capture/` (recorder, replay, trajectory, adapters, consent, ingestion) and
+`src/training/` (exporter, job-store/manifest, runner, execution-service). Found
+the pipeline had capture → schema → dataset → replay covered, but the **train +
+infer** stage was a stub: `LocalAppleSiliconTrainingRunner` only emits MLX/Axolotl
+*shell commands* that cannot execute in the cloud/CI. There was no backend that
+actually learns from recorded movements or predicts new ones — objective #2(c) &
+#2(d) were unimplemented and untestable.
+
+**Changed (additive, new module `src/training/movement-model.ts`):**
+- `MovementModelBackend` interface — the pluggable seam the roadmap called for; a
+  real on-device small model implements `train()`/`restore()` without touching
+  callers.
+- `NgramMovementBackend` — a deterministic, dependency-free in-process n-gram
+  model (configurable order, stupid-backoff generalization, argmax with
+  lexicographic tie-break so predictions are byte-reproducible in cloud and
+  on-device). It genuinely **repeats** recorded movements (`generate()`) and
+  **generalizes** to unseen-but-related sequences (`predictNext()` via backoff).
+  Serializes/restores to portable JSON weights.
+- `buildMovementDataset()` — derives ordered action-token sequences from replay
+  manifests (`ReplayManifest`/`ExportedReplayManifest`, structural `ReplayLike`),
+  with `tool` vs `tool-summary` granularity and replay/trajectory grouping.
+- `generateSyntheticMovementSequences()` — deterministic seeded (LCG, no
+  `Math.random`) synthetic streams following a learnable chain, so the pipeline
+  validates without real OS input.
+- `evaluateMovementModel()` — generalization eval harness: next-token top-1/top-K
+  accuracy + perplexity on held-out sequences, and an exact-replay rate (seeded
+  from the first action) for faithful reproduction.
+- Barrel exports in `src/index.ts`.
+
+**Test results:** new `movement-model.test.ts` — **9/9 pass** (repeat, predict,
+serialize round-trip, generalization accuracy = 1.0 on a fully-covered synthetic
+chain, deterministic synthetic generation, exact-replay rate). `typecheck:src`
+✅ CLEAN (exit 0). `npm run build` ✅. Full suite **180/183**.
+
+**Pre-existing blocker (NOT caused by this run):** 3 test files
+(`operator-runtime.test.ts`, `app.test.ts`, `server.test.ts`) fail on the
+**clean baseline too** — verified via `git stash` (4 failed with my changes
+stashed). Root cause is a background-task **state-file JSON corruption**
+(`readJsonFile` → `SyntaxError: Expected ',' or '}' … position 311` from
+`background-tasks.ts` state recovery), independent of the movement subsystem.
+Logged to ROADMAP as a discovered bug to fix in a dedicated run. Per the focused-
+scope guardrail I did not expand this run into that unrelated debugging. Pushed
+to the designated feature branch `claude/peaceful-dirac-er7mcv` (main kept clean).
+
+**New idea:** with a real backend seam in place, add a *reward-weighted* training
+mode — weight each movement sequence by its trajectory `outcome.reward` (already
+in the schema) so the model learns to prefer successful movements over merely
+frequent ones. Pairs naturally with the RL runner's replay-manifest reward model
+and is a one-parameter extension of the n-gram counts (weighted increments).
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
