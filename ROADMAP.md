@@ -40,6 +40,14 @@ unchecked items are queued. Keep this richer than you found it each run.
     fix residual test-only typings.
 - [ ] Add a `verify` npm script (`typecheck && build && test`) and have the
       engine run it as a pre-push self-check each cycle.
+- [ ] **Make background-task tests hermetic (unblocks a true green gate).**
+      `app.test.ts` (2) + `server.test.ts` (1, load-dependent) fail in the cloud
+      because they spawn **real detached processes** and assert on process liveness
+      / platform-breaker state. Inject a mock `SpawnBackgroundProcess` (and expose
+      `backgroundTaskIsProcessRunning` on `OperatorCliApp` — the runtime already
+      accepts it) so no real process runs. Same pattern as the `configHome`
+      hermeticity fix (2026-06-22). Run 9 fixed the related `shellQuote` JSON
+      corruption that was crashing `operator-runtime.test.ts`.
 - [x] Interim **source-only typecheck gate** — DONE run 7. `tsconfig.src.json`
       (excludes `**/*.test.ts`) + `typecheck:src` script; passes (exit 0). Next:
       have the engine run it as a per-run pre-push self-check.
@@ -62,13 +70,22 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
+      for a real on-device small model. **DONE run 9** — `src/training/movement-model.ts`:
+      `MovementModelBackend` interface + `MovementBackendRegistry`, deterministic
+      `MarkovMovementBackend` (back-off n-gram; repeats recorded movements + generalizes
+      via backoff), `evaluate()` replay-fidelity metric, JSON round-trip. 10 tests.
 - [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
+      round-trips without real OS input. (Next: feed generated streams into
+      `buildMovementDataset` and assert `generate()` reproduces them.)
 - [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      related synthetic trajectories. Build on `MovementModel.evaluate()` (run 9):
+      leave-one-trajectory-out train/score → report accuracy + backoffRate per run.
+- [ ] Real on-device backend behind the `MovementModelBackend` seam (e.g. wrap an
+      mlx LoRA fine-tune); register it in the `MovementBackendRegistry` alongside
+      `markov-mock`. The runner's `LocalTrainingRuntime` (mlx/axolotl) is the
+      execution target; the movement-model interface is the inference target.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

@@ -6,6 +6,63 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-08 (run 9) — 🧠 Pluggable movement-model backend (train/repeat/generalize) + real shellQuote bug fix
+
+**Audited:** The local-movement learning subsystem (objective #2). `src/capture/`
+captures events and `src/training/` builds *external* launch scripts (mlx/axolotl)
+— but nothing actually **trains a local model or runs inference in-process**, so
+objectives 2(c) "repeat recorded movements" and 2(d) "generalize" had no runnable,
+cloud-testable implementation (the Apple-silicon runtimes can't execute in CI).
+
+**Changed (additive):**
+- **New `src/training/movement-model.ts`** — the pluggable local-model seam:
+  - `MovementModelBackend` interface (`train(dataset, opts) -> MovementModel`) and
+    `MovementBackendRegistry` (register/resolve by id) so a real on-device backend
+    swaps in without touching call sites; `createDefaultMovementBackendRegistry()`
+    pre-seeds the deterministic mock.
+  - `MarkovMovementBackend` (`id: "markov-mock"`) — a dependency-free, deterministic
+    back-off n-gram model. **Repeats** recorded sequences exactly via `generate()`
+    (2c) and **generalizes** to unseen contexts by backing off to known shorter
+    suffixes (2d). No randomness → reproducible in CI.
+  - `tokenizeReplayEvent` / `buildMovementDataset` derive token sequences from the
+    existing `ReplayManifest` event format; `MovementModel.evaluate()` gives a
+    teacher-forced **replay-fidelity** metric (accuracy + backoff rate); full
+    JSON `toJSON()`/`restoreMovementModel()` round-trip for persistence.
+  - Exported the whole surface from `src/index.ts`.
+- **Real reliability bug fixed** in `src/harness/background-tasks.ts` `shellQuote`:
+  the POSIX single-quote escape replacement was `"'"'"'` (starts with `"`) instead
+  of `'"'"'` (must **close** the open quote first). The stray leading `"` corrupted
+  the launch-script state JSON for **any command containing a single quote** (e.g.
+  `printf 'x'`): the `pid` sed-substitution silently failed and the `command` value
+  was mangled → `readState` threw `SyntaxError` on parse. `runner.ts` already had
+  the correct form, so this was a copy divergence. Verified via a spawn repro: state
+  now parses, `pid` is a real number, `command` is intact.
+
+**Test results:** new `movement-model.test.ts` **10/10** ✅ (tokenize, dataset,
+exact-repeat, backoff-generalize, zero-step fidelity, empty-model, determinism,
+serialization round-trip, registry). `typecheck:src` ✅ (exit 0). Build ✅.
+The shellQuote fix **deterministically greened `operator-runtime.test.ts`** (was a
+JSON-parse crash) and stabilized `app`/`server` (baseline flaked 2→3 failures under
+spawn races; now stably 2). Full `npm test`: **181/184**, with **zero regressions
+from this run** (proven by reverting shellQuote alone: app+server counts unchanged
+or improved; the movement module is a separate file and cannot affect them).
+
+**Known blocker (pre-existing, NOT introduced here):** `app.test.ts` (2) and
+`server.test.ts` (1, load-dependent) remain red. Root cause: these tests spawn
+**real detached processes** and assert on process liveness / platform-breaker state
+— which is nondeterministic in the cloud sandbox (a task shows `missing-process` →
+platform control reads `degraded`, and an expected active task isn't found). The
+proper fix is test hermeticity: inject a mock `SpawnBackgroundProcess` /
+`backgroundTaskIsProcessRunning` into `OperatorCliApp` (the runtime already supports
+the latter; the app doesn't expose it yet) so no real process runs — the same class
+of fix as the `configHome` hermeticity work in the 2026-06-22 run. Logged to ROADMAP.
+
+**New idea:** a **generalization eval harness** built on `MovementModel.evaluate()`:
+hold out one recorded trajectory, train on the rest, and report replay fidelity +
+backoff rate on the held-out sequence — turning "does the model generalize?" into a
+tracked scalar per run. Pairs naturally with a synthetic event-stream generator so
+we can sweep fidelity vs. dataset size without any real OS input.
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
