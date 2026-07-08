@@ -4,6 +4,19 @@ Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
 ## Foundations / DX
+- [x] **Green the build gate** — DONE run 9. `npm test` had regressed to 3 red
+      (corrupt background-task `state.json` from `printf|sed` shell-templating +
+      real detached processes racing the tests). Fixed the serializer (python
+      `json.dumps`), forwarded a launcher seam through `OperatorCliApp`, and
+      injected no-op launchers in the 3 flaky suites. Now 174/174, stable 8/8
+      consecutive runs.
+- [ ] `renderLaunchScript` golden/round-trip unit test: feed adversarial commands
+      (embedded quotes, newlines, `$(…)`, unicode) through the generated script
+      and assert `state.json` parses and `command` round-trips byte-for-byte —
+      lock in run 9's escaping fix at the unit level.
+- [ ] Lint: flag any test constructing a runtime/app that can
+      `startBackgroundTask` without injecting a `backgroundTaskSpawnProcess`
+      override, so no new suite silently spawns real detached OS processes in CI.
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`

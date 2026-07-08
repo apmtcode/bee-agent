@@ -801,7 +801,18 @@ describe("OperatorCliApp", () => {
 
   it("supports session lifecycle, transcript, approvals, pairing, config, and prompt commands", async () => {
     const rootDir = await makeTempDir();
-    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    const app = new OperatorCliApp({
+      rootDir,
+      cwd: rootDir,
+      currentDate: "2026-05-25",
+      // Deterministic background-task execution: a no-op launcher that reports
+      // the (guaranteed-alive) test process id, so started tasks stay "running"
+      // under the *default* liveness probe — instead of racing a real detached
+      // process that finishes and flips state under load. The default probe is
+      // preserved (not stubbed) so the explicitly-written bogus-pid state later
+      // in this test still reconciles to "failed"/degraded as intended.
+      backgroundTaskSpawnProcess: () => ({ pid: process.pid, unref() {} }),
+    });
     const firstSession = await app.runtime.startSession({ title: "first", cwd: rootDir, agentId: "operator-cli" });
     const secondSession = await app.runtime.startSession({ title: "second", cwd: rootDir, agentId: "operator-cli" });
 

@@ -6,6 +6,58 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-08 (run 9) — Reliability: corrupt background-task state JSON + flaky-test isolation
+
+**Audited:** Repo health from a clean checkout. `npm test` was **RED**: 3 tests
+failed (`operator-runtime`, `cli/app`, `control-plane/server`) — a regression
+since run 8's 174/174. Every prior run (5–8) ground down typecheck debt; this run
+the build gate itself was broken, so fixing it was the highest-value step (can't
+push to `main` with red tests).
+
+**Root cause (a real production bug, not just a test bug).** Background tasks
+launch a generated `run.sh` that seeds the initial `running` `state.json` via
+`printf '%s' <shell-quoted-JSON> | sed …`. When `task.command` contains
+JSON-significant characters (the tests use `printf 'line-1\nline-2\n'` — real
+newlines + single quotes), the shell-quoting reconstruction injects literal `"`
+into the JSON string, so the file is **invalid JSON**. The detached process then
+races the test's own `writeState`, and `reconcileTask` → `readJsonFile` throws
+`SyntaxError` on the corrupt file. Reproduced deterministically at byte level
+(`od -c`): `"command":"printf "'line-1␊line-2␊"'"`.
+
+**Changed (additive, reversible):**
+- `src/harness/background-tasks.ts` — replaced the fragile `printf|sed` initial-
+  state writer with a `python3` heredoc (`renderInitialStateWriterPython`) that
+  takes every field as a distinct `argv` and builds the file with `json.dumps`.
+  Robust for *any* command string; `python3` was already required for the
+  completion/failure state writers, so no new dependency. Removed the now-dead
+  `quotedStatePayload`/placeholder machinery. **This fixes real reconciliation/
+  recovery for tasks whose command has quotes, newlines, or spaces.**
+- `src/cli/app.ts` — forwarded optional `backgroundTaskSpawnProcess` /
+  `backgroundTaskIsProcessRunning` from `OperatorCliAppOptions` into the runtime
+  (previously hardcoded `{ rootDir }`), giving tests/embedders a launcher seam.
+- Test isolation (the deeper flakiness): the failing tests drive execution state
+  entirely via `writeState`/`writeOutput`, yet also spawned **real detached OS
+  processes** that concurrently rewrote the same state files — flaky under
+  parallel load (≈80% fail rate). Injected a no-op launcher in the three
+  affected suites: `operator-runtime.test.ts` (pid 4242 + `isProcessRunning:
+  false`), `cli/app.test.ts` (pid = `process.pid` so a started task stays
+  "running" under the *default* liveness probe, while a later explicitly-written
+  bogus pid still reconciles to degraded), and the three runtimes in
+  `server.test.ts`'s big RPC test.
+
+**Test results:** `npm test` **174/174**, now **green 8/8 consecutive full-suite
+runs** (was 1–2 failing per run before). Build ✅. `typecheck:src` ✅ (exit 0).
+Full `tsc` unchanged at **125** (test-file debt; no new errors introduced).
+
+**New idea:** add a tiny `renderLaunchScript` **golden/round-trip unit test** that
+feeds adversarial commands (embedded quotes, newlines, `$(…)`, unicode) through
+the generated script and asserts the resulting `state.json` parses and round-
+trips `command` byte-for-byte — locking in the escaping fix and catching any
+future shell-templating regression at the unit level instead of via a flaky
+integration test. Bigger: a lint that flags tests constructing a runtime/app
+that can `startBackgroundTask` **without** injecting a launcher override, so no
+new suite silently spawns real detached processes into CI.
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
