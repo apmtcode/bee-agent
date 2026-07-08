@@ -6,6 +6,59 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-08 (run 9) — 🐞 Real bug: `shellQuote` single-quote escape + de-flaked the whole suite
+
+**Audited:** The green baseline. `npm test` was **RED** on this machine — 3 tests
+failed (operator-runtime, control-plane/server, cli/app), and the suite was
+non-deterministic (a 4th test flaked in/out across repeats). Prior runs reported
+174/174, so this was a real regression surfaced by a different execution
+environment. Root-caused each failure rather than papering over it.
+
+**Genuine production bug fixed (`src/harness/background-tasks.ts`):**
+`shellQuote()` escaped an embedded single quote as `` `"'"'"'` `` (6 chars)
+instead of the correct `` `'"'"'` `` (5 chars). The background-task launch
+script single-quotes a JSON payload and pipes it through `printf`/`sed`, so this
+mangled **any command or path containing `'`**, writing **invalid JSON** to the
+task's execution state file — every such background task then failed to read
+back (`SyntaxError: Expected ',' or '}'`). The sibling copy in
+`src/training/runner.ts` already had the correct escape, confirming a typo.
+Reproduced end-to-end, fixed, and added a **regression test** in
+`background-tasks.test.ts` that runs the real launch script for a single-quoted
+command and asserts valid JSON round-trips (verified it fails on the old escape,
+passes on the fix).
+
+**Test flakiness eliminated (hermeticity, no production behaviour change):** the
+failing control-plane/CLI tests spawned **real detached processes** whose async
+state-file writes raced the assertions (`sleep 5` launchers, fast `printf`
+exiting before `stop`). Made them deterministic by injecting the existing
+`backgroundTaskSpawnProcess` / `backgroundTaskIsProcessRunning` hooks:
+- `operator-runtime.test.ts`, `server.test.ts` (×3 runtimes: main, drifting,
+  breaker) — no-op spawn so hand-written state files aren't clobbered by a real
+  launcher; staged mixed→degraded→paused breaker progression is now stable.
+- `cli/app.ts` — **added** optional `backgroundTaskSpawnProcess` /
+  `backgroundTaskIsProcessRunning` to `OperatorCliAppOptions` (additive,
+  production-default `undefined`; same pattern as the earlier `configHome`
+  test-seam) and threaded them into the runtime.
+- `cli/app.test.ts` — two tests made hermetic; the "background and monitor
+  commands" test was internally contradictory (wrote a `completed` monitor state
+  then expected to `stop` it — only the launcher race masked it), fixed to model
+  live running tasks with explicit output/state + a stubbed `process.kill`.
+
+**Test results:** build ✅; **`npm test` 175/175 (was 174) and now GREEN + stable
+across 5 consecutive full runs** (previously 1 flaky failure ~2/3 of runs);
+`typecheck:src` ✅ clean.
+
+**New idea:** add a **`spawnHooks` fixture helper** for tests (a factory
+returning `{ backgroundTaskSpawnProcess, backgroundTaskIsProcessRunning }` plus a
+scoped `process.kill` stub via a disposable) so future background-task tests are
+hermetic by construction instead of each re-deriving the no-op spawn. Bigger:
+a lightweight **flake sentinel** in the engine's pre-push self-check — run the
+suite N× (e.g. 3) and refuse to push to `main` unless all N are green, so a
+timing-dependent regression like this one is caught before it lands, not a run
+later on a different machine.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

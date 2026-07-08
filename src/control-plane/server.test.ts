@@ -81,9 +81,16 @@ const exportManifest: ReviewedExportManifest = {
 describe("OperatorControlPlaneServer", () => {
   it("handles session, transcript, approval, trajectory, memory, and orchestration methods", async () => {
     const rootDir = await makeTempDir();
+    let nextPid = 4200;
     const runtime = new StandaloneOperatorRuntime({
       rootDir,
       backgroundTaskIsProcessRunning: () => false,
+      // Deterministic spawn: return a pid without launching a real detached
+      // process. The real launcher writes the task's execution state file
+      // asynchronously, which races the remote-status health check below (this
+      // test intends the task record to read "running" with no observed state
+      // file, i.e. control "active").
+      backgroundTaskSpawnProcess: () => ({ pid: (nextPid += 1), unref: () => {} }),
       delivery: new OperatorDeliveryService(rootDir, {
         sendBrowserPush: async () => {},
       }),
@@ -950,9 +957,13 @@ describe("OperatorControlPlaneServer", () => {
     });
 
     const driftingRootDir = await makeTempDir();
+    let driftingNextPid = 4500;
     const driftingRuntime = new StandaloneOperatorRuntime({
       rootDir: driftingRootDir,
       backgroundTaskIsProcessRunning: () => false,
+      // Deterministic spawn: the test writes and syncs this task's execution
+      // state by hand; a real detached launcher would race those writes.
+      backgroundTaskSpawnProcess: () => ({ pid: (driftingNextPid += 1), unref: () => {} }),
     });
     const driftingServer = new OperatorControlPlaneServer({ runtime: driftingRuntime });
     const driftingBootstrap = await driftingServer.handle({
@@ -1016,9 +1027,15 @@ describe("OperatorControlPlaneServer", () => {
     });
 
     const breakerRootDir = await makeTempDir();
+    let breakerNextPid = 4400;
     const breakerRuntime = new StandaloneOperatorRuntime({
       rootDir: breakerRootDir,
       backgroundTaskIsProcessRunning: () => false,
+      // Deterministic spawn: this test stages remote health by writing each
+      // task's execution state file by hand (task 1, then 2, then 3). A real
+      // detached `sleep 5` launcher would write "running" for all three up
+      // front, collapsing the staged mixed→degraded→paused progression.
+      backgroundTaskSpawnProcess: () => ({ pid: (breakerNextPid += 1), unref: () => {} }),
     });
     const breakerServer = new OperatorControlPlaneServer({ runtime: breakerRuntime });
     const breakerOne = await breakerServer.handle({

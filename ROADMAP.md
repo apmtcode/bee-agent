@@ -40,6 +40,15 @@ unchecked items are queued. Keep this richer than you found it each run.
     fix residual test-only typings.
 - [ ] Add a `verify` npm script (`typecheck && build && test`) and have the
       engine run it as a pre-push self-check each cycle.
+- [ ] **Flake sentinel in the pre-push self-check**: run `npm test` N× (e.g. 3)
+      and refuse to push to `main` unless all N pass. Run 9 found the suite was
+      timing-dependent (real detached-process spawns) — a green single run hid a
+      ~2/3 flake rate. Repeat-run gating catches this before it lands.
+- [ ] **`spawnHooks` test fixture**: a factory returning
+      `{ backgroundTaskSpawnProcess, backgroundTaskIsProcessRunning }` + a scoped
+      `process.kill` stub, so background-task tests are hermetic by construction
+      instead of each re-deriving the no-op spawn (run 9 did this inline in 3
+      files).
 - [x] Interim **source-only typecheck gate** — DONE run 7. `tsconfig.src.json`
       (excludes `**/*.test.ts`) + `typecheck:src` script; passes (exit 0). Next:
       have the engine run it as a per-run pre-push self-check.
