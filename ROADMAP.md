@@ -59,16 +59,37 @@ unchecked items are queued. Keep this richer than you found it each run.
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
 (exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
-      objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
-      deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+- [x] Inventory what `src/capture` + `src/training` already implement vs. the
+      objective's five pieces — DONE run 9. `src/capture` covers capture → schema
+      → dataset → replay; `src/training` covered launch-plans only; the model
+      (train/infer/generalize, parts c & d) was the gap, now filled.
+- [x] Pluggable local-model backend interface with a deterministic mock backend
+      and a documented seam for a real on-device small model — DONE run 9
+      (`MovementModelBackend` + `createMovementModelBackend` +
+      `MockNgramMovementBackend` in `src/training/movement-model.ts`).
+- [x] Synthetic event-stream generator to validate the pipeline without real OS
+      input — DONE run 9 (`generateSyntheticMovementReplays`, seeded PRNG).
+- [x] Generalization eval harness: measure fidelity on held-out but related
+      synthetic trajectories — DONE run 9 (`evaluateMovementGeneralization`,
+      reports novel-context accuracy).
+- [ ] Real on-device backend behind the `MovementModelBackend` seam (tiny
+      MLX/GGUF policy) — the mock proves the loop; swap in a real learner next.
+- [ ] Feed richer features to the policy (action `target`/`metadata`, timing
+      gaps, longer history than a single previous action) and measure the
+      accuracy lift over the current bigram-backoff baseline.
+- [ ] Online loop: retrain the movement policy after each reviewed export and
+      log held-out generalization accuracy to self-check telemetry to trend
+      movement-learning fidelity across runs.
+
+## Test health (regressions)
+- [ ] **Make gateway-heartbeat staleness deterministic.** As of run 9, 3 tests
+      fail on clean HEAD (`server.test.ts:719`; two in `app.test.ts`) —
+      `sessions.remoteControl` resume/pause returns a `quarantined`/stale result
+      instead of `active`. Root cause: the staleness window is measured against
+      wall-clock `Date.now()`, so the assertions are clock-sensitive. Inject a
+      clock/`now` provider (or a configurable staleness window) into the
+      gateway-heartbeat check so these tests are deterministic. Top priority —
+      the suite is red until fixed, which forces feature-branch-only pushes.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

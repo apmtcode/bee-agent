@@ -6,6 +6,71 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-08 (run 9) — Movement policy model: pluggable backend + train/infer/generalize loop
+
+**Audited:** The local-movement learning subsystem (standing objective #2).
+`src/capture/` already has capture → schema → dataset → replay (recorder, device/
+os/browser adapters, trajectory spans, `ReplayManifest` timeline, reviewed
+exporter). `src/training/` had the *launch-plan* side (job manifest, MLX/axolotl
+runner, execution service) but **no actual model that learns from movements and
+predicts new ones** — parts (c) *post-train a local model to repeat movements*
+and (d) *generalize to new-but-related movements* were unimplemented. That was
+the biggest capability gap in the objective, so I built the model layer.
+
+**Changed (additive, new module `src/training/movement-model.ts`):**
+- **Dataset builder** `extractMovementExamples` / `buildMovementDataset`: turns
+  reviewed `ReplayManifest` timelines into supervised `(context → next action)`
+  examples. Observation events advance the "current surface"; each action event
+  becomes one labelled example conditioned on `{ surface, previousAction }`.
+  Connects the existing capture pipeline to training.
+- **Pluggable backend seam** `MovementModelBackend` + `createMovementModelBackend`
+  factory — the interface a real on-device model (tiny MLX/GGUF policy) plugs
+  into later without touching call sites.
+- **Deterministic mock backend** `MockNgramMovementBackend`: a real learned
+  count-based policy with **multi-level context backoff** (full bigram → surface
+  → previous-action → global prior). Backoff *is* the generalization mechanism —
+  an unseen `(surface, previousAction)` pair falls back to a coarser context and
+  still emits a plausible movement. Fully deterministic (no `Math.random`, no OS,
+  no training hardware) so the whole loop runs and is testable in the cloud.
+- **Persistence**: `TrainedMovementPolicy.serialize()` + `deserializeMovementPolicy`
+  (round-trips to identical predictions).
+- **Generalization eval harness** `evaluateMovementGeneralization`: top-1
+  accuracy, mean backoff level, backoff histogram, and — the real signal —
+  accuracy restricted to contexts *absent from training*.
+- **Synthetic event-stream generator** `generateSyntheticMovementReplays` (seeded
+  mulberry32 PRNG) + `splitMovementReplays`: emits learnable structured
+  trajectories (each surface has a preferred gesture; gestures bias the next
+  surface) so the train→eval loop can be validated with no real OS input.
+- Exported all of the above from `src/index.ts` (movement-prefixed names, no
+  barrel collisions).
+
+**Test results:** new `movement-model.test.ts` — **12/12 pass**, incl. an
+end-to-end test that trains on 30 synthetic sessions and shows held-out accuracy
+> 0.4 and novel-context (generalization) accuracy > 0.3, both well above chance,
+with zero held-out examples hitting the no-knowledge sentinel. `npm run build` ✅.
+`npm run typecheck:src` ✅ (exit 0, source stays clean). No regressions from this
+diff.
+
+**⚠️ Pre-existing blocker (NOT introduced here):** 3 tests now fail on the clean
+HEAD independent of this change — `server.test.ts:719` and two in `app.test.ts`
+(`sessions.remoteControl` resume/pause expecting `control.state: "active"` but
+getting a `quarantined`/stale-heartbeat result). They are **time/heartbeat
+dependent** (`Date.now()`-relative gateway-staleness logic) and were green at run
+8; likely an environment/clock sensitivity. Verified pre-existing by stashing
+this run's diff and re-running. Because tests are red, this run pushes to the
+designated feature branch `claude/peaceful-dirac-8fpnsq` (not `main`) per the
+branch mandate. **Queued as the top fix for next run** (see ROADMAP): make the
+gateway-heartbeat staleness window injectable/clock-mockable so these tests are
+deterministic.
+
+**New idea:** wire the movement policy into an *online* self-improvement loop —
+after each reviewed export, retrain the mock policy and log its held-out
+generalization accuracy to the self-check telemetry file, so the engine can
+watch movement-learning fidelity trend across runs (and later A/B the mock vs a
+real on-device backend behind the same `MovementModelBackend` seam).
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
