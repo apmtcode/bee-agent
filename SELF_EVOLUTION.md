@@ -6,6 +6,55 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-08 (run 9) — Movement subsystem: pluggable local-model backend + inference
+
+**Audited:** The local-movement learning subsystem (objective 2). `src/capture/`
+already captures/records/replays trajectories and `src/training/` exports a
+reviewed dataset and emits **launch scripts** for real on-device MLX/axolotl
+training (`LocalAppleSiliconTrainingRunner`). But that runner only *shells out* —
+nothing in-repo could actually **train a model and run inference** to "repeat the
+recorded movements" (2c) or "generalize to new but related movements" (2d), and
+there was no pluggable backend seam. That was the biggest concrete gap.
+
+**Changed (additive, new files only):**
+- `src/training/model-backend.ts` — the movement-model seam:
+  - `tokenizeReplayEvents` / `toMovementSequence`: turn a `ReplayTimelineEvent[]`
+    timeline into coarse movement tokens (`action:<tool>`, `observe:<source>`;
+    transcript chatter dropped) so the model learns movement *structure*, not
+    free-text — the property that enables generalization.
+  - `MovementModelBackend` interface + `MovementModelBackendRegistry` — the
+    pluggable seam; a real on-device small-model backend drops in by name later.
+  - `MarkovMovementBackend` / `MarkovMovementModel` — a **deterministic,
+    in-process** variable-order Markov backend with stupid-backoff smoothing.
+    High order → exact replay (2c); backoff to shorter contexts → sensible next
+    step on unseen contexts (2d). `predict`/`predictNext`/`generate` +
+    `serialize`/`deserialize` for cross-process persistence.
+  - `evaluateReplayFidelity` — prompt-then-roll-forward eval that scores
+    longest-common-prefix fidelity in [0,1] against a held-out sequence: the
+    generalization-eval harness the roadmap asked for.
+- `src/index.ts` — barrel exports for the above.
+- `src/training/model-backend.test.ts` — 11 tests: tokenizer, exact replay,
+  end-sentinel stop, frequency ranking, backoff generalization, empty-model
+  safety, serialize round-trip, fidelity eval (exact + partial), registry.
+
+**Test results:** `typecheck:src` ✅ (exit 0). Build ✅. New tests ✅ **11/11**.
+Full suite **182/185**. ⚠️ The **3 failures are pre-existing and unrelated** to
+this change — verified on the clean committed tree (`git stash -u` → **3 failed |
+171 passed**, i.e. 171/174 before my +11). They are:
+`cli/app.test.ts` (control=degraded vs active), `control-plane/server.test.ts`
+(orchestration result shape), `orchestrator/operator-runtime.test.ts`
+(`readState` JSON `SyntaxError` at pos 311 in a background-task state file). Run 8
+logged 174/174, so a regression crept in between then and now. Not chased this
+run to keep the diff focused/reversible; filed top-priority in ROADMAP. Shipped
+the green additive feature to the designated feature branch with this documented.
+
+**New idea:** add a **behavior-cloning backend** alongside the Markov one — a tiny
+linear/softmax next-token classifier over a windowed bag-of-tokens feature,
+trained by a few deterministic gradient steps (no external runtime). It would
+give a second, smoother generalizer to A/B against Markov backoff via the same
+`evaluateReplayFidelity` harness, and prove the backend interface is truly
+model-agnostic before wiring a real on-device model.
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
