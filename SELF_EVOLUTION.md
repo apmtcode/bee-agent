@@ -6,6 +6,62 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-08 (run 9) — 🔴→🟢 Deterministic background-task tests: killed a real-process flakiness class + atomic state writes
+
+**Audited:** The build/test gate itself. On a fresh checkout in the cloud
+environment the suite was **RED and nondeterministic** — re-running the same
+files gave `4 failed` then `3 failed`. Prior runs logged "174/174" because they
+observed the flakiness differently; the green gate every future run depends on
+was effectively broken here. Root-caused to two independent defects in the
+background-task subsystem (`src/harness/background-tasks.ts`):
+1. **Torn state files.** The generated launch script wrote task state with
+   `printf … > statePath` (initial) and Python `state_path.write_text(…)`
+   (completion) — both **non-atomic, truncating** writes. When the control
+   plane reconciled a task *while* its launch script was writing, `readState`
+   read a half-written file → `SyntaxError … in JSON at position 311`. A real
+   production bug, not just a test artifact.
+2. **Real detached OS processes in unit tests.** Tests spawned actual launch
+   scripts whose async state/output writes raced the tests' own seeded state,
+   and whose liveness (`kill(-pid,0)`) is environment-specific — so
+   reconciliation was nondeterministic (`missing-process` vs `active`).
+
+**Changed (additive, reversible):**
+- **Atomic state writes** in the launch script: initial write goes to
+  `"$state_path.$$.tmp"` then `mv -f` into place; the Python completion writer
+  writes a temp file then `os.replace(...)`. Eliminates the torn-read race for
+  *all* callers, production included.
+- **Two first-class pluggable launchers** exported from `background-tasks.ts`:
+  `createSimulatedBackgroundSpawn()` (records intended launches, returns
+  monotonic synthetic pids, never executes — safe for hermetic tests, `--dry-run`,
+  and the cloud runner where bee-agent shouldn't spawn real jobs) and
+  `createSynchronousBackgroundSpawn()` (runs the script to completion via
+  `spawnSync` so output/terminal state are ready with no race).
+- **Extended the injection seam to the CLI:** `OperatorCliAppOptions` now accepts
+  `backgroundTaskSpawnProcess` / `backgroundTaskIsProcessRunning`, threaded into
+  the runtime (undefined ⇒ real `spawn`/`process.kill`, so production is
+  unchanged).
+- **Made the 4 flaky tests deterministic** by injecting the simulated launcher
+  with liveness modeled to match each test's *intent* (e.g. app test 1 models
+  "all alive except the sentinel pid 999999" that the test uses to drive a task
+  into the degraded state; app test 2 keeps the task running and seeds its
+  output, mirroring how the monitor's output was already seeded).
+- **Added 4 unit tests** for the new launchers + a guard asserting the launch
+  script uses temp-file+rename / `os.replace`.
+
+**Test results:** `npm test` **178/178** (was 174 + 4 new) — **green across 3
+consecutive full runs and 3 per-file runs** (previously 3–4 failing,
+nondeterministic). `typecheck:src` ✅ (source stays clean). Full `tsc` unchanged
+at **125** (all in test files). Build ✅.
+
+**New idea:** promote a `verify` npm script (`typecheck:src && build && test`)
+and have the engine run it as a mandatory pre-push self-check every cycle —
+this run only caught the red gate because I re-ran tests by hand. Bigger: a
+tiny "flake sentinel" that runs the background-task test files N× in CI and
+fails if results differ, so a reintroduced real-process race is caught as a
+determinism regression rather than an intermittent red.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

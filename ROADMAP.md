@@ -38,8 +38,16 @@ unchecked items are queued. Keep this richer than you found it each run.
     `skills.executable.*`, `push.subscriptions.*`, `trajectories.*`, `replays.*`,
     `cron.runs`/misc — plus a few genuine test-only typings. Map the rest, then
     fix residual test-only typings.
-- [ ] Add a `verify` npm script (`typecheck && build && test`) and have the
-      engine run it as a pre-push self-check each cycle.
+- [ ] Add a `verify` npm script (`typecheck:src && build && test`) and have the
+      engine run it as a pre-push self-check each cycle. **RAISED in priority
+      (run 9):** run 9's fresh checkout was RED + nondeterministic in the cloud
+      yet a prior run logged "174/174" — only a manual re-run caught it. A
+      standing `verify` gate would have caught it automatically.
+- [ ] **Flake sentinel:** a tiny harness (or CI step) that runs the
+      process-touching test files (background-tasks, operator-runtime, server,
+      app) N× and fails if pass/fail counts differ across runs — so a
+      reintroduced real-process race surfaces as a determinism regression, not
+      an intermittent red. (Idea from run 9.)
 - [x] Interim **source-only typecheck gate** — DONE run 7. `tsconfig.src.json`
       (excludes `**/*.test.ts`) + `typecheck:src` script; passes (exit 0). Next:
       have the engine run it as a per-run pre-push self-check.
@@ -69,6 +77,20 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
       round-trips without real OS input.
 - [ ] Generalization eval harness: measure replay fidelity on held-out but
       related synthetic trajectories.
+
+## Reliability / test hermeticity
+- [x] **Atomic background-task state writes** (run 9): launch script writes
+      state via temp-file + `mv -f` / `os.replace`, ending the torn-read
+      (`SyntaxError … JSON at position 311`) race for the control plane.
+- [x] **Pluggable simulated / synchronous background launchers** (run 9):
+      `createSimulatedBackgroundSpawn` + `createSynchronousBackgroundSpawn`,
+      with the injection seam threaded through `OperatorCliApp`. Made the 4
+      real-process-spawning tests deterministic (178/178, stable ×3).
+- [ ] Sweep remaining tests that still spawn real processes via the default
+      `spawn` (grep `new StandaloneOperatorRuntime` / `new OperatorCliApp`
+      without a `backgroundTask*` override) and inject a launcher, so no test
+      depends on host process behaviour. Run 9 fixed the 4 that flaked here;
+      others may flake under different timing.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

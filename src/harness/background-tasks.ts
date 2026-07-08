@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { ensureParentDir, readJsonFile, writeJsonAtomic } from "../shared/fs.js";
 
@@ -107,6 +107,60 @@ export type SpawnBackgroundProcess = (
 ) => { pid?: number; unref(): void };
 
 export type IsProcessRunning = (pid: number) => boolean;
+
+export type SimulatedBackgroundLaunch = {
+  command: string;
+  args: string[];
+  cwd: string;
+  pid: number;
+};
+
+export type SimulatedBackgroundSpawn = SpawnBackgroundProcess & {
+  readonly launches: readonly SimulatedBackgroundLaunch[];
+};
+
+/**
+ * A {@link SpawnBackgroundProcess} that records intended launches instead of
+ * starting a real OS process. It returns a monotonic synthetic pid and a no-op
+ * `unref`, and — crucially — never executes the launch script, so it never
+ * writes to the task's state/output files.
+ *
+ * That makes it safe both for hermetic tests (no write races against
+ * manually-seeded state files) and for environments where bee-agent should not
+ * spawn real processes — e.g. the cloud self-evolution runner or a `--dry-run`
+ * mode. Pair with `isProcessRunning: () => true | false` to deterministically
+ * model whether the simulated task is still "alive".
+ */
+export function createSimulatedBackgroundSpawn(options: { basePid?: number } = {}): SimulatedBackgroundSpawn {
+  const launches: SimulatedBackgroundLaunch[] = [];
+  let nextPid = Math.max(1, Math.floor(options.basePid ?? 970001));
+  const spawnProcess = ((command: string, args: string[], spawnOptions: { cwd: string }) => {
+    const pid = nextPid;
+    nextPid += 1;
+    launches.push({ command, args: [...args], cwd: spawnOptions.cwd, pid });
+    return { pid, unref: () => {} };
+  }) as SpawnBackgroundProcess;
+  return Object.assign(spawnProcess, { launches }) as SimulatedBackgroundSpawn;
+}
+
+/**
+ * A {@link SpawnBackgroundProcess} that runs the launch script synchronously to
+ * completion (via `spawnSync`) before returning. Unlike the default async
+ * `spawn`, the task's state and output files are fully written by the time the
+ * caller resumes, so there is no read/write race. Useful for deterministic
+ * integration tests that assert on a task's real command output, and for
+ * foreground execution modes. Still requires a real shell on the host.
+ */
+export function createSynchronousBackgroundSpawn(): SpawnBackgroundProcess {
+  return (command, args, options) => {
+    const result = spawnSync(command, args, {
+      cwd: options.cwd,
+      env: options.env,
+      stdio: "ignore",
+    });
+    return { pid: result.pid ?? 0, unref: () => {} };
+  };
+}
 
 export type BackgroundTaskRecoveryReason =
   | "unchanged"
@@ -752,19 +806,24 @@ function renderLaunchScript(task: BackgroundTaskRecord): string {
   return [
     "#!/usr/bin/env bash",
     "set -euo pipefail",
-    `mkdir -p $(dirname ${quotedStatePath}) $(dirname ${quotedOutputFile})`,
+    `state_path=${quotedStatePath}`,
+    `mkdir -p $(dirname "$state_path") $(dirname ${quotedOutputFile})`,
     "started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-    `printf '%s' ${quotedStatePayload} | sed "s/__OPENCLAW_STARTED_AT__/$started_at/g; s/\"\$\$\"/$$/g" > ${quotedStatePath}`,
+    // Write state atomically (temp file + rename) so a concurrent reader — the
+    // control plane reconciling this task — never observes a half-written file.
+    `state_tmp="$state_path.$$.tmp"`,
+    `printf '%s' ${quotedStatePayload} | sed "s/__OPENCLAW_STARTED_AT__/$started_at/g; s/\"\$\$\"/$$/g" > "$state_tmp"`,
+    `mv -f "$state_tmp" "$state_path"`,
     `printf '%s\n' "starting ${task.kind} ${task.id}" >> ${quotedOutputFile}`,
     `if cd ${quotedCwd} && bash -lc ${quotedCommand} >> ${quotedOutputFile} 2>&1; then`,
     "  completed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-    `  python3 - ${quotedStatePath} $$ "$completed_at" 0 <<'PY'`,
+    `  python3 - "$state_path" $$ "$completed_at" 0 <<'PY'`,
     ...renderStateWriterPython("completed"),
     "PY",
     "else",
     "  exit_code=$?",
     "  completed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-    `  python3 - ${quotedStatePath} $$ "$completed_at" "$exit_code" <<'PY'`,
+    `  python3 - "$state_path" $$ "$completed_at" "$exit_code" <<'PY'`,
     ...renderStateWriterPython("failed"),
     "PY",
     '  exit "$exit_code"',
@@ -776,6 +835,7 @@ function renderLaunchScript(task: BackgroundTaskRecord): string {
 function renderStateWriterPython(status: BackgroundTaskExecutionState["status"]): string[] {
   return [
     "import json",
+    "import os",
     "import pathlib",
     "import sys",
     "state_path = pathlib.Path(sys.argv[1])",
@@ -789,7 +849,10 @@ function renderStateWriterPython(status: BackgroundTaskExecutionState["status"])
     "state['completedAt'] = timestamp",
     "state['exitCode'] = exit_code",
     `state['error'] = None if '${status}' == 'completed' else f'background task exited non-zero ({exit_code})'`,
-    "state_path.write_text(json.dumps(state, indent=2) + '\\n')",
+    // Atomic replace so the control plane never reads a torn state file.
+    "tmp_path = state_path.with_name(state_path.name + '.' + str(pid) + '.tmp')",
+    "tmp_path.write_text(json.dumps(state, indent=2) + '\\n')",
+    "os.replace(tmp_path, state_path)",
   ];
 }
 

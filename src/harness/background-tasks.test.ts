@@ -5,6 +5,8 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   BackgroundTaskExecutionService,
   FileBackgroundTaskStore,
+  createSimulatedBackgroundSpawn,
+  createSynchronousBackgroundSpawn,
   type BackgroundTaskExecutionState,
 } from "./background-tasks.js";
 
@@ -369,5 +371,82 @@ describe("BackgroundTaskExecutionService", () => {
     await expect(fs.readFile(path.join(rootDir, task.execution.launchScript), "utf8")).resolves.toContain("bash -lc");
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
+  });
+});
+
+describe("createSimulatedBackgroundSpawn", () => {
+  it("records intended launches with monotonic pids and never runs a process", async () => {
+    const rootDir = await makeTempDir();
+    const spawn = createSimulatedBackgroundSpawn({ basePid: 500000 });
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"), spawn, () => true);
+
+    const first = await store.start({ title: "one", command: "printf one", cwd: rootDir, kind: "task" });
+    const second = await store.start({ title: "two", command: "printf two", cwd: rootDir, kind: "monitor" });
+
+    // Synthetic pids are assigned monotonically from basePid.
+    expect(first.execution.processId).toBe(500000);
+    expect(second.execution.processId).toBe(500001);
+    expect(first.status).toBe("running");
+
+    // The launch script was recorded but never executed, so no per-task state
+    // file exists yet — eliminating read/write races against seeded state.
+    expect(spawn.launches).toHaveLength(2);
+    expect(spawn.launches[0]?.command).toBe(path.join(rootDir, first.execution.launchScript));
+    await expect(fs.access(path.join(rootDir, first.execution.stateFile))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("models liveness deterministically for reconciliation", async () => {
+    const rootDir = await makeTempDir();
+    const spawn = createSimulatedBackgroundSpawn();
+    // Everything alive except a sentinel pid we use to drive a failure.
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"), spawn, (pid) => pid !== 999999);
+
+    const alive = await store.start({ title: "alive", command: "sleep 1", cwd: rootDir, kind: "task" });
+    await expect(store.recover(alive.id)).resolves.toMatchObject({ task: { status: "running" } });
+
+    const doomed = await store.start({ title: "doomed", command: "printf x", cwd: rootDir, kind: "task" });
+    await store.executionService.writeState(doomed, {
+      version: 1,
+      taskId: doomed.id,
+      kind: "task",
+      status: "running",
+      pid: 999999,
+      startedAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      outputFile: doomed.execution.outputFile,
+      cwd: rootDir,
+      command: "printf x",
+    });
+    await expect(store.recover(doomed.id)).resolves.toMatchObject({ task: { status: "failed" }, reason: "missing-process" });
+  });
+});
+
+describe("createSynchronousBackgroundSpawn", () => {
+  it("runs the launch script to completion so output and terminal state are ready", async () => {
+    const rootDir = await makeTempDir();
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"), createSynchronousBackgroundSpawn());
+
+    const task = await store.start({ title: "smoke", command: "printf ok", cwd: rootDir, kind: "task" });
+
+    // Because the launcher is synchronous, the command output and a terminal
+    // (completed) state file are fully written by the time start() resolves.
+    await expect(store.getOutput(task.id)).resolves.toContain("ok");
+    const state = await store.executionService.readState(task);
+    expect(state?.status).toBe("completed");
+    expect(state?.exitCode).toBe(0);
+  });
+});
+
+describe("renderLaunchScript (atomic state writes)", () => {
+  it("writes state via a temp file + rename rather than in place", async () => {
+    const rootDir = await makeTempDir();
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"), createSimulatedBackgroundSpawn());
+    const task = await store.start({ title: "atomic", command: "printf ok", cwd: rootDir, kind: "task" });
+    const script = await fs.readFile(path.join(rootDir, task.execution.launchScript), "utf8");
+    // Initial write goes to a temp file then is renamed into place...
+    expect(script).toContain(`.tmp`);
+    expect(script).toContain(`mv -f`);
+    // ...and the completion writer uses an atomic os.replace.
+    expect(script).toContain(`os.replace(tmp_path, state_path)`);
   });
 });
