@@ -55,6 +55,23 @@ unchecked items are queued. Keep this richer than you found it each run.
       gaps.
 - [ ] Audit `claude-code` reference for slash-command / hook coverage gaps.
 
+## Reliability / hermetic tests
+- [x] **Simulated background-process backend** (2026-07-08, run 9):
+      `createSimulatedBackgroundProcess()` in `src/harness/simulated-process.ts`
+      (OS-free `spawn`/`isProcessRunning`, exported from the barrel).
+      `OperatorCliApp` now accepts `backgroundTaskSpawnProcess` /
+      `backgroundTaskIsProcessRunning`. Restored the green gate (179/179) by
+      removing real-subprocess flakiness from 3 tests.
+- [ ] **Atomic state writes in the real launch script.** `renderLaunchScript`'s
+      `printf … > state.json` and `renderStateWriterPython`'s `write_text` write
+      non-atomically — a real recover/sync reading mid-write can hit truncated
+      JSON (the exact race that failed run 8's pushed tests). Write to a temp
+      file then `mv`/`os.replace`, mirroring `writeJsonAtomic`.
+- [ ] **Gate-honesty pre-push check.** Fail the run if `SELF_EVOLUTION.md`
+      records a passing test count a clean `npm test` can't reproduce, so a
+      "green" claim can never be pushed while the suite is red (as happened at
+      the start of run 9).
+
 ## Local-movement learning subsystem
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`

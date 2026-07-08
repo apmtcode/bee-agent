@@ -6,6 +6,56 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-08 (run 9) — 🟢 Restored the green gate: simulated background-process backend
+
+**Audited:** The actual build/test gate on a fresh install in this container.
+Run 8's log claimed **174/174**, but `npm test` here showed **3 failing tests**
+(`operator-runtime.test.ts`, `server.test.ts`, `app.test.ts`) — a regression that
+had been pushed to `main`. Root cause was **one shared bug**, not three: those
+tests exercise background-task orchestration but let the runtime use the *real*
+detached-process spawner. The real launch script (`printf`/`tail -f` + a
+`sed`/`python3` state writer) runs a live OS process that writes the task's
+`state.json`/output **non-atomically and asynchronously**, so it (a) raced with
+the tests' own hand-written state (`SyntaxError` on a half-written JSON file),
+(b) made `background.tasks.state` return a full state where the test expected
+`NOT_FOUND`, and (c) made process-liveness checks flap (`control=degraded`,
+"task is not running"). Inherently non-deterministic in a sandboxed/cloud env.
+
+**Changed (additive, guardrail-aligned — simulate OS interactions):**
+- **New `src/harness/simulated-process.ts`** — `createSimulatedBackgroundProcess({
+  alive?, basePid? })` returns a drop-in `{ spawn, isProcessRunning, launches }`.
+  The `spawn` never touches the OS: it hands back a stable fake PID (default base
+  `900_000_000`, above any real Linux `pid_max` so a stray `process.kill(-pid)`
+  yields `ESRCH` instead of signalling a real group) and records each launch;
+  `isProcessRunning` reports those PIDs per the `alive` flag. No child process ⇒
+  no surprise state/output files ⇒ the caller fully owns on-disk task state.
+- Exported it from the barrel (`src/index.ts`), plus the `IsProcessRunning` type.
+- **`OperatorCliApp`** now accepts optional `backgroundTaskSpawnProcess` /
+  `backgroundTaskIsProcessRunning` and threads them to its runtime (production
+  unchanged — both default to the real backend). This closed a testability gap:
+  the app previously hard-wired the real spawner with no injection seam.
+- Wired the simulated backend into the 3 failing tests (runtime already had the
+  injection points; the app now does too). Added `writeOutput` where a test
+  asserted on execution output the simulated backend intentionally doesn't emit.
+- New unit test `simulated-process.test.ts` (5 cases: unique PIDs, launch
+  recording, above-`pid_max` PIDs, alive/dead liveness, custom base).
+
+**Test results:** **174 → 179 passing (179/179), 0 failing** — the gate is green
+again and **deterministic across repeated runs**. `npm run build` ✅.
+`npm run typecheck:src` ✅ (source stays clean). Full `tsc` **125 → 125** (no net
+test-debt change; my new test file narrows the optional `pid` so it adds zero
+errors).
+
+**New idea:** the real launch script writes `state.json` with a plain `> file`
+redirect (and the Python fallback with `write_text`), i.e. **non-atomically** —
+the same partial-read race that bit these tests can bite a real recover/sync that
+reads mid-write. Harden `renderLaunchScript`/`renderStateWriterPython` to write
+to a temp file and `mv`/`os.replace` into place (mirroring `writeJsonAtomic`), so
+concurrent readers never observe a truncated state file on a real machine.
+Second idea: a tiny "gate honesty" pre-push check that fails the run if
+`SELF_EVOLUTION.md` claims a passing count that a clean `npm test` doesn't
+reproduce — so a green claim can never diverge from reality again.
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

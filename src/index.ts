@@ -70,10 +70,17 @@ export {
   type FailBackgroundTaskParams,
   type MarkBackgroundTaskStartedParams,
   type ReadBackgroundTaskOutputOptions,
+  type IsProcessRunning,
   type SpawnBackgroundProcess,
   type StartBackgroundTaskParams,
   type StopBackgroundTaskParams,
 } from "./harness/background-tasks.js";
+export {
+  createSimulatedBackgroundProcess,
+  type SimulatedBackgroundProcess,
+  type SimulatedBackgroundProcessOptions,
+  type SimulatedLaunch,
+} from "./harness/simulated-process.js";
 export {
   FileSessionStore,
   type SessionStoreRecord,
