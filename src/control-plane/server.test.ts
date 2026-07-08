@@ -18,6 +18,12 @@ async function makeTempDir(): Promise<string> {
   return dir;
 }
 
+// Hermetic background-task launcher: returns a fake pid without forking a real
+// OS process. Tests that start background tasks drive their execution state by
+// hand, so a real detached launch script would only race those writes and make
+// the assertions non-deterministic.
+const hermeticSpawn = () => ({ pid: 4242, unref() {} });
+
 afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })));
 });
@@ -84,6 +90,7 @@ describe("OperatorControlPlaneServer", () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir,
       backgroundTaskIsProcessRunning: () => false,
+      backgroundTaskSpawnProcess: hermeticSpawn,
       delivery: new OperatorDeliveryService(rootDir, {
         sendBrowserPush: async () => {},
       }),
@@ -953,6 +960,7 @@ describe("OperatorControlPlaneServer", () => {
     const driftingRuntime = new StandaloneOperatorRuntime({
       rootDir: driftingRootDir,
       backgroundTaskIsProcessRunning: () => false,
+      backgroundTaskSpawnProcess: hermeticSpawn,
     });
     const driftingServer = new OperatorControlPlaneServer({ runtime: driftingRuntime });
     const driftingBootstrap = await driftingServer.handle({
@@ -1019,6 +1027,7 @@ describe("OperatorControlPlaneServer", () => {
     const breakerRuntime = new StandaloneOperatorRuntime({
       rootDir: breakerRootDir,
       backgroundTaskIsProcessRunning: () => false,
+      backgroundTaskSpawnProcess: hermeticSpawn,
     });
     const breakerServer = new OperatorControlPlaneServer({ runtime: breakerRuntime });
     const breakerOne = await breakerServer.handle({
@@ -2098,7 +2107,10 @@ describe("OperatorControlPlaneServer", () => {
   });
 
   it("filters runtime events by session, run, and family", async () => {
-    const runtime = new StandaloneOperatorRuntime({ rootDir: await makeTempDir() });
+    const runtime = new StandaloneOperatorRuntime({
+      rootDir: await makeTempDir(),
+      backgroundTaskSpawnProcess: hermeticSpawn,
+    });
     const sessionA = await runtime.startSession({ title: "Session A" });
     const sessionB = await runtime.startSession({ title: "Session B" });
     const runA = await runtime.startRun({ sessionId: sessionA.id, title: "Run A" });

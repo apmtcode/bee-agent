@@ -4,6 +4,13 @@ Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
 ## Foundations / DX
+- [x] **Un-break the test suite (run 9, 2026-07-08).** 4 tests failed on a clean
+      tree because the background-task launch script produced malformed state
+      JSON (a broken `printf|sed` initial-state writer + a `shellQuote` that
+      mishandled embedded single quotes) and several tests spawned real detached
+      processes that raced their own state writes. Fixed both bugs, added a
+      launch-script execution regression test, and made the state-driven tests
+      hermetic via an injected spawn seam. Suite now 176/176, 5/5 runs green.
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`
@@ -84,3 +91,16 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
       count to a baseline file and fail if a module regresses above it. Lets the
       engine pay debt down module-by-module without one green-gate blocking
       progress, and prevents backsliding while the total is still > 0.
+- [ ] **Shell-lint the background-task launch script (from run 9).** The script
+      is assembled by string concatenation and can only be validated by executing
+      it. Extract a shared `renderStateJson(...)` helper for the
+      initial/completed/failed writers, and add a test that runs `bash -n` on the
+      rendered script for a matrix of adversarial commands (embedded `'`, `"`,
+      `$`, backticks, newlines, unicode) so quoting regressions are caught without
+      a live process.
+- [ ] **De-flake remaining real-spawn tests.** The `app.test` "background and
+      monitor task commands" case still launches a real `printf ok` process and
+      asserts on its output/`task-stop` timing. It passed 5/5 after the run-9 fix
+      but is a latent race; give it a deterministic simulated launcher (mock
+      spawn that writes the expected output + running state) like the other
+      background-task tests now use.

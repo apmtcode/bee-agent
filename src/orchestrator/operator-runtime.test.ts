@@ -15,6 +15,11 @@ async function makeTempDir(): Promise<string> {
   return dir;
 }
 
+// Hermetic background-task launcher: returns a fake pid without forking a real
+// OS process, so tests that drive execution state by hand are not racing an
+// actual detached launch script.
+const hermeticSpawn = () => ({ pid: 4242, unref() {} });
+
 function buildHookCaptureCommand(outputFile: string): string {
   const script = [
     "import fs from 'node:fs';",
@@ -531,6 +536,7 @@ describe("StandaloneOperatorRuntime", () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
       backgroundTaskIsProcessRunning: () => false,
+      backgroundTaskSpawnProcess: hermeticSpawn,
     });
     const session = await runtime.startSession({ title: "Tasks", agentId: "main" });
 

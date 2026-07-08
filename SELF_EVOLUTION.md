@@ -6,6 +6,61 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-08 (run 9) — Fix broken background-task launch script (malformed state JSON) + hermetic spawn seam
+
+**Audited:** The verification gate itself. `npm test` reported **4 failing tests**
+on a clean tree (last run logged 174/174) — `operator-runtime.test`,
+`server.test`, and two `app.test` cases. The engine cannot verify anything while
+the suite is red, so this took priority over new capability work.
+
+**Root cause (two real bugs in `src/harness/background-tasks.ts`):**
+1. **`shellQuote` was broken for embedded single quotes.** It replaced `'` with
+   `"'"'"'`, which does *not* close the surrounding single-quote first, so any
+   command/path containing a `'` was reconstructed incorrectly by the shell.
+   Fixed to the canonical POSIX escape (close-quote, escaped-quote, reopen).
+   Verified by round-tripping several commands through `bash eval`.
+2. **The launch script seeded its initial `running` state via `printf | sed`
+   placeholder substitution.** `sed` cannot safely rewrite JSON whose values
+   contain quotes/slashes: it left `pid` as the literal string `"$$"` and
+   corrupted commands embedding `"`, producing a **single-line, malformed state
+   file** that failed `JSON.parse` (`Expected ',' or '}' … position 311`).
+   Rewrote it to build the state with `python3` from shell-quoted argv (the same
+   robust pattern the completed/failed writers already use) — no sed, no
+   placeholders, `pid` is a real int, and any command round-trips verbatim.
+
+   The malformed state only surfaced now because these tests **spawn real
+   detached OS processes** and the corrupt state races the tests' own writes —
+   environment-timing-dependent, hence "green last run, red this run".
+
+**Also (hermeticity / guardrail — simulate real-OS effects):**
+- Added a `backgroundTaskSpawnProcess` / `backgroundTaskIsProcessRunning`
+  injection seam to `OperatorCliApp` (threaded into its runtime; production
+  default unchanged) so CLI-level tests can run without forking real processes.
+- Injected a no-op `hermeticSpawn` into the state-driven background-task tests in
+  `server.test.ts` (4 constructors) and `operator-runtime.test.ts`. These tests
+  write execution state by hand, so a real launch script only ever raced them.
+
+**Tests added:**
+- `background-tasks.test.ts`: executes the *real* generated launch script
+  end-to-end for a quote-heavy command and asserts the state file is valid JSON
+  with a numeric `pid` and a verbatim `command` (regression guard for both bugs).
+- `app.test.ts`: asserts background-task launches route through the injected
+  spawn seam (fake pid, no real process).
+
+**Test results:** **176/176 passing**, and **5/5 consecutive full-suite runs
+green** (previously 1–2 flaky failures per run). Build ✅. `typecheck:src` clean
+(exit 0). Full `tsc` unchanged at **125** (test-file debt untouched).
+
+**New idea:** the launch script is assembled by string concatenation and can
+only be validated by executing it — brittle. Extract a single
+`renderStateJson(...)` helper shared by the initial/completed/failed writers, and
+add a lightweight "shell-lint" test that runs `bash -n` (syntax check) on the
+rendered script for a matrix of adversarial commands (embedded `'`, `"`, `$`,
+backticks, newlines, unicode) so quoting regressions are caught without depending
+on a live process.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

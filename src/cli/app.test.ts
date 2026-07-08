@@ -1180,6 +1180,36 @@ describe("OperatorCliApp", () => {
     expect(cronDelete).toContain(`Deleted cron job ${job.id}`);
   });
 
+  it("routes background-task launches through an injected spawn seam (no real process)", async () => {
+    const rootDir = await makeTempDir();
+    const spawned: Array<{ command: string; cwd: string }> = [];
+    const app = new OperatorCliApp({
+      rootDir,
+      cwd: rootDir,
+      currentDate: "2026-05-25",
+      // Hermetic seam: never fork a real OS process from a CLI test.
+      backgroundTaskSpawnProcess: (command, _args, options) => {
+        spawned.push({ command, cwd: options.cwd });
+        return { pid: 4242, unref() {} };
+      },
+      backgroundTaskIsProcessRunning: () => true,
+    });
+    const session = await app.runtime.startSession({ title: "seam", cwd: rootDir, agentId: "operator-cli" });
+
+    const startOutput = await app.dispatchSlashCommand(
+      { kind: "background-start", title: "smoke", command: "printf ok" },
+      session.id,
+    );
+    expect(startOutput).toContain("Started background task");
+    expect(spawned).toHaveLength(1);
+    const [task] = await app.runtime.listBackgroundTasks(session.id);
+    if (!task) {
+      throw new Error("expected background task");
+    }
+    expect(task.execution.processId).toBe(4242);
+    expect(spawned[0]?.command).toBe(path.join(rootDir, task.execution.launchScript));
+  });
+
   it("gates dangerous background commands and allows rerun after approval", async () => {
     const rootDir = await makeTempDir();
     await fs.mkdir(path.join(rootDir, ".claude"), { recursive: true });

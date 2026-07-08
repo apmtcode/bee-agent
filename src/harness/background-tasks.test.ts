@@ -1,6 +1,8 @@
+import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   BackgroundTaskExecutionService,
@@ -369,5 +371,41 @@ describe("BackgroundTaskExecutionService", () => {
     await expect(fs.readFile(path.join(rootDir, task.execution.launchScript), "utf8")).resolves.toContain("bash -lc");
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
+  });
+
+  // Regression: the launch script used to seed the initial "running" state via a
+  // `printf | sed` placeholder rewrite. sed cannot safely edit JSON whose values
+  // contain quotes/slashes, so it left `pid` as the literal string "$$" and
+  // corrupted any command that embedded a double-quote, producing a state file
+  // that failed `JSON.parse`. The script now builds the state with python3 from
+  // shell-quoted argv, so any command survives verbatim. This test executes the
+  // real generated script end-to-end and asserts the state file is well formed.
+  it("generates a launch script whose state file is valid JSON for quote-heavy commands", async () => {
+    const rootDir = await makeTempDir();
+    const store = new FileBackgroundTaskStore(
+      path.join(rootDir, "background-tasks.json"),
+      () => ({ pid: 4321, unref() {} }),
+    );
+    // A command that embeds a double-quote — exactly the shape the old sed-based
+    // writer corrupted (it un-escaped the quote and broke the JSON).
+    const command = `printf %s 'first "quoted" second'`;
+    const task = await store.start({ title: "Quote smoke", command, cwd: rootDir, kind: "task" });
+
+    const scriptPath = path.join(rootDir, task.execution.launchScript);
+    await promisify(execFile)("bash", [scriptPath], { cwd: rootDir });
+
+    const rawState = await fs.readFile(path.join(rootDir, task.execution.stateFile), "utf8");
+    const parsed = JSON.parse(rawState) as BackgroundTaskExecutionState;
+    expect(parsed.taskId).toBe(task.id);
+    expect(parsed.status).toBe("completed");
+    expect(parsed.exitCode).toBe(0);
+    // pid must be a real number, never the unreplaced "$$" placeholder.
+    expect(typeof parsed.pid).toBe("number");
+    expect(parsed.pid).toBeGreaterThan(0);
+    // The command must round-trip verbatim through the JSON state file.
+    expect(parsed.command).toBe(command);
+
+    const rawOutput = await fs.readFile(path.join(rootDir, task.execution.outputFile), "utf8");
+    expect(rawOutput).toContain('first "quoted" second');
   });
 });

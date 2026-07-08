@@ -734,27 +734,21 @@ function renderLaunchScript(task: BackgroundTaskRecord): string {
   const quotedOutputFile = shellQuote(task.execution.outputFile);
   const quotedCwd = shellQuote(task.cwd);
   const quotedCommand = shellQuote(task.command);
-  const quotedStatePayload = shellQuote(
-    JSON.stringify({
-      version: 1,
-      taskId: task.id,
-      kind: task.kind,
-      status: "running",
-      pid: "$$",
-      startedAt: "__OPENCLAW_STARTED_AT__",
-      updatedAt: "__OPENCLAW_STARTED_AT__",
-      outputFile: task.execution.outputFile,
-      cwd: task.cwd,
-      command: task.command,
-    }),
-  );
+  const quotedTaskId = shellQuote(task.id);
+  const quotedKind = shellQuote(task.kind);
 
   return [
     "#!/usr/bin/env bash",
     "set -euo pipefail",
     `mkdir -p $(dirname ${quotedStatePath}) $(dirname ${quotedOutputFile})`,
     "started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-    `printf '%s' ${quotedStatePayload} | sed "s/__OPENCLAW_STARTED_AT__/$started_at/g; s/\"\$\$\"/$$/g" > ${quotedStatePath}`,
+    // Build the initial "running" state via python3 from shell-quoted argv rather
+    // than printf/sed placeholder substitution: sed cannot safely rewrite JSON
+    // whose values contain quotes/slashes (it left `pid:"$$"` unreplaced and
+    // corrupted commands that embedded `"`), producing malformed state files.
+    `python3 - ${quotedStatePath} "$$" "$started_at" ${quotedTaskId} ${quotedKind} ${quotedOutputFile} ${quotedCwd} ${quotedCommand} <<'PY'`,
+    ...renderInitialStateWriterPython(),
+    "PY",
     `printf '%s\n' "starting ${task.kind} ${task.id}" >> ${quotedOutputFile}`,
     `if cd ${quotedCwd} && bash -lc ${quotedCommand} >> ${quotedOutputFile} 2>&1; then`,
     "  completed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
@@ -771,6 +765,35 @@ function renderLaunchScript(task: BackgroundTaskRecord): string {
     "fi",
     "",
   ].join("\n");
+}
+
+function renderInitialStateWriterPython(): string[] {
+  return [
+    "import json",
+    "import pathlib",
+    "import sys",
+    "state_path = pathlib.Path(sys.argv[1])",
+    "pid = int(sys.argv[2])",
+    "started_at = sys.argv[3]",
+    "task_id = sys.argv[4]",
+    "kind = sys.argv[5]",
+    "output_file = sys.argv[6]",
+    "cwd = sys.argv[7]",
+    "command = sys.argv[8]",
+    "state = {",
+    "    'version': 1,",
+    "    'taskId': task_id,",
+    "    'kind': kind,",
+    "    'status': 'running',",
+    "    'pid': pid,",
+    "    'startedAt': started_at,",
+    "    'updatedAt': started_at,",
+    "    'outputFile': output_file,",
+    "    'cwd': cwd,",
+    "    'command': command,",
+    "}",
+    "state_path.write_text(json.dumps(state, indent=2) + '\\n')",
+  ];
 }
 
 function renderStateWriterPython(status: BackgroundTaskExecutionState["status"]): string[] {
@@ -794,5 +817,10 @@ function renderStateWriterPython(status: BackgroundTaskExecutionState["status"])
 }
 
 function shellQuote(value: string): string {
-  return `'${value.replaceAll(`'`, `"'"'"'`)}'`;
+  // POSIX-safe single-quoting: wrap in single quotes and replace each embedded
+  // single quote with `'\''` (close-quote, escaped-quote, reopen-quote). The
+  // previous escape (`"'"'"'`) failed to close the surrounding quote first, so
+  // any command/path containing a single quote was reconstructed incorrectly by
+  // the shell.
+  return `'${value.replaceAll(`'`, `'\\''`)}'`;
 }
