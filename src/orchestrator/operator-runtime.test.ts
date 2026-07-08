@@ -530,6 +530,11 @@ describe("StandaloneOperatorRuntime", () => {
   it("starts, syncs, recovers, lists, and cancels background tasks", async () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
+      // Inject an inert spawn: this test drives execution state manually via
+      // writeState/writeOutput, so a real launcher subprocess would only race
+      // it (asynchronously overwriting the state file) and make recovery
+      // assertions non-deterministic.
+      backgroundTaskSpawnProcess: () => ({ pid: 100001, unref() {} }),
       backgroundTaskIsProcessRunning: () => false,
     });
     const session = await runtime.startSession({ title: "Tasks", agentId: "main" });

@@ -6,6 +6,61 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-08 (run 9) — Reliability: fix two shell-quoting bugs in the background-task/training launch scripts (suite green again)
+
+**Audited:** Full build + test at baseline. The suite came up **RED (3 failing
+tests** in `operator-runtime.test.ts`, `server.test.ts`, `app.test.ts) — not
+flaky, consistently failing. Root-caused a `SyntaxError` reading a background
+task's `state.json` (`readJsonFile` at position 311) down to the shell that the
+launch script renders.
+
+**Two real bugs found (both correctness, both pre-existing):**
+1. **Broken POSIX single-quote escaping** in `renderLaunchScript`'s `shellQuote`
+   (`src/harness/background-tasks.ts`): it replaced `'` with `"'"'"'` instead of
+   the correct `'"'"'` (missing the leading close-quote). Any command containing
+   a single quote — e.g. the test's `printf 'line-1\n…'` — corrupted the JSON
+   payload the launcher `printf`s into `state.json`, so recovery crashed on
+   parse. The training runner's `shellQuote` (`src/training/runner.ts`) already
+   had the correct form — that's how the discrepancy was spotted.
+2. **Under-escaped sed pid-substitution** in the launch scripts of BOTH
+   `background-tasks.ts` and `runner.ts`. The intent was to replace the JSON
+   placeholder `"$$"` with the launcher's real pid via
+   `sed "…; s/\"\$\$\"/$$/g"`, but the TS source used single backslashes
+   (`\"`,`\$`) which a template literal collapses to bare `"`/`$` — so the
+   emitted bash was `s/"$$"/$$/g`, whose unescaped inner `"` chars close/reopen
+   the shell double-quote, turning the substitution into a no-op `s/<pid>/<pid>/`.
+   Result: the running-state file kept `"pid":"$$"` (a *string*), so recovery saw
+   a bogus pid, `isProcessRunning("$$")` → NaN → false, and mis-marked live tasks
+   as `missing-process`. Fixed by doubling the backslashes so the emitted bash is
+   `s/\"\$\$\"/$$/g` (verified end-to-end: running state now has a numeric pid).
+
+**Test hardening (additive):** the 3 failing integration tests drive execution
+state manually via `writeState`/`writeOutput`, so the *real* spawned launcher was
+pure interference — its async, non-atomic state writes raced the assertions
+(especially the never-exiting `tail -f` task). Injected the already-supported
+`backgroundTaskSpawnProcess` with an inert spawn at the 4 runtime constructions
+those tests use, making recovery deterministic. Added a **new regression test**
+(`background-tasks.test.ts`) that runs a *real* rendered launch script for a
+single-quoted, sentinel-blocked command and asserts (a) the running-state JSON is
+valid with the single quote preserved and (b) `pid` is a real number — locking in
+both fixes.
+
+**Test results:** suite **RED (3 failed / 174) → GREEN 175/175** (added the
+regression test), stable across 3 repeated full runs. `npm run build` ✅.
+`npm run typecheck:src` ✅ (exit 0). Fixes are additive and reversible.
+
+**New idea:** the launcher writes `state.json` non-atomically (`> file`
+redirect), so a concurrent reader can observe a torn file mid-write — a latent
+flakiness source distinct from the bugs above. Port the atomic
+`writeJsonAtomic` pattern (write-temp-then-rename) into the bash/python state
+writers, or have `readState` treat a `JSON.parse` failure as "transiently
+unavailable, retry" rather than throwing, so recovery never crashes on a partial
+read. Also worth: a tiny lint/test that greps every `shellQuote` in `src/` and
+asserts they share one canonical implementation (the two copies already drifted
+once — this fix re-aligned them, but nothing prevents re-drift).
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

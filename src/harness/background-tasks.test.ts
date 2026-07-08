@@ -370,4 +370,55 @@ describe("BackgroundTaskExecutionService", () => {
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
   });
+
+  it("executes a real launch script with a single-quoted command and writes valid state JSON", async () => {
+    const rootDir = await makeTempDir();
+    // Default (real) spawn so the rendered launch script actually runs. The
+    // command contains single quotes (regression for the shell-quoting bug that
+    // corrupted the state JSON) and blocks on a sentinel file so the running
+    // state is observable deterministically without racing process exit.
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"));
+    const task = await store.start({
+      title: "Quoted blocking command",
+      command: "printf 'waiting\\n'; until [ -f release ]; do sleep 0.05; done",
+      cwd: rootDir,
+      kind: "task",
+    });
+
+    const running = await pollState(store, task, (state) => state?.status === "running");
+    // shell-quoting fix: the single-quoted command survives into valid JSON.
+    expect(running.command).toContain("printf 'waiting");
+    // sed pid-substitution fix: the "$$" placeholder becomes a real numeric pid.
+    expect(typeof running.pid).toBe("number");
+    expect(running.pid).toBeGreaterThan(0);
+
+    await fs.writeFile(path.join(rootDir, "release"), "");
+    const done = await pollState(store, task, (state) => state?.status === "completed" || state?.status === "failed");
+    expect(done.status).toBe("completed");
+    expect(done.exitCode).toBe(0);
+    expect(typeof done.pid).toBe("number");
+  });
 });
+
+async function pollState(
+  store: FileBackgroundTaskStore,
+  task: Awaited<ReturnType<FileBackgroundTaskStore["start"]>>,
+  predicate: (state: BackgroundTaskExecutionState | undefined) => boolean,
+  timeoutMs = 5000,
+): Promise<BackgroundTaskExecutionState> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    let state: BackgroundTaskExecutionState | undefined;
+    try {
+      state = await store.executionService.readState(task);
+    } catch {
+      // A non-atomic launcher write may be observed mid-flight; retry.
+      state = undefined;
+    }
+    if (predicate(state)) {
+      return state as BackgroundTaskExecutionState;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  throw new Error("timed out waiting for expected background task state");
+}

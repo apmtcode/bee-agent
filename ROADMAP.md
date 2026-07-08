@@ -70,6 +70,24 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Generalization eval harness: measure replay fidelity on held-out but
       related synthetic trajectories.
 
+## Reliability
+- [x] Fix broken POSIX single-quote escaping in `background-tasks.ts` `shellQuote`
+      and the under-escaped sed pid-substitution in both `background-tasks.ts` and
+      `training/runner.ts` launch scripts (run 9, 2026-07-08). These corrupted the
+      rendered launcher's `state.json` for any single-quoted command and left the
+      running-state `pid` as the string `"$$"`. Added a real-execution regression
+      test and de-raced 3 subprocess-spawning integration tests. Suite RED→GREEN.
+- [ ] **Atomic / torn-read-safe state writes.** The launch scripts write
+      `state.json` via a plain `> file` redirect (non-atomic), so a concurrent
+      recovery read can observe a partial file and throw on `JSON.parse`. Either
+      write-temp-then-rename in the bash/python writers, or make `readState`
+      treat a parse failure as "transiently unavailable → retry" instead of
+      throwing. (Surfaced while fixing the run-9 quoting bugs.)
+- [ ] **Single `shellQuote` source of truth.** `background-tasks.ts` and
+      `training/runner.ts` each carry their own copy; they drifted once (run 9
+      re-aligned them). Extract to `src/shared/` and/or add a test that asserts
+      all `shellQuote` definitions are identical, so re-drift is caught.
+
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in
