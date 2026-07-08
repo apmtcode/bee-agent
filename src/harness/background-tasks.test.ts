@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -5,6 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   BackgroundTaskExecutionService,
   FileBackgroundTaskStore,
+  shellQuote,
   type BackgroundTaskExecutionState,
 } from "./background-tasks.js";
 
@@ -369,5 +371,34 @@ describe("BackgroundTaskExecutionService", () => {
     await expect(fs.readFile(path.join(rootDir, task.execution.launchScript), "utf8")).resolves.toContain("bash -lc");
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
+  });
+});
+
+describe("shellQuote", () => {
+  // Regression guard: a launch script embeds a JSON state payload inside a
+  // single-quoted shell literal. A previous shellQuote used a 6-char escape
+  // (`"'"'"'`) that injected a spurious double quote for every apostrophe,
+  // corrupting the payload for commands like `printf 'x'` so the state file
+  // failed to parse and background-task recovery mis-reported "missing-process".
+  const tricky = [
+    "printf 'line-1\nline-2\n'",
+    `he said "hi" and 'bye'`,
+    "a'b'c",
+    `{"command":"printf 'done'"}`,
+    "plain-value",
+  ];
+
+  it("round-trips single quotes and mixed quoting through bash exactly", () => {
+    for (const value of tricky) {
+      const out = execFileSync("bash", ["-c", `printf '%s' ${shellQuote(value)}`], { encoding: "utf8" });
+      expect(out).toBe(value);
+    }
+  });
+
+  it("keeps a JSON payload valid after shell round-trip", () => {
+    const payload = JSON.stringify({ pid: 1234, command: "printf 'line-1\nline-2\n'" });
+    const out = execFileSync("bash", ["-c", `printf '%s' ${shellQuote(payload)}`], { encoding: "utf8" });
+    expect(out).toBe(payload);
+    expect(JSON.parse(out)).toEqual({ pid: 1234, command: "printf 'line-1\nline-2\n'" });
   });
 });

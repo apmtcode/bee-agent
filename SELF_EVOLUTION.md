@@ -6,6 +6,64 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-08 (run 9) — 🐛 Fix two real bugs in background-task/training launch-script state generation
+
+**Audited:** Full `npm test` health on this environment. Found **3 failing tests**
+(not the "174/174" prior runs recorded — those ran in an environment where the
+real-subprocess launch scripts happened not to interfere). Root-caused two
+genuine, deterministic bugs in the shell launch scripts that record a task's
+initial execution state (`src/harness/background-tasks.ts` and, identically,
+`src/training/runner.ts`):
+
+1. **Broken `shellQuote` → invalid JSON.** `background-tasks.ts`'s `shellQuote`
+   used a **6-char** POSIX escape `"'"'"'` for embedded apostrophes instead of
+   the correct **5-char** `'"'"'` (the same helper in `training/runner.ts` was
+   already correct). The extra `"` was injected for every apostrophe, so a
+   command like `printf 'x'` produced a `state.json` with an unescaped inner
+   quote → `JSON.parse` threw during recovery. Proof: dumped the corrupt file
+   (`"command":"printf "'line-1\n…"'"`).
+2. **`pid` placeholder never substituted.** The initial state embedded
+   `"pid":"$$"` and relied on `sed "…s/\"\$\$\"/$$/g"` to swap in the real PID.
+   But in a JS template literal `\"\$\$\"` collapses to `"$$"`, so the file held
+   `sed "…s/"$$"/$$/g"` — the bare `"` **closes bash's double-quoted sed arg**,
+   exposing `$$` (the shell PID) on *both* sides → `s/<pid>/<pid>/g`, a no-op.
+   `pid` stayed the string `"$$"`, so every reconciled task looked like a dead
+   process ("missing-process" → degraded control).
+
+**Fixed (source):** corrected `shellQuote` (now matches the training runner) and
+replaced the fragile quoted-`$$` sed with the same robust plain-token mechanism
+already used for the timestamp: emit `"pid":__OPENCLAW_PID__` (unquoted, via a
+post-`stringify` `.replace`) and `sed "…s/__OPENCLAW_PID__/$$/g"`. Verified
+end-to-end by executing the rendered script in bash — `pid` is now a real
+integer and the payload is valid JSON. Also `export`ed `shellQuote` for testing.
+
+**Fixed (test determinism, additive):** three suites spawned **real**
+subprocesses (`sleep 5`, `printf …`) whose (now-valid) launch-script state raced
+the tests' explicit `writeState` calls — environment-dependent flakiness. Added
+an optional `backgroundTaskSpawnProcess` (+`backgroundTaskIsProcessRunning`) to
+`OperatorCliAppOptions`, threaded into the runtime, and injected a no-op spawn
+(`() => ({ pid, unref(){} })`) in the affected `server.test`/`app.test`/
+`operator-runtime.test` cases so background-task state is governed solely by the
+explicit writes — matching those tests' clear intent (they already override
+`isProcessRunning`).
+
+**New tests:** a deterministic `shellQuote` regression guard that round-trips
+tricky values (apostrophes, mixed quoting, a JSON payload) through real `bash`
+and asserts equality + `JSON.parse` validity — this fails loudly on the old
+6-char escape.
+
+**Test results:** **176/176 passing, deterministic across 3 full runs** (was 3
+failing). `typecheck:src` ✅ (exit 0). Full `tsc` **125 → 125** (no regression).
+Build ✅ (532 kB).
+
+**New idea:** add a tiny `verify`-time "launch-script lint": render each launch
+script for a battery of adversarial commands (embedded `'`, `"`, `$`, newlines,
+`;`, backticks) and assert the emitted initial `state.json` parses as JSON with a
+numeric `pid`. Catches shell-escaping regressions at authoring time instead of
+via a flaky integration test. Bigger: replace the printf+sed state bootstrap
+entirely with a `python3 -c` heredoc that `json.dumps` the payload and injects
+`os.getppid()` — no shell-escaping surface at all.
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

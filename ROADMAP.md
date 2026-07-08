@@ -45,6 +45,25 @@ unchecked items are queued. Keep this richer than you found it each run.
       have the engine run it as a per-run pre-push self-check.
 - [ ] Add a minimal CI workflow mirroring `verify` for human-opened PRs.
 
+## Reliability / correctness
+- [x] **Fix background-task launch-script state generation** (2026-07-08, run 9).
+      Two real bugs: (a) `background-tasks.ts` `shellQuote` used a 6-char apostrophe
+      escape → invalid `state.json`; (b) the `pid:"$$"` sed substitution was a
+      no-op (bare `"` closed bash's quoted sed arg). Fixed both here and in the
+      identical `training/runner.ts`; replaced quoted-`$$` sed with a robust
+      `__OPENCLAW_PID__` plain token. Added a bash round-trip `shellQuote`
+      regression test. Suite 3 failing → **176/176 deterministic**.
+- [x] Make real-subprocess background-task tests deterministic (2026-07-08) via an
+      injectable no-op `backgroundTaskSpawnProcess` (threaded through
+      `OperatorCliAppOptions`), removing environment-dependent flakiness.
+- [ ] **Launch-script lint** (verify-time): render each launch script for a
+      battery of adversarial commands (embedded `'`, `"`, `$`, newlines, `;`,
+      backticks) and assert the emitted initial `state.json` parses as JSON with a
+      numeric `pid`. Catches shell-escaping regressions at authoring time.
+- [ ] Replace the printf+sed state bootstrap with a `python3 -c` heredoc that
+      `json.dumps` the payload and injects `os.getppid()` — eliminates the
+      shell-escaping surface entirely (both background-tasks and training runner).
+
 ## Capability parity (audit reference agents → port gaps)
 - [ ] Build a "capability inventory" generator: enumerate bee-agent's exported
       RPC/tool surface (`src/index.ts`) and diff it against `openclaw`,
