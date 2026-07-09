@@ -62,13 +62,43 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      for a real on-device small model. **DONE run 9** —
+      `src/training/movement-policy.ts`: `MovementPolicyBackend` /
+      `TrainedMovementPolicy` seam + `NearestNeighborMovementBackend` reference
+      backend. Next: wire it to the `runner.ts` plan so a real backend can be
+      selected via `LocalTrainingRuntime`, and expose an RPC
+      (`movementPolicy.train` / `.predict`) on the control plane.
+- [x] Synthetic event-stream generator to validate capture→dataset→replay
+      round-trips without real OS input. **DONE run 9** —
+      `generateSyntheticMovementTrajectories` (seeded LCG, deterministic).
+      Next: feed it through the full `recorder → trajectory-store → exporter`
+      path (not just the in-memory dataset builder) for an end-to-end round-trip.
+- [x] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories. **DONE run 9** — `evaluateMovementPolicy`.
+      Next: confidence-weighted active-learning loop (below).
+- [ ] **Active-learning capture prioritization:** rank held-out examples by
+      lowest prediction confidence from `evaluateMovementPolicy` and emit a
+      "capture-more-of-this" list so recording targets the movements the policy
+      generalizes worst on. Cheap; builds directly on run 9.
+- [ ] Wire `movement-policy` into `runner.ts`/control plane: select a backend
+      via `LocalTrainingRuntime`, expose `movementPolicy.train`/`.predict` RPCs,
+      and persist trained policies alongside job artifacts.
+
+## Reliability
+- [ ] **Atomic state-file writes in generated launch scripts** (diagnosed run 9).
+      `src/harness/background-tasks.ts` and `src/training/runner.ts` render bash
+      that writes execution-state JSON non-atomically (`sed > file`, Python
+      `write_text`). A concurrent `readJsonFile` can observe a partial write →
+      `SyntaxError: Expected ',' or '}' … JSON at position N`. This is the root
+      cause of the 3 currently-red, subprocess-spawning tests (`app.test.ts`,
+      `server.test.ts`, `operator-runtime.test.ts`). Fix: write to `*.tmp.$$`
+      then `mv` (shell) and `Path.replace` (Python) so readers only ever see a
+      complete file. A prototype of this alone did **not** fully settle the
+      cloud-container subprocess timing, so pair it with making the affected
+      tests inject a mock `spawnProcess`/`isProcessRunning` instead of spawning
+      real OS processes (deterministic + no torn reads by construction).
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

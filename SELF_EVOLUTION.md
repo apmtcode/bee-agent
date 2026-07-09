@@ -6,6 +6,58 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-09 (run 9) — Movement-policy inference + generalization eval (objective #2 pieces c & d)
+
+**Audited:** Standing objective #2's five pieces against `src/capture/` +
+`src/training/`. Found capture → schema → dataset → replay → training-*plan* all
+scaffolded, but the **inference side was entirely missing**: nothing consumed a
+trained policy to (c) *repeat* recorded movements or (d) *generalize* to
+new-but-related ones. `runner.ts` only emits an external mlx/axolotl launch plan;
+there was no in-process way to validate the learn→act loop in the cloud.
+
+**Changed (additive, self-contained):** new `src/training/movement-policy.ts`:
+- **Dataset schema + builder** — `buildMovementDataset(spans)` flattens
+  `TrajectorySpan[]` into `(context → next action)` examples. Context is
+  sequence-aware: app/screen + observations *up to* the action + prior action
+  tools **and summaries**, so consecutive movements on one screen are
+  distinguishable (the feature that lifts training-set replay fidelity from ~0.2
+  to ~0.82 on synthetic data).
+- **Pluggable backend seam** — `MovementPolicyBackend` / `TrainedMovementPolicy`
+  interfaces so a real on-device small model drops in later, plus a default
+  **deterministic, dependency-free** `NearestNeighborMovementBackend` (Jaccard
+  over namespaced context tokens; earliest-example tie-break) that runs in
+  cloud/CI with no GPU. Identical context → exact replay (confidence 1); related
+  context → nearest recorded movement (confidence < 1) = generalization.
+- **Generalization eval harness** — `evaluateMovementPolicy(policy, heldOut)`
+  reports tool/summary match rates, exact-context matches, mean confidence.
+- **Deterministic synthetic generator** — `generateSyntheticMovementTrajectories`
+  (seeded LCG, no `Math.random`/wall-clock) to exercise capture→dataset→train→
+  infer without real OS input; same seed → byte-identical output.
+
+**Test results:** new `movement-policy.test.ts` — **11/11 pass**. Build ✅.
+`typecheck:src` ✅ (exit 0, source stays green). Full suite **181/185**; the
+**3 failing files are PRE-EXISTING and unrelated** (`app.test.ts`,
+`server.test.ts`, `operator-runtime.test.ts`) — they were red at this run's
+baseline *before any change*, and none of my new tests fail.
+
+**Blocker diagnosed (queued, not shipped):** those 3 failures are a real
+**torn-read race**: the generated background-task/training launch scripts write
+state files **non-atomically** (`sed > file` and Python `write_text`), so a
+concurrent `readJsonFile` gets partial content → *"Expected ',' or '}' … JSON at
+position 311"*. I prototyped an atomic-write fix (`> tmp.$$ && mv`,
+`Path.replace`) but it didn't fully resolve the subprocess-timing raciness in the
+cloud container, so — per the "focused, reviewable diff" guardrail — I reverted
+it rather than ship a partial behaviour change to shared script-gen infra. Logged
+to ROADMAP as a dedicated reliability item.
+
+**New idea:** an *active-learning* loop for the movement subsystem — after an
+eval, surface the held-out examples with the **lowest** prediction confidence as
+a prioritized "capture-more-of-this" list, so the recording pipeline can target
+exactly the movements the current policy generalizes worst on, instead of
+recording uniformly. Cheap to compute from `evaluateMovementPolicy` internals.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
