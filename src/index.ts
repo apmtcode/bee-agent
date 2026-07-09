@@ -431,3 +431,35 @@ export type {
   FailTrainingJobParams,
   TrainingJobStoreShape,
 } from "./training/job-store.js";
+export {
+  MOVEMENT_BOS,
+  MOVEMENT_EOS,
+  MarkovMovementBackend,
+  buildMovementDatasetFromSpans,
+  createMovementModelBackend,
+  movementActionToken,
+} from "./training/movement-model.js";
+export type {
+  BuildMovementDatasetOptions,
+  LocalMovementModel,
+  LocalMovementModelBackend,
+  MovementAlternative,
+  MovementBackendKind,
+  MovementDataset,
+  MovementGenerateOptions,
+  MovementPrediction,
+  MovementSequence,
+  MovementTrainOptions,
+} from "./training/movement-model.js";
+export {
+  createSeededRng,
+  defaultMovementGrammar,
+  evaluateNextTokenAccuracy,
+  generateSyntheticMovementDataset,
+} from "./training/movement-eval.js";
+export type {
+  MovementGrammar,
+  MovementGrammarStep,
+  NextTokenEvalResult,
+  SyntheticMovementOptions,
+} from "./training/movement-eval.js";

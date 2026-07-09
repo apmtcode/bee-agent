@@ -62,13 +62,38 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      for a real on-device small model. — DONE run 9
+      (`src/training/movement-model.ts`: `LocalMovementModelBackend` +
+      deterministic `MarkovMovementBackend` (n-gram + stupid-backoff) +
+      `createMovementModelBackend` factory + `buildMovementDatasetFromSpans`
+      bridge from the capture schema).
+- [x] Synthetic event-stream generator to validate capture→dataset→replay
+      round-trips without real OS input. — DONE run 9
+      (`src/training/movement-eval.ts`: seeded mulberry32 RNG +
+      `MovementGrammar` + `generateSyntheticMovementDataset`).
+- [~] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories. — PARTIAL run 9: teacher-forced
+      `evaluateNextTokenAccuracy` (train/test on disjoint synthetic draws, >0.6
+      on held-out). Next: a rollout **replay-fidelity** metric (edit distance of
+      `generate(seed)` vs. ground-truth continuation) for a single reproduce
+      score.
+- [ ] Wire `buildMovementDatasetFromSpans` into `LocalTrainingExporter` so a
+      reviewed export also emits a movement-token dataset artifact next to the
+      MLX/axolotl launch plan (feeds the new backend end-to-end).
+
+## Suite health (regressions to fix)
+- [ ] **Background-task recovery tests are red in the cloud sandbox** (found run
+      9; clean-tree baseline 170/174). `startBackgroundTask` spawns real
+      subprocesses whose launch script writes state via a non-atomic
+      `printf … | sed … > state.json`; recovery `JSON.parse`s a truncated
+      mid-write read (`line 1 column 312`). Fix: make the launch-script state
+      write atomic (write to `state.json.tmp` then `mv`, mirroring
+      `writeJsonAtomic`), and/or inject a mock spawner so
+      `operator-runtime.test.ts` / `server.test.ts` / `app.test.ts` don't depend
+      on real process timing. Affects `src/harness/background-tasks.ts`
+      (`renderLaunchScript`) and the training runner's analogous script.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

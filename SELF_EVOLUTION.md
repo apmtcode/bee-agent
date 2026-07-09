@@ -6,6 +6,75 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-09 (run 9) — Movement learning: pluggable local model backend + synthetic eval
+
+**Audited:** The local-movement learning subsystem (standing objective #2) —
+`src/capture/` (schema, recorder, adapters, replay) and `src/training/`
+(exporter, job store/manifest, runner). Found the capture→dataset→replay side is
+well built, and the training **runner** emits real MLX/axolotl *launch plans*,
+but there was **no in-process learner** — nothing that actually trains on a
+movement dataset and predicts/repeats/generalizes movements. That's objective #2
+pieces (c) *post-train a local model to repeat movements* and (d) *generalize to
+new related movements*, and the ROADMAP's "pluggable local-model backend +
+deterministic mock" and "synthetic event-stream generator" items.
+
+**Changed (additive, two new modules + barrel exports):**
+- `src/training/movement-model.ts` — the pluggable learner seam:
+  - `LocalMovementModelBackend` interface (`train`/`predictNext`/`generate`) so a
+    real on-device small model can drop in later behind the same contract.
+  - `MarkovMovementBackend` — a fully **deterministic** n-gram backend with
+    stupid-backoff. Trains transition counts over BOS/EOS-padded token sequences
+    for all orders 0..N; `predictNext` backs off from the longest seen context to
+    the unigram, tie-breaking by count then lexicographic token, so training and
+    inference reproduce byte-for-byte across machines (no `Math.random`, no
+    clocks). "Repeat" = rolling out `generate` from a seen prefix reproduces the
+    recorded sequence; "generalize" = back-off yields a plausible next token for
+    unseen prefixes. Model is plain JSON (persist/restore round-trips).
+  - `buildMovementDatasetFromSpans` + `movementActionToken` — bridge from the
+    existing `TrajectorySpan` capture schema into a token dataset.
+  - `createMovementModelBackend(kind)` factory (documented backend seam).
+- `src/training/movement-eval.ts` — validate the pipeline with NO real OS input:
+  - `createSeededRng` (mulberry32), a probabilistic `MovementGrammar` +
+    `generateSyntheticMovementDataset` (deterministic synthetic movement streams).
+  - `evaluateNextTokenAccuracy` — teacher-forced generalization eval harness;
+    train and test on **disjoint** synthetic draws to measure generalization, not
+    recall (with per-back-off-order breakdown).
+- `src/index.ts` — barrel exports for the new surface.
+
+**Test results:** two new test files, **17/17 passing** (repeat, deterministic
+predict, back-off generalization, unigram fallback, empty model, JSON
+round-trip, dataset derivation, seeded-RNG determinism, held-out accuracy >0.6).
+`npm run typecheck:src` ✅ (exit 0). `npm run build` ✅. New modules add **zero**
+regressions.
+
+**⚠️ Pre-existing suite failures (NOT caused by this run):** the full `npm test`
+is red with **4 failures** — `operator-runtime.test.ts` (background-task
+recover), `server.test.ts` (orchestration), and `app.test.ts` (×2). Verified via
+`git stash -u` that these fail on a clean tree **without** any of this run's
+changes (clean baseline **170/174**; with this run **187/191** — same 4 fails +17
+new passes). Root cause diagnosed: the recovery tests `startBackgroundTask` spawn
+**real subprocesses** whose launch script writes a single-line state file via a
+**non-atomic** `printf '%s' … | sed … > state.json`; recovery then `JSON.parse`s
+it and hits a truncated read (`Unexpected … at line 1 column 312`) — a
+write/read race against a real process, environment-sensitive in the cloud
+sandbox. The `printf|sed` substitution itself is correct (reproduced by hand →
+valid JSON). Queued a proper fix in ROADMAP (make the launch-script state write
+atomic, mirroring `writeJsonAtomic`; and/or stub process spawning in these
+tests). Left as-is this run per the "focused, additive, no unrelated large
+rewrites" guardrail — pushing to the designated feature branch, which already
+carried these reds.
+
+**New idea:** a **replay-fidelity metric** built on this backend — beyond
+next-token accuracy, roll out `generate` from a held-out seed and compute edit
+distance vs. the ground-truth continuation (normalized), giving a single
+"can it reproduce the movement" score to track model quality across backends and
+gate a real on-device model against the mock. Second idea: promote
+`buildMovementDatasetFromSpans` into the training **exporter** so reviewed
+trajectories automatically yield a movement dataset artifact alongside the MLX
+launch plan.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
