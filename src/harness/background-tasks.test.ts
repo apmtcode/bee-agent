@@ -370,4 +370,51 @@ describe("BackgroundTaskExecutionService", () => {
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
   });
+
+  it("records a numeric process id for a real launched task", async () => {
+    // Regression: the launch script previously wrote pid: "$$" (a string) via a
+    // broken printf+sed substitution, so isProcessRunning() always returned
+    // false and every real task looked like a "missing-process".
+    const rootDir = await makeTempDir();
+    // Real spawn (default) — no injected stub.
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"));
+    const task = await store.start({ title: "Sleeper", command: "sleep 30", cwd: rootDir, kind: "task" });
+    try {
+      const state = await waitForRunningState(store.executionService, task);
+      expect(typeof state.pid).toBe("number");
+      expect(Number.isFinite(state.pid)).toBe(true);
+      expect(store.executionService.isProcessRunning(state.pid)).toBe(true);
+    } finally {
+      await store.cancel(task.id).catch(() => undefined);
+    }
+  });
+
+  it("writes valid JSON state for a command containing quotes and newlines", async () => {
+    // Regression: shell-quoting the JSON payload and piping it through sed
+    // corrupted the `command` field for commands containing quotes/newlines,
+    // making the state file unparseable and crashing recovery.
+    const rootDir = await makeTempDir();
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"));
+    const command = "printf 'line-1\nline-2\n' && echo \"done\"";
+    const task = await store.start({ title: "Quoted", command, cwd: rootDir, kind: "task" });
+    const state = await waitForRunningState(store.executionService, task);
+    // The raw file must be valid JSON (the wait above already parsed it) and the
+    // command must round-trip exactly.
+    expect(state.command).toBe(command);
+    await store.cancel(task.id).catch(() => undefined);
+  });
 });
+
+async function waitForRunningState(
+  service: BackgroundTaskExecutionService,
+  task: { execution: { stateFile: string } } & Parameters<BackgroundTaskExecutionService["readState"]>[0],
+): Promise<BackgroundTaskExecutionState> {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    const state = await service.readState(task);
+    if (state) {
+      return state;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  throw new Error("background task never wrote execution state");
+}

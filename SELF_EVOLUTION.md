@@ -6,6 +6,61 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-09 (run 9) — 🐞 Background-task launch: fix pid/quote corruption, atomic state, deflake suite (green again)
+
+**Audited:** The build/test gate itself. On a fresh clone the suite was **not
+green** in this environment — `npm test` failed **2–3 tests** and, worse, was
+**~25% flaky under full-suite load** (`server.test.ts`, `app.test.ts`,
+`operator-runtime.test.ts`). Run 8 recorded "174/174", so this was a real
+regression *or* an environment-sensitive latent bug. Traced all failures to the
+background-task launch subsystem (`src/harness/background-tasks.ts`).
+
+**Three genuine product bugs found & fixed (all in `background-tasks.ts`):**
+1. **`shellQuote` corrupted every command containing a single quote.** The
+   single-quote escape replacement was `"'"'"'` (6 chars) instead of the
+   canonical POSIX `'"'"'` (5 chars), so `a'b` reconstructed as `a"'b`. This
+   corrupted the launched command *and* the `command` field written to the
+   state file (making it unparseable → recovery crashed with `SyntaxError:
+   Expected ',' or '}'`). Fixed the escape sequence.
+2. **Every launched task recorded `pid: "$$"` (a string).** The running-state
+   was emitted via `printf '%s' PAYLOAD | sed 's/"$$"/$$/g'`; the literal `"`
+   in the sed program broke out of the outer shell double-quotes, so `$$` never
+   substituted. `isProcessRunning(state.pid)` then always returned `false` and
+   **every real task looked like a "missing-process"** → platforms wrongly went
+   `degraded`/`paused`. Replaced the fragile `printf+sed` running-state write
+   with a robust `python3` writer that takes all fields via `argv` (each
+   `shellQuote`d as one word) and serialises with `json.dumps` — immune to
+   quotes/newlines/backslashes in the command.
+3. **Non-atomic state writes → torn reads.** The running state (`> file`) and
+   the completed/failed python writer (`write_text`) weren't atomic; a
+   concurrent `readState` could observe a partial file. Both now write to a
+   temp file and `os.replace`/`mv` into place.
+
+**Test-determinism fixes (no product masking):** three unit tests that *stage*
+execution state manually (`writeState`) to drive recovery/breaker logic were
+also spawning **real** `sleep`/`printf` subprocesses that raced the staging by
+writing their own state files. Injected the existing `backgroundTaskSpawnProcess`
+stub (`() => ({ pid, unref })`, the pattern already used across
+`background-tasks.test.ts`) into the `runtime`, `driftingRuntime`, and
+`breakerRuntime` instances so the staged state is the sole source of truth.
+
+**New regression tests** (`background-tasks.test.ts`, real spawn): (a) a real
+`sleep` task records a **numeric** pid with `isProcessRunning` true; (b) a
+command containing quotes **and** newlines round-trips exactly through the state
+file as valid JSON.
+
+**Test results:** `npm test` **174/174**, and **0/10 failures** across a
+10× full-suite stress run (was ~25% flaky + 2–3 hard failures). Build ✅.
+`typecheck:src` ✅ (exit 0). Net diff +118/−19 across 4 files.
+
+**New idea:** add a tiny **`verify` npm script** = `typecheck:src && build &&
+test` and, more importantly, run the suite **twice** (or with a repeat flag) in
+the engine's pre-push self-check — a single green run hid a 25%-flaky suite this
+cycle. Longer term, a `--retry=0 --sequence.shuffle` CI lane would surface
+order/timing races like these before they reach a "174/174" log line.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

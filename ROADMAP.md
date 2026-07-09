@@ -39,7 +39,11 @@ unchecked items are queued. Keep this richer than you found it each run.
     `cron.runs`/misc — plus a few genuine test-only typings. Map the rest, then
     fix residual test-only typings.
 - [ ] Add a `verify` npm script (`typecheck && build && test`) and have the
-      engine run it as a pre-push self-check each cycle.
+      engine run it as a pre-push self-check each cycle. **Update (run 9):** the
+      self-check should run `test` **at least twice** (or `vitest --repeat`) —
+      run 9 found the suite was ~25% flaky under load while a single run could
+      print a clean "174/174". A shuffled/sequential CI lane would surface
+      order/timing races earlier.
 - [x] Interim **source-only typecheck gate** — DONE run 7. `tsconfig.src.json`
       (excludes `**/*.test.ts`) + `typecheck:src` script; passes (exit 0). Next:
       have the engine run it as a per-run pre-push self-check.
@@ -69,6 +73,22 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
       round-trips without real OS input.
 - [ ] Generalization eval harness: measure replay fidelity on held-out but
       related synthetic trajectories.
+
+## Reliability (background-task subsystem)
+- [x] **Fix background-task launch corruption + deflake the suite** (run 9):
+      corrected `shellQuote` single-quote escaping, replaced the fragile
+      `printf+sed` running-state write (which recorded `pid: "$$"`) with a
+      robust `python3`/argv writer, made all state writes atomic (temp+replace),
+      and stubbed real subprocesses in the staged-state unit tests. Suite went
+      from ~25% flaky to 0/10.
+- [ ] Harden `readState` against a torn/partial JSON read (retry-once or treat
+      an unparseable state as "unknown" rather than throwing) as belt-and-braces
+      even though writes are now atomic — a truncated file from an external
+      `kill -9` mid-write would still crash recovery today.
+- [ ] Fallback when `python3` is absent: the launch script now depends on
+      `python3` for all three state writes. Detect its absence and fall back to
+      a pure-bash atomic JSON writer (or record a clear task-failure reason)
+      instead of the task silently never writing state.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
