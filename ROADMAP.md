@@ -4,6 +4,23 @@ Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
 ## Foundations / DX
+- [x] **Restore green test suite + fix real shell-quoting bug** (2026-07-09, run
+      9). `shellQuote` used a broken single-quote escape (`"'"'"'`) that injected
+      stray double quotes, so background-task launch scripts wrote invalid JSON to
+      `state.json` for any command containing a `'` — a genuine runtime crash.
+      Fixed to the correct `'"'"'`. Also de-flaked the runtime/server/app
+      background-task tests (real detached subprocess raced manual `writeState`);
+      added a `backgroundTaskSpawnProcess`/`backgroundTaskIsProcessRunning` seam to
+      `OperatorCliApp` and a deterministic `shellQuote` bash round-trip regression
+      test. Suite 174→176, stable.
+- [ ] **Robust JSON state writes in `renderLaunchScript`** (new, run 9). The
+      initial state write uses `printf '%s' <payload> | sed "s/__PLACEHOLDER__/…/"`
+      — a `sed` replacement containing `/`, `&`, or a newline would corrupt the
+      JSON the same way the quoting bug did. Route the initial state write through
+      the existing python `json.loads`/`json.dumps` writer (stamping
+      `startedAt`/`updatedAt` from a shell var) so no hand-encoded JSON via
+      `sed`/`printf` remains. Consider a targeted test that launches a real script
+      with a `/`-containing command and asserts the persisted state parses.
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`

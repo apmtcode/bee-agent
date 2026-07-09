@@ -793,6 +793,16 @@ function renderStateWriterPython(status: BackgroundTaskExecutionState["status"])
   ];
 }
 
-function shellQuote(value: string): string {
-  return `'${value.replaceAll(`'`, `"'"'"'`)}'`;
+/**
+ * Quote an arbitrary string so bash reproduces it verbatim. Exported for
+ * regression testing of the escaping invariant (see background-tasks.test.ts).
+ */
+export function shellQuote(value: string): string {
+  // POSIX single-quote escaping: a literal single quote is written by closing
+  // the quoted span, emitting an escaped quote, then reopening it: ' -> '"'"'.
+  // (The previous form `"'"'"'` began with a `"` that stayed literal inside the
+  // surrounding single quotes, turning every embedded `'` into `"'` and thereby
+  // injecting stray double quotes that corrupted JSON payloads — e.g. the
+  // background-task state.json written by the launch script.)
+  return `'${value.replaceAll(`'`, `'"'"'`)}'`;
 }

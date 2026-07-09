@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -5,6 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   BackgroundTaskExecutionService,
   FileBackgroundTaskStore,
+  shellQuote,
   type BackgroundTaskExecutionState,
 } from "./background-tasks.js";
 
@@ -352,6 +354,36 @@ describe("FileBackgroundTaskStore", () => {
       expect.objectContaining({ task: expect.objectContaining({ id: missing.id }), reason: "missing-process" }),
     ]);
     await expect(reloaded.get(other.id)).resolves.toMatchObject({ id: other.id, status: "running" });
+  });
+});
+
+describe("shellQuote", () => {
+  // Regression guard: the launch script embeds a JSON state payload (and the raw
+  // command) into single-quoted shell words. A broken single-quote escape injects
+  // stray characters that corrupt the JSON the background process writes to
+  // state.json. This asserts the core invariant — bash must reproduce the input
+  // byte-for-byte — for strings containing single quotes, double quotes, newlines,
+  // and shell metacharacters.
+  it("round-trips arbitrary strings through a bash single-quoted word", () => {
+    const samples = [
+      "printf 'line-1\nline-2\n'",
+      `mix 'single' and "double" quotes`,
+      "backslash \\ and $VAR and `cmd` and $(sub)",
+      "trailing quote'",
+      "'leading quote",
+      JSON.stringify({ command: "printf 'a\nb'", note: "x'y\"z" }),
+    ];
+    for (const sample of samples) {
+      const out = execFileSync("bash", ["-c", `printf '%s' ${shellQuote(sample)}`], { encoding: "utf8" });
+      expect(out).toBe(sample);
+    }
+  });
+
+  it("keeps an embedded JSON payload parseable after a bash round-trip", () => {
+    const payload = JSON.stringify({ status: "running", command: "printf 'line-1\nline-2\n'" });
+    const out = execFileSync("bash", ["-c", `printf '%s' ${shellQuote(payload)}`], { encoding: "utf8" });
+    expect(() => JSON.parse(out)).not.toThrow();
+    expect(JSON.parse(out)).toEqual({ status: "running", command: "printf 'line-1\nline-2\n'" });
   });
 });
 

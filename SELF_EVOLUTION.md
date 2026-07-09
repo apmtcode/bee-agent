@@ -6,6 +6,56 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-09 (run 9) — 🐛 Fix real shell-quoting bug in background-task launch script; restore green suite
+
+**Audited:** Ran the suite fresh and found the baseline was **RED** — 4 tests
+failing (`operator-runtime`, `server`, `app` ×2) despite run 8 logging 174/174.
+Two independent root causes, both surfaced by this (faster) machine's timing.
+
+**Root cause 1 — genuine product bug (`src/harness/background-tasks.ts`).**
+`shellQuote()` used the escape sequence `` `"'"'"'` `` for an embedded single
+quote. That string *begins with a `"`* which, inside the surrounding
+single-quoted shell word, stays a literal double-quote char and does **not**
+close the quote first — so every `'` in the value became `"'`, injecting stray
+double quotes. The launch script embeds a JSON state payload **and** the raw
+command into single-quoted words, so any command containing a single quote (e.g.
+`printf 'line-1\nline-2\n'`) made the spawned process write **invalid JSON** to
+`state.json` (stray `"` + raw newlines) → `readState`/`recoverBackgroundTasks`
+threw `SyntaxError` at runtime. **Fix:** the correct POSIX escape `` `'"'"'` ``
+(close-quote, `"'"`, reopen-quote → yields `'`). Verified by piping through real
+bash.
+
+**Root cause 2 — flaky tests (real subprocess race).** `operator-runtime`,
+`server`, and `app` background-task tests spawned **real** detached subprocesses
+that asynchronously wrote their own `state.json`, racing the tests' manual
+`writeState()` / status assertions (the old JSON crash had merely *masked* this;
+run 8's 174/174 was a lucky race). **Fix (test-only + one additive seam):**
+injected the no-op `backgroundTaskSpawnProcess` that `background-tasks.test.ts`
+already uses. `OperatorCliApp` didn't expose that seam, so added two optional
+constructor options (`backgroundTaskSpawnProcess`, `backgroundTaskIsProcessRunning`)
+forwarded to its runtime — additive, prod default unchanged.
+
+**Regression guard:** exported `shellQuote` and added two deterministic tests
+that round-trip strings (single/double quotes, newlines, `$VAR`, backticks,
+`$(...)`, embedded JSON) through real `bash -c 'printf %s …'` and assert byte
+equality + JSON-parseability. Confirmed they **fail** on the reverted buggy
+escape and pass on the fix (no reliance on subprocess timing).
+
+**Test results:** suite **RED (4 failing) → GREEN 176/176** (174 + 2 new),
+stable across 5 consecutive runs. `typecheck:src` ✅ exit 0. Build ✅. Full `tsc`
+debt unchanged at **125** (all in test files; no new errors introduced).
+
+**New idea:** the `printf '%s' <payload> | sed "s/__PLACEHOLDER__/…/"` step in
+`renderLaunchScript` is a second fragility of the same family — a `sed`
+replacement value containing `/`, `&`, or a newline would corrupt the JSON just
+like the quoting bug did. Replace the placeholder-substitution approach entirely:
+have the launch script capture `started_at` into a shell var and let the **python
+writer** (already invoked for the terminal state) stamp `startedAt`/`updatedAt`
+via `json.loads`/`json.dumps`, so **all** state writes go through one robust JSON
+serializer and no `sed`/`printf` hand-encoding of JSON remains. Queued in ROADMAP.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
