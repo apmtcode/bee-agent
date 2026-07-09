@@ -6,6 +6,67 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-09 (run 9) — 🧠 In-process movement-model backend: train → repeat → generalize
+
+**Audited:** The local-movement learning subsystem (standing objective #2).
+`src/capture/` covers capture→schema→dataset→replay; `src/training/` covers the
+*external* on-device training path (runner emits mlx/axolotl launch scripts,
+exporter/job-store manage reviewed exports). **Gap:** nothing implemented the
+core learning loop *in-process* — take a recorded movement dataset, train a
+model, and have it **repeat** the recorded movements and **generalize** to
+related-but-unseen ones. That loop can't be validated in the cloud when it only
+exists as shell scripts for external tools, so objective #2 pieces (c) dataset,
+(d) train + infer + generalize were untested end-to-end.
+
+**Changed (additive) — new `src/training/movement-model.ts`:**
+- `MovementModelBackend<M>` interface (train / predictNext / generate /
+  serialize / deserialize) so the model backend is **pluggable** — a real
+  on-device small model can register without touching call sites.
+- `MarkovMovementBackend`: a dependency-free, **deterministic** variable-order
+  Markov model with stupid-backoff. *Recall* — a verbatim order-N context
+  reproduces the recorded next movement, so it repeats trajectories exactly (it
+  learns start/stop via a sequence-boundary marker). *Generalization* — an
+  unseen order-N prefix backs off to shorter contexts, then to the global
+  unigram distribution, so novel-but-related movement prefixes still yield a
+  plausible next movement. Ties break by (count, then lexicographic key) — no
+  randomness, fully reproducible.
+- `MovementModelBackendRegistry` + `createDefaultMovementBackendRegistry()`
+  (seeded with `markov`).
+- `buildMovementDataset(trajectories)`: derives replayable movement sequences
+  from `TrajectorySpan` obs+actions, interleaved in timestamp order, with a
+  `canonicalize()` symbol map (lowercases, folds digits→`#`, keeps ≤4 words) so
+  the model generalizes over phrasing/identifiers instead of memorizing them.
+- `evaluateMovementModel(...)`: generalization eval harness — seed each held-out
+  sequence with its first k movements, generate the continuation, and report
+  token-level accuracy + exact-sequence reproduction. (Closes a ROADMAP item.)
+- Exported all of the above from `src/index.ts`.
+
+**Test results:** new `movement-model.test.ts` — **15/15 pass** (canonicalize,
+dataset interleave, exact recall, deterministic ranking, back-off
+generalization, global fallback, generate stop/max, serialize round-trip,
+registry, eval harness). `npm run build` ✅. `npm run typecheck:src` ✅ (exit 0
+— source stays clean). **No regressions.**
+
+**Pre-existing blocker discovered (NOT caused by this run):** on a clean tree
+(git stash), 3 tests now fail —
+`server.test.ts`, `app.test.ts`, `operator-runtime.test.ts` (each 1 test, the
+big lifecycle case). They assert a `failedAt`/`status:"failed"` is *absent* but
+it's present — these look **date/time-sensitive** (the suite was 174/174 in
+prior runs; system date is now 2026-07-09). Not touched by this diff; flagged in
+ROADMAP as the next fix. Because these are pre-existing and my additive change
+is fully green (build + source typecheck + 15 new tests), work is pushed to the
+designated feature branch `claude/peaceful-dirac-gpol00`.
+
+**New idea:** add a **synthetic movement-stream generator** (parameterized
+grammar over app/gesture/os-event vocab with controllable noise) to
+mass-produce trajectories, then use `evaluateMovementModel` as a regression
+metric: assert recall≈1.0 on training data and accuracy above a floor on
+held-out related streams. That turns "does the learning subsystem still learn?"
+into a CI gate, and gives every future model backend (incl. the real on-device
+one) a common, deterministic benchmark to beat.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

@@ -62,13 +62,31 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
-      deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
+- [x] Pluggable local-model backend interface with a deterministic mock backend
+      (so cloud/CI tests pass) and a documented seam for a real on-device small
+      model — DONE run 9 (`src/training/movement-model.ts`:
+      `MovementModelBackend` + `MarkovMovementBackend` + registry).
 - [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      round-trips without real OS input. (Run 9 added `buildMovementDataset` +
+      `canonicalize`; next: a parameterized grammar generator that mass-produces
+      trajectories with controllable noise, wired to `evaluateMovementModel` as
+      a CI regression gate — recall≈1.0 on train, accuracy floor on held-out.)
+- [x] Generalization eval harness: measure replay fidelity on held-out but
+      related trajectories — DONE run 9 (`evaluateMovementModel`: token accuracy
+      + exact-sequence reproduction; back-off gives the generalization).
+- [ ] Register/document a real on-device small-model backend under the new
+      `MovementModelBackendRegistry` (e.g. wrap the mlx/axolotl runner output as
+      a backend, or a tiny local transformer) — the seam exists, fill it in.
+
+## Health / regressions
+- [ ] **Fix 3 date-sensitive test failures** (discovered run 9, pre-existing on
+      a clean tree). The big lifecycle cases in `server.test.ts`, `app.test.ts`,
+      and `operator-runtime.test.ts` assert a `failedAt`/`status:"failed"` is
+      absent but it's now present — the suite was 174/174 in prior runs and
+      system date is now 2026-07-09, so a background-task deadline/TTL comparison
+      is almost certainly firing against wall-clock `Date`. Fix: inject a clock
+      (or freeze time with fake timers) in those tests instead of real `Date`.
+      Highest-value next run — restores the green `npm test` gate.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
