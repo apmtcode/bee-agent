@@ -6,6 +6,65 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-09 (run 9) — Pluggable local-movement policy backend (train-to-repeat + generalize)
+
+**Audited:** The local-movement learning subsystem (standing objective #2) —
+`src/capture/` (recorder, device/os/browser adapters, trajectory schema, replay
+manifest) and `src/training/` (exporter, job store/manifest, runner). Finding:
+the pieces (a) capture, (b) schema/dataset, (c) replay timeline exist, but the
+"post-train a local model to repeat movements" + "generalize to new-but-related
+movements" pieces (objective #2 c & d) had **no in-process implementation** — the
+runner only emits external MLX/axolotl launch *plans/scripts*, so nothing could
+be trained or inferred (or tested) in the cloud. This is the roadmap's
+"pluggable local-model backend with a deterministic mock" item.
+
+**Changed (additive, isolated to `src/training/`):**
+- **`movement-dataset.ts`** — `buildMovementDataset(trajectories)` turns recorded
+  `TrajectorySpan`s into a supervised (context → action) dataset: one example per
+  action, conditioned only on *preceding* context (last observation + last
+  action + step index), so no current-action field leaks into the label. Events
+  are time-ordered (observation-before-action on ties). Optional
+  `requireApprovedReview` gate mirrors the export path.
+- **`movement-backend.ts`** — a backend-agnostic `MovementPolicyBackend` /
+  `MovementPolicy` interface plus `DeterministicMovementPolicyBackend`, an
+  n-gram-style frequency model that trains and infers fully in-process with **no
+  randomness**: exact-context matches *reproduce* recorded movements; unseen
+  contexts *generalize* via an ordered backoff over feature subsets
+  (appName/observationSource/lastActionTool…); global most-frequent action is the
+  fallback. Predictions carry `source` (`exact`/`generalized`/`fallback`/`empty`),
+  a heuristic confidence, and the matched features. Policies `serialize()`/`load()`
+  for persistence. `MovementBackendRegistry` +
+  `createDefaultMovementBackendRegistry()` are the documented seam where a real
+  on-device MLX/GGUF backend plugs in. `rolloutMovementPolicy()` runs a policy
+  over held-out contexts (basis for the generalization eval harness).
+- Wired all exports through `src/index.ts`.
+
+**Test results:** +2 files, **11 new tests** (dataset extraction, exact
+reproduction, generalization-via-backoff, fallback, empty, order-independent
+determinism, serialize/load round-trip, rollout, registry) — all green.
+`typecheck:src` ✅ (exit 0), build ✅, full suite **182/185**.
+
+**⚠️ Pre-existing blocker (not introduced this run):** the same **3** tests fail
+at the `main` tip *before any change* —
+`operator-runtime.test.ts` / `app.test.ts` / `server.test.ts`. All three share one
+root cause: background tasks are launched as **real detached subprocesses**
+(`renderLaunchScript` → `bash launch.sh` → `python3` state writer), and in this
+cloud sandbox those processes go `missing-process`, so control state resolves to
+`degraded` instead of `active` (and the shell/python state file can be read
+mid-write → a JSON parse error). Reproduced the sed/printf state pipeline in
+isolation — it is correct; the failures are subprocess *liveness/timing* in the
+sandbox, not a logic bug. Logged to ROADMAP as a reliability item (atomic state
+writes + a mockable process-liveness seam so these tests are hermetic in CI).
+My change is fully green and touches none of that code.
+
+**New idea:** a **generalization eval harness** — hold out a slice of synthetic
+trajectories, train on the rest, and score replay fidelity (exact-hit rate,
+generalized-hit rate, action-family accuracy) so backend swaps (deterministic →
+real MLX) are measured, not assumed. `rolloutMovementPolicy` is the primitive;
+next is a `scoreMovementPolicy(policy, heldOut)` returning those metrics.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

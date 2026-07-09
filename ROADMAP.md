@@ -62,13 +62,36 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
+      for a real on-device small model. — DONE run 9. `training/movement-backend.ts`
+      (`MovementPolicyBackend`/`MovementPolicy` + `DeterministicMovementPolicyBackend`
+      + `MovementBackendRegistry`) and `training/movement-dataset.ts`
+      (`buildMovementDataset`). Exact-context → reproduce; backoff → generalize;
+      serialize/load; registry is the real-backend seam.
 - [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
+      round-trips without real OS input. (Partial: run 9's tests build synthetic
+      trajectories inline; promote to a reusable `synthesizeMovementTrajectory`
+      generator with configurable app/gesture/screen distributions.)
 - [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      related synthetic trajectories. Next concrete step (run 9):
+      `scoreMovementPolicy(policy, heldOut)` → { exactHitRate, generalizedHitRate,
+      actionFamilyAccuracy } built on `rolloutMovementPolicy`.
+- [ ] Real on-device backend: implement a `MovementPolicyBackend` that trains via
+      the existing `LocalAppleSiliconTrainingRunner` (MLX) and loads the resulting
+      GGUF policy for `predict()`; register it alongside the deterministic mock.
+
+## Reliability
+- [ ] **Hermetic background-task tests** (surfaced run 9). Three tests fail in the
+      cloud sandbox — `operator-runtime.test.ts`, `app.test.ts`,
+      `server.test.ts` — all because background tasks spawn **real detached
+      subprocesses** (`renderLaunchScript` → `bash` → `python3` state writer) that
+      go `missing-process` here, flipping control state to `degraded` and
+      occasionally being read mid-write (JSON parse error). Fix: (a) make the
+      shell/python state writes atomic (write temp + `mv`), and (b) inject a
+      mockable process-liveness/launcher seam so these tests don't depend on real
+      OS scheduling. Verified the sed/printf pipeline itself is correct — this is
+      timing, not logic.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
