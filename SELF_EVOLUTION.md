@@ -6,6 +6,56 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-09 (run 9) — 🐛 Fixed a real flaky-test bug: uncontrolled real subprocess spawns
+
+**Audited:** Started from the required green gate — `npm test` was **NOT** clean
+this run: **3 tests failed** (`operator-runtime.test.ts`, `server.test.ts`,
+`app.test.ts`), all with `SyntaxError: … in JSON at position 311` on a
+**single-line** state file. Earlier runs reported 174/174, so this is a
+*nondeterministic* flake that only surfaces on certain timings (it passed on
+faster CI, fails here).
+
+**Root cause (real bug, not a test typo):** the background-task tests pass
+`backgroundTaskIsProcessRunning: () => false` but **not** a spawn mock, so
+`startBackgroundTask` used the **default real `spawn`** and launched a live
+detached bash launch-script. That script writes the state file *non-atomically*
+(`printf | sed > state.json`, then a `python3` read-modify-write) and races the
+test's own explicit `writeState` (atomic, pretty JSON) + reads. A read catching
+the shell's half-written single-line JSON → parse crash. Same class of bug also
+**leaked real processes** (`sleep 5`, `printf drift`) from the cloud test run.
+
+**Changed (additive, reversible):**
+- `src/harness/background-tasks.ts`: added **`createInertBackgroundSpawn()`** — a
+  `SpawnBackgroundProcess` that hands out deterministic pids and launches no real
+  process. This is the seam for tests/CI *and* for embedders running the runtime
+  in a spawn-disallowed sandbox. Exported from the barrel (`src/index.ts`) with
+  its `InertBackgroundSpawnOptions` type.
+- `src/cli/app.ts`: threaded two new pass-through options on `OperatorCliApp`
+  (`backgroundTaskSpawnProcess`, `backgroundTaskIsProcessRunning`) into the
+  runtime it builds — the same testability seam already established for
+  `configHome`. Production behaviour unchanged (both default to `undefined` →
+  real `spawn` / kill-probe).
+- Tests: injected `createInertBackgroundSpawn()` at every construction that
+  starts a background task (`operator-runtime.test.ts`, 4 sites in
+  `server.test.ts`, `app.test.ts`). The one genuine *integration* test
+  (`supports background and monitor task commands …`) now drives the task
+  lifecycle by explicit `writeOutput` + `isProcessRunning: () => true`, mirroring
+  the pattern its own monitor half already used — so its `watch-active`
+  assertion no longer races the process finishing.
+- Added 2 unit tests for the helper (deterministic pids; full lifecycle with no
+  racing writes).
+
+**Test results:** `npm test` **176/176 passing, 3 runs in a row** (was
+171–174/174, flaky). `typecheck:src` ✅ (source stays green). Full `tsc` **125**
+(unchanged — no new debt). Build ✅.
+
+**New idea:** add a **spawn-leak guard** to the test setup — a global
+`afterAll`/`afterEach` that asserts no unexpected child processes were spawned
+during a test (e.g. wrap the default `spawn` and count), so any future test that
+forgets to inject the inert spawn *fails loudly and immediately* instead of
+flaking hours later. Complements this fix by preventing the class of bug from
+returning. Logged to ROADMAP.
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

@@ -8,6 +8,16 @@ unchecked items are queued. Keep this richer than you found it each run.
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`
       (2026-06-22).
+- [x] **Eliminate real-subprocess flake in background-task tests** (2026-07-09,
+      run 9). Added `createInertBackgroundSpawn()` + threaded
+      `backgroundTaskSpawnProcess`/`backgroundTaskIsProcessRunning` through
+      `OperatorCliApp`; injected the inert spawn wherever tests start tasks.
+      `npm test` now 176/176 deterministically (was flaky, crashing on a
+      half-written shell-authored state file).
+- [ ] **Spawn-leak guard** (new, run 9): a global test hook that wraps the
+      default `spawn` and fails any test which launches an unexpected real child
+      process, so a forgotten inert-spawn injection fails loudly instead of
+      flaking later. Prevents the run-9 bug class from returning.
 - [ ] **Pay down typecheck debt** (surfaced by the `typecheck` script). Full
       `tsc --noEmit` count was **397** on 2026-06-22; now **125**. 🎯 ALL source
       (`src/**` non-test) files typecheck clean since run 7; remaining 125 errors

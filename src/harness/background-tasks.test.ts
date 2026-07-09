@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   BackgroundTaskExecutionService,
   FileBackgroundTaskStore,
+  createInertBackgroundSpawn,
   type BackgroundTaskExecutionState,
 } from "./background-tasks.js";
 
@@ -369,5 +370,49 @@ describe("BackgroundTaskExecutionService", () => {
     await expect(fs.readFile(path.join(rootDir, task.execution.launchScript), "utf8")).resolves.toContain("bash -lc");
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
+  });
+});
+
+describe("createInertBackgroundSpawn", () => {
+  it("hands out deterministic pids without launching a real process", () => {
+    const spawn = createInertBackgroundSpawn({ basePid: 5000 });
+    const first = spawn("ignored", [], { cwd: ".", env: {}, stdio: "ignore", detached: true });
+    const second = spawn("ignored", [], { cwd: ".", env: {}, stdio: "ignore", detached: true });
+    expect(first.pid).toBe(5001);
+    expect(second.pid).toBe(5002);
+    // unref must be a no-op that never throws (real detached children need it).
+    expect(() => first.unref()).not.toThrow();
+  });
+
+  it("drives the full task lifecycle with no racing state writes", async () => {
+    const rootDir = await makeTempDir();
+    const store = new FileBackgroundTaskStore(
+      path.join(rootDir, "background-tasks.json"),
+      createInertBackgroundSpawn(),
+    );
+    const task = await store.start({ title: "Inert", command: "sleep 5", cwd: rootDir, kind: "task" });
+    expect(task.status).toBe("running");
+    expect(task.execution.processId).toBe(424201);
+
+    // No real child wrote state, so the store owns it entirely and reads are stable.
+    await store.executionService.writeState(task, {
+      version: 1,
+      taskId: task.id,
+      kind: "task",
+      status: "completed",
+      pid: task.execution.processId ?? 0,
+      startedAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:10:00.000Z",
+      completedAt: "2026-01-01T00:10:00.000Z",
+      exitCode: 0,
+      outputFile: task.execution.outputFile,
+      cwd: rootDir,
+      command: task.command,
+    });
+    await expect(store.getExecutionState(task.id)).resolves.toMatchObject({
+      taskId: task.id,
+      status: "completed",
+      exitCode: 0,
+    });
   });
 });

@@ -108,6 +108,34 @@ export type SpawnBackgroundProcess = (
 
 export type IsProcessRunning = (pid: number) => boolean;
 
+export type InertBackgroundSpawnOptions = {
+  /** First pid handed out; each spawn increments deterministically. */
+  basePid?: number;
+};
+
+/**
+ * A {@link SpawnBackgroundProcess} that never launches a real OS process. It
+ * hands out deterministic, monotonically increasing pids and does nothing else,
+ * so the background-task lifecycle can be driven entirely by explicit
+ * {@link BackgroundTaskExecutionService.writeState} calls.
+ *
+ * This is the seam for two callers: (1) tests and cloud/CI environments that
+ * must not spawn — and race against — real detached shells while asserting on
+ * task state; (2) embedders running the runtime in a sandbox where spawning is
+ * disallowed. Production defaults to the real `spawn`; pass this explicitly to
+ * opt out.
+ */
+export function createInertBackgroundSpawn(
+  options: InertBackgroundSpawnOptions = {},
+): SpawnBackgroundProcess {
+  let counter = 0;
+  const basePid = options.basePid ?? 424200;
+  return () => {
+    counter += 1;
+    return { pid: basePid + counter, unref() {} };
+  };
+}
+
 export type BackgroundTaskRecoveryReason =
   | "unchanged"
   | "state-running"
