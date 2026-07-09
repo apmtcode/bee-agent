@@ -1,7 +1,11 @@
+import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
+
+const execFileAsync = promisify(execFile);
 import {
   BackgroundTaskExecutionService,
   FileBackgroundTaskStore,
@@ -369,5 +373,28 @@ describe("BackgroundTaskExecutionService", () => {
     await expect(fs.readFile(path.join(rootDir, task.execution.launchScript), "utf8")).resolves.toContain("bash -lc");
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
+  });
+
+  it("executes launch scripts whose command contains single quotes without corrupting state JSON", async () => {
+    const rootDir = await makeTempDir();
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"), () => ({ pid: 2222, unref() {} }));
+    // A command with embedded single quotes exercises shellQuote's POSIX escaping.
+    // Previously the wrong escape sequence leaked a stray `"` into the launch
+    // script, corrupting both the executed command and the JSON state file.
+    const task = await store.start({
+      title: "Quoted command",
+      command: "printf '%s' 'hello '\\''world'\\'''",
+      cwd: rootDir,
+    });
+    const service = new BackgroundTaskExecutionService(rootDir, () => ({ pid: 2222, unref() {} }));
+
+    const launchScriptPath = path.join(rootDir, task.execution.launchScript);
+    await execFileAsync("bash", [launchScriptPath], { cwd: rootDir });
+
+    // State JSON must parse and reflect successful completion.
+    const state = await service.readState(task);
+    expect(state).toMatchObject({ taskId: task.id, status: "completed", exitCode: 0 });
+    // The command's own single quotes must survive into execution.
+    await expect(service.readOutput(task)).resolves.toContain("hello 'world'");
   });
 });

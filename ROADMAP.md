@@ -70,6 +70,23 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Generalization eval harness: measure replay fidelity on held-out but
       related synthetic trajectories.
 
+## Reliability / correctness
+- [x] **Fix `shellQuote` POSIX single-quote escape** (2026-07-09, run 9). It
+      emitted `"'"'"'` (double-quote delimited) instead of `'"'"'`, leaking a
+      stray `"` and corrupting any background-task launch script / `state.json`
+      whose command/cwd contained a `'`. Fixed + end-to-end regression test that
+      runs a real single-quoted launch script.
+- [ ] **Make background-task orchestration tests hermetic.** The
+      `operator-runtime` recovery/sync test spawns a *real detached process* and
+      races it against a manual `writeState`, so it flakes across environments
+      (fails in the cloud container, passes where authored). Add an injectable
+      `spawnProcess` with a deterministic fake so no real child is spawned. Same
+      root cause likely behind the `server.test.ts`/`app.test.ts` gateway/remote-
+      control failures — audit those for real-process/network dependence too.
+- [ ] Property test for `shellQuote`: round-trip arbitrary strings through
+      `shellQuote` + `bash -c "printf '%s'"` and assert identity, so quoting
+      regressions are caught at the unit level rather than via a downstream crash.
+
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in

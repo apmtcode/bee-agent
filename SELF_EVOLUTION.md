@@ -6,6 +6,59 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-09 (run 9) — Fix `shellQuote` POSIX-escape bug corrupting background-task launch scripts + state JSON
+
+**Audited:** Ran the full suite as the first act of the run and found the baseline
+was **red** — 3 test files failing (`operator-runtime`, `server`, `app`), which
+the prior run recorded as 174/174. The `operator-runtime` failure was a hard
+crash: `SyntaxError: Expected ',' or '}' after property value in JSON` thrown from
+`readJsonFile` while reconciling a background task's `state.json`.
+
+**Root cause (real correctness bug, not a test bug):** `shellQuote`
+(`src/harness/background-tasks.ts`) used the wrong POSIX single-quote escape. The
+standard escape for an embedded `'` inside a single-quoted shell word is `'\''`
+(equivalently `'"'"'` — close-quote, double-quoted quote, reopen-quote: begins and
+ends with a **single** quote). The code emitted `"'"'"'` — 6 chars beginning and
+ending with a **double** quote — which leaks a stray `"` into the output. Every
+background task whose `command`, `cwd`, output path, or state payload contains a
+single quote (extremely common: `printf '…'`, `echo '…'`, `git commit -m '…'`)
+therefore produced (a) a **corrupted executed command** in the launch script and
+(b) a **malformed `state.json`** with an unterminated JSON string — which then
+crashed recovery/sync on read. Reproduced deterministically end-to-end in a real
+shell before fixing.
+
+**Changed (one-line, additive):** corrected the escape to `'"'"'` and documented
+the invariant inline. Added an **end-to-end regression test** in
+`background-tasks.test.ts` that actually *executes* a launch script whose command
+contains single quotes (`printf '%s' 'hello '\''world'\'''`) via real `bash`, then
+asserts (1) `readState` parses and reports `status: "completed", exitCode: 0` and
+(2) the command's own quotes survive into the output (`hello 'world'`). Verified
+the test **fails on the buggy escape and passes on the fix** by flipping it back
+and forth. (The pre-existing `printf 'done'` artifact test only asserted the
+script `.toContain("bash -lc")`, so it never exercised execution and missed this.)
+
+**Test results:** `typecheck:src` ✅ (0 errors). Build ✅. Targeted
+`background-tasks.test.ts` ✅ **8/8** (was 7). Full suite: **171/175** — the fix
+turned the `operator-runtime` JSON crash into a *timing* assertion, and the
+remaining **3 failures are pre-existing and environmental** (confirmed identical
+on a `git stash`-ed pristine tree): the operator-runtime test spawns a **real
+detached background process** and then races it with a manual `writeState`, so in
+this faster cloud container the spawned launch script overwrites the state the
+test set up (its `pid` field even shows an unreplaced `"$$"` from the still-in-
+flight initial write); `server.test.ts`/`app.test.ts` fail on gateway/remote-
+control state that depends on real process/network behavior absent here. These are
+not caused by — and are net-reduced by — this change. Because the designated
+branch is `claude/peaceful-dirac-s3e7w2` (not `main`), work lands there.
+
+**New idea (logged to ROADMAP):** the spawn-then-`writeState` race is a real
+test-robustness defect worth fixing at the source: `BackgroundTaskExecutionService`
+should accept an injectable `spawnProcess` so orchestration tests can use a
+**deterministic fake process** (no detached child, no wall-clock race) instead of
+spawning a real one — making recovery/sync tests hermetic and portable across
+environments. Bonus: a tiny property test that round-trips arbitrary strings
+through `shellQuote` + `bash -c "printf '%s'"` and asserts identity, so any future
+quoting regression is caught at the unit level, not via a downstream JSON crash.
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
