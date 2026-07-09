@@ -6,6 +6,61 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-09 (run 9) — 🐞 Real bug: launch-script `shellQuote` corrupted JSON state; + test hermeticity
+
+**Audited:** Ran the suite on this cloud machine and found it was **not** the
+recorded 174/174 — it was red and *flaky* (2–4 failures, count varied run to
+run). Root-caused every failure instead of assuming environment noise.
+
+**Genuine bug fixed** (`src/harness/background-tasks.ts`): the background-task
+**launch script** builds its initial `state.json` by `printf`-ing a JSON payload
+through `sed`, single-quoting the payload with a `shellQuote()` helper. That
+helper's single-quote escape was **wrong**: it emitted `"'"'"'` instead of the
+correct POSIX sequence `'"'"'` (an extra leading `"`). For any task whose
+`command` contains a single quote (e.g. `printf 'line-1\nline-2\n'` — extremely
+common), the stray double quote corrupted the payload, so `state.json` was
+**invalid JSON**. The completion writer's `json.loads` then threw and the whole
+launch script exited non-zero; `readState` threw `SyntaxError: Expected ',' or
+'}'`. Reproduced end-to-end with bash, confirmed the one-character-class fix
+(`'"'"'`) round-trips. Note `src/training/runner.ts` already used the *correct*
+form — the two copies had silently diverged (see roadmap: dedupe `shellQuote`).
+
+**Regression test added** (`background-tasks.test.ts`): runs the generated
+launch script **synchronously** (mock spawn → `execFileSync bash`, no
+detached-process race) for a command with single quotes + real newlines, and
+asserts the on-disk `state.json` is valid JSON that round-trips the command
+verbatim. Verified it **fails** on the pre-fix escape and **passes** on the fix.
+
+**Flake removed** (`operator-runtime.test.ts`): the background-task test spawned
+a **real** detached process (default `spawn`) whose async state-file writes
+raced the test's own `writeState`/recover calls — nondeterministic in the cloud
+(where we have no OS-input access anyway). Injected a no-op
+`backgroundTaskSpawnProcess` so the test drives state deterministically. Now
+green 3/3 consecutive runs (was flaky).
+
+**Test results:** `typecheck:src` ✅, build ✅. Suite **175 tests, 173 passing**
+(added 1), now **stable at 2 failures** (was flaky 2–4). Remaining 2 are
+*pre-existing* and share one root cause: the giant `server.test.ts`
+"handles session…" and `app.test.ts` "session lifecycle…" integration tests
+spawn real background tasks (`sleep 5`, `printf ok`) and encode **race-dependent
+expectations** — e.g. `resume`→`active` only holds when the task's `state.json`
+hasn't been written yet, so with `isProcessRunning:()=>false` a written "running"
+state trips a `missing-process` diagnostic and flips control to `degraded`. Not
+a product bug; the tests bake in a timing assumption. Attempted a no-op-spawn fix
+but the tests interleave *repair* scenarios that need a running-state-with-dead-
+process, so a clean fix needs per-scenario clock/spawn seams — logged to roadmap,
+reverted to keep this diff focused. Per guardrails (suite not fully green) this
+run pushes to the designated dev branch, not `main`.
+
+**New idea:** add a tiny **shell-quoting golden test** shared by both
+launch-script emitters — a table of nasty argument strings (single quotes,
+double quotes, `$`, backticks, newlines, `&`, `/`) asserting each survives a
+real `bash -c` round-trip. It would have caught this divergence immediately and
+guards the training runner too. Bigger: extract ONE `shellQuote`/`renderLaunch`
+into `src/shared/` so the two agents can't drift again.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -352,6 +353,42 @@ describe("FileBackgroundTaskStore", () => {
       expect.objectContaining({ task: expect.objectContaining({ id: missing.id }), reason: "missing-process" }),
     ]);
     await expect(reloaded.get(other.id)).resolves.toMatchObject({ id: other.id, status: "running" });
+  });
+
+  it("emits a launch script whose state payload stays valid JSON for commands with quotes and newlines", async () => {
+    // Regression: the shell single-quote escape in renderLaunchScript must be
+    // `'"'"'`, not `"'"'"'`. The broken form injected a stray double quote,
+    // corrupting the initial state.json so the completion writer's json.loads
+    // threw and the launch script exited non-zero. Run the generated script
+    // synchronously (no detached-process race) and assert the on-disk state is
+    // parseable JSON that round-trips the original command verbatim.
+    const rootDir = await makeTempDir();
+    const filePath = path.join(rootDir, "background-tasks.json");
+    // Contains single quotes and real newlines — the exact shape that broke.
+    const command = "printf 'line-1\nline-2\n'";
+    const store = new FileBackgroundTaskStore(
+      filePath,
+      (scriptPath, _args, options) => {
+        execFileSync("bash", [scriptPath], { cwd: options.cwd, stdio: "ignore" });
+        return { pid: 4242, unref() {} };
+      },
+      () => false,
+    );
+
+    const task = await store.start({
+      sessionId: "sess-quote",
+      title: "Quoted command",
+      command,
+      cwd: rootDir,
+      kind: "task",
+    });
+
+    const raw = await fs.readFile(path.join(rootDir, task.execution.stateFile), "utf8");
+    const parsed = JSON.parse(raw) as BackgroundTaskExecutionState;
+    expect(parsed.command).toBe(command);
+    expect(parsed.taskId).toBe(task.id);
+    expect(parsed.status).toBe("completed");
+    expect(typeof parsed.pid).toBe("number");
   });
 });
 

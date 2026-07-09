@@ -4,6 +4,31 @@ Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
 ## Foundations / DX
+- [x] **Fix launch-script `shellQuote` JSON corruption** (2026-07-09, run 9) —
+      `src/harness/background-tasks.ts` escaped single quotes as `"'"'"'` instead
+      of `'"'"'`, so any task command containing a `'` produced invalid
+      `state.json`. Fixed + added a synchronous (race-free) regression test.
+- [ ] **Dedupe `shellQuote` / `renderLaunchScript`** into `src/shared/`. Two
+      copies exist (`harness/background-tasks.ts`, `training/runner.ts`) and had
+      already diverged (only the background-tasks copy carried the escape bug).
+      Add a shared shell-quoting **golden test**: a table of nasty args (single
+      /double quotes, `$`, backticks, newlines, `&`, `/`) each asserted to
+      survive a real `bash -c` round-trip.
+- [ ] **De-flake the two real-subprocess integration tests** (pre-existing,
+      surfaced run 9). `server.test.ts` "handles session…" and `app.test.ts`
+      "session lifecycle…" spawn real background tasks (`sleep 5`, `printf ok`)
+      whose async `state.json` writes race the assertions, and encode
+      race-dependent expectations (`resume`→`active` only holds before the state
+      file lands; otherwise `isProcessRunning:()=>false` → `missing-process` →
+      `degraded`). These tests interleave *repair* scenarios that DO need a
+      running-state-with-dead-process, so the fix is per-scenario seams: a
+      deterministic spawn that writes the "running" state synchronously **plus**
+      a per-remote `isProcessRunning` the scenario controls (alive for the
+      steady-state remote, dead for the repair remote). Then the expectations
+      become deterministic. `StandaloneOperatorRuntime` already accepts
+      `backgroundTaskSpawnProcess` + `backgroundTaskIsProcessRunning`; thread the
+      same options through `OperatorCliApp` (currently not injectable) for the
+      app.test side.
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`
