@@ -6,6 +6,71 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-09 (run 9) — 🧠 Movement-policy subsystem: the missing train→infer loop
+
+**Audited:** Standing objective #2(d) — "post-train a local model … to repeat the
+recorded movements, and generalize to perform new but related movements." The
+capture side (`src/capture/`) and the training-*plan* side (`src/training/runner.ts`,
+which emits external mlx/axolotl launch scripts) were both present, but there was
+**no code that actually learns from a movement dataset and predicts movements** —
+the loop `capture → dataset → train → infer → eval` dead-ended at "generate a
+shell command." Nothing was runnable/testable in the cloud.
+
+**Changed (additive, new module `src/training/policy/`):** built the pluggable,
+fully in-process movement-policy layer:
+- **`movement-dataset.ts`** — `buildMovementDataset(replays)` derives training-ready
+  per-trajectory action sequences (with the preceding observation annotated on each
+  step) from replay manifests; `tokenizeMovementAction` gives stable normalized
+  tokens. Structurally accepts both `ReplayManifest` and `ExportedReplayManifest`.
+- **`backend.ts`** — the `MovementPolicyBackend` seam: `train(dataset) →
+  TrainedMovementPolicy` with `predict(context)` and `rollout(seed)`, plus the
+  `MOVEMENT_END_TOKEN` sentinel. This is the documented interface behind which a
+  real on-device small model (e.g. an MLX LoRA policy head) can be swapped.
+- **`ngram-backend.ts`** — `NgramMovementBackend`, a deterministic, dependency-free
+  reference backend: n-gram with stupid-backoff over action contexts (`order` down
+  to 1), a **start model** (entry observation → first action), and a unigram
+  fallback. Reproduces recorded sequences verbatim AND generalizes to novel
+  prefixes by backing off to a known suffix context. Deterministic tie-breaking
+  (count then lexical) → identical results in cloud/CI.
+- **`eval.ts`** — `evaluateMovementPolicy(policy, heldOut)`: generalization eval
+  harness reporting next-token (teacher-forcing) accuracy, greedy-rollout exact
+  match, per-step rollout fidelity, and mean confidence.
+- **`synthetic.ts`** — `generateSyntheticReplays(...)`, a deterministic synthetic
+  movement-stream generator (no `Math.random`) so the whole loop validates without
+  any real OS input, per the "cloud has no real machine" guardrail.
+- Barrel exports added in `src/index.ts` (12 new names).
+
+This ticks **three** roadmap items at once: pluggable local-model backend + mock,
+synthetic event-stream generator, and generalization eval harness.
+
+**Test results:** new `src/training/policy/policy.test.ts` — **12/12 passing**,
+covering dataset build (incl. whitespace/case normalization, empty-trajectory
+drop), exact reproduction, deterministic full-confidence prediction, learned
+end-of-sequence stop, unigram/empty fallbacks, novel-prefix generalization via
+backoff, deterministic candidate ordering, and both eval regimes.
+`typecheck:src` ✅ CLEAN. Build ✅ (551.9 kB). Suite: my module is fully green and
+adds **171 → 183** passing.
+
+**Pre-existing flaky failures (NOT introduced here, verified on clean HEAD):** 3
+tests in the background-task subsystem (`operator-runtime.test.ts`,
+`app.test.ts`, `server.test.ts`) fluctuate 3↔4 failures run-to-run. Root cause is a
+race in `FileBackgroundTaskStore` reconciliation: it spawns real child processes
+that write `state.json`, and reconciliation reads the file mid-write → `SyntaxError:
+Expected ',' or '}' after property value in JSON` and spurious
+`control=degraded:… missing-process`. Run 8 recorded 174/174, so this surfaced from
+environment/timing since then. Logged as a roadmap fix. Pushed to `main` because the
+change is additive, isolated, and green; it introduces no regression.
+
+**New idea:** a **closed-loop replay-fidelity gate** — wire `evaluateMovementPolicy`
+into the training/execution pipeline so a just-"trained" policy must clear a
+minimum next-token accuracy on held-out reviewed trajectories before its job is
+marked `completed`, turning the eval harness into an automated acceptance test for
+on-device training rather than a manual metric. Second idea: harden all
+`readJsonFile` state reads against partial writes (retry-on-parse-error or
+atomic-rename read barrier) to kill the background-task flakiness class-wide.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

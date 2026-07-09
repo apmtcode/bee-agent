@@ -62,13 +62,35 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      for a real on-device small model. — DONE run 9 (`src/training/policy/`:
+      `MovementPolicyBackend` seam + `NgramMovementBackend` reference backend).
+- [x] Synthetic event-stream generator to validate capture→dataset→replay
+      round-trips without real OS input. — DONE run 9 (`policy/synthetic.ts` +
+      `buildMovementDataset`).
+- [x] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories. — DONE run 9 (`policy/eval.ts`:
+      `evaluateMovementPolicy`).
+- [ ] **Wire a real on-device backend** behind `MovementPolicyBackend` (MLX LoRA
+      policy head), keeping `NgramMovementBackend` as the cloud/CI default. The
+      `LocalAppleSiliconTrainingRunner` should emit a policy that loads through the
+      same `TrainedMovementPolicy` interface.
+- [ ] **Closed-loop replay-fidelity gate:** have the training/execution pipeline
+      run `evaluateMovementPolicy` on held-out reviewed trajectories and refuse to
+      mark a job `completed` below a minimum next-token accuracy.
+- [ ] Richer movement tokens: preserve gesture kind/direction/target coordinates
+      (currently folded into the action `summary`) so the policy can generalize
+      over structured movement fields, not just summary strings.
+
+## Reliability
+- [ ] **Harden background-task state reads against partial writes** (surfaced run
+      9). `FileBackgroundTaskStore` reconciliation reads child-process-written
+      `state.json` mid-write → `SyntaxError: Expected ',' or '}'` and spurious
+      `control=degraded:… missing-process`. Causes 3–4 flaky failures in
+      `operator-runtime.test.ts` / `app.test.ts` / `server.test.ts`. Fix at the
+      `readJsonFile` seam (retry-on-parse-error, or write-temp+atomic-rename so
+      readers never observe a torn file) — a class-wide fix, not per-test.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
