@@ -6,6 +6,72 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-10 (run 9) — Movement-learning: pluggable in-process model backend (post-train + generalize)
+
+**Audited:** The local-movement learning subsystem (objective 2). The existing
+pipeline goes capture → `TrajectorySpan` schema → reviewed export → **training
+*plan*** (`runner.ts` emits MLX/axolotl launch scripts for Apple Silicon). Gap:
+those launch scripts cannot run in the cloud/CI, so **nothing actually
+post-trains a model or runs inference** — objectives 2(c) "post-train a local
+model to repeat recorded movements" and 2(d) "generalize to new-but-related
+movements" had no runnable, testable implementation. This was the queued
+roadmap item "pluggable local-model backend with a deterministic mock backend."
+
+**Changed (additive):** new `src/training/movement-model.ts` + tests, exported
+from `src/index.ts`:
+- **Pluggable backend interface** `LocalMovementModelBackend` (`train(dataset,
+  config) → TrainedMovementModel`) so a real small on-device model can drop in
+  behind the same seam.
+- **Deterministic bundled backend** `NgramMovementBackend` (`id:
+  "ngram-mock-v1"`): learns a weighted n-gram distribution over actions + a
+  token co-occurrence index. Inference is a 3-tier cascade — (1) longest exact
+  context-suffix match → *repeat* recorded movements; (2) token-overlap
+  similarity back-off → *generalize* to related contexts; (3) global prior
+  fallback. No `Math.random`/`Date` — identical datasets yield identical models
+  (tie-break by action key), so it's fully cloud/CI-safe.
+- **Dataset builder** `buildMovementDataset(trajectories)`: flattens spans into a
+  ts-ordered event token stream (`obs:<source>`, `act:<tool>`) and emits one
+  `{context, action, weight}` example per recorded action, weighting by
+  trajectory reward. Ties capture → dataset.
+- **Eval harness** `evaluateMovementModel(model, dataset)`: reports
+  exact/tool-level accuracy + per-source breakdown; a held-out test proves
+  generalization on a structurally-similar trajectory. (Covers part of the
+  roadmap "generalization eval harness" item.)
+
+**Test results:** `typecheck:src` ✅ (exit 0). Build ✅. New suite
+`movement-model.test.ts` ✅ **15/15**. Full suite **185/189** — the **4 failures
+are PRE-EXISTING** on the clean tree (confirmed by stashing this change: clean
+`main` is 170/174, not the log's stale "174/174"). They are deterministic (fail
+single-threaded and with `--no-file-parallelism`) and live entirely in the
+background-task recovery path (`app.test.ts`, `server.test.ts`,
+`operator-runtime.test.ts`). My change adds 15 passing tests and introduces
+**zero** new failures. Pushed to the designated feature branch (not `main`),
+which is safe for a green additive diff.
+
+**Root-cause lead for the pre-existing failures (for next run):** the reconcile
+path throws `SyntaxError: … after property value in JSON at line 1 column 312`
+from `readJsonFile` → `BackgroundTaskExecutionService.readState`. The error is
+on a **single-line** JSON (`line 1`), but `writeJsonAtomic` always writes
+*indented multi-line* JSON — so the corrupt file is the **compact state file
+written by the shell launch script** (`renderStateWriter`, `printf '%s' … | sed`
+in `background-tasks.ts` ~L744-757), not by `writeState`. Likely the spawned
+launch process races with / clobbers the test's `writeState`, or the sed
+`"$$"`→pid / `__OPENCLAW_STARTED_AT__` substitution emits malformed JSON. Fix
+candidate: have the launch script write state via a small python/`node`
+json.dumps step (like `renderStateWriterPython` already does for the completion
+state) instead of `printf|sed`, and/or make `readState` tolerate a
+partially-written state file. **This is now the top ROADMAP item.**
+
+**New idea:** add a `MovementPolicyService` that closes the loop — given a live
+observation stream it calls `model.predict()` and emits candidate movements back
+through the existing `replay-service`/`device-adapter` seam (behind the consent
+policy + a mandatory dry-run/confirm gate), so a trained model can *act*, not
+just be scored. Pair it with an on-line "surprise" metric (prediction
+confidence vs. realized action) to auto-flag trajectories worth capturing for
+the next training round — a self-curating dataset.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

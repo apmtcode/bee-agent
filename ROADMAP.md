@@ -3,6 +3,21 @@
 Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
+## 🔴 TOP PRIORITY — fix pre-existing background-task test failures
+Discovered run 9: the clean tree is **170/174**, NOT the previously-logged
+"174/174". 4 deterministic failures (fail even single-threaded) in the
+background-task recovery path:
+`app.test.ts`, `server.test.ts`, `operator-runtime.test.ts`.
+- [ ] `readJsonFile`→`BackgroundTaskExecutionService.readState` throws
+      `SyntaxError … at line 1 column 312`. The bad file is **single-line**, but
+      `writeJsonAtomic` writes indented multi-line — so the culprit is the
+      **shell-launch-script state writer** (`renderStateWriter`, `printf|sed` in
+      `src/harness/background-tasks.ts` ~L744-757), not `writeState`. Fix: emit
+      state via a json.dumps step (as `renderStateWriterPython` already does for
+      the completion state) instead of `printf|sed`, and/or make `readState`
+      tolerant of a partially-written/compact state file. Get the tree to 174/174
+      before layering more parity work.
+
 ## Foundations / DX
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
@@ -62,13 +77,29 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
+      for a real on-device small model. **DONE run 9** —
+      `src/training/movement-model.ts`: `LocalMovementModelBackend` interface +
+      deterministic `NgramMovementBackend` (exact-suffix / similarity / prior
+      cascade), `buildMovementDataset` (capture→dataset), 15 passing tests.
 - [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      round-trips without real OS input. (Next increment: feed generated streams
+      through `buildMovementDataset` + `evaluateMovementModel` and assert a
+      fidelity floor; parameterize by movement-class families for generalization
+      tests.)
+- [~] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories. **Partial run 9** —
+      `evaluateMovementModel(model, dataset)` reports exact/tool accuracy +
+      per-source breakdown; a held-out test proves generalization. Remaining:
+      systematic held-out *families* + a fidelity regression baseline.
+- [ ] `MovementPolicyService` (run-9 idea): given a live observation stream,
+      call `model.predict()` and emit candidate movements back through
+      `replay-service`/`device-adapter` behind consent + a dry-run/confirm gate,
+      so a trained model can *act*. Add an on-line "surprise" metric to
+      auto-flag trajectories worth capturing → self-curating dataset.
+- [ ] Persist/load a `TrainedMovementModel` (`describe()` → JSON artifact) so a
+      model trained in one session can be reloaded and served without retraining.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
