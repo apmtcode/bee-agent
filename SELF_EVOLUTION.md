@@ -6,6 +6,61 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-10 (run 9) — 🐛 Green the suite: hermetic background-task tests (4 real-spawn races fixed)
+
+**Audited:** Project health. The committed baseline claimed "Tests ✅ 174/174",
+but on this run's container **4 tests failed consistently** (not flaky):
+`operator-runtime` (background tasks), `server` (RPC orchestration), and two
+`app` tests (session-lifecycle, background/monitor commands). One even crashed
+recovery with a `SyntaxError` reading a half-written `state.json`.
+
+**Root cause (one bug, four symptoms):** `startBackgroundTask` spawns a **real,
+detached bash launcher** that asynchronously writes `state.json`
+(running → completed/failed) via a non-atomic `printf | sed > state.json`
+pipeline while running the task's command. The tests only mocked
+`isProcessRunning`, **not `spawn`** — so a live launcher raced the tests' own
+`writeState`/`writeOutput` calls. Depending on container timing you got: a torn
+read of a half-written file (the `SyntaxError`); a `sleep 5` task seen as dead so
+`control` degraded instead of `active`; or a `printf` task that completed before
+`watch-active` ran. The reference machine happened to win these races; this one
+didn't. The tests were never deterministic.
+
+**Changed (additive):**
+- **`src/harness/background-tasks.testkit.ts` (new):** `createMockBackgroundSpawn()`
+  — a deterministic spawn double that hands out incrementing fake pids and
+  **never launches a real process**, so `state.json` is written solely by the
+  test. Paired `isProcessRunning` reports exactly the handed-out pids as alive;
+  `kill(pid)`/`killLast()` simulate an exit so a specific task can be made "dead"
+  while others stay "running". Exposes `livePids`/`pids` for inspection.
+- **`src/cli/app.ts`:** forwarded new `backgroundTaskSpawnProcess` /
+  `backgroundTaskIsProcessRunning` options through `OperatorCliAppOptions` to the
+  runtime (the seam already existed on `StandaloneOperatorRuntime`; the app just
+  didn't expose it). Production default unchanged (real spawn).
+- **Tests (4 failing + 1 latent):** injected the double into the failing
+  `operator-runtime`, `server`, and two `app` tests, plus the event-filter
+  monitors test (latently flaky, leaked real processes). For the big server RPC
+  test the `sleep 5` remote task stays alive (`control=active`) while the
+  "Collect logs" task is `killLast()`-ed so `background.tasks.state`'s sync marks
+  it failed — reproducing the exact scenario the assertions encode. Added one
+  explicit `writeOutput("ok\n")` where a test previously relied on real `printf`
+  output.
+
+**Test results:** **174/174 passing, 20+ consecutive clean runs** (was 4 failing,
+deterministically). Build ✅. `typecheck:src` ✅. Full `tsc` held at the **125**
+baseline (the testkit is source-clean; the `{}`-typed RPC-result debt was avoided
+by killing via the mock's own pid tracking rather than the untyped result).
+
+**New idea:** the production launcher writes `state.json` **non-atomically**
+(`printf | sed > file`, then a `python3` `write_text`), so even in production a
+concurrent `readState` can hit a torn read and crash recovery (exactly the
+`SyntaxError` seen here). Harden it two ways: (1) make the launcher write to a
+temp file and `mv` into place (atomic rename), mirroring Node's
+`writeJsonAtomic`; (2) make `readState` tolerant of a transient parse error
+(retry-once / treat as "not yet readable") so a single torn read never aborts a
+whole `recoverBySession`. Queued in ROADMAP under reliability.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

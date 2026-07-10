@@ -8,6 +8,7 @@ import { OperatorCronService } from "./cron-service.js";
 import { OperatorDeliveryService } from "./delivery.js";
 import { buildRuntimeEventFilter, subscribeRuntimeEvents } from "./subscriptions.js";
 import { StandaloneOperatorRuntime } from "../orchestrator/operator-runtime.js";
+import { createMockBackgroundSpawn } from "../harness/background-tasks.testkit.js";
 import type { ReviewedExportManifest } from "../training/export-manifest.js";
 
 const tempDirs: string[] = [];
@@ -81,9 +82,11 @@ const exportManifest: ReviewedExportManifest = {
 describe("OperatorControlPlaneServer", () => {
   it("handles session, transcript, approval, trajectory, memory, and orchestration methods", async () => {
     const rootDir = await makeTempDir();
+    const background = createMockBackgroundSpawn();
     const runtime = new StandaloneOperatorRuntime({
       rootDir,
-      backgroundTaskIsProcessRunning: () => false,
+      backgroundTaskSpawnProcess: background.spawn,
+      backgroundTaskIsProcessRunning: background.isProcessRunning,
       delivery: new OperatorDeliveryService(rootDir, {
         sendBrowserPush: async () => {},
       }),
@@ -952,6 +955,7 @@ describe("OperatorControlPlaneServer", () => {
     const driftingRootDir = await makeTempDir();
     const driftingRuntime = new StandaloneOperatorRuntime({
       rootDir: driftingRootDir,
+      backgroundTaskSpawnProcess: createMockBackgroundSpawn().spawn,
       backgroundTaskIsProcessRunning: () => false,
     });
     const driftingServer = new OperatorControlPlaneServer({ runtime: driftingRuntime });
@@ -1018,6 +1022,7 @@ describe("OperatorControlPlaneServer", () => {
     const breakerRootDir = await makeTempDir();
     const breakerRuntime = new StandaloneOperatorRuntime({
       rootDir: breakerRootDir,
+      backgroundTaskSpawnProcess: createMockBackgroundSpawn().spawn,
       backgroundTaskIsProcessRunning: () => false,
     });
     const breakerServer = new OperatorControlPlaneServer({ runtime: breakerRuntime });
@@ -1444,6 +1449,10 @@ describe("OperatorControlPlaneServer", () => {
     if (!backgroundTask) {
       throw new Error("expected background task to be created");
     }
+    // Simulate this task's launcher process having exited, so the reconcile
+    // paths below observe it as no longer running (matches the historical
+    // `isProcessRunning: () => false` behaviour for this task specifically).
+    background.killLast();
     await expect(server.handle({ method: "background.tasks.get", params: { taskId: backgroundTask.id } })).resolves.toMatchObject({
       ok: true,
       result: { id: backgroundTask.id, sessionId: session.id, kind: "task", status: "running" },
@@ -2098,7 +2107,10 @@ describe("OperatorControlPlaneServer", () => {
   });
 
   it("filters runtime events by session, run, and family", async () => {
-    const runtime = new StandaloneOperatorRuntime({ rootDir: await makeTempDir() });
+    const runtime = new StandaloneOperatorRuntime({
+      rootDir: await makeTempDir(),
+      backgroundTaskSpawnProcess: createMockBackgroundSpawn().spawn,
+    });
     const sessionA = await runtime.startSession({ title: "Session A" });
     const sessionB = await runtime.startSession({ title: "Session B" });
     const runA = await runtime.startRun({ sessionId: sessionA.id, title: "Run A" });

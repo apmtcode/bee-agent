@@ -4,6 +4,11 @@ Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
 ## Foundations / DX
+- [x] **Hermetic background-task tests** (2026-07-10, run 9) — 4 tests were
+      failing on-container because they spawned *real* detached launcher
+      processes that raced the tests' own state writes. Added
+      `background-tasks.testkit` (`createMockBackgroundSpawn`) + an app-level
+      injection seam; suite is now deterministic (174/174, 20+ clean runs).
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`
@@ -69,6 +74,22 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
       round-trips without real OS input.
 - [ ] Generalization eval harness: measure replay fidelity on held-out but
       related synthetic trajectories.
+
+## Reliability
+- [ ] **Atomic launcher state writes.** The background-task launcher writes
+      `state.json` non-atomically (`printf | sed > file`, then a `python3`
+      `write_text`). A concurrent Node `readState` can hit a torn read and throw
+      `SyntaxError`, aborting a whole `recoverBySession` (observed on 2026-07-10).
+      Fix: launcher writes to a temp file and `mv` into place (atomic rename,
+      mirroring `writeJsonAtomic`); it already does this for the completion
+      writer via `renderStateWriterPython` — extend it to the initial write.
+- [ ] **Torn-read-tolerant `readState`.** Make `readJsonFile`/`readState` treat a
+      transient JSON parse error on a live state file as "not yet readable"
+      (retry-once, then fall back) so a single torn read never crashes recovery.
+- [ ] Consider adding a `vitest` retry or a `--sequence.concurrent=false` guard
+      for the remaining real-execution tests (freeform-run / hook capture in
+      `app.test.ts`) if they prove flaky; they intentionally spawn real
+      processes and are not covered by the spawn double.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
