@@ -4,6 +4,18 @@ Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
 ## Foundations / DX
+- [x] **Full `npm test` green in the cloud container** (2026-07-10, run 9).
+      Fixed a real product bug (background-task launch script wrote invalid JSON
+      for commands with quotes) + a flaky real-spawn-timing breaker test. Suite
+      174/174, build ✅, `typecheck:src` ✅.
+- [ ] **`renderLaunchScript` round-trip test** — render the launch script for
+      adversarial commands (embedded quotes, newlines, literal `$$`, unicode),
+      execute the state-writer, and assert the emitted `state.json` parses back to
+      the expected object. Locks in the JSON-safety guarantee fixed in run 9.
+- [ ] **Spawn-determinism guard** — flag test-time `StandaloneOperatorRuntime`
+      constructions that override `backgroundTaskIsProcessRunning` (wanting to
+      control task lifecycle) but leave `backgroundTaskSpawnProcess` as the real
+      default — the exact race fixed in run 9. Catch it at authoring time.
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`

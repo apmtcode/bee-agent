@@ -1019,6 +1019,12 @@ describe("OperatorControlPlaneServer", () => {
     const breakerRuntime = new StandaloneOperatorRuntime({
       rootDir: breakerRootDir,
       backgroundTaskIsProcessRunning: () => false,
+      // This test stages breaker failures deterministically by writing execution
+      // state manually. A real spawned process would asynchronously write its own
+      // running state and race the manual writes (e.g. surfacing task three's
+      // failure before its state is intentionally written), so inject a no-op
+      // spawn that leaves state control entirely to the test.
+      backgroundTaskSpawnProcess: () => ({ pid: 424242, unref() {} }),
     });
     const breakerServer = new OperatorControlPlaneServer({ runtime: breakerRuntime });
     const breakerOne = await breakerServer.handle({

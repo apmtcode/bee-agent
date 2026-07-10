@@ -6,6 +6,58 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-10 (run 9) — Fix corrupt background-task state JSON + flaky breaker test; suite green in cloud
+
+**Audited:** The actual `npm test` result in the cloud container (prior runs
+tracked *typecheck* debt but the last recorded *test* pass count, 174/174, was
+from a different machine). Found the suite **red here: 3 failing tests** across
+`operator-runtime.test.ts`, `cli/app.test.ts`, and `control-plane/server.test.ts`.
+
+**Root cause #1 — invalid JSON in background-task state files (real product bug).**
+`renderLaunchScript` (`src/harness/background-tasks.ts`) wrote the initial
+`running` state via a `printf '%s' <json> | sed …` pipeline. This corrupted the
+state file whenever the task's `command` contained quotes — the command value
+`printf 'line-1…` broke out of its JSON string — and the `"$$"`→pid substitution
+silently failed, leaving `"pid":"$$"`. Any reader (`readState`, recovery,
+inventory) then threw `SyntaxError: Expected ',' or '}'`. Instrumented
+`readJsonFile` to capture the exact malformed payload and confirmed it.
+- **Fix:** replaced the fragile `printf|sed` writer with a `python3` + `json`
+  writer (`renderRunningStateWriterPython`), mirroring the existing *completion*
+  writer. The payload is passed as one `shellQuote`d argv and re-serialized with
+  `json.dumps`, so arbitrary quotes/newlines in the command stay valid JSON and
+  pid/startedAt/updatedAt are injected from real runtime values. No new
+  dependency — the completion path already required `python3`.
+
+**Root cause #2 — flaky breaker test relying on real-spawn timing (test bug).**
+`server.test.ts`'s platform-breaker test stages failures deterministically by
+writing execution state by hand, but constructed its runtime with the *real*
+default spawn. The three `sleep 5` tasks' bash launch scripts asynchronously
+wrote their own `running` state, racing the manual writes — task three's failure
+surfaced before its state was intentionally written, giving `failureCount 3`
+where the test expects `2`. On a fast cloud box the race is lost every time.
+- **Fix:** injected `backgroundTaskSpawnProcess: () => ({ pid, unref(){} })`
+  (already an injectable seam on `StandaloneOperatorRuntime`) so no real process
+  writes state; the test now fully controls state via `writeState`.
+
+**Test results:** `npm test` **174/174 passing** (was 171 passing / 3 failing).
+`npm run build` ✅ (5 files, 531 kB). `npm run typecheck:src` ✅ exit 0. The three
+previously-red files pass **3/3 repeated runs** (checked for flakiness). Both
+changes are additive/reversible; the product fix also hardens real background
+tasks whose commands contain quotes.
+
+**New idea (logged to ROADMAP):** Add a **spawn-determinism guard** — a tiny test
+helper/lint that flags `StandaloneOperatorRuntime` constructions in tests which
+override `backgroundTaskIsProcessRunning` (signalling they want to control task
+lifecycle) but leave `backgroundTaskSpawnProcess` as the real default. That
+combination is the exact recipe for the race fixed this run; catching it at
+authoring time prevents future timing-dependent flakes. Bigger idea: a
+`round-trips` unit test for `renderLaunchScript` that renders the script for
+adversarial commands (embedded quotes, newlines, `$$`, unicode) and asserts the
+emitted state file parses back to the expected object — locking in the
+JSON-safety guarantee against regressions in the shell/python plumbing.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
