@@ -6,6 +6,66 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-10 (run 9) — 🐛 Fix real `shellQuote` corruption bug + de-race background-task tests (suite red→green)
+
+**Audited:** The build/test gate itself. On a fresh cloud checkout `npm test`
+was **RED** — 3–4 tests failing *deterministically* (not flaky): a
+`SyntaxError: Expected ',' or '}' after property value in JSON` thrown from
+`readJsonFile` while reconciling background-task state, plus circuit-breaker /
+watch-active assertion mismatches. Prior runs logged 174/174, so this was an
+environment-exposed latent defect, and it blocked the whole verification
+procedure — highest value to fix first.
+
+**Root cause (a genuine production bug, not a test bug):** `shellQuote` in
+`src/harness/background-tasks.ts` used the escape sequence `"'"'"'` (leading
+double-quote) instead of the correct POSIX `'\''`/`'"'"'` (leading
+single-quote). So any value containing an apostrophe — e.g. a background task
+whose command is `printf 'line-1\nline-2\n'` — was corrupted when embedded in
+the generated launch script, producing an **unparseable state file**. Commands
+without apostrophes (`tail -f app.log`, `printf ok`) round-tripped fine, which
+is why it lay hidden. A second, independent bug: the initial-state writer's
+`sed "…; s/\"\$\$\"/$$/g"` had its `"$$"` parsed by the shell as
+quote-close/`$$`/quote-open, collapsing to a no-op `s/<pid>/<pid>/g` — so the
+live pid was **never substituted** and state always carried `"pid":"$$"`.
+
+**Changed (additive, production-correct):**
+- `src/harness/background-tasks.ts`:
+  - Fixed `shellQuote` to `'` → `'\''` (verified round-trips through the shell
+    for apostrophes, embedded `$VARS`, and nested quotes).
+  - Replaced the brittle `printf … | sed` initial-state write with
+    `printf <payload> > state` followed by a `python3` fixup
+    (`renderInitialStateWriterPython`) that parses the JSON and fills the live
+    pid + start/updated timestamps — matching the existing python
+    completion/failure writers, so there is now **one** serialization path and
+    no text-substitution hazards.
+- `src/cli/app.ts`: `OperatorCliAppOptions` now forwards optional
+  `backgroundTaskSpawnProcess` / `backgroundTaskIsProcessRunning` to the runtime
+  (defaults unchanged = real `spawn`), so CLI tests can be made hermetic.
+- **Test hermeticity** (matches the run-2 precedent): `operator-runtime.test.ts`,
+  `server.test.ts` (3 runtimes), and `app.test.ts` (2 apps) now inject a no-op
+  spawn stub so background tasks never launch a **real detached** launch script
+  whose async state writes were racing the assertions. One CLI test also stubs
+  `isProcessRunning → true` so a started task stays `running` until explicitly
+  stopped.
+- **New regression test** (`background-tasks.test.ts`): renders **and executes**
+  the real bash+python3 launch script for an apostrophe-containing command and
+  asserts the state file is valid, correctly-typed JSON (numeric live pid,
+  round-tripped command, non-empty `startedAt`, terminal `completed`/exit 0).
+  This test **fails against the old `shellQuote`** — it locks the fix in.
+
+**Test results:** `npm test` **175/175** (was 174 passing + the 4 failures;
++1 new regression test), green **deterministically** across parallel and
+`--no-file-parallelism` runs. Build ✅. `typecheck:src` exit 0 (source clean).
+Full `tsc` unchanged at 125 (all in test files; this run added none).
+
+**New idea:** Add an `os-portability` self-check to the engine's pre-push gate —
+the launch script hard-depends on `bash` + `python3` + `date`. A tiny probe
+(`command -v bash python3 date`) surfaced at runtime, plus a pure-Node fallback
+state-writer for the initial "running" state (Node is already the host, so it
+needs no external tools), would make background tasks robust on minimal
+containers and Windows where `python3`/`sed` may be absent — removing the last
+shell-quoting/external-tool hazard from the hot path entirely.
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

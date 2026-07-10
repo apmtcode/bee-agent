@@ -8,6 +8,20 @@ unchecked items are queued. Keep this richer than you found it each run.
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`
       (2026-06-22).
+- [x] **Fix `shellQuote` corruption + de-race background-task tests** (run 9,
+      2026-07-10). `shellQuote` used a malformed POSIX escape (`"'"'"'` vs
+      `'\''`) that corrupted any command containing an apostrophe into an
+      unparseable state file; the sed-based initial-state writer also never
+      substituted the live pid. Fixed both (python-based initial writer), added
+      an end-to-end launch-script regression test, and made the runtime/CLI
+      background-task tests hermetic via an injectable spawn stub
+      (`backgroundTaskSpawnProcess` now forwarded through `OperatorCliApp`).
+      Suite red (4 failing) → **175/175 green deterministically**.
+- [ ] **`os-portability` pre-push probe + pure-Node initial state writer.** The
+      background-task launch script hard-depends on `bash`+`python3`+`date`.
+      Add a runtime `command -v` probe and a Node-native fallback for the initial
+      "running" state (Node is already the host) so tasks work on minimal
+      containers / Windows and the last external-tool hazard leaves the hot path.
 - [ ] **Pay down typecheck debt** (surfaced by the `typecheck` script). Full
       `tsc --noEmit` count was **397** on 2026-06-22; now **125**. 🎯 ALL source
       (`src/**` non-test) files typecheck clean since run 7; remaining 125 errors

@@ -1,7 +1,11 @@
+import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
+
+const execFileAsync = promisify(execFile);
 import {
   BackgroundTaskExecutionService,
   FileBackgroundTaskStore,
@@ -107,6 +111,45 @@ describe("FileBackgroundTaskStore", () => {
       status: "completed",
       execution: { exitCode: 0 },
     });
+  });
+
+  it("renders a launch script that writes valid JSON state for commands containing quotes", async () => {
+    // Regression guard: the launch script embeds the command and a JSON state
+    // payload via POSIX single-quote escaping. A malformed escape sequence used
+    // to corrupt any command containing an apostrophe (e.g. `printf 'x'`),
+    // producing an unparseable state file, and a separate sed step failed to
+    // substitute the live pid. This runs the real bash+python3 launch script and
+    // asserts the resulting state file is valid, correctly-typed JSON.
+    const rootDir = await makeTempDir();
+    const filePath = path.join(rootDir, "background-tasks.json");
+    // Mock spawn so start() writes the launch-script artifact without racing us.
+    const store = new FileBackgroundTaskStore(filePath, () => ({ pid: 4242, unref() {} }), () => true);
+
+    const command = "printf 'line-1\nline-2\n'";
+    const task = await store.start({
+      sessionId: "sess-quote",
+      title: "Quoted command",
+      command,
+      cwd: rootDir,
+      kind: "task",
+    });
+
+    const launchScriptPath = path.join(rootDir, task.execution.launchScript);
+    await execFileAsync("bash", [launchScriptPath], { cwd: rootDir });
+
+    const raw = await fs.readFile(path.join(rootDir, task.execution.stateFile), "utf8");
+    const parsed = JSON.parse(raw) as BackgroundTaskExecutionState;
+    expect(parsed.taskId).toBe(task.id);
+    expect(parsed.command).toBe(command);
+    expect(typeof parsed.pid).toBe("number");
+    expect(parsed.pid).toBeGreaterThan(0);
+    // printf succeeds → the completion writer records a terminal state + exit 0.
+    expect(parsed.status).toBe("completed");
+    expect(parsed.exitCode).toBe(0);
+    expect(parsed.startedAt).not.toBe("");
+    const output = await store.executionService.readOutput(task, { lineLimit: 200 });
+    expect(output).toContain("line-1");
+    expect(output).toContain("line-2");
   });
 
   it("cancels running tasks and records cancelled state", async () => {
