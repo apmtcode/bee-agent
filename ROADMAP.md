@@ -40,6 +40,10 @@ unchecked items are queued. Keep this richer than you found it each run.
     fix residual test-only typings.
 - [ ] Add a `verify` npm script (`typecheck && build && test`) and have the
       engine run it as a pre-push self-check each cycle.
+- [ ] **Flakiness guard (run 9):** the pre-push gate should run `test` **twice**
+      (or add a `test:repeat` script) and fail if *any* run fails. Run 9's
+      launcher bug was invisible to a single green check because the suite was
+      only intermittently failing. Cheap insurance against re-introducing races.
 - [x] Interim **source-only typecheck gate** — DONE run 7. `tsconfig.src.json`
       (excludes `**/*.test.ts`) + `typecheck:src` script; passes (exit 0). Next:
       have the engine run it as a per-run pre-push self-check.
@@ -69,6 +73,19 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
       round-trips without real OS input.
 - [ ] Generalization eval harness: measure replay fidelity on held-out but
       related synthetic trajectories.
+
+## Reliability (added run 9)
+- [x] **Fix `shellQuote` single-quote escaping** — was `"'"'"'`, now `'"'"'`.
+      Any background-task command containing a `'` was mangled into unbalanced
+      quotes and failed at runtime. DONE run 9.
+- [x] **Atomic launcher state writes** — initial state now written via Python
+      `json.dumps` (not shell `printf | sed`), all writes temp+rename, and
+      `readState` retries on transient `SyntaxError`. DONE run 9.
+- [x] **`createDeterministicBackgroundSpawn()` test helper** + `OperatorCliApp`
+      spawn injection; de-flaked operator-runtime/server/app suites. DONE run 9.
+- [ ] Audit the other `spawn`/child-process call sites (training runner,
+      execution service) for the same non-atomic-write / real-subprocess-in-test
+      hazards now that the pattern is understood.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

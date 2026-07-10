@@ -108,6 +108,45 @@ export type SpawnBackgroundProcess = (
 
 export type IsProcessRunning = (pid: number) => boolean;
 
+export type DeterministicBackgroundSpawn = {
+  /** Drop-in replacement for the real detached `spawn`. */
+  spawnProcess: SpawnBackgroundProcess;
+  /** Liveness probe that reports a synthetic PID as running until it is killed. */
+  isProcessRunning: IsProcessRunning;
+  /** The set of synthetic PIDs currently considered alive (mutable, for assertions). */
+  alivePids: Set<number>;
+  /** Mark a synthetic PID as terminated so liveness probes report it dead. */
+  kill: (pid: number) => void;
+};
+
+/**
+ * Build a deterministic, in-memory stand-in for the OS process launcher used by
+ * background tasks. It never starts a real process — so it can never race a
+ * caller's own state writes — yet it faithfully models liveness: every launched
+ * task receives a synthetic PID that reports as running until {@link
+ * DeterministicBackgroundSpawn.kill} is called (or a caller writes an execution
+ * state referencing an unknown PID). Intended for tests, simulations, and any
+ * embedder that needs to exercise the task store without touching the OS.
+ */
+export function createDeterministicBackgroundSpawn(startPid = 40000): DeterministicBackgroundSpawn {
+  const alivePids = new Set<number>();
+  let nextPid = startPid;
+  const spawnProcess: SpawnBackgroundProcess = () => {
+    const pid = nextPid;
+    nextPid += 1;
+    alivePids.add(pid);
+    return {
+      pid,
+      unref() {},
+    };
+  };
+  const isProcessRunning: IsProcessRunning = (pid) => alivePids.has(pid);
+  const kill = (pid: number): void => {
+    alivePids.delete(pid);
+  };
+  return { spawnProcess, isProcessRunning, alivePids, kill };
+}
+
 export type BackgroundTaskRecoveryReason =
   | "unchanged"
   | "state-running"
@@ -231,10 +270,23 @@ export class BackgroundTaskExecutionService {
   }
 
   async readState(task: BackgroundTaskRecord): Promise<BackgroundTaskExecutionState | undefined> {
-    return await readJsonFile<BackgroundTaskExecutionState | undefined>(
-      path.join(this.rootDir, task.execution.stateFile),
-      undefined,
-    );
+    const statePath = path.join(this.rootDir, task.execution.stateFile);
+    // The state file is written by an out-of-process launch script. Even though
+    // that script now writes atomically (temp + rename), a defensive retry keeps
+    // recovery robust against any external writer that isn't atomic: a torn/partial
+    // read surfaces as a JSON SyntaxError, which we retry briefly before giving up.
+    const maxAttempts = 3;
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      try {
+        return await readJsonFile<BackgroundTaskExecutionState | undefined>(statePath, undefined);
+      } catch (error) {
+        if (!(error instanceof SyntaxError) || attempt === maxAttempts) {
+          throw error;
+        }
+        await delay(5 * attempt);
+      }
+    }
+    return undefined;
   }
 
   async writeOutput(task: BackgroundTaskRecord, content: string): Promise<void> {
@@ -734,27 +786,22 @@ function renderLaunchScript(task: BackgroundTaskRecord): string {
   const quotedOutputFile = shellQuote(task.execution.outputFile);
   const quotedCwd = shellQuote(task.cwd);
   const quotedCommand = shellQuote(task.command);
-  const quotedStatePayload = shellQuote(
-    JSON.stringify({
-      version: 1,
-      taskId: task.id,
-      kind: task.kind,
-      status: "running",
-      pid: "$$",
-      startedAt: "__OPENCLAW_STARTED_AT__",
-      updatedAt: "__OPENCLAW_STARTED_AT__",
-      outputFile: task.execution.outputFile,
-      cwd: task.cwd,
-      command: task.command,
-    }),
-  );
+  const quotedTaskId = shellQuote(task.id);
+  const quotedKind = shellQuote(task.kind);
+  const quotedRelOutputFile = shellQuote(task.execution.outputFile);
 
   return [
     "#!/usr/bin/env bash",
     "set -euo pipefail",
     `mkdir -p $(dirname ${quotedStatePath}) $(dirname ${quotedOutputFile})`,
     "started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-    `printf '%s' ${quotedStatePayload} | sed "s/__OPENCLAW_STARTED_AT__/$started_at/g; s/\"\$\$\"/$$/g" > ${quotedStatePath}`,
+    // Write the initial "running" state with Python's json.dumps rather than
+    // shell string-munging: values (command, cwd) are passed as shell-quoted
+    // argv, so quotes/newlines can never corrupt the JSON, and the write is
+    // atomic (temp + rename).
+    `python3 - ${quotedStatePath} $$ "$started_at" ${quotedTaskId} ${quotedKind} ${quotedRelOutputFile} ${quotedCwd} ${quotedCommand} <<'PY'`,
+    ...renderInitialStateWriterPython(),
+    "PY",
     `printf '%s\n' "starting ${task.kind} ${task.id}" >> ${quotedOutputFile}`,
     `if cd ${quotedCwd} && bash -lc ${quotedCommand} >> ${quotedOutputFile} 2>&1; then`,
     "  completed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
@@ -773,6 +820,30 @@ function renderLaunchScript(task: BackgroundTaskRecord): string {
   ].join("\n");
 }
 
+function renderInitialStateWriterPython(): string[] {
+  return [
+    "import json",
+    "import pathlib",
+    "import sys",
+    "state_path = pathlib.Path(sys.argv[1])",
+    "state = {",
+    "    'version': 1,",
+    "    'taskId': sys.argv[4],",
+    "    'kind': sys.argv[5],",
+    "    'status': 'running',",
+    "    'pid': int(sys.argv[2]),",
+    "    'startedAt': sys.argv[3],",
+    "    'updatedAt': sys.argv[3],",
+    "    'outputFile': sys.argv[6],",
+    "    'cwd': sys.argv[7],",
+    "    'command': sys.argv[8],",
+    "}",
+    "tmp_path = state_path.with_name(state_path.name + '.launch.tmp')",
+    "tmp_path.write_text(json.dumps(state, indent=2) + '\\n')",
+    "tmp_path.replace(state_path)",
+  ];
+}
+
 function renderStateWriterPython(status: BackgroundTaskExecutionState["status"]): string[] {
   return [
     "import json",
@@ -789,10 +860,20 @@ function renderStateWriterPython(status: BackgroundTaskExecutionState["status"])
     "state['completedAt'] = timestamp",
     "state['exitCode'] = exit_code",
     `state['error'] = None if '${status}' == 'completed' else f'background task exited non-zero ({exit_code})'`,
-    "state_path.write_text(json.dumps(state, indent=2) + '\\n')",
+    "tmp_path = state_path.with_name(state_path.name + '.launch.tmp')",
+    "tmp_path.write_text(json.dumps(state, indent=2) + '\\n')",
+    "tmp_path.replace(state_path)",
   ];
 }
 
 function shellQuote(value: string): string {
-  return `'${value.replaceAll(`'`, `"'"'"'`)}'`;
+  // Wrap in single quotes and escape any embedded single quote with the POSIX
+  // idiom `'"'"'` (close-quote, a double-quoted quote, reopen-quote). The value
+  // may contain newlines — single quotes span lines in the shell, so that is
+  // preserved verbatim.
+  return `'${value.replaceAll("'", `'"'"'`)}'`;
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }

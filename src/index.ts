@@ -58,6 +58,9 @@ export {
 export {
   FileBackgroundTaskStore,
   BackgroundTaskExecutionService,
+  createDeterministicBackgroundSpawn,
+  type DeterministicBackgroundSpawn,
+  type IsProcessRunning,
   type BackgroundTaskExecution,
   type BackgroundTaskExecutionState,
   type BackgroundTaskKind,

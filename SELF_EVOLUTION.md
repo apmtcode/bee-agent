@@ -6,6 +6,55 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-10 (run 9) — Fix latent launcher quoting bug; de-flake the whole suite
+
+**Audited:** Overall test health. The suite was *flaky* — a full `npm test`
+failed with **3–4 failures every run** (baseline), across `operator-runtime`,
+`server`, and `app` test files, all in background-task code paths. Root-caused
+two distinct, real bugs plus a test-design race.
+
+**Bug 1 — broken `shellQuote` (the real prize).** The background-task launcher
+builds a bash script and quotes values with `shellQuote`. Its single-quote escape
+was **`"'"'"'`** instead of the correct POSIX idiom **`'"'"'`** — so *any* command
+containing a single quote (e.g. the ubiquitous `printf 'x'`) was mangled into
+unbalanced quotes. The launched command then died with `bash: unexpected EOF
+looking for matching '` (exit 2), and the state file recorded a corrupted
+command. This was latent because the tests overwrote state via `writeState`
+before asserting, hiding the subprocess failure. Fixed the escape.
+
+**Bug 2 — non-atomic + fragile state writes.** The initial "running" state was
+built by shell `printf | sed` string-munging (which also silently failed to
+substitute `"$$"`→pid and tore JSON on concurrent reads). Replaced it with a
+Python `json.dumps` writer (matching the existing completed/failed writers), and
+made **all** launcher state writes atomic (temp file + `rename`/`replace`). Added
+a defensive retry-on-`SyntaxError` in `readState` so recovery never crashes on an
+external non-atomic writer.
+
+**Test-design race.** Three test files spawned **real** subprocesses (only
+`isProcessRunning` was mocked), so the launcher's async state writes raced the
+tests' own `writeState`. Added an exported, reusable
+**`createDeterministicBackgroundSpawn()`** helper (in-memory launcher that models
+PID liveness without touching the OS) and injected it in the racy tests. Also
+made `OperatorCliApp` forward `backgroundTaskSpawnProcess` /
+`backgroundTaskIsProcessRunning` for testability.
+
+**New coverage:** two real-launch integration tests in `background-tasks.test.ts`
+that actually execute the generated script for commands with quotes + newlines
+and assert the state is valid JSON, the command round-trips byte-for-byte, and
+exit code is 0 — locking in the Bug 1/2 fixes.
+
+**Test results:** full `npm test` **176/176 passing, deterministic across 6
+consecutive runs** (was 3–4 failures every run). `typecheck:src` ✅ clean. Build
+✅.
+
+**New idea:** add a tiny `verify` npm script (`typecheck:src && build && test`)
+AND run the whole suite **twice** in the engine's pre-push gate — this run's bug
+would have been invisible to a single-shot green check because the flakiness only
+surfaces intermittently. A "run tests N× / fail if any run fails" wrapper is the
+cheapest guard against re-introducing flakiness. (Queued in ROADMAP.)
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

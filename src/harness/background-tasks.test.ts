@@ -370,4 +370,63 @@ describe("BackgroundTaskExecutionService", () => {
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
   });
+
+  it("runs the real launcher and writes valid JSON state for commands with quotes and newlines", async () => {
+    const rootDir = await makeTempDir();
+    // Default (real) spawn: actually execute the generated launch script so we
+    // exercise the shell + python state writer end-to-end. The command embeds
+    // single quotes, a double quote, and newlines — exactly the payload that
+    // corrupted the previous `printf | sed`-built JSON.
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"));
+    const command = `printf 'a\nb "c" d\n'`;
+    const task = await store.start({ title: "Tricky command", command, cwd: rootDir, kind: "task" });
+    expect(task.status).toBe("running");
+
+    const service = new BackgroundTaskExecutionService(rootDir);
+    // Poll until the launcher writes a terminal state. readState must never
+    // throw on a torn/partial read (atomic temp+rename write) and the parsed
+    // command must round-trip byte-for-byte.
+    const deadline = Date.now() + 10_000;
+    let state: BackgroundTaskExecutionState | undefined;
+    while (Date.now() < deadline) {
+      state = await service.readState(task);
+      if (state && state.status !== "running") {
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+
+    expect(state?.status).toBe("completed");
+    expect(state?.exitCode).toBe(0);
+    expect(state?.command).toBe(command);
+    expect(typeof state?.pid).toBe("number");
+
+    await expect(service.readOutput(task)).resolves.toBe(`starting task ${task.id}\na\nb "c" d`);
+  });
+
+  it("round-trips a newline-containing command through the real launcher", async () => {
+    // The classic repro: a command whose argument holds real newlines and single
+    // quotes. The old shell-built JSON mangled the quoting (unbalanced quotes →
+    // the command failed with a shell syntax error) and corrupted the state file.
+    const rootDir = await makeTempDir();
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"));
+    const command = "printf 'line-1\nline-2\n'";
+    const task = await store.start({ title: "Collect logs", command, cwd: rootDir, kind: "task" });
+
+    const service = new BackgroundTaskExecutionService(rootDir);
+    const deadline = Date.now() + 10_000;
+    let state: BackgroundTaskExecutionState | undefined;
+    while (Date.now() < deadline) {
+      state = await service.readState(task);
+      if (state && state.status !== "running") {
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+
+    expect(state?.status).toBe("completed");
+    expect(state?.exitCode).toBe(0);
+    expect(state?.command).toBe(command);
+    await expect(service.readOutput(task)).resolves.toBe(`starting task ${task.id}\nline-1\nline-2`);
+  });
 });
