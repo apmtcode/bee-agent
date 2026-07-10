@@ -70,6 +70,20 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Generalization eval harness: measure replay fidelity on held-out but
       related synthetic trajectories.
 
+## Reliability / test hygiene
+- [x] Fix `shellQuote` in `src/harness/background-tasks.ts` (was `"'"'"'`,
+      now `'"'"'`) — real bug that corrupted launch-script state JSON for any
+      command containing a single quote (run 9).
+- [x] De-flake the three non-hermetic background-task tests by injecting
+      deterministic spawn mocks; added `backgroundTaskSpawnProcess` /
+      `backgroundTaskIsProcessRunning` seams to `OperatorCliApp` (run 9).
+- [ ] **Flake sentinel in the pre-push self-check**: run the suite 3× (or with a
+      shuffled seed) instead of once, so timing-dependent tests are caught before
+      being logged as green. Discovered in run 9 (a flake showed ~1/5).
+- [ ] **Lint against non-hermetic spawn tests**: flag any test that starts a
+      background task / drives `spawn` without an injected `spawnProcess` mock, so
+      the real-subprocess-race class of flake is caught at authoring time.
+
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in

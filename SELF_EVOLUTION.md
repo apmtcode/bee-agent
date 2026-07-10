@@ -6,6 +6,55 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-10 (run 9) — 🐛 Real shell-escaping bug + de-flaked background-task tests (green baseline restored)
+
+**Audited:** The build/test baseline before choosing work. Found the suite was
+**red in this cloud environment** — `npm test` reported **3 failed / 171
+passed**, contradicting the "174/174" logged by run 8 (that machine's slower
+subprocess timing masked the failures). Root-caused two distinct problems.
+
+**Problem 1 — a genuine latent bug** in `src/harness/background-tasks.ts`
+`shellQuote()`: it escaped single quotes with `"'"'"'` (6 chars) instead of the
+correct POSIX `'"'"'` (5 chars) — the sibling `shellQuote` in
+`src/training/runner.ts` had it right. The buggy sequence injects a stray `"`
+into the launch script's emitted state JSON **whenever a task command contains a
+single quote** (e.g. the tests' `printf 'line-1\n…'`), so the state file becomes
+invalid JSON and `readState` throws `SyntaxError: Expected ',' or '}'`. This
+would corrupt background-task state for any real command with quotes — not just
+tests. Fixed to match `runner.ts`.
+
+**Problem 2 — non-hermetic, timing-fragile tests.** Three tests
+(`operator-runtime.test.ts`, `server.test.ts`, `app.test.ts`) started background
+tasks through the **real** `spawn` (no injected mock), then manually
+`writeState()`/asserted — so the detached launch script's async output/state
+writes raced the tests' synchronous assertions. They passed only when the
+subprocess happened to be slow enough; on this faster machine they lost the race
+(missing-process/`degraded`, clobbered output, "no active task").
+
+**Changed (additive, production behaviour unchanged except the bugfix):**
+- `src/harness/background-tasks.ts`: the 1-line `shellQuote` fix.
+- `src/cli/app.ts`: added optional `backgroundTaskSpawnProcess` /
+  `backgroundTaskIsProcessRunning` seams to `OperatorCliAppOptions`, forwarded to
+  the runtime (unset in production → identical behaviour). This gives the CLI app
+  the same test-injection points the runtime and control-plane already had.
+- Injected deterministic spawn mocks into the three tests
+  (`() => ({ pid, unref })`; the background/monitor CLI test uses a mock that
+  writes the output + a "running" state file into the task dir and reports the
+  process alive, so the higher-level slash-command assertions are deterministic).
+  This is the same hermetic pattern `background-tasks.test.ts` already used.
+
+**Test results:** `npm run build` ✅. `npm test` **174/174** — and **12/12
+consecutive full-suite runs green** (the flake had shown ~1/5 before). `npm run
+typecheck:src` ✅ (source stays clean). Diff: +52/−5 across 5 files; the only
+production-source change is the one-line bugfix + the additive app seam.
+
+**New idea:** add a **flake sentinel** to the engine's pre-push self-check — run
+the suite 3× (or with a shuffled seed) rather than once, so timing-dependent
+non-hermetic tests are caught before they're logged as "green". More broadly, a
+lint/test that flags any `startBackgroundTask`/spawn-driven test constructed
+*without* an injected `spawnProcess` would prevent this whole class of flake at
+authoring time (queued to ROADMAP).
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
