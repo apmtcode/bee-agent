@@ -6,6 +6,68 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-10 (run 9) — 🧠 Movement-learning: in-process pluggable train+infer backend
+
+**Audited:** The local-movement learning subsystem (standing objective 2). The
+capture side (`src/capture/`) and the *export/orchestration* side of training
+(`src/training/`: exporter, job-store, runner) were solid, but the runner only
+emits **external mlx/axolotl shell commands** — nothing can actually train a
+model or run inference in the cloud/CI. Objectives **2c (post-train a local
+model to repeat recorded movements)** and **2d (generalize to new but related
+movements)** had no runnable implementation, only a shell-out seam.
+
+**Changed (additive) — new `src/training/movement-model.ts` (+ 17 tests):**
+- **Pluggable backend interface.** `MovementModelBackend` (training seam) +
+  `TrainedMovementModel` (inference seam). A real on-device model (an MLX/GGUF
+  adapter produced by `LocalAppleSiliconTrainingRunner`) can implement the same
+  two interfaces and drop in without touching callers — the documented seam the
+  roadmap asked for.
+- **Deterministic in-process backend** `MarkovMovementBackend` /
+  `MarkovMovementModel`: a variable-order (default 3) n-gram Markov model with
+  **stupid-backoff**. High-order context **reproduces recorded movements
+  exactly** (2c); unseen high-order prefixes **back off** to shorter contexts to
+  predict plausible continuations (2d). Fully deterministic — greedy argmax,
+  lexicographic tie-break, no RNG — so it is testable and reproducible.
+- **Dataset builders** `buildMovementDatasetFromTrajectories` /
+  `buildMovementDatasetFromReplays` convert consent-reviewed spans/replay
+  manifests into `MovementDataset` (token sequences). Tokenizer canonicalizes
+  device gestures into structured `tool:gesture[:direction]` tokens (the
+  transferable structure) and prefers redacted/reviewed events.
+- **Generalization eval harness** `evaluateMovementModel`: teacher-forced top-1
+  next-token accuracy + whole-sequence exact-replay rate on held-out sequences.
+- **Synthetic movement-stream generator** `generateSyntheticMovementSequences`:
+  deterministic grammar expansion so the capture→dataset→train→infer→eval loop
+  validates with **no real OS input** (we run in Anthropic's cloud).
+- Model `serialize()`/`fromSerialized()` for a persistable, loadable artifact.
+- Exported the full surface from `src/index.ts`.
+
+**Test results:** new suite **17/17 ✅** (exact replay, backoff generalization,
+serialize round-trip, eval on held-out synthetic flows, determinism). Build ✅.
+`typecheck:src` ✅ (source stays fully green). Full `npm test` = **188/191**.
+
+**⚠️ Pre-existing baseline failures (NOT introduced this run).** The 3 failures
+were confirmed present on the clean baseline via `git stash` before my change:
+1. `operator-runtime.test.ts` — `recoverBackgroundTasks` throws `SyntaxError`
+   when a background-task **state file is corrupt/malformed**; `readJsonFile`
+   (`src/shared/fs.ts`) rethrows instead of the recovery treating it as a failed
+   task. A real reliability bug in source — queued to fix next run.
+2. `app.test.ts` / `server.test.ts` — remote-control/gateway **heartbeat
+   "stale"/"drift"** assertions; time-dependent logic that misbehaves at the
+   far-future test clock (today = 2026-07-10). Queued to investigate.
+My change is purely additive (one new module + its exports), so pushing it does
+not worsen the baseline; the three reds are logged here and in ROADMAP so a
+future run pays them down deliberately rather than rediscovering them.
+
+**New idea:** add a **movement-policy inference service** that wires
+`TrainedMovementModel` into the replay engine — given a live/observed prefix,
+suggest the next movement (with confidence from `predictNext().probability`) and
+gate auto-execution behind a confidence threshold + the existing consent policy.
+That turns the learned model from an offline artifact into an online assistant
+while keeping the human-consent guardrails. Also: a **confidence-calibration
+report** (reliability diagram) so the threshold is chosen from data, not guessed.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

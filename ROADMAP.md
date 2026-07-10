@@ -59,16 +59,41 @@ unchecked items are queued. Keep this richer than you found it each run.
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
 (exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
+- [x] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+      — run 9. Gap found: no runnable train/infer; runner only shells out to
+      mlx/axolotl. Closed below.
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      for a real on-device small model — run 9. `MovementModelBackend` /
+      `TrainedMovementModel` + `MarkovMovementBackend` (variable-order Markov w/
+      stupid-backoff) in `src/training/movement-model.ts`.
+- [x] Synthetic event-stream generator to validate capture→dataset→replay
+      round-trips without real OS input — run 9
+      (`generateSyntheticMovementSequences`, deterministic grammar).
+- [x] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories — run 9 (`evaluateMovementModel`:
+      teacher-forced next-token accuracy + exact-replay rate).
+- [ ] **Movement-policy inference service:** wire `TrainedMovementModel` into the
+      replay engine so a live observed prefix yields a suggested next movement
+      (confidence = `predictNext().probability`), gated behind a threshold + the
+      consent policy. Turns the offline artifact into an online assistant.
+- [ ] Confidence-calibration report (reliability diagram) to pick the
+      auto-execute threshold from data instead of guessing.
+- [ ] Real on-device backend adapter implementing `MovementModelBackend` by
+      loading the mlx/gguf artifact from `LocalAppleSiliconTrainingRunner`'s
+      output (behind the same interface; mock stays the CI default).
+
+## Pre-existing test breakage (surfaced run 9, confirmed on clean baseline)
+- [ ] `operator-runtime.test.ts` `recoverBackgroundTasks` throws `SyntaxError`
+      on a **corrupt background-task state file**. `readState`
+      (`src/harness/background-tasks.ts`) → `readJsonFile` (`src/shared/fs.ts`)
+      rethrows a JSON parse error during `reconcileTask` instead of the recovery
+      marking the task failed/unreadable. Real reliability bug; make recovery
+      tolerate malformed state (treat as failed + log).
+- [ ] `app.test.ts` / `server.test.ts` remote-control **heartbeat "stale"/"drift"**
+      assertions fail at the far-future test clock. Likely time-relative logic
+      or hard-coded expectations; inject a clock or freeze time in the tests.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
