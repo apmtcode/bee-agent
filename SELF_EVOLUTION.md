@@ -6,6 +6,63 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-10 (run 9) — 🐛 Fix two real launch-script bugs; make background-task tests hermetic (green suite restored)
+
+**Audited:** Ran the suite on this cloud machine and found it **red** (not the
+174/174 the log claimed) — 2–4 failures that varied run-to-run across
+`operator-runtime`, `server`, and `app` tests. Chased the flakiness to two
+genuine, latent **correctness bugs** in the background-task launch script
+(`src/harness/background-tasks.ts`), both masked until now because the tests
+that would expose them relied on real-`spawn` timing.
+
+**Bug 1 — malformed POSIX single-quote escaping in `shellQuote`.** The
+replacement was `"'"'"'` (6 chars) instead of the correct `'"'"'` (5 chars), so
+`shellQuote("a'b")` produced `'a"'"'"'b'`, which bash parses as `a"'b` — a
+spurious `"` injected for **every** command containing a single quote. The
+launch script writes its state file as JSON built from the command, so any
+quoted command (e.g. the test's `printf 'line-1\nline-2\n'`) corrupted
+`state.json` → `SyntaxError: Expected ',' or '}'` on the next `readState`.
+(`src/training/runner.ts` already had the correct escape — only this copy was
+wrong.)
+
+**Bug 2 — pid placeholder never substituted.** The initial-state writer used
+`sed "…; s/\"\$\$\"/$$/g"` in a **JS template literal**, which collapsed the
+backslashes so `run.sh` literally contained `s/"$$"/$$/g`. Bash then re-parsed
+that as `s/$$/$$/g` (a no-op), leaving `"pid":"$$"` a string. Every reconcile
+with a real `isProcessRunning` then mis-saw the task as a dead process. Fixed by
+double-escaping (`s/\\"\\$\\$\\"/$$/g`) so `run.sh` carries `s/\"\$\$\"/$$/g`;
+verified the executed script now writes `"pid": <number>` with valid JSON.
+
+**Test hermeticity (root of the flakiness).** `operator-runtime.test.ts` and
+`server.test.ts` stubbed `backgroundTaskIsProcessRunning: () => false` for
+determinism but still let `startBackgroundTask` spawn a **real detached shell**
+whose launch script asynchronously wrote the same `state.json` the tests were
+asserting on — a race. Added the matching `backgroundTaskSpawnProcess` stub
+(the pattern already used in `background-tasks.test.ts`) at all three runtime
+constructions. `app.test.ts` was left untouched: it uses real spawn **and** real
+`isProcessRunning` (internally consistent — the `sleep 5` process is genuinely
+alive), and the pid fix makes its numeric-pid path work, so it now passes too.
+
+**New coverage:** since the main test now stubs the spawn, added a dedicated
+`BackgroundTaskExecutionService` test that renders a launch script for a
+single-quoted command, asserts `run.sh` carries the escaped sed pattern, then
+**executes the real script** and asserts the persisted state parses with a
+numeric pid and a round-tripped command. Confirmed it fails on the pre-fix code.
+
+**Test results:** `npm test` **175/175** (was 171–173 with 2–4 flaky failures),
+green across 5 consecutive full runs + per-file isolation runs. `typecheck:src`
+✅ clean. Build ✅ (531 kB). Diff: 4 files, +67/−2, additive and reversible.
+
+**New idea:** the real bug here is a *default* that spawns a detached OS process
+in unit tests. Add a `BackgroundTaskExecutionService` "dry-run"/simulation
+backend (write artifacts + synthesize deterministic state transitions, no real
+`spawn`) selectable via a runtime option, and make it the default in the test
+harness — so future background-task tests are hermetic by construction instead
+of each remembering to stub both `spawn` and `isProcessRunning`. Bonus: it
+doubles as a safe demo mode for the movement-subsystem replay engine.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

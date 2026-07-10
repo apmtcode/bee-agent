@@ -754,7 +754,14 @@ function renderLaunchScript(task: BackgroundTaskRecord): string {
     "set -euo pipefail",
     `mkdir -p $(dirname ${quotedStatePath}) $(dirname ${quotedOutputFile})`,
     "started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-    `printf '%s' ${quotedStatePayload} | sed "s/__OPENCLAW_STARTED_AT__/$started_at/g; s/\"\$\$\"/$$/g" > ${quotedStatePath}`,
+    // The second substitution rewrites the placeholder pid string ("$$") to the
+    // launch script's numeric PID. The escaping must survive TWO passes: this JS
+    // template literal (so run.sh literally contains `\"\$\$\"`) and bash's
+    // double-quote parsing (which turns that back into the sed pattern "$$").
+    // Using `\"\$\$\"` here would collapse to `"$$"` in run.sh, and bash would
+    // then read it as `s/$$/$$/g` (a no-op), leaving pid an unquoted-placeholder
+    // string and every reconcile falsely treating the task as a dead process.
+    `printf '%s' ${quotedStatePayload} | sed "s/__OPENCLAW_STARTED_AT__/$started_at/g; s/\\"\\$\\$\\"/$$/g" > ${quotedStatePath}`,
     `printf '%s\n' "starting ${task.kind} ${task.id}" >> ${quotedOutputFile}`,
     `if cd ${quotedCwd} && bash -lc ${quotedCommand} >> ${quotedOutputFile} 2>&1; then`,
     "  completed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
@@ -794,5 +801,9 @@ function renderStateWriterPython(status: BackgroundTaskExecutionState["status"])
 }
 
 function shellQuote(value: string): string {
-  return `'${value.replaceAll(`'`, `"'"'"'`)}'`;
+  // POSIX single-quote escaping: end the quote, emit an escaped quote via
+  // double-quotes, then reopen the quote — `'` -> `'"'"'`. A malformed variant
+  // (`"'"'"'`) injects a spurious `"` that corrupts the emitted shell (and any
+  // JSON payload the script writes) for values containing a single quote.
+  return `'${value.replaceAll(`'`, `'"'"'`)}'`;
 }

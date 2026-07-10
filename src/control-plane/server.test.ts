@@ -84,6 +84,10 @@ describe("OperatorControlPlaneServer", () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir,
       backgroundTaskIsProcessRunning: () => false,
+      // Stub the launch so background tasks never spawn a real detached shell
+      // whose script would asynchronously write its own state file and race the
+      // deterministic states these tests assert on.
+      backgroundTaskSpawnProcess: () => ({ pid: 4242, unref: () => {} }),
       delivery: new OperatorDeliveryService(rootDir, {
         sendBrowserPush: async () => {},
       }),
@@ -953,6 +957,10 @@ describe("OperatorControlPlaneServer", () => {
     const driftingRuntime = new StandaloneOperatorRuntime({
       rootDir: driftingRootDir,
       backgroundTaskIsProcessRunning: () => false,
+      // Stub the launch so background tasks never spawn a real detached shell
+      // whose script would asynchronously write its own state file and race the
+      // deterministic states these tests assert on.
+      backgroundTaskSpawnProcess: () => ({ pid: 4242, unref: () => {} }),
     });
     const driftingServer = new OperatorControlPlaneServer({ runtime: driftingRuntime });
     const driftingBootstrap = await driftingServer.handle({
@@ -1019,6 +1027,10 @@ describe("OperatorControlPlaneServer", () => {
     const breakerRuntime = new StandaloneOperatorRuntime({
       rootDir: breakerRootDir,
       backgroundTaskIsProcessRunning: () => false,
+      // Stub the launch so background tasks never spawn a real detached shell
+      // whose script would asynchronously write its own state file and race the
+      // deterministic states these tests assert on.
+      backgroundTaskSpawnProcess: () => ({ pid: 4242, unref: () => {} }),
     });
     const breakerServer = new OperatorControlPlaneServer({ runtime: breakerRuntime });
     const breakerOne = await breakerServer.handle({

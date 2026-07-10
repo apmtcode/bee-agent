@@ -4,6 +4,17 @@ Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
 ## Foundations / DX
+- [x] **Green, deterministic test suite** (2026-07-10, run 9). Fixed two real
+      launch-script bugs (`shellQuote` POSIX escaping; pid `sed` double-escape)
+      and made the background-task tests hermetic by stubbing `spawn` alongside
+      the existing `isProcessRunning` stub. `npm test` 175/175, stable across
+      repeated runs.
+- [ ] **Hermetic-by-default background tasks in tests.** Add a dry-run /
+      simulation `BackgroundTaskExecutionService` backend (writes artifacts +
+      synthesizes deterministic state transitions, no real `spawn`) selectable
+      via a runtime option and defaulted-on in the test harness, so future
+      background-task tests can't reintroduce the real-`spawn` race. Doubles as a
+      safe demo/replay mode for the movement subsystem.
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`

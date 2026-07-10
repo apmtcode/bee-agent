@@ -528,9 +528,15 @@ describe("StandaloneOperatorRuntime", () => {
   });
 
   it("starts, syncs, recovers, lists, and cancels background tasks", async () => {
+    // Stub the launch so the test never spawns a real detached shell that would
+    // race the manual writeState() calls below (the script writes its own
+    // running/completed state to the same file). The test drives every state
+    // transition explicitly; isProcessRunning is forced false for determinism.
+    let nextPid = 40000;
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
       backgroundTaskIsProcessRunning: () => false,
+      backgroundTaskSpawnProcess: () => ({ pid: (nextPid += 1), unref: () => {} }),
     });
     const session = await runtime.startSession({ title: "Tasks", agentId: "main" });
 

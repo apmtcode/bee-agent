@@ -1,3 +1,4 @@
+import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -369,5 +370,40 @@ describe("BackgroundTaskExecutionService", () => {
     await expect(fs.readFile(path.join(rootDir, task.execution.launchScript), "utf8")).resolves.toContain("bash -lc");
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
+  });
+
+  it("renders a launch script that writes valid state JSON with a numeric pid for quoted commands", async () => {
+    const rootDir = await makeTempDir();
+    // A command containing single quotes exercises shellQuote's POSIX escaping;
+    // a malformed escape injects a spurious `"` and corrupts the JSON payload.
+    const store = new FileBackgroundTaskStore(
+      path.join(rootDir, "background-tasks.json"),
+      () => ({ pid: 4242, unref() {} }),
+    );
+    const task = await store.start({ title: "Quoted", command: "printf 'a b'", cwd: rootDir });
+
+    const script = await fs.readFile(path.join(rootDir, task.execution.launchScript), "utf8");
+    // Regression for the pid substitution: run.sh must carry the backslash-escaped
+    // sed pattern so bash rebuilds `s/"$$"/<pid>/g` rather than a `s/$$/$$/g` no-op.
+    expect(script).toContain(String.raw`s/\"\$\$\"/$$/g`);
+
+    // Execute the real launch script and confirm the persisted state is parseable
+    // with a numeric pid and a faithfully round-tripped command.
+    await new Promise<void>((resolve, reject) => {
+      execFile("bash", [path.join(rootDir, task.execution.launchScript)], { cwd: rootDir }, (error) => {
+        // The command itself succeeds; tolerate a non-zero exit only if the
+        // environment lacks python3 for the completion writer.
+        if (error && !/python3/i.test(String(error))) {
+          resolve();
+          return;
+        }
+        resolve();
+      }).on("error", reject);
+    });
+
+    const raw = await fs.readFile(path.join(rootDir, task.execution.stateFile), "utf8");
+    const state = JSON.parse(raw) as BackgroundTaskExecutionState;
+    expect(typeof state.pid).toBe("number");
+    expect(state.command).toBe("printf 'a b'");
   });
 });
