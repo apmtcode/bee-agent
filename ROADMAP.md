@@ -62,13 +62,29 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      for a real on-device small model. **DONE run 9** —
+      `src/training/movement-policy.ts`: `MovementPolicyBackend` interface +
+      `MarkovMovementBackend` (deterministic, dependency-free, generalizes via
+      cross-context backoff). `train`/`predict`/`rollout`/`serialize`/`load`.
+- [~] Synthetic event-stream generator to validate capture→dataset→replay
+      round-trips without real OS input. **Partial (run 9):** the movement-policy
+      tests drive a synthetic gesture stream through build→train→rollout. Still
+      want a reusable generator util (seedable, multi-app) shared across tests.
+- [x] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories. **DONE run 9** —
+      `evaluateMovementPolicy(model, heldOut)`: next-token teacher-forcing
+      accuracy + a generalized-prediction count (how much came from
+      cross-context backoff), with per-context breakdown.
+- [ ] Policy-driven replay: feed `MovementPolicyModel.rollout()` output back
+      through `src/capture/replay-service` so a *generated* (not recorded)
+      movement executes on the same replay machinery — validates generalization
+      against the real replay path. Add a `MovementPolicyReplaySource` adapter.
+- [ ] Wire the movement-policy backend into the training runner/execution service
+      so a reviewed export can produce a trained in-process model artifact (JSON
+      via `serialize()`) alongside the MLX/axolotl launch plan — giving a working
+      end-to-end path even without Apple-silicon hardware.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
@@ -80,6 +96,12 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Barrel-collision lint: scan `src/index.ts` re-exports for names exported
       from more than one module and flag them, so duplicate-identifier debt is
       caught at authoring time instead of accumulating silently.
+- [ ] Make the background-task tests hermetic: `app.test.ts` / `server.test.ts`
+      cover background/monitor/cron commands by spawning **real** shell processes
+      and polling state-files, so they flake non-deterministically in
+      cloud/CI sandboxes (2–4 failing per run here, independent of any change).
+      Inject a fake process launcher + clock so they assert deterministically
+      without real `date`/shell timing.
 - [ ] Per-module typecheck ratchet: record each module's current `tsc` error
       count to a baseline file and fail if a module regresses above it. Lets the
       engine pay debt down module-by-module without one green-gate blocking

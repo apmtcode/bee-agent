@@ -6,6 +6,60 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-10 (run 9) — 🧠 Movement-policy learning backend: train + infer + generalize (objective #2)
+
+**Audited:** The local-movement learning subsystem (standing objective #2) end to
+end. `src/capture/*` records movements into `TrajectorySpan`s and
+`src/training/runner.ts` emits MLX/axolotl **launch plans** for real on-device
+training — but there was **no in-process model backend** that actually *learns* a
+policy from a recorded dataset or runs *inference*. Objective pieces (c) "repeat
+recorded movements" and (d) "generalize to new-but-related movements" were
+entirely unimplemented in any runnable/testable form; the whole capture → dataset
+→ train → infer loop could not be validated in the cloud.
+
+**Changed (additive) — new `src/training/movement-policy.ts`:**
+- `MovementDataset` + `buildMovementDataset(trajectories)`: a compact, serializable
+  dataset derived from recorded trajectories, with a default canonical action
+  tokenizer (`tool:gesture[-dir][#target]`) and app-context derivation — both
+  overridable.
+- `MovementPolicyBackend` **interface** (the pluggable seam a real on-device small
+  model slots into) with `train(dataset)` / `load(serialized)`, plus
+  `MovementPolicyModel` (`predict` / `rollout` / `serialize`).
+- `MarkovMovementBackend`: a **deterministic, dependency-free** reference backend —
+  an order-k context-conditioned Markov policy with two backoff tiers (shorter
+  history within the same context, then a **pooled cross-context grammar**). The
+  cross-context tier is what makes it *generalize*: inference for an unseen context
+  falls back to the movement grammar learned across every recorded context.
+  Argmax with lexical tie-breaking → fully reproducible (no randomness).
+- `evaluateMovementPolicy(model, heldOut)`: a held-out next-token eval harness
+  (teacher forcing) reporting fidelity **and** how many predictions came from
+  cross-context generalization.
+- Exported the whole surface from `src/index.ts`.
+
+**Test results:** new `movement-policy.test.ts` — **8/8 green**, driven by a
+synthetic gesture stream (no real OS input): repeat-a-recorded-sequence,
+continue-from-a-prime, generalize-to-an-unseen-context (asserts `backoff:
+"global"`), serialize/load round-trip, empty-model safety, and a held-out eval
+scoring 100% next-token accuracy entirely via generalization. `typecheck:src` ✅
+(exit 0). `build` ✅ (tsdown, 5 files). Full suite **179/182**.
+
+**Pre-existing failures (NOT caused by this run):** 3 tests in `app.test.ts` /
+`server.test.ts` that spawn **real background shell processes** and poll
+state-files fail non-deterministically in this cloud sandbox (they flaked 2–4/run
+in the pre-change baseline too, before any edit; earlier runs' environments ran
+them green). They live in files this run never touched. Per the branch mandate,
+work is pushed to the designated feature branch `claude/peaceful-dirac-hq9mgu`.
+**New ROADMAP item added** to make these process tests hermetic (inject a fake
+process launcher / clock so they don't depend on real `date`+shell timing).
+
+**New idea:** now that a policy can *rollout* a movement sequence, close the loop
+by feeding rollouts back through the existing `replay-service` — a
+"policy-driven replay" that executes a *generated* (not recorded) trajectory,
+so generalization can be validated against the same replay machinery used for
+recorded ones. Add a `MovementPolicyReplaySource` adapter next run.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
