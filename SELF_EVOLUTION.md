@@ -6,6 +6,60 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-10 (run 9) — 🐛 Fix background-task launch pipeline: suite 174(4 failing)→175 green
+
+**Audited:** The actual `npm test` baseline (prior runs tracked `tsc` debt but the
+*runtime* suite had **4 deterministically/racily failing tests** across
+`operator-runtime`, `server`, `app`, surfacing as `SyntaxError: … JSON at position
+311`). Root-caused it into two real product bugs in the background-task launch
+pipeline (`src/harness/background-tasks.ts`).
+
+**Bug 1 — `shellQuote` corrupted embedded JSON (correctness + injection).** The
+POSIX single-quote escape was `"'"'"'` (a *leading double-quote*) instead of the
+correct `'"'"'` (leading *closing single-quote*). Any `command` containing a
+single quote — e.g. `printf 'line-1\nline-2\n'` — was mangled (`'` → `"'`),
+producing an unparseable `state.json` that crashed recovery/status reads.
+Reproduced in isolation, then fixed to the canonical escape. (`src/training/runner.ts`
+already had the correct form.)
+
+**Bug 2 — running-state `pid` never substituted.** The launch script wrote
+`"pid":"$$"` and relied on `sed "s/\"\$\$\"/$$/g"`, but the rendered bare `"`
+were stripped by bash as quote syntax, so the pattern became `s/<pid>/<pid>/g`
+and never matched — leaving `pid` as the literal string `"$$"` (breaks
+`isProcessRunning`). Replaced with a clean `__OPENCLAW_PID__` sentinel emitted
+**unquoted** in the JSON template, so the `sed` needs no embedded quotes and
+yields a proper JSON number.
+
+**Tests:**
+- New regression test in `background-tasks.test.ts` that *executes* the generated
+  launch script (real `bash`) for a quote-containing command and asserts the
+  state JSON parses and `pid` is numeric. Verified it FAILS on the pre-fix code
+  (same position-311 error) and passes after.
+- Added a `backgroundTaskSpawnProcess` / `backgroundTaskIsProcessRunning` **test
+  seam** to `OperatorCliApp` (forwarded to the runtime), mirroring the runtime's
+  existing injection points.
+- Made `operator-runtime`, `app`, and `server` tests deterministic by stubbing
+  the spawner so they no longer launch real OS processes (`sleep 5`, `tail -f`,
+  `printf`) that raced with the tests' manual state writes and leaked across
+  tests. Bug 1 had been *masking* these races behind the JSON crash.
+
+**Results:** `npm test` **175/175 green, stable across 3 consecutive runs** (was
+174 with 4 failing). `typecheck:src` clean; `build` ✅; full `tsc` debt unchanged
+at **125** (still entirely in test files). Core product diff is 2 files
+(`background-tasks.ts` + the `app.ts` seam); the rest are test determinism.
+
+**New idea:** add a `verify` npm script (`typecheck:src && build && test`) and
+have the engine run it as the pre-push gate every cycle — this run only caught the
+red suite because I ran `npm test` by hand; a green-gate would have caught it
+automatically. Deeper: a tiny **lint that flags shell-quoting helpers**
+(`shellQuote`-style functions) with a golden round-trip table (values containing
+`'`, `"`, `$`, newlines, spaces) so any regression in escape sequences is caught
+at unit level, not via a downstream JSON parse. Also: audit remaining tests that
+call `startBackgroundTask` against a real spawner and route them through the new
+seam, so no unit test depends on real OS process timing.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

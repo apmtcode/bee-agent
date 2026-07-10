@@ -734,19 +734,24 @@ function renderLaunchScript(task: BackgroundTaskRecord): string {
   const quotedOutputFile = shellQuote(task.execution.outputFile);
   const quotedCwd = shellQuote(task.cwd);
   const quotedCommand = shellQuote(task.command);
+  // The running state's `pid` is filled in by the launch script via `sed`. Use a
+  // plain sentinel token (no shell-special characters) and emit it *unquoted* in
+  // the JSON template so the substitution turns it into a JSON number without the
+  // pattern needing embedded quotes — bash would otherwise strip bare quotes from
+  // the sed program, leaving `pid` as the literal string "$$".
   const quotedStatePayload = shellQuote(
     JSON.stringify({
       version: 1,
       taskId: task.id,
       kind: task.kind,
       status: "running",
-      pid: "$$",
+      pid: "__OPENCLAW_PID__",
       startedAt: "__OPENCLAW_STARTED_AT__",
       updatedAt: "__OPENCLAW_STARTED_AT__",
       outputFile: task.execution.outputFile,
       cwd: task.cwd,
       command: task.command,
-    }),
+    }).replace('"__OPENCLAW_PID__"', "__OPENCLAW_PID__"),
   );
 
   return [
@@ -754,7 +759,7 @@ function renderLaunchScript(task: BackgroundTaskRecord): string {
     "set -euo pipefail",
     `mkdir -p $(dirname ${quotedStatePath}) $(dirname ${quotedOutputFile})`,
     "started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-    `printf '%s' ${quotedStatePayload} | sed "s/__OPENCLAW_STARTED_AT__/$started_at/g; s/\"\$\$\"/$$/g" > ${quotedStatePath}`,
+    `printf '%s' ${quotedStatePayload} | sed "s/__OPENCLAW_STARTED_AT__/$started_at/g; s/__OPENCLAW_PID__/$$/g" > ${quotedStatePath}`,
     `printf '%s\n' "starting ${task.kind} ${task.id}" >> ${quotedOutputFile}`,
     `if cd ${quotedCwd} && bash -lc ${quotedCommand} >> ${quotedOutputFile} 2>&1; then`,
     "  completed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
@@ -794,5 +799,9 @@ function renderStateWriterPython(status: BackgroundTaskExecutionState["status"])
 }
 
 function shellQuote(value: string): string {
-  return `'${value.replaceAll(`'`, `"'"'"'`)}'`;
+  // POSIX single-quote escaping: close the quote, emit an escaped quote via a
+  // double-quoted segment, then reopen — `'"'"'`. The literal must start with a
+  // closing single quote; a leading `"` (the previous form) mangles any value
+  // that itself contains a single quote, corrupting embedded JSON.
+  return `'${value.replaceAll(`'`, `'"'"'`)}'`;
 }

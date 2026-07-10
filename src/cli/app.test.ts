@@ -1063,7 +1063,20 @@ describe("OperatorCliApp", () => {
 
   it("supports background and monitor task commands plus cron commands", async () => {
     const rootDir = await makeTempDir();
-    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    // Stub the spawner so no real OS process is launched — the CLI surface is
+    // what's under test, and a real short-lived launch script would otherwise
+    // race with the manual output/state writes below (and leak processes into
+    // sibling tests in this file).
+    const app = new OperatorCliApp({
+      rootDir,
+      cwd: rootDir,
+      currentDate: "2026-05-25",
+      backgroundTaskSpawnProcess: () => ({ pid: 4242, unref() {} }),
+      backgroundTaskIsProcessRunning: () => true,
+    });
+    const originalKill = process.kill;
+    process.kill = (() => true) as typeof process.kill;
+    try {
     const session = await app.runtime.startSession({ title: "CLI ops", cwd: rootDir, agentId: "operator-cli" });
 
     const startOutput = await app.dispatchSlashCommand(
@@ -1078,6 +1091,9 @@ describe("OperatorCliApp", () => {
     if (!task) {
       throw new Error("expected background task");
     }
+    // The stubbed spawner runs nothing, so stand in for the launch script's
+    // output write that the view/watch assertions below depend on.
+    await app.runtime.backgroundTasks.executionService.writeOutput(task, "ok\n");
 
     const listOutput = await app.dispatchSlashCommand({ kind: "background-list" });
     expect(listOutput).toContain(task.id);
@@ -1178,6 +1194,9 @@ describe("OperatorCliApp", () => {
 
     const cronDelete = await app.dispatchSlashCommand({ kind: "cron-delete", jobId: job.id }, session.id);
     expect(cronDelete).toContain(`Deleted cron job ${job.id}`);
+    } finally {
+      process.kill = originalKill;
+    }
   });
 
   it("gates dangerous background commands and allows rerun after approval", async () => {

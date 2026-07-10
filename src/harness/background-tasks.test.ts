@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -21,6 +22,40 @@ afterEach(async () => {
 });
 
 describe("FileBackgroundTaskStore", () => {
+  it("writes valid, parseable state JSON for commands containing quotes", async () => {
+    // Regression: the launch script embeds `command` into a shell-quoted JSON
+    // payload. A broken single-quote escape used to corrupt any command that
+    // itself contained a single quote, producing an unparseable state.json.
+    const rootDir = await makeTempDir();
+    const filePath = path.join(rootDir, "background-tasks.json");
+    const store = new FileBackgroundTaskStore(
+      filePath,
+      (command, args, options) => {
+        // Actually run the generated launch script so the real shell-quoting
+        // path is exercised (the default mock stub would never reveal the bug).
+        execFileSync("bash", [command, ...args], { cwd: options.cwd });
+        return { pid: 4242, unref() {} };
+      },
+      () => false,
+    );
+
+    const command = "printf 'has a single quote and \"double\" quote\\n'";
+    const task = await store.start({
+      sessionId: "sess-quote",
+      title: "Quote sensitive",
+      command,
+      cwd: rootDir,
+      kind: "task",
+    });
+
+    // readState() parses state.json; a corrupt payload would throw here.
+    const state = await store.getExecutionState(task.id);
+    expect(state).toMatchObject({ taskId: task.id, command });
+    // The pid sentinel must be substituted with a real numeric pid, not left as
+    // the literal string "$$".
+    expect(typeof state?.pid).toBe("number");
+  });
+
   it("starts tasks, persists output, syncs terminal state, and reloads", async () => {
     const rootDir = await makeTempDir();
     const filePath = path.join(rootDir, "background-tasks.json");

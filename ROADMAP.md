@@ -38,8 +38,19 @@ unchecked items are queued. Keep this richer than you found it each run.
     `skills.executable.*`, `push.subscriptions.*`, `trajectories.*`, `replays.*`,
     `cron.runs`/misc — plus a few genuine test-only typings. Map the rest, then
     fix residual test-only typings.
-- [ ] Add a `verify` npm script (`typecheck && build && test`) and have the
-      engine run it as a pre-push self-check each cycle.
+- [ ] Add a `verify` npm script (`typecheck:src && build && test`) and have the
+      engine run it as a pre-push self-check each cycle. **Priority raised (run 9):**
+      run 9 found the runtime suite was RED (4 failing) while prior runs only
+      tracked `tsc` debt — a green-gate would have caught it automatically.
+- [x] **Fix background-task launch pipeline** (run 9): `shellQuote` used a broken
+      POSIX single-quote escape (`"'"'"'` vs `'"'"'`) that corrupted any command
+      containing a single quote into unparseable `state.json`; and the running
+      `pid` was never substituted (bare `sed` quotes stripped by bash), leaving
+      `"pid":"$$"`. Both fixed + regression test that executes the real launch
+      script. Suite 174(4 failing)→175 green.
+- [x] **`OperatorCliApp` spawn/liveness test seam** (run 9):
+      `backgroundTaskSpawnProcess` / `backgroundTaskIsProcessRunning` options
+      forwarded to the runtime so CLI-level tests don't launch real OS processes.
 - [x] Interim **source-only typecheck gate** — DONE run 7. `tsconfig.src.json`
       (excludes `**/*.test.ts`) + `typecheck:src` script; passes (exit 0). Next:
       have the engine run it as a per-run pre-push self-check.
@@ -84,3 +95,13 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
       count to a baseline file and fail if a module regresses above it. Lets the
       engine pay debt down module-by-module without one green-gate blocking
       progress, and prevents backsliding while the total is still > 0.
+- [ ] **Shell-quoting golden test (run 9 idea):** a unit test with a round-trip
+      table for `shellQuote` (values with `'`, `"`, `$`, newlines, spaces, `%`)
+      asserting `printf '%s' <quoted>` reproduces the input exactly. Would have
+      caught the run-9 escape bug at unit level instead of via a downstream JSON
+      parse crash. Consider a lint that flags any hand-rolled shell-quoting helper
+      lacking such coverage.
+- [ ] **Route all bg-task tests through the spawn seam (run 9 idea):** audit every
+      test that calls `startBackgroundTask` against a real spawner and inject a
+      stub, so no unit test depends on real OS process timing (`sleep`, `tail -f`).
+      Runs 8→9 showed these races were masked by an unrelated crash.
