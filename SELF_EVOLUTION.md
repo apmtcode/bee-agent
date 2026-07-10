@@ -6,6 +6,59 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-10 (run 9) — 🐛 Fix `shellQuote` corruption bug + hermetic background-task tests
+
+**Audited:** The test baseline. On a clean checkout `npm test` was **RED**:
+3 tests failing (`operator-runtime.test`, `server.test`, `app.test`) — a
+regression from the "174/174" claimed at run 8. Root-caused all of it.
+
+**Two distinct problems, both fixed:**
+
+1. **Real bug — `shellQuote()` produced corrupt shell (and thus corrupt JSON).**
+   `src/harness/background-tasks.ts` escaped embedded single quotes with the
+   sequence `"'"'"'` (6 chars, starts with `"`). The correct POSIX escape is
+   `'"'"'` (5 chars — *close* the single quote first). The buggy form injected
+   stray `"` characters: any background-task command containing a `'` (e.g.
+   `printf 'line-1\nline-2\n'`) round-tripped to `printf "'line-1...` in the
+   launch script, so the emitted `state.json` was invalid JSON and `readState()`
+   threw `SyntaxError`. Verified the fix in isolation: `a'b'c` now round-trips
+   cleanly (was `a"'b"'c`). This fixed `operator-runtime.test`'s parse crash.
+
+2. **Flaky tests — real OS spawn raced the assertions.** Several tests start a
+   real background task (`startBackgroundTask` → detached `bash` launch script
+   that asynchronously writes `state.json`/`output.log`) and then assert on
+   derived control state. Whether the state file had landed (and whether the
+   process was still alive) depended on host scheduling — they passed at run 8
+   only because spawn was slower then. Made them **hermetic** via the existing
+   (previously unused) `backgroundTaskSpawnProcess` injection seam:
+   - New `src/harness/background-tasks.testkit.ts` with three deterministic
+     spawns: `createNoopBackgroundSpawn` (writes nothing → caller's explicit
+     `writeState()` is authoritative), `createSynchronousBackgroundSpawn` (runs
+     the launch script to completion), and `createRunningBackgroundSpawn` (runs
+     it for real output, then pins `state.json` back to `running`).
+   - Additive: `OperatorCliApp` now forwards optional
+     `backgroundTaskSpawnProcess` / `backgroundTaskIsProcessRunning` to its
+     runtime (production still defaults to the real spawn / OS probe).
+   - Wired no-op spawn into the state-driven tests (`server.test` ×3 runtimes,
+     `operator-runtime.test`, `app.test` platform test) and the running spawn
+     (+ `isProcessRunning: () => true`) into `app.test`'s watch/stop test.
+
+**Test results:** `npm test` **174/174 ✅** (was 3 failing), stable across 5+
+repeated runs (previously order/timing-dependent). `npm run build` ✅.
+`npm run typecheck:src` ✅ (exit 0). Full `tsc` unchanged at **125** (all in
+pre-existing test files; the new source file adds zero errors).
+
+**New idea:** add a lightweight **flaky-test guard** to the engine's pre-push
+self-check — run the suite twice (or with `--sequence.shuffle`) and fail the
+run if results differ between passes. This exact class of real-process/timing
+flakiness silently rotted the "green" baseline between run 8 and run 9; a
+double-run gate would have caught it at authoring time. Longer term, a lint that
+flags any test constructing `StandaloneOperatorRuntime`/`OperatorCliApp` and
+calling `startBackgroundTask` *without* injecting a `backgroundTaskSpawnProcess`,
+so new tests can't reintroduce real-spawn races.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

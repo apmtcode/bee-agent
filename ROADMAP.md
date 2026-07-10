@@ -4,6 +4,14 @@ Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
 ## Foundations / DX
+- [x] **Green the test baseline** (2026-07-10, run 9). Fixed a real
+      `shellQuote()` POSIX single-quote escaping bug in
+      `src/harness/background-tasks.ts` (was `"'"'"'`, now `'"'"'`) that
+      corrupted the launch script / `state.json` for any command containing a
+      `'`. Made the background-task tests hermetic via the
+      `backgroundTaskSpawnProcess` seam + new
+      `src/harness/background-tasks.testkit.ts`; `npm test` 3-failing → 174/174,
+      stable across repeated runs.
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`
@@ -40,6 +48,15 @@ unchecked items are queued. Keep this richer than you found it each run.
     fix residual test-only typings.
 - [ ] Add a `verify` npm script (`typecheck && build && test`) and have the
       engine run it as a pre-push self-check each cycle.
+- [ ] **Flaky-test guard** (new, run 9): run the suite twice (or with
+      `--sequence.shuffle`) in the pre-push self-check and fail if results
+      differ between passes. Real-process/timing flakiness silently rotted the
+      "green" baseline between runs 8 and 9; a double-run gate catches it.
+- [ ] **Real-spawn lint** (new, run 9): flag any test that constructs
+      `StandaloneOperatorRuntime`/`OperatorCliApp` and calls
+      `startBackgroundTask` without injecting a `backgroundTaskSpawnProcess`, so
+      new tests can't reintroduce detached-process races. Prefer the deterministic
+      spawns in `src/harness/background-tasks.testkit.ts`.
 - [x] Interim **source-only typecheck gate** — DONE run 7. `tsconfig.src.json`
       (excludes `**/*.test.ts`) + `typecheck:src` script; passes (exit 0). Next:
       have the engine run it as a per-run pre-push self-check.
