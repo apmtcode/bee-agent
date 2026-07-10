@@ -6,6 +6,63 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-10 (run 9) — Movement subsystem: in-process train → infer → generalize pipeline
+
+**Audited:** The local-movement learning subsystem (`src/capture/` + `src/training/`)
+against objective #2's five pieces (capture → schema → dataset → replay →
+**train/infer**). Found the first four exist (recorder/adapters, trajectory
+schema, exporter dataset, replay manifest) but the **train + infer** piece was
+entirely missing in-process: `runner.ts` only emits *external* mlx/axolotl launch
+scripts, so nothing about learning-to-repeat-and-generalize movements could be
+exercised or validated in the cloud. That is the whole point of the objective.
+
+**Changed (additive):** new `src/training/movement-model.ts` — a pluggable,
+cloud-runnable model pipeline with a deterministic reference backend:
+- **Schema/tokenization:** `MovementStep` (tool/gesture/target/direction) with a
+  fully-specific `movementStepToken` and an abstracted, target-less
+  `movementStepShape` (the generalization axis). Derivers from captured
+  `TrajectoryAction`s (`movementStepFromAction`, sorts by ts), whole trajectories
+  (`movementSequenceFromTrajectory`), and replay timelines
+  (`movementSequenceFromReplayEvents`); `buildMovementDataset` assembles a corpus.
+- **Pluggable backend:** `MovementModelBackend` interface (`train → TrainedMovementModel`
+  with `predictNext`/`generate`). A real on-device small model drops in behind
+  this seam; the shipped `MarkovMovementBackend` is a **variable-order Markov model
+  with structured backoff** and is fully deterministic (argmax + lexicographic
+  tie-break, no RNG) so it doubles as the CI reference. Prediction path:
+  longest exact context (verbatim replay) → abstracted "shape" context (the
+  generalization path to novel-but-related movements) → global prior; each
+  prediction reports `level` so replay vs. generalization is observable.
+- **Generalization eval harness:** `evaluateMovementModel` scores teacher-forced
+  next-step prediction on held-out sequences — coverage, exact accuracy, shape
+  accuracy, and a `generalizationRate` (shape-correct among predictions reached
+  *without* an exact match).
+- **Synthetic stream generator:** `synthesizeMovementSequences` deterministically
+  expands templates by target substitution, so capture→dataset→train→eval
+  round-trips run with zero real OS input. Exported all of the above from the barrel.
+
+**Test results:** new `movement-model.test.ts` — **16/16 passing** (tokenization,
+ts-ordering, replay-exactness, shape-backoff generalization, prior fallback,
+determinism, synthetic train/held-out split with generalizationRate = 1).
+`npm run typecheck:src` ✅ (source stays green). `npm run build` ✅.
+
+**Pre-existing failures (NOT caused by this run):** full `npm test` shows **3
+failing** in `operator-runtime.test.ts`, `server.test.ts`, `app.test.ts` — all
+one root cause: `FileBackgroundTaskStore.start()` spawns **real shell processes**
+(`printf`, `tail -f`) whose completion wrapper races the test's manually-written
+state file, so `getBackgroundTaskExecutionState` reads `undefined` in the cloud
+sandbox. Verified by stashing this run's changes: the same 3 fail on the clean
+base branch (deterministic across 3 reruns). Left untouched per the "don't chase
+unrelated churn" guardrail; logged to ROADMAP as an OS-dependency to harden.
+
+**New idea:** give the movement model a *skill-conditioned* context — key
+transitions not just on prior movements but on the active promoted-skill/intent
+(from `memory-store`), so the same "tap → type → submit" shape generalizes
+differently under "login" vs "search" intents. This turns the flat Markov policy
+into a lightweight hierarchical one and is the natural next backend upgrade
+before wiring a real on-device model.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

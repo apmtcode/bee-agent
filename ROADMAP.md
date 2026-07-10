@@ -62,13 +62,26 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      for a real on-device small model. (2026-07-10, run 9) — `MovementModelBackend`
+      + deterministic `MarkovMovementBackend` in `src/training/movement-model.ts`.
+- [x] Synthetic event-stream generator to validate capture→dataset→replay
+      round-trips without real OS input. (2026-07-10, run 9) —
+      `synthesizeMovementSequences` (deterministic template/target expansion).
+- [x] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories. (2026-07-10, run 9) — `evaluateMovementModel`
+      (coverage / exact / shape / generalizationRate).
+- [ ] Skill/intent-conditioned movement backend: key transitions on the active
+      promoted-skill/intent (from `memory-store`) so one movement shape
+      generalizes differently per intent — a lightweight hierarchical policy and
+      the natural upgrade before a real on-device model.
+- [ ] Wire the movement model into the training runner/execution service so a
+      reviewed export can be trained and eval'd in-process (mock backend) as a
+      pre-flight before emitting the external mlx/axolotl launch script.
+- [ ] Persist/serialize a trained movement model (and a loader) so inference can
+      run without retraining, and add a replay engine that drives captured
+      adapters from generated movements.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
@@ -80,6 +93,13 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Barrel-collision lint: scan `src/index.ts` re-exports for names exported
       from more than one module and flag them, so duplicate-identifier debt is
       caught at authoring time instead of accumulating silently.
+- [ ] **Harden real-process background-task tests for the cloud sandbox.** 3
+      tests (`operator-runtime.test.ts`, `server.test.ts`, `app.test.ts`) fail
+      because `FileBackgroundTaskStore.start()` spawns real shells (`printf`,
+      `tail -f`) whose completion wrapper races the test's manually-written state
+      file → `getExecutionState` reads `undefined`. Pre-existing (fails on the
+      clean base). Fix by injecting a mock launcher/clock or awaiting wrapper
+      completion so the state file is deterministic in CI.
 - [ ] Per-module typecheck ratchet: record each module's current `tsc` error
       count to a baseline file and fail if a module regresses above it. Lets the
       engine pay debt down module-by-module without one green-gate blocking
