@@ -6,6 +6,73 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-10 (run 9) — 🧠 Movement-model backend: cloud-runnable train → infer → generalize loop
+
+**Audited:** Standing objective #2 (local-movement learning), dormant since the
+scaffolding landed while runs 2–8 paid down typecheck debt. Inventoried
+`src/training/`: the pipeline exports a reviewed dataset and builds an
+**Apple-Silicon launch plan** (`runner.ts` → mlx/axolotl command + shell
+script), but there was **no backend abstraction and nothing that actually
+trains or infers in the cloud** — objective #2's parts (c) "post-train a model to
+repeat movements" and (d) "generalize to related movements" had zero executable
+coverage. The real training only ever runs on-device.
+
+**Changed (additive — two new modules + barrel exports, no existing code
+touched):**
+- **`src/training/movement-model.ts`** — the pluggable backend seam that closes
+  the loop in-cloud:
+  - Tokenizer: replay events → discrete *movement tokens*
+    (`action:<tool>` / `observation:<source>`), timeline-ordered
+    (`sequenceFromReplay` / `sequencesFromReplays`).
+  - `MovementModelBackend` interface (`train` / `predict` / `generate`) + a
+    process-wide **registry** (`registerMovementBackend` / `getMovementBackend`)
+    so a real on-device small model drops in behind the same seam.
+  - `MarkovMovementBackend` — a **deterministic variable-order Markov policy with
+    Katz-style back-off**. It's a genuine learned model (accumulates transition
+    counts for every context length 0..order, left-padded with `BEGIN`
+    sentinels) that *faithfully replays* recorded movements at full order and
+    *generalizes* to unseen prefixes by shortening context — yet needs no native
+    deps, so CI exercises the real train→predict→generate path.
+  - `evaluateMovementModel` — teacher-forced next-token **replay-fidelity /
+    generalization eval** (accuracy, full-order-hit rate, exact-rollout rate).
+  - `MovementTrainingService` — trains from `ReplayManifest[]`, persists/loads
+    the JSON model artifact (`writeJsonAtomic`/`readJsonFile`), serves inference.
+    Backend is injected (defaults to markov mock).
+- **`src/training/movement-synthetic.ts`** — deterministic seeded
+  (`mulberry32`) synthetic replay generator from a task "grammar" with a
+  tunable `variationRate`, so capture→dataset→train→replay round-trips and
+  generalization can be validated with **no real OS input** (roadmap item).
+- `src/index.ts` — exported the new surface.
+
+**Design fix caught during testing:** `predict` originally didn't `BEGIN`-pad the
+context, so short teacher-forced prefixes silently backed off to the global
+unigram instead of the begin-conditioned distribution — inconsistent with
+`train`/`generate` (memorized task scored 0.89, not 1.0). Fixed `predict` to
+left-pad internally; `generate` now delegates to it. Memorized fidelity is now
+exactly 1.0; generalization on all-varied held-out sits in (0.5, 1.0) as
+intended.
+
+**Test results:** `movement-model.test.ts` **14/14** (stable across repeated
+runs). `typecheck:src` ✅ (exit 0). `npm run build` ✅ (5 files, 549 kB). Full
+suite **185/188**. The **3 failures are pre-existing and time-dependent, not
+introduced here** — verified by `git stash` (clean HEAD fails the *same* suites,
+4 failures) and by isolation (each of `server.test.ts`, `app.test.ts`,
+`operator-runtime.test.ts` fails exactly one test alone). Root cause is a
+wall-clock-relative pairing heartbeat: the test expects remote-control
+`state: "active"` but gets `"degraded"` because the baseline (logged 2026-06-23)
+is now ~17 days stale against today's clock (2026-07-10). Per the branch
+requirements this run pushes to the designated feature branch
+`claude/peaceful-dirac-9qovh0`, not `main`.
+
+**New idea:** the flaky trio is a **time-injection** gap — those subsystems read
+the ambient wall clock, so their heartbeat/expiry assertions rot as real time
+advances. Thread an injectable `now()` clock (the pattern `movement-model`
+already uses for `trainedAt`) through the pairing/remote-control + background-task
+runtimes so tests pin time and stop drifting. Second idea: a **behaviour-cloning
+"skill distiller"** — feed a promoted executable-skill's approved trajectories
+through `MovementTrainingService` to mint a per-skill movement model, so a skill
+can *act* (roll out movements) rather than only replay its recorded transcript.
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

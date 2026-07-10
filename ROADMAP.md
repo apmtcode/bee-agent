@@ -59,18 +59,40 @@ unchecked items are queued. Keep this richer than you found it each run.
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
 (exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
-      objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Inventory what `src/capture` + `src/training` already implement vs. the
+      objective's five pieces (2026-07-10, run 9). Prior state: capture→schema→
+      dataset→replay existed; **train/infer only produced an on-device launch
+      plan** (`runner.ts`), nothing ran in-cloud. Gap now closed by the backend
+      seam below.
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      for a real on-device small model. DONE run 9 — `MovementModelBackend`
+      interface + registry + deterministic `MarkovMovementBackend` +
+      `MovementTrainingService` in `src/training/movement-model.ts`.
+- [x] Synthetic event-stream generator to validate capture→dataset→replay
+      round-trips without real OS input. DONE run 9 —
+      `src/training/movement-synthetic.ts` (seeded, grammar-driven, tunable
+      `variationRate`).
+- [x] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories. DONE run 9 — `evaluateMovementModel`
+      (next-token accuracy + full-order-hit + exact-rollout rates).
+- [ ] Wire a real on-device backend behind `MovementModelBackend` (MLX token
+      model): implement `train`/`predict`/`generate` against the launch-plan
+      runtime and register it alongside `markov`.
+- [ ] **Skill distiller (behaviour cloning):** feed a promoted executable
+      skill's approved trajectories through `MovementTrainingService` to mint a
+      per-skill movement model, so a skill can *act* (roll out movements), not
+      only replay its recorded transcript.
 
 ## Innovation backlog
+- [ ] **Time injection for clock-dependent suites:** `server.test.ts`,
+      `app.test.ts`, `operator-runtime.test.ts` each fail one wall-clock-relative
+      assertion (pairing/remote-control heartbeat reads `state:"degraded"` once
+      the baseline goes stale — surfaced run 9, ~17 days after the 2026-06-23
+      baseline). Thread an injectable `now()` clock (as `movement-model` does for
+      `trainedAt`) through the pairing/remote-control + background-task runtimes
+      so these tests pin time and stop rotting. Highest-value DX fix: it's what
+      keeps the full suite from being green.
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in
       project health over time.
