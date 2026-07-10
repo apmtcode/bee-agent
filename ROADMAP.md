@@ -59,6 +59,17 @@ unchecked items are queued. Keep this richer than you found it each run.
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
 (exporter, job store/manifest, runner, execution service). Next increments:
+- [x] **Fix background-task state corruption** (run 9, 2026-07-10): `shellQuote`
+      escaped `'` as `"'"'"'` (leading `"`), corrupting the launch script's JSON
+      state file for any command with a single quote; the initial-state `sed`
+      also never stamped the pid. Fixed `shellQuote` to `'\''`, moved initial
+      state to a `python3` json writer, made 3 racy tests hermetic (injectable
+      spawn/liveness), and added a real-launch-script regression test.
+- [ ] **Launch-script contract test + argv-based state writer** (run-9 idea):
+      exercise the launch script against adversarial commands (quotes, `$`,
+      backticks, newlines, unicode) end-to-end; then eliminate shell-escaped
+      JSON entirely by having python read the command from `argv` instead of
+      interpolated script text.
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.

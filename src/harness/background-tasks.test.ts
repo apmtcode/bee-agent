@@ -370,4 +370,34 @@ describe("BackgroundTaskExecutionService", () => {
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
   });
+
+  it("writes a valid state file for commands containing single quotes (real launch script)", async () => {
+    // Regression: shellQuote previously escaped a single quote as `"'"'"'`
+    // (leading `"`), injecting a stray double quote and corrupting the JSON
+    // payload for any command/path containing `'`. Run the real launch script
+    // — which spawns bash + python3 — and confirm the persisted state file
+    // parses and round-trips the exact command.
+    const rootDir = await makeTempDir();
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"));
+    const command = "printf 'quoted-1\nquoted-2\n'";
+    const task = await store.start({ title: "quoting smoke", command, cwd: rootDir });
+
+    // Poll to completion rather than a fixed sleep (real subprocess timing).
+    let synced = await store.sync(task.id);
+    for (let attempt = 0; attempt < 50 && synced && synced.status === "running"; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      synced = await store.sync(task.id);
+    }
+    if (!synced) {
+      throw new Error("expected task to persist");
+    }
+
+    // readState throws if the state file is not valid JSON — the crux of the bug.
+    const state = await store.executionService.readState(synced);
+    expect(synced.status).toBe("completed");
+    expect(state?.exitCode).toBe(0);
+    expect(typeof state?.pid).toBe("number");
+    expect(state?.command).toBe(command);
+    await expect(store.executionService.readOutput(synced)).resolves.toContain("quoted-1\nquoted-2");
+  });
 });

@@ -6,6 +6,66 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-10 (run 9) — 🐛 Real bug: `shellQuote` corrupted background-task state files (broke 3 tests)
+
+**Audited:** Full-suite health on a fresh `npm install`. The log claimed
+174/174, but **3 tests failed deterministically** (`operator-runtime`,
+`control-plane/server`, `cli/app`), each aborting with
+`SyntaxError: Expected ',' or '}' after property value in JSON` from
+`readJsonFile`. Traced it to a **genuine production bug**, not a test bug.
+
+**Root cause (`src/harness/background-tasks.ts`):** `shellQuote` escaped a single
+quote as `` `"'"'"'` `` (6 chars, **leading `"`**) instead of the POSIX-correct
+`'\''`. Every `'` in a command/path therefore gained a stray `"`, so the
+launch script's single-line JSON state payload became invalid for any command
+containing a single quote (e.g. the test's `printf 'line-1\nline-2\n'`). The
+launch script then wrote a corrupt `state.json`, and the next `readState`
+threw — cascading into "background task missing-process" platform degradations
+that failed unrelated `control=active`/`mixed` assertions. A second latent bug
+in the same function: the initial-state `sed "s/\"$$\"/$$/g"` never substituted
+the pid (its backslashes were consumed by the JS template literal, not bash),
+leaving `"pid":"$$"` (a string) in every state file.
+
+**Changed (additive, production-correct):**
+- **Fixed `shellQuote`** to emit `'\''` — the real fix; any command/path with a
+  single quote now round-trips correctly.
+- **Replaced the fragile `printf | sed` initial-state write** with `printf` +
+  a `python3` json writer (`renderInitialStateWriterPython`), mirroring the
+  existing completion writer. This stamps a real numeric `pid` and ISO
+  timestamps and removes all shell/sed escaping fragility. (`python3` was
+  already a hard dependency of the completion writer, so no new dep.)
+- **Made 3 tests hermetic:** injected a no-op `backgroundTaskSpawnProcess`
+  (returns a pid, launches nothing) so the launch script never writes state
+  asynchronously and races the tests' explicit `writeState`/`writeOutput`.
+  Threaded new optional `backgroundTaskSpawnProcess` /
+  `backgroundTaskIsProcessRunning` options through `OperatorCliAppOptions`
+  (default = real behaviour), matching the run-1 `configHome` injection
+  precedent.
+- **Added a behaviour-level regression test** that runs the *real* launch
+  script (bash + python3) with a single-quote + newline command and asserts the
+  persisted state file parses and the command round-trips. Verified it **fails**
+  (`SyntaxError`) against the old `shellQuote` and passes against the fix.
+
+**End-to-end proof:** started a real background task with
+`command = "printf 'a-1\nb-2\n'"` → `status=completed exit=0 pid=18844`
+(numeric, was `"$$"`), timestamps stamped, output `a-1\nb-2`, command
+round-tripped exactly. Before the fix this produced unparseable JSON.
+
+**Test results:** full suite **175/175** (was 171/174 on this machine), stable
+across 4 consecutive runs (race gone). `npm run build` ✅. `npm run
+typecheck:src` ✅ (source stays clean).
+
+**New idea:** the background-task launch script embeds shell + python + JSON
+across three quoting layers — exactly where this bug lived. Add a tiny
+"launch-script contract" test that, for a battery of adversarial commands
+(single quotes, double quotes, `$`, backticks, newlines, unicode), renders and
+executes the script and asserts the state round-trips. Better still: stop
+shelling out for state entirely — have the launch script write the payload from
+a single here-doc'd python block (command passed via `argv`, never interpolated
+into JSON text), eliminating the shell-escaping surface for good.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
