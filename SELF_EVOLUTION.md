@@ -6,6 +6,67 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-10 (run 9) — 🟢 Restore a deterministic green suite: de-race the background-task integration tests
+
+**Audited:** Project health. On a fresh container the suite was **red at HEAD**:
+`npm test` failed **3 tests deterministically** in isolation and **5 under full
+parallel load** (flaky) — `operator-runtime.test.ts` (background tasks),
+`server.test.ts` (remote status / breakers), and `app.test.ts` (session
+lifecycle + background/monitor commands). Run 8 logged 174/174, so this was a
+**timing-sensitive regression**, not a code change.
+
+**Root cause (diagnosed, not guessed):** these integration tests construct a
+runtime/app and call `startBackgroundTask`, which spawns a **real detached bash
+launch script**. That script writes its execution-state file **non-atomically**
+(`… | sed > state.json`, then python `write_text`), racing the tests' own
+`writeState`/`writeOutput` and the control-plane health probes:
+- `operator-runtime` caught the state file **mid-write** → `JSON.parse` threw
+  `SyntaxError: Expected ',' or '}' … at position 311` (a truncated read).
+- `server`/`app` assert `control=active`, which requires **no** dead-process
+  `running` state to exist; the launch script writing a `running` state (whose
+  short-lived process is already gone under `isProcessRunning: () => false`)
+  flipped the diagnostic to `background task missing-process` → `degraded`.
+- Under parallel load, many spawned scripts compete for CPU, so *which* tests
+  lose the race shifts run-to-run (3→5 failing) — the classic flaky signature.
+
+**Changed (additive, matches the codebase's own hermetic pattern):** the unit
+test `background-tasks.test.ts` already injects a **stub spawn**
+(`() => ({ pid, unref(){} })`) so no OS process runs. The three integration
+tests simply never used the seam. Wired it through:
+- `src/cli/app.ts`: added `backgroundTaskSpawnProcess?` +
+  `backgroundTaskIsProcessRunning?` to `OperatorCliAppOptions` and forwarded them
+  to `StandaloneOperatorRuntime` (the runtime already accepted them; the app
+  didn't expose them). Purely additive — production still uses real `spawn`.
+- `operator-runtime.test.ts` (1 site) + `server.test.ts` (3 sites): pass a no-op
+  stub spawn. Every execution state in these tests is already written manually,
+  so the real script was pure interference.
+- `app.test.ts` (2 sites): pass a stub spawn. The background/monitor test reads
+  the smoke task's real `printf ok` output, so it now `writeOutput("ok\n")` and
+  stubs `isProcessRunning: () => true` (mirroring how it already hand-writes the
+  monitor's output/state) — deterministic, no real process.
+
+**Test results:** `npm test` **174/174**, run **3× consecutively** with zero
+flake. `typecheck:src` ✅ (exit 0). Build ✅. Diff is 4 files, +45/−4.
+
+**Considered & rejected this run:** I first prototyped making the launch-script
+state writes **atomic** (`sed > tmp && mv -f`, python `os.replace`) in
+`background-tasks.ts` + `runner.ts`. It's a *real latent production bug* (a
+`reconcile`/health probe can read a half-written state file and crash), but it
+did **not** fix the flakiness (the `running`-state-vs-dead-process race is
+logical, not just torn-read) and it broke `runner.test.ts`'s exact-script
+snapshot. Reverted to keep this run's diff focused and correct; **queued the
+atomic-write fix in ROADMAP** as a standalone hardening task with its own test.
+
+**New idea:** add a tiny **CI/pre-push flake guard** to the engine's self-check —
+run the background-task + control-plane test files **N× in a loop** (e.g. 3
+repeats) as part of `verify`, so a non-hermetic test that spawns real processes
+or depends on wall-clock timing is caught the run it's introduced instead of
+silently passing once and rotting until a slow container exposes it. More
+generally: a lint that flags a test importing `child_process`/`spawn` (directly
+or via a store) **without** injecting a stub spawner.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

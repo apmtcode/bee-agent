@@ -4,6 +4,23 @@ Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
 ## Foundations / DX
+- [x] **Restore a deterministic green suite** (2026-07-10, run 9). The
+      background-task integration tests (`operator-runtime`, `server`, `app`)
+      spawned **real detached bash launch scripts** that raced the tests'
+      manual state/output writes and the control-plane health probes — 3 failed
+      deterministically, 5 flaked under parallel load. Fixed by injecting the
+      already-designed **stub spawn** seam (added `backgroundTaskSpawnProcess?` /
+      `backgroundTaskIsProcessRunning?` to `OperatorCliAppOptions` + forwarded to
+      the runtime). 174/174, green 3× in a row.
+- [ ] **Atomic launch-script state writes** (queued from run 9). Both
+      `src/harness/background-tasks.ts` and `src/training/runner.ts` render bash
+      that writes the execution-state file non-atomically (`… | sed > state`,
+      python `write_text`). A concurrent reader (`reconcile`, platform health)
+      can catch a **torn write** and throw `SyntaxError` in `readJsonFile`,
+      crashing recovery in production. Fix: write to `state.json.tmp` then
+      `mv -f` / `os.replace`. Additive; needs a unit test that renders the script
+      and asserts the temp-then-rename pattern (the integration tests no longer
+      execute the script, so cover it at the rendering layer).
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`
@@ -71,6 +88,12 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
       related synthetic trajectories.
 
 ## Innovation backlog
+- [ ] **Flake guard in `verify`** (from run 9): loop the process-spawning test
+      files (background-tasks, operator-runtime, server, app) N× (e.g. 3) as a
+      pre-push self-check, so a non-hermetic test that races real OS processes is
+      caught the run it lands, not when a slow container later exposes it. Pair
+      with a lint that flags a test reaching `child_process`/`spawn` without
+      injecting a stub spawner.
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in
       project health over time.
