@@ -112,8 +112,13 @@ describe("LocalAppleSiliconTrainingRunner", () => {
       runtime: "mlx",
       replayEvalPath: `training-jobs/${job.id}/replay-eval.json`,
     });
+    // The initial running-state is written atomically by a python3 helper that
+    // receives the state file as its first argv (no fragile printf|sed redirect).
     await expect(runner.readLaunchScript({ ...job, execution })).resolves.toEqual(
-      expect.stringContaining(`> '${execution.stateFile}'`),
+      expect.stringContaining(`python3 - '${execution.stateFile}'`),
+    );
+    await expect(runner.readLaunchScript({ ...job, execution })).resolves.toEqual(
+      expect.stringContaining("os.replace(tmp_path, state_path)"),
     );
     await expect(runner.readLaunchScript({ ...job, execution })).resolves.toContain("mlx_lm.lora");
     await expect(fs.readFile(path.join(rootDir, execution.datasetDir, "manifest.json"), "utf8")).resolves.toContain(

@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -369,5 +370,44 @@ describe("BackgroundTaskExecutionService", () => {
     await expect(fs.readFile(path.join(rootDir, task.execution.launchScript), "utf8")).resolves.toContain("bash -lc");
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
+  });
+
+  it("writes state atomically so concurrent readers never see partial JSON", async () => {
+    const rootDir = await makeTempDir();
+    // Actually execute the generated launch script and hammer readState while it
+    // runs. Before the atomic-write fix the reader would catch a truncated
+    // `> state.json` redirect (or a mid-`write_text` Python write) and throw a
+    // JSON SyntaxError. Now every write is temp-file + rename, so a reader only
+    // ever observes a complete document.
+    const store = new FileBackgroundTaskStore(
+      path.join(rootDir, "background-tasks.json"),
+      (command, args, options) => spawn(command, args, options),
+    );
+    const service = store.executionService;
+    const task = await store.start({
+      title: "Emit lines",
+      command: "for i in 1 2 3 4 5; do printf 'line-%s\\n' \"$i\"; sleep 0.01; done",
+      cwd: rootDir,
+    });
+
+    // Poll while the launch script runs. `readState` parses the on-disk JSON, so
+    // any partial/corrupt write surfaces here as a thrown SyntaxError. The core
+    // guarantee under test is that this never happens; reaching a parseable
+    // terminal state confirms the running→terminal handoff also stays valid.
+    let parseFailures = 0;
+    let lastStatus: string | undefined;
+    for (let attempt = 0; attempt < 400; attempt += 1) {
+      try {
+        const state = await service.readState(task);
+        lastStatus = state?.status;
+        if (state?.status === "completed" || state?.status === "failed") break;
+      } catch {
+        parseFailures += 1;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+
+    expect(parseFailures).toBe(0);
+    expect(["completed", "failed"]).toContain(lastStatus);
   });
 });

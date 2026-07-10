@@ -84,6 +84,9 @@ describe("OperatorControlPlaneServer", () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir,
       backgroundTaskIsProcessRunning: () => false,
+      // Deterministic: drive execution state via writeState below rather than
+      // letting a real launch script race its own state writes under load.
+      backgroundTaskSpawnProcess: () => ({ pid: 1234, unref() {} }),
       delivery: new OperatorDeliveryService(rootDir, {
         sendBrowserPush: async () => {},
       }),
@@ -953,6 +956,7 @@ describe("OperatorControlPlaneServer", () => {
     const driftingRuntime = new StandaloneOperatorRuntime({
       rootDir: driftingRootDir,
       backgroundTaskIsProcessRunning: () => false,
+      backgroundTaskSpawnProcess: () => ({ pid: 9999, unref() {} }),
     });
     const driftingServer = new OperatorControlPlaneServer({ runtime: driftingRuntime });
     const driftingBootstrap = await driftingServer.handle({
@@ -1019,6 +1023,11 @@ describe("OperatorControlPlaneServer", () => {
     const breakerRuntime = new StandaloneOperatorRuntime({
       rootDir: breakerRootDir,
       backgroundTaskIsProcessRunning: () => false,
+      // No-op spawn: this test drives execution state manually via writeState at
+      // each checkpoint, so a real launch script must not asynchronously write its
+      // own running-state file (that race let task 3 be counted a checkpoint early,
+      // flaking failureCount 2 -> 3).
+      backgroundTaskSpawnProcess: () => ({ pid: 9999, unref() {} }),
     });
     const breakerServer = new OperatorControlPlaneServer({ runtime: breakerRuntime });
     const breakerOne = await breakerServer.handle({

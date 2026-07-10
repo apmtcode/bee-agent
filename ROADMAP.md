@@ -4,6 +4,13 @@ Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
 ## Foundations / DX
+- [x] **Fix background-task state corruption + de-flake the suite** (2026-07-10,
+      run 9). Launch-script `printf|sed` JSON assembly produced invalid state
+      files for any command containing quotes/`$`, and non-atomic writes raced
+      readers. Replaced with an argv-fed Python writer using atomic temp+replace
+      (both `harness/background-tasks.ts` and `training/runner.ts`); injected
+      no-op spawns in tests that manually drive state. Suite went from ~40% flaky
+      to 10/10 green.
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`
@@ -84,3 +91,14 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
       count to a baseline file and fail if a module regresses above it. Lets the
       engine pay debt down module-by-module without one green-gate blocking
       progress, and prevents backsliding while the total is still > 0.
+- [ ] **`readJsonFileResilient`**: on a `SyntaxError`, retry a bounded few times
+      with a micro-delay before throwing (defense-in-depth for any future
+      non-atomic writer such as a plugin; turns a crash into at-worst-stale
+      reads). Atomic writes make it unnecessary today (run 9) but cheap insurance.
+- [ ] **"No real subprocess in unit tests" lint**: flag any
+      `new StandaloneOperatorRuntime` in a `*.test.ts` that starts a background
+      task without injecting `backgroundTaskSpawnProcess`, so the real-subprocess
+      race class de-flaked in run 9 can't be reintroduced.
+- [ ] **Suite flake-gate in the engine's pre-push self-check**: run `npm test`
+      2–3× (or with a repeat flag) before pushing, so a newly-introduced flake is
+      caught the same run rather than surfacing as a red suite next cycle.

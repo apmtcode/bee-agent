@@ -531,6 +531,9 @@ describe("StandaloneOperatorRuntime", () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
       backgroundTaskIsProcessRunning: () => false,
+      // Deterministic: this test simulates execution via writeState/writeOutput,
+      // so a real launch script must not race its own state writes under load.
+      backgroundTaskSpawnProcess: () => ({ pid: 1234, unref() {} }),
     });
     const session = await runtime.startSession({ title: "Tasks", agentId: "main" });
 
