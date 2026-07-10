@@ -1,12 +1,20 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { spawnSync } from "node:child_process";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   BackgroundTaskExecutionService,
   FileBackgroundTaskStore,
   type BackgroundTaskExecutionState,
 } from "./background-tasks.js";
+
+// The launch script shells out to bash/python3/sed/date. Skip the end-to-end
+// launch test where those aren't available so it never becomes environment-flaky.
+const launchToolsAvailable =
+  spawnSync("bash", ["-c", "command -v python3 && command -v sed && command -v date"], {
+    stdio: "ignore",
+  }).status === 0;
 
 const tempDirs: string[] = [];
 
@@ -370,4 +378,37 @@ describe("BackgroundTaskExecutionService", () => {
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
   });
+
+  // Regression: a command containing single quotes must survive shell-quoting into
+  // the launch script's state payload. The previous shellQuote() emitted `"'"'"'`
+  // (an extra leading `"`) for each `'`, injecting stray double quotes that
+  // produced invalid state JSON (readState would throw "Expected ',' or '}'").
+  it.skipIf(!launchToolsAvailable)(
+    "runs a launch script with a single-quoted command and writes valid state JSON",
+    async () => {
+      const rootDir = await makeTempDir();
+      const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"));
+      const command = "printf 'hello world'";
+      const task = await store.start({ title: "quote test", command, cwd: rootDir });
+
+      // The launch script runs detached; wait for it to write a terminal state.
+      // readState() JSON-parses the file, so a corrupt payload throws here.
+      let state: BackgroundTaskExecutionState | undefined;
+      for (let attempt = 0; attempt < 100; attempt += 1) {
+        state = await store.executionService.readState(task);
+        if (state && (state.status === "completed" || state.status === "failed")) {
+          break;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+
+      expect(state?.status).toBe("completed");
+      expect(state?.exitCode).toBe(0);
+      // The command round-trips exactly — single quotes preserved, not mangled.
+      expect(state?.command).toBe(command);
+      // The `"$$"` placeholder was substituted to a real numeric pid.
+      expect(typeof state?.pid).toBe("number");
+      await expect(store.executionService.readOutput(task)).resolves.toContain("hello world");
+    },
+  );
 });

@@ -6,6 +6,56 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-10 (run 9) — Fix real shell-quoting bug in background-task launch scripts + make the suite hermetic
+
+**Audited:** The build/test gate on a fresh checkout. Contrary to the prior log's
+"174/174", **4 tests failed deterministically** here (operator-runtime, app,
+server suites). Root-caused two genuine defects plus a test-isolation gap.
+
+**Defect 1 (production bug) — `shellQuote()` in `src/harness/background-tasks.ts`.**
+It escaped each `'` as `` "'"'"' `` (an *extra leading* `"`) instead of the
+correct POSIX `` '"'"' ``. Any background-task **command or path containing a
+single quote** (e.g. `printf 'line-1\nline-2\n'`) corrupted the JSON state
+payload the launch script writes, so `readState()` threw
+`SyntaxError: Expected ',' or '}' …` and recovery/sync/status all broke. Fixed
+the escape; added a comment explaining the sequence.
+
+**Defect 2 (reliability) — non-atomic state writes in the launch script.** The
+generated bash wrote `state.json` via `printf|sed > file` and Python
+`write_text`, both non-atomic, so a concurrent `readState()` could observe a torn
+file. Rewrote both to write a temp file then `mv`/`Path.replace` (atomic rename),
+matching the `writeJsonAtomic` contract used everywhere else. The `$$`→pid
+substitution now also lands (it was masked by the corruption).
+
+**Test isolation — real detached processes.** Several tests started real
+background processes (`sleep 5`, `printf …`) but asserted on manually-written
+state, so the two writers raced (missing-process/degraded flapping,
+`.state` returning a synthesized running state instead of NOT_FOUND, `task-stop`
+seeing an already-exited task). Threaded a `backgroundTaskSpawnProcess` /
+`backgroundTaskIsProcessRunning` injection seam through `OperatorCliApp`
+(additive DI; production unchanged) and gave the affected tests deterministic
+stubs — including a **per-pid liveness set** in the big server test so one task
+stays running while another reads as missing.
+
+**Regression test added:** `background-tasks.test.ts` now runs a *real* launch
+script for `printf 'hello world'` (guarded by a bash/python3/sed/date
+availability check) and asserts the state JSON is valid, the command round-trips
+verbatim, the pid is numeric, and output contains `hello world`. Verified it
+**fails** with the old `shellQuote` and **passes** with the fix.
+
+**Test results:** full suite **175/175** (was 4 failing → 0; +1 new test), stable
+across repeated runs. Build ✅. `typecheck:src` exit 0. Full `tsc` unchanged at
+**125** (all pre-existing test-file debt; no new errors introduced).
+
+**New idea:** add a tiny **hermeticity lint** — a test/CI check that flags any
+suite constructing `StandaloneOperatorRuntime`/`OperatorCliApp` that starts a
+background task without injecting `backgroundTaskSpawnProcess`, so real detached
+processes can never sneak back into the suite and reintroduce this class of
+flake. Pair it with the queued `verify` script (`typecheck:src && build && test`)
+as the engine's pre-push gate.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

@@ -4,6 +4,11 @@ Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
 ## Foundations / DX
+- [x] **Green the test suite on a fresh checkout** (2026-07-10, run 9). Fixed a
+      real `shellQuote()` bug (single-quoted commands corrupted launch-script
+      state JSON), made launch-script state writes atomic, and removed real
+      detached processes from the suite via an injectable spawn/liveness seam.
+      Suite: 174→**175** passing, 4 pre-existing failures → 0.
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`
@@ -40,6 +45,10 @@ unchecked items are queued. Keep this richer than you found it each run.
     fix residual test-only typings.
 - [ ] Add a `verify` npm script (`typecheck && build && test`) and have the
       engine run it as a pre-push self-check each cycle.
+- [ ] **Hermeticity lint** (added run 9): flag any test that constructs
+      `StandaloneOperatorRuntime`/`OperatorCliApp` and starts a background task
+      without injecting `backgroundTaskSpawnProcess`, so real detached processes
+      can't re-enter the suite and reintroduce state-file race flakes.
 - [x] Interim **source-only typecheck gate** — DONE run 7. `tsconfig.src.json`
       (excludes `**/*.test.ts`) + `typecheck:src` script; passes (exit 0). Next:
       have the engine run it as a per-run pre-push self-check.

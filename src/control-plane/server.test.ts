@@ -81,9 +81,16 @@ const exportManifest: ReviewedExportManifest = {
 describe("OperatorControlPlaneServer", () => {
   it("handles session, transcript, approval, trajectory, memory, and orchestration methods", async () => {
     const rootDir = await makeTempDir();
+    // Deterministic background-task spawning with per-task liveness control:
+    // real detached processes would race the state files and flap task state.
+    // Each stub launch gets a distinct pid; `alivePids` decides which are still
+    // running, so one task can stay "running" while another reads as missing.
+    const alivePids = new Set<number>();
+    let nextBackgroundPid = 4321;
     const runtime = new StandaloneOperatorRuntime({
       rootDir,
-      backgroundTaskIsProcessRunning: () => false,
+      backgroundTaskSpawnProcess: () => ({ pid: nextBackgroundPid++, unref() {} }),
+      backgroundTaskIsProcessRunning: (pid) => alivePids.has(pid),
       delivery: new OperatorDeliveryService(rootDir, {
         sendBrowserPush: async () => {},
       }),
@@ -626,6 +633,12 @@ describe("OperatorControlPlaneServer", () => {
       command: "sleep 5",
       kind: "task",
     });
+    // Keep the remote task's process "alive" so it stays running/active; the
+    // later "Collect logs" task's pid is left out of alivePids so it reads as
+    // missing-process (exercising the not-found/recovery path).
+    if (remoteTask.execution.processId !== undefined) {
+      alivePids.add(remoteTask.execution.processId);
+    }
     await expect(server.handle({ method: "pairing.list", params: { status: "redeemed" } })).resolves.toMatchObject({
       ok: true,
       result: [expect.objectContaining({ id: pairingCreate.result.id, status: "redeemed" })],
@@ -952,6 +965,10 @@ describe("OperatorControlPlaneServer", () => {
     const driftingRootDir = await makeTempDir();
     const driftingRuntime = new StandaloneOperatorRuntime({
       rootDir: driftingRootDir,
+      // Stub spawn: this test drives task state purely via writeState(), so a
+      // real detached process must not write a competing state file. Liveness
+      // stays false so the manually-written "running" state reads as missing.
+      backgroundTaskSpawnProcess: () => ({ pid: 4321, unref() {} }),
       backgroundTaskIsProcessRunning: () => false,
     });
     const driftingServer = new OperatorControlPlaneServer({ runtime: driftingRuntime });
@@ -1018,6 +1035,10 @@ describe("OperatorControlPlaneServer", () => {
     const breakerRootDir = await makeTempDir();
     const breakerRuntime = new StandaloneOperatorRuntime({
       rootDir: breakerRootDir,
+      // Stub spawn: the three breaker tasks are driven via writeState() to build
+      // the mixed→degraded progression; real `sleep 5` processes would write
+      // competing running state and flap the derived control state.
+      backgroundTaskSpawnProcess: () => ({ pid: 4321, unref() {} }),
       backgroundTaskIsProcessRunning: () => false,
     });
     const breakerServer = new OperatorControlPlaneServer({ runtime: breakerRuntime });
