@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -369,5 +370,38 @@ describe("BackgroundTaskExecutionService", () => {
     await expect(fs.readFile(path.join(rootDir, task.execution.launchScript), "utf8")).resolves.toContain("bash -lc");
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
+  });
+
+  it("writes a valid state file for commands containing quotes and backslashes", async () => {
+    const rootDir = await makeTempDir();
+    // A command with an embedded double-quote and a backslash escape sequence:
+    // JSON.stringify escapes both, and the launch script must preserve those
+    // escapes intact (the old printf|sed templating corrupted them).
+    const command = `printf '%s' 'he said "hi"\\nbye'`;
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"), () => ({
+      pid: 2222,
+      unref() {},
+    }));
+    const task = await store.start({ title: "Quote handling", command, cwd: rootDir });
+
+    const scriptPath = path.join(rootDir, task.execution.launchScript);
+    await new Promise<void>((resolve, reject) => {
+      const child = spawn("bash", [scriptPath], { stdio: "ignore", cwd: rootDir });
+      child.on("error", reject);
+      child.on("exit", (code) =>
+        code === 0 ? resolve() : reject(new Error(`launch script exited with ${code}`)),
+      );
+    });
+
+    const statePath = path.join(rootDir, task.execution.stateFile);
+    const raw = await fs.readFile(statePath, "utf8");
+    // The core regression guard: the file is valid JSON and round-trips the
+    // command verbatim. A corrupt escape would make JSON.parse throw here (and
+    // would already have crashed the script's own python completion writer).
+    const state = JSON.parse(raw) as BackgroundTaskExecutionState;
+    expect(state.command).toBe(command);
+    expect(state.status).toBe("completed");
+    expect(typeof state.pid).toBe("number");
+    expect(state.taskId).toBe(task.id);
   });
 });

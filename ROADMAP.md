@@ -70,6 +70,28 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Generalization eval harness: measure replay fidelity on held-out but
       related synthetic trajectories.
 
+## Reliability / correctness
+- [x] **`shellQuote` correctness bug fixed** (run 9) — malformed POSIX escaping
+      (`"'"'"'` instead of `'\''`) corrupted every background command containing
+      a single quote, plus the `printf|sed` initial-state writer produced invalid
+      JSON. Both fixed; regression test added; suite back to green (175/175).
+- [x] **Background-task test family de-flaked** (run 9) — five tests ran real
+      launch scripts while driving state manually, racing under parallel load.
+      Stubbed the spawner in each (added an `OperatorCliApp` spawner passthrough
+      for the CLI test). 16 consecutive green full-suite runs.
+- [ ] **Shell-quoting property test:** feed `shellQuote` a corpus of adversarial
+      strings (quotes, backslashes, newlines, `$`, backticks, globs) and assert
+      each round-trips byte-identical through `bash -c 'printf %s …'`. Quoting
+      bugs are silent and catastrophic — pin the contract so no refactor
+      reintroduces one.
+- [ ] **Single audited shell-quoting helper:** route ALL shell-command
+      construction through one reviewed quoter and lint against raw
+      `${var}`-in-shell-string interpolation (grep shows other ad-hoc sites).
+- [ ] **Prefer no-shell spawning where possible:** background tasks build a bash
+      launch script by string concatenation; evaluate an argv-array execution
+      path (spawn without a shell) for the non-templated cases to shrink the
+      quoting attack surface entirely.
+
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in

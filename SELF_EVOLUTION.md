@@ -6,6 +6,74 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-10 (run 9) — 🐛 Real correctness bug: `shellQuote` corrupted every quoted command; suite back to green
+
+**Audited:** Started from the verification gate itself — ran `npm test` on a
+clean tree and found **3 tests failing** (174 → 171), a regression the prior log
+claimed green. Traced all three (`operator-runtime`, `app`, `server`) to the same
+`SyntaxError: Expected ',' or '}' … in JSON` thrown from `readJsonFile` while
+reconciling background-task state files.
+
+**Root cause (two compounding bugs in `src/harness/background-tasks.ts`):**
+1. **`shellQuote` produced malformed POSIX escaping.** It replaced `'` with the
+   literal `"'"'"'` (6 chars, leading `"`) instead of the correct `'\''` /
+   `'"'"'` (close-quote, escaped quote, reopen). Verified by round-tripping
+   through bash: `printf '%s' 'hi'` came back as `printf "'%s"' "'hi"'`. This
+   corrupted **any** value containing a single quote — including the JSON state
+   payload *and* the actual command fed to `bash -lc ${quotedCommand}`. Since
+   nearly every shell command uses single quotes, this was a live runtime
+   correctness bug, not just a test artifact.
+2. **The initial `state.json` was templated with `printf '%s' … | sed`.** `sed`
+   mangles the backslash escapes `JSON.stringify` emits (`\"`, `\\n`), and the
+   `$$`→pid substitution was fragile. Even with correct quoting this writes
+   invalid JSON for commands containing quotes/backslashes.
+
+**Changed (additive, `src/harness/background-tasks.ts`):**
+- Fixed `shellQuote` to emit correct `'\''` escaping (one-line fix, big blast
+  radius — every launched background command is now quoted correctly).
+- Replaced the `printf|sed` initial-state writer with a `python3` writer
+  (`renderInitialStateWriterPython`) that `json.loads` a shell-safe payload and
+  injects pid + timestamps — same mechanism the completion writers already use,
+  so no new dependency and no fragile text templating.
+
+**Also de-flaked the whole background-task test family.** Five tests
+(`operator-runtime`, `app`, and three in `server` — the main handler, the
+drifting remote, and the circuit-breaker cases) started **real** launch scripts
+via the default spawner and *then* drove state with explicit `writeState` calls.
+The real script's async state writes raced those, so under full-suite parallel
+load the reconcile/sync/breaker outcomes were nondeterministic (missing-process
+vs. unchanged, completed vs. failed, failureCount 2 vs. 3). Injected a no-op
+`backgroundTaskSpawnProcess` stub into each so state is driven solely by the
+tests. For the CLI test this required a small **source** change: threaded
+optional `backgroundTaskSpawnProcess` / `backgroundTaskIsProcessRunning`
+passthroughs through `OperatorCliAppOptions` into the runtime (mirroring the
+existing `configHome` test-isolation seam) — additive and production-safe. The
+one background-task test that genuinely exercises the real launch script's output
+(`printf ok` → `background view`) was deliberately left real, giving end-to-end
+coverage of the launch-script fix above.
+
+**New test:** `background-tasks.test.ts` now spawns the *real* generated launch
+script for a command containing a double-quote and a backslash escape, then
+asserts the resulting `state.json` is valid JSON round-tripping the command
+verbatim — a direct regression guard for both bugs.
+
+**Test results:** **171 → 175/175** passing (added 1 regression test), verified
+**stable across 16 consecutive full-suite runs** (previously failed ~1 in 3).
+`npm run build` ✅. `npm run typecheck:src` ✅ (exit 0). Diff: 1 source file for
+the real bug (`background-tasks.ts`) + 1 source passthrough (`cli/app.ts`) +
+test de-flaking across 3 test files.
+
+**New idea (logged to ROADMAP):** Add a **shell-quoting property test** — feed
+`shellQuote` a corpus of adversarial strings (single/double quotes, backslashes,
+newlines, `$`, backticks, glob chars) and assert each round-trips byte-identical
+through `bash -c 'printf %s …'`. Quoting bugs are silent and catastrophic; a
+property test pins the contract so no future refactor reintroduces one. Bigger:
+route ALL shell-command construction in the repo through one audited quoting
+helper (grep shows ad-hoc interpolation elsewhere) and lint against raw
+`${var}`-in-shell-string patterns.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
