@@ -6,6 +6,13 @@ unchecked items are queued. Keep this richer than you found it each run.
 ## Foundations / DX
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
+- [x] **Green baseline restored** (2026-07-10, run 9). Fixed a real
+      launch-script `state.json` corruption bug (`printf | sed` → `python3`
+      argv writer, in `background-tasks.ts` + `training/runner.ts`) that made
+      recovery throw on any command containing quotes/newlines, and eliminated
+      a class of flaky real-subprocess test races by injecting the existing
+      `backgroundTaskSpawnProcess` mock (added the seam to `OperatorCliApp`).
+      Suite now deterministically **175/175** across 12 consecutive runs.
 - [x] Make config loading hermetic in tests via an injectable `configHome`
       (2026-06-22).
 - [ ] **Pay down typecheck debt** (surfaced by the `typecheck` script). Full
@@ -71,6 +78,15 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
       related synthetic trajectories.
 
 ## Innovation backlog
+- [ ] **Flake sentinel** (new, run 9): the engine's per-run self-check should run
+      the suite 2–3× and refuse to call it "green" if the pass set differs between
+      runs — catches newly-exposed races the same hour they appear instead of
+      letting a single lucky run mask them (exactly how run 9's failures had been
+      hidden).
+- [ ] **Real-subprocess test lint** (new, run 9): flag any test that constructs
+      `StandaloneOperatorRuntime`/`OperatorCliApp` and calls `startBackgroundTask`
+      without injecting `backgroundTaskSpawnProcess`, so state-driven assertions
+      can't race a real launch-script subprocess again.
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in
       project health over time.

@@ -171,9 +171,9 @@ function renderLaunchScript(execution: LocalTrainingExecution, plan: TrainingJob
       version: 1,
       jobId: plan.jobId,
       status: "running",
-      pid: "$$",
-      startedAt: "__OPENCLAW_STARTED_AT__",
-      updatedAt: "__OPENCLAW_STARTED_AT__",
+      pid: 0,
+      startedAt: "",
+      updatedAt: "",
       logFile: execution.logFile,
       workingDirectory: execution.workingDirectory,
       command: plan.command,
@@ -185,7 +185,12 @@ function renderLaunchScript(execution: LocalTrainingExecution, plan: TrainingJob
     "set -euo pipefail",
     `mkdir -p ${shellQuote(execution.artifactDir)} $(dirname ${quotedLogFile}) $(dirname ${quotedStatePath})`,
     "started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-    `printf '%s' ${quotedStatePayload} | sed "s/__OPENCLAW_STARTED_AT__/$started_at/g; s/\"\$\$\"/$$/g" > ${quotedStatePath}`,
+    // Write the initial state via python rather than a printf | sed pipeline so
+    // arbitrary command args (quotes, newlines) survive intact and state.json is
+    // always valid JSON. See background-tasks.ts renderLaunchScript for context.
+    `python3 - ${quotedStatePath} ${quotedStatePayload} "$started_at" $$ <<'PY'`,
+    ...renderInitialStateWriterPython(),
+    "PY",
     `printf '%s\n' "starting ${plan.mode} training for ${plan.jobId}" >> ${quotedLogFile}`,
     `if ${quotedCommand} >> ${quotedLogFile} 2>&1; then`,
     "  completed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
@@ -202,6 +207,20 @@ function renderLaunchScript(execution: LocalTrainingExecution, plan: TrainingJob
     "fi",
     "",
   ].join("\n");
+}
+
+function renderInitialStateWriterPython(): string[] {
+  return [
+    "import json",
+    "import pathlib",
+    "import sys",
+    "state_path = pathlib.Path(sys.argv[1])",
+    "state = json.loads(sys.argv[2])",
+    "state['startedAt'] = sys.argv[3]",
+    "state['updatedAt'] = sys.argv[3]",
+    "state['pid'] = int(sys.argv[4])",
+    "state_path.write_text(json.dumps(state, indent=2) + '\\n')",
+  ];
 }
 
 function renderStateWriterPython(status: TrainingExecutionState["status"]): string[] {

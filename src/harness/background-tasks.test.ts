@@ -370,4 +370,23 @@ describe("BackgroundTaskExecutionService", () => {
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
   });
+
+  it("embeds commands with quotes and newlines as valid JSON in the launch script", async () => {
+    const rootDir = await makeTempDir();
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"), () => ({ pid: 2222, unref() {} }));
+    // A command containing double-quotes AND newlines previously corrupted the
+    // initial state.json (the printf | sed pipeline mangled the payload), which
+    // made recovery throw a JSON SyntaxError. Now the payload is written via a
+    // python argv, so the command must survive JSON-encoded and unmangled.
+    const command = 'printf "line-1\nline-2"';
+    const task = await store.start({ title: "Nasty command", command, cwd: rootDir });
+
+    const script = await fs.readFile(path.join(rootDir, task.execution.launchScript), "utf8");
+    // The JSON-encoded command appears verbatim (shellQuote adds no escapes here
+    // because the JSON payload contains no single quotes).
+    expect(script).toContain(JSON.stringify(command));
+    // The fragile sed-based state initialization must be gone.
+    expect(script).not.toContain("| sed ");
+    expect(script).toContain("state = json.loads(sys.argv[2])");
+  });
 });

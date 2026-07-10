@@ -6,6 +6,67 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-10 (run 9) — 🐛 Fix launch-script state corruption + make real-subprocess tests deterministic (green baseline restored)
+
+**Audited:** Ran the actual test suite as the first step (the procedure's
+verification gate). Prior runs logged "174/174 ✅", but on this machine the suite
+was **red**: 3 tests failed *deterministically every run*, and under full parallel
+load 1–2 more flaked intermittently — so no run could honestly push to `main`.
+Root-caused both classes of failure.
+
+**Bug 1 — launch-script state corruption (real, not test-only).**
+`renderLaunchScript` (both `src/harness/background-tasks.ts` and
+`src/training/runner.ts`) wrote the initial `state.json` via a
+`printf '%s' <payload> | sed …` pipeline. When a task's `command` contained
+double-quotes or newlines (e.g. `printf "line-1\nline-2"`), the sed substitution
+mangled the JSON, leaving an **unparseable `state.json`** on disk. Recovery then
+threw `SyntaxError: Expected ',' or '}' … in JSON` (`readJsonFile` →
+`reconcileTask`), failing 3 tests. This corrupts real on-device state files too,
+not just tests.
+- **Fix:** write the initial state via `python3` (already required by the
+  completion block) instead of `printf | sed`. The JSON payload is passed as a
+  single-quoted argv — which `shellQuote` preserves faithfully for *any* command
+  string — and `json.loads`/`json.dumps` re-emit guaranteed-valid JSON. Added a
+  `renderInitialStateWriterPython()` helper in both files; payload now carries
+  `pid: 0`/`startedAt: ""` placeholders that python overwrites from argv.
+- **Regression test:** `background-tasks.test.ts` — a command with quotes+newlines
+  must appear JSON-encoded verbatim in the script, with no `| sed` state write.
+
+**Bug 2 — flaky real-subprocess tests.** Several tests constructed a runtime with
+a **real** process spawn, started background tasks (`sleep 5`, `printf drift`,
+`printf a`), then asserted on state/control that the *test itself* set via explicit
+`writeState`. The real launch-script subprocess wrote `state.json` asynchronously
+and **raced** those assertions (e.g. `printf drift` finishing → derived platform
+control flips `active`→`degraded`; a stray `sleep 5` inflating a breaker
+failureCount 2→3). Passed alone, failed under load — and Bug 1's fix made the
+races *more* reliable, exposing them.
+- **Fix (uses existing seams):** injected the already-supported
+  `backgroundTaskSpawnProcess` mock into the offending tests so state is driven
+  entirely by the test: `operator-runtime.test.ts` (1), `server.test.ts` (4
+  runtimes: main/drifting/breaker/monitor). For `OperatorCliApp` (which hard-wired
+  a real spawn) added an **additive injection seam** — optional
+  `backgroundTaskSpawnProcess`/`backgroundTaskIsProcessRunning` in
+  `OperatorCliAppOptions`, threaded into the runtime (production default unchanged:
+  real spawn) — mirroring the existing `configHome` testability seam; used it in
+  the flaky "session lifecycle" test.
+
+**Test results:** `typecheck:src` ✅. Build ✅. Tests ✅ **175/175** (was 174;
++1 regression test) and **deterministically green across 12 consecutive full-suite
+runs** (previously 3 hard failures + intermittent flakes). No production behaviour
+change beyond the state-serialization fix; the new app options default to prior
+behaviour.
+
+**New idea:** the real fix here was *running the tests first and trusting the red*.
+Add a tiny **flake sentinel** to the engine's per-run self-check: run the suite
+2–3× and fail the "green" determination if results differ between runs — so a
+newly-introduced (or environment-exposed) race is caught the same hour it appears
+rather than being masked by a single lucky run. Pair it with a lint that flags any
+test constructing `StandaloneOperatorRuntime`/`OperatorCliApp` that calls
+`startBackgroundTask` **without** injecting `backgroundTaskSpawnProcess`, so this
+whole class of real-subprocess race can't be reintroduced.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
