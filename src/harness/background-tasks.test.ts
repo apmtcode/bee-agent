@@ -1,3 +1,4 @@
+import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -5,6 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   BackgroundTaskExecutionService,
   FileBackgroundTaskStore,
+  renderLaunchScript,
   type BackgroundTaskExecutionState,
 } from "./background-tasks.js";
 
@@ -369,5 +371,44 @@ describe("BackgroundTaskExecutionService", () => {
     await expect(fs.readFile(path.join(rootDir, task.execution.launchScript), "utf8")).resolves.toContain("bash -lc");
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
+  });
+
+  // Regression: the launch script hand-builds the initial state.json via a
+  // shell-quoted JSON payload. A malformed single-quote escape in shellQuote
+  // used to emit `"'` for every embedded `'`, so any command containing a
+  // single quote produced invalid JSON that broke recovery (readState threw a
+  // SyntaxError). Render the real script, execute it, and assert the persisted
+  // state parses back to the exact command — for commands with single quotes,
+  // double quotes, and embedded newlines.
+  it.each([
+    ["printf 'line-1\nline-2\n'"],
+    ["echo \"it's a quoted value\""],
+    ["node -e 'process.stdout.write(`a${1}b`)'"],
+  ])("renders a launch script whose state payload is valid JSON for %j", async (command) => {
+    const rootDir = await makeTempDir();
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"), () => ({ pid: 2222, unref() {} }));
+    const task = await store.start({ title: "Quoted command", command, cwd: rootDir, kind: "task" });
+
+    const scriptPath = path.join(rootDir, task.execution.launchScript);
+    const script = renderLaunchScript(task);
+    await fs.writeFile(scriptPath, script, { mode: 0o700 });
+
+    // Execute the real launch script (all three commands terminate promptly),
+    // then assert the persisted state parses and preserves the command exactly.
+    // With the buggy single-quote escape this state.json was invalid JSON.
+    await new Promise<void>((resolve, reject) => {
+      execFile("bash", [scriptPath], { cwd: rootDir }, (error) => (error ? reject(error) : resolve()));
+    });
+
+    const raw = await fs.readFile(path.join(rootDir, task.execution.stateFile), "utf8");
+    const parsed = JSON.parse(raw) as BackgroundTaskExecutionState;
+    expect(parsed.command).toBe(command);
+    expect(parsed.taskId).toBe(task.id);
+    expect(parsed.status).toBe("completed");
+    // The PID placeholder must be substituted with the launch shell's numeric
+    // PID (regression: the old `"$$"` placeholder toggled out of the sed
+    // argument's shell quotes and was never replaced, leaving pid: "$$").
+    expect(typeof parsed.pid).toBe("number");
+    expect(parsed.pid).toBeGreaterThan(0);
   });
 });

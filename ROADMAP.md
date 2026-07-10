@@ -4,6 +4,18 @@ Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
 ## Foundations / DX
+- [x] **Green the test suite** (2026-07-10, run 9) — fixed two real launch-script
+      bugs (`shellQuote` POSIX escape + `$$` PID placeholder never substituted)
+      and de-raced three real-detached-process tests with a mock spawn. Suite
+      173→**177/177**, deterministic. See SELF_EVOLUTION run 9.
+- [ ] **Launch-script generator hardening.** The background-task launch script is
+      built by string concat across two escaping layers (JS template → bash),
+      where run 9's two bugs hid. Add a launch-script self-test that renders the
+      script for an adversarial command (`' " $ \ \n` + the literal
+      `__OPENCLAW_PID__`), executes its bootstrap, and asserts valid JSON /
+      numeric pid / exact command. Stretch: replace the `printf|sed` state write
+      with a `python3 -c`/`node -e` one-liner fed the payload on argv to delete
+      the double-escaping surface entirely.
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`

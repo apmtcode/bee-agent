@@ -729,7 +729,7 @@ function applyExecutionState(task: BackgroundTaskRecord, state: BackgroundTaskEx
   };
 }
 
-function renderLaunchScript(task: BackgroundTaskRecord): string {
+export function renderLaunchScript(task: BackgroundTaskRecord): string {
   const quotedStatePath = shellQuote(task.execution.stateFile);
   const quotedOutputFile = shellQuote(task.execution.outputFile);
   const quotedCwd = shellQuote(task.cwd);
@@ -740,7 +740,10 @@ function renderLaunchScript(task: BackgroundTaskRecord): string {
       taskId: task.id,
       kind: task.kind,
       status: "running",
-      pid: "$$",
+      // Inert placeholder substituted by the launch script's sed pass with the
+      // shell PID. Using a plain token (rather than a literal "$$") keeps the
+      // sed pattern free of shell/regex metacharacters — see the sed line below.
+      pid: "__OPENCLAW_PID__",
       startedAt: "__OPENCLAW_STARTED_AT__",
       updatedAt: "__OPENCLAW_STARTED_AT__",
       outputFile: task.execution.outputFile,
@@ -754,7 +757,11 @@ function renderLaunchScript(task: BackgroundTaskRecord): string {
     "set -euo pipefail",
     `mkdir -p $(dirname ${quotedStatePath}) $(dirname ${quotedOutputFile})`,
     "started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-    `printf '%s' ${quotedStatePayload} | sed "s/__OPENCLAW_STARTED_AT__/$started_at/g; s/\"\$\$\"/$$/g" > ${quotedStatePath}`,
+    // Replace the timestamp and PID placeholders with the real values. The `$$`
+    // on the right of the second substitution is the launch shell's PID; the
+    // `\\"` sequences emit literal `\"` into the script so bash keeps the quotes
+    // inside the double-quoted sed argument, yielding sed pattern `"__OPENCLAW_PID__"`.
+    `printf '%s' ${quotedStatePayload} | sed "s/__OPENCLAW_STARTED_AT__/$started_at/g; s/\\"__OPENCLAW_PID__\\"/$$/g" > ${quotedStatePath}`,
     `printf '%s\n' "starting ${task.kind} ${task.id}" >> ${quotedOutputFile}`,
     `if cd ${quotedCwd} && bash -lc ${quotedCommand} >> ${quotedOutputFile} 2>&1; then`,
     "  completed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
@@ -794,5 +801,11 @@ function renderStateWriterPython(status: BackgroundTaskExecutionState["status"])
 }
 
 function shellQuote(value: string): string {
-  return `'${value.replaceAll(`'`, `"'"'"'`)}'`;
+  // POSIX-safe single-quoting: end the quote, emit an escaped quote, reopen.
+  // The canonical escape for a single quote inside a single-quoted string is
+  // `'\''`, i.e. the 5-character sequence `'"'"'`. A previous version used
+  // `"'"'"'` (an extra leading `"`), which decoded to `"'` for every embedded
+  // single quote — corrupting the generated launch script's JSON state payload
+  // (and any other quoted field) whenever a task command contained a `'`.
+  return `'${value.replaceAll(`'`, `'"'"'`)}'`;
 }

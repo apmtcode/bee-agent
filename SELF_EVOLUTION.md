@@ -6,6 +6,64 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-10 (run 9) — 🐛 Two real launch-script bugs: green test suite (173→177)
+
+**Audited:** Ran the baseline suite and found it **red** — 4 failing tests
+(`operator-runtime`, `control-plane/server`, and two `cli/app` cases), not the
+174/174 run 8 recorded. Root-caused all four to the background-task **launch
+script generator** (`src/harness/background-tasks.ts`), which hand-builds each
+task's initial `state.json` via a shell-quoted JSON payload piped through `sed`.
+
+**Two genuine production bugs fixed (both latent, both corrupt `state.json`):**
+1. **Broken POSIX single-quote escape in `shellQuote`.** The escape sequence was
+   `` `"'"'"'` `` (6 chars, an extra leading `"`), which shell-decodes to `"'`
+   for *every* embedded single quote instead of `'`. Any task whose command
+   contained a `'` (e.g. `printf 'line-1\nline-2\n'`) produced **invalid JSON**
+   in `state.json`, so `readState` threw a `SyntaxError` and recovery/reconcile
+   crashed. Fixed to the canonical `` `'"'"'` `` (i.e. `'\''`).
+2. **`$$` PID placeholder never substituted.** The `sed` line was written as a JS
+   template literal `s/\"\$\$\"/$$/g` — but JS collapses `\"`→`"` and `\$`→`$`,
+   so the *emitted* script was `sed "...; s/"$$"/$$/g"`. The bare `"$$"` toggles
+   out of the shell's double-quotes, so `$$` expands to the PID on **both** sides
+   → `s/<PID>/<PID>/g`, a no-op. Result: `"pid":"$$"` (a string) was persisted,
+   so `isProcessRunning("$$")` mis-fired and every recovered task was wrongly
+   flagged missing-process/degraded. Fixed by replacing the fragile `"$$"` dance
+   with an inert `__OPENCLAW_PID__` placeholder (metacharacter-free, matching the
+   existing `__OPENCLAW_STARTED_AT__` pattern) and emitting properly-escaped
+   quotes (`\\"` in the source).
+
+**Test fixes (racy real-process tests → deterministic):** three tests
+(`operator-runtime`, `server`, `app`) spawned **real detached** launch scripts
+whose asynchronous `state.json` writes raced the tests' own manual `writeState`
+calls, so pass/fail hinged on OS scheduling. Injected a mock
+`backgroundTaskSpawnProcess` (the same pattern the harness unit tests already
+use) so these logic tests control state deterministically. The **real** launch
+script is still exercised end-to-end by a new dedicated regression test.
+
+**New regression test** (`background-tasks.test.ts`): renders the real launch
+script for commands containing single quotes, double quotes, and embedded
+newlines, **executes it**, and asserts the persisted `state.json` parses, round-
+trips the command exactly, and has a **numeric** pid. This would have caught both
+bugs (invalid JSON + `pid:"$$"`).
+
+**Test results:** full suite **177/177 passing** (was 173/177), stable across
+repeated runs. `npm run build` ✅. `npm run typecheck:src` ✅ (exit 0). Full
+`tsc` debt unchanged at **125** (test additions are type-clean).
+
+**New idea:** the launch script is assembled by string concatenation with two
+distinct escaping layers (JS template literal → bash), which is exactly how both
+of these bugs hid. Add a **launch-script lint/self-test**: a tiny build-time (or
+test-time) check that renders the script for an adversarial command (containing
+`' " $ \\ \n` and the literal text `__OPENCLAW_PID__`), executes only its
+bootstrap, and asserts the emitted `state.json` is valid JSON with a numeric pid
+and exact command — turning "the generator emits correct shell" into an
+invariant instead of a thing we rediscover. Longer term, consider having the
+launch script write its initial state via a `python3 -c`/`node -e` one-liner fed
+the payload on argv (no `sed`/`printf` quoting at all), removing the entire
+double-escaping surface.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
