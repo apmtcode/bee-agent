@@ -58,19 +58,43 @@ unchecked items are queued. Keep this richer than you found it each run.
 ## Local-movement learning subsystem
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
-(exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
+(exporter, job store/manifest, runner, execution service, **movement-model** as
+of run 9). Next increments:
+- [x] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+      — DONE run 9 (see SELF_EVOLUTION run 9: capture/schema/dataset/replay all
+      present; the missing piece was in-process train+infer).
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
+      for a real on-device small model — DONE run 9 (`src/training/movement-model.ts`:
+      `MovementModelBackend` + `MovementModelRegistry` + deterministic `ngram`
+      backend that learns, generalizes via family backoff, and serializes).
+- [x] Generalization eval harness: measure fidelity on held-out but related
+      synthetic trajectories — DONE run 9 (`evaluateMovementPolicy`, next-movement
+      top-1 accuracy). Extend next with a token-distance metric (below).
 - [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      round-trips without real OS input (the movement tests use inline synthetic
+      trajectories; promote to a reusable generator module).
+- [ ] **Replay-fidelity closed loop**: feed a trained `MovementPolicy.generate()`
+      back through capture→dataset and score vs. the source trajectory as a single
+      CI metric; add an edit-distance / LCS metric over movement tokens so
+      partial-match fidelity is measurable, not just top-1 exact.
+- [ ] Wire the movement-model into the training runner/execution service so a
+      reviewed export can train an `ngram` policy artifact in-process (alongside
+      the shell-plan path for real on-device runtimes).
 
 ## Innovation backlog
+- [ ] **Atomic launch-script state writes** (reliability): make the spawned
+      launch scripts in `background-tasks.ts` and `training/runner.ts` write state
+      to `state.json.tmp` then `mv` into place, so recovery never observes a
+      half-written file. Run 9 added defensive read tolerance (`readState` treats
+      unparseable state as missing); this fixes the root cause. Likely also greens
+      the pre-existing flaky real-process integration tests (`app.test.ts`,
+      `server.test.ts`, `operator-runtime.test.ts` background-task cases).
+- [ ] **Source control-char guard** (DX/tooling): a tiny pre-commit/CI scan that
+      fails if any `src/**` file contains a control char outside tab/newline —
+      run 9 hit stray NUL/SOH bytes injected into string literals by the editor
+      tooling; a byte-scan would catch that class of corruption automatically.
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in
       project health over time.

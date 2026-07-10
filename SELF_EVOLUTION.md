@@ -6,6 +6,81 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-10 (run 9) — 🧠 In-process pluggable movement-model backend (learn + generalize) + background-task recovery robustness
+
+**Audited:** Standing objective #2 (local-movement learning). Inventoried
+`src/capture/` + `src/training/`: capture (recorder/adapters/consent), event
+schema (`TrajectorySpan` obs/actions, `ReplayTimelineEvent`), dataset
+(`ReviewedExportManifest.replays`), and replay (`buildReplayManifest`) all exist,
+plus a real-device training runner (`LocalAppleSiliconTrainingRunner`). **Gap:**
+the runner only *emits shell plans* for on-device MLX/axolotl — there was **no
+in-process model that actually learns or infers**, so objective pieces (c) train
+and (d) generalize could not run or be validated in the cloud/CI.
+
+**Changed (additive):**
+- **`src/training/movement-model.ts` (new).** A pluggable `MovementModelBackend`
+  interface + a deterministic in-process `ngram` backend (`NgramMovementModelBackend`):
+  - Normalizes trajectory actions → `MovementToken` (`tool::summary`), with
+    extraction from both `TrajectorySpan.actions` and replay action events.
+  - Learns a **variable-order Markov policy** over start/END-framed movement
+    sequences; `predict()` does longest-context backoff, then a **family
+    fallback** (tool + gesture verb, e.g. `device::type`) so it **generalizes to a
+    new-but-related movement**, then a global unigram prior. Fully deterministic
+    (argmax with lexicographic tie-break) → reliable mock for the training seam,
+    no OS/GPU needed.
+  - `generate()` replays a full predicted trajectory from a seed; `serialize()`/
+    `restore()` give a plain-JSON, replayable policy artifact.
+  - `MovementModelRegistry` for backend pluggability (documented seam for a real
+    on-device small model); `evaluateMovementPolicy()` = held-out next-movement
+    top-1 accuracy (generalization eval harness).
+  - Exported from `src/index.ts`.
+- **`src/harness/background-tasks.ts` — recovery robustness fix.** `readState()`
+  now treats an unparseable state file (a spawned launch script's half-written /
+  non-atomic JSON) as *no usable state* (returns `undefined`) instead of throwing
+  a `SyntaxError` that aborted the **entire** `recoverBackgroundTasks` batch and
+  every sibling task's recovery. Non-parse (I/O) errors still throw. This is a
+  real production robustness bug (a state file read mid-write would crash
+  recovery), surfaced by a read/write race in this container.
+
+**Tests:** `movement-model.test.ts` (new, **16/16**) — normalization, ordered
+extraction, replay-event extraction, exact learning + full-trajectory regen,
+learned stop, family generalization, low-confidence suppression, serialization
+round-trip via the registry, custom-backend pluggability, and the eval harness
+(perfect on memorized, >0 on held-out related). `background-tasks.test.ts` — new
+regression proving a corrupt state file no longer crashes session recovery
+(**25/25 in that file**). `typecheck:src` ✅ (source stays green). Build ✅.
+
+**Pre-existing failures (NOT caused by this run — verified on the clean tree):**
+the big real-process integration tests (`app.test.ts`,
+`server.test.ts`, `operator-runtime.test.ts` background-task cases) are
+environment/timing flaky in this container — the clean tree fails **3** of them;
+**with this run's `readState` fix that drops to 2** (the fix repaired the
+"background and monitor task commands" case). So this run strictly *reduces*
+pre-existing red. Full suite: **189 passed / 191**, the 2 reds pre-existing.
+Because the full suite is not 100% green, pushed to the designated feature branch
+`claude/peaceful-dirac-bp9joc` (not `main`).
+
+**⚠️ Tooling note for future runs:** the Write tool intermittently injected a
+stray control byte (NUL, then SOH `0x01`) into whitespace/empty string literals
+in `movement-model.ts` — caught via a byte scan (`buf.indexOf(0)` / control-char
+sweep) after Write. **Always byte-scan newly-written source for control chars
+before trusting typecheck.** Fixed by rewriting and using an explicit `\u001f`
+escape for the context delimiter.
+
+**New idea:** a **replay-fidelity closed loop** — feed a trained `MovementPolicy`'s
+`generate()` output back through the capture→dataset path and score it against the
+source trajectory with `evaluateMovementPolicy`, turning "does the learned policy
+reproduce the recorded movement" into a single CI metric. Extend later with a
+distance metric over movement *tokens* (edit distance / longest-common-subsequence)
+so partial-match fidelity is measurable, not just top-1 exact.
+
+**2nd idea (reliability):** make the launch-script state write **atomic** (write to
+`state.json.tmp` then `mv`) in both `background-tasks.ts` and `training/runner.ts`
+so recovery never observes a half-written file — the root cause behind the
+robustness fix above. Queued to ROADMAP.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

@@ -353,6 +353,57 @@ describe("FileBackgroundTaskStore", () => {
     ]);
     await expect(reloaded.get(other.id)).resolves.toMatchObject({ id: other.id, status: "running" });
   });
+
+  it("recovers a session even when one task's state file is corrupt", async () => {
+    const rootDir = await makeTempDir();
+    const filePath = path.join(rootDir, "background-tasks.json");
+    const store = new FileBackgroundTaskStore(
+      filePath,
+      () => ({ pid: 3333, unref() {} }),
+      (pid) => pid === 3333,
+    );
+
+    const healthy = await store.start({
+      sessionId: "sess-x",
+      title: "Tail healthy",
+      command: "tail -f healthy.log",
+      cwd: rootDir,
+      kind: "monitor",
+    });
+    const corrupt = await store.start({
+      sessionId: "sess-x",
+      title: "Tail corrupt",
+      command: "tail -f corrupt.log",
+      cwd: rootDir,
+      kind: "monitor",
+    });
+
+    await store.executionService.writeState(healthy, {
+      version: 1,
+      taskId: healthy.id,
+      kind: "monitor",
+      status: "running",
+      pid: 3333,
+      startedAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      outputFile: healthy.execution.outputFile,
+      cwd: rootDir,
+      command: healthy.command,
+    });
+
+    // Simulate a half-written / shell-mangled state file (invalid JSON).
+    const corruptStatePath = path.join(rootDir, corrupt.execution.stateFile);
+    await fs.mkdir(path.dirname(corruptStatePath), { recursive: true });
+    await fs.writeFile(corruptStatePath, '{"version":1,"taskId":"' + corrupt.id + '","pid":$$', "utf8");
+
+    // A single corrupt state file must not abort recovery of its siblings.
+    const recovered = await store.recoverBySession("sess-x");
+    expect(recovered).toHaveLength(2);
+    const byId = new Map(recovered.map((entry) => [entry.task.id, entry]));
+    expect(byId.get(healthy.id)?.reason).toBe("state-running");
+    // The corrupt task is reconciled (treated as no usable state), not thrown on.
+    expect(byId.has(corrupt.id)).toBe(true);
+  });
 });
 
 describe("BackgroundTaskExecutionService", () => {

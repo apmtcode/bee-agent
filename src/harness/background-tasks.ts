@@ -231,10 +231,22 @@ export class BackgroundTaskExecutionService {
   }
 
   async readState(task: BackgroundTaskRecord): Promise<BackgroundTaskExecutionState | undefined> {
-    return await readJsonFile<BackgroundTaskExecutionState | undefined>(
-      path.join(this.rootDir, task.execution.stateFile),
-      undefined,
-    );
+    try {
+      return await readJsonFile<BackgroundTaskExecutionState | undefined>(
+        path.join(this.rootDir, task.execution.stateFile),
+        undefined,
+      );
+    } catch (error) {
+      // A state file written by a spawned launch script can be half-written or
+      // malformed when read (mid-write, or a shell that emitted invalid JSON).
+      // Treat an unparseable state as "no usable state" so batch recovery
+      // reconciles this task as missing-process instead of crashing every
+      // sibling task's recovery. Non-parse errors (I/O, permissions) still throw.
+      if (error instanceof SyntaxError) {
+        return undefined;
+      }
+      throw error;
+    }
   }
 
   async writeOutput(task: BackgroundTaskRecord, content: string): Promise<void> {
