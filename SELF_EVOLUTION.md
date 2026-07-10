@@ -6,6 +6,65 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-10 (run 9) — Movement-policy model: learn → repeat → generalize (objective #2 c+d)
+
+**Audited:** The local-movement learning subsystem end-to-end. The capture half
+(recorder, device/os/browser adapters, trajectory store, replay manifest) and
+the *export/plan* half (`src/training/exporter.ts`, `runner.ts`,
+`execution-service.ts`) were already substantial — but the runner only emits
+**real Apple-Silicon `mlx`/`axolotl` launch scripts that cannot run in the
+cloud**, and there was **no actual model** that learns from recorded movements
+and can predict/generalize them. Objective #2's pieces (c) *post-train a local
+model to repeat movements* and (d) *generalize to new-but-related movements*
+were entirely unimplemented. Three matching ROADMAP items were open (pluggable
+backend + mock, synthetic generator, generalization eval).
+
+**Changed (additive — new module `src/training/policy/`, nothing existing
+touched except the barrel):**
+- `movement-policy.ts`: a **pluggable `MovementPolicyBackend`** interface
+  (`train` / `predictNext` / `generate`) so a real on-device small model can slot
+  in later, plus a shipped **deterministic `MarkovMovementBackend`** — a
+  Katz-style backoff n-gram over movement tokens. It needs no native deps and no
+  randomness, so it trains + infers identically in cloud and on-device and its
+  tests are stable. **Generalization (d)** falls out of context backoff: an
+  unseen high-order context falls back to the longest observed suffix, so a
+  related prefix still yields a sensible next move. **Repeat (c)** = deterministic
+  argmax rollout terminated by an END sentinel. Added token derivation from
+  existing types (`movementTokenFromAction`, `movementSequenceFromTrajectory`,
+  `movementSequenceFromReplayEvents`) so it consumes the capture data already
+  produced.
+- `synthetic.ts`: a **seeded synthetic movement-stream generator**
+  (`generateSyntheticMovementDataset`, deterministic mulberry32 PRNG — no
+  `Math.random`, no real OS) with a correlated per-instance "style" so the data
+  has genuine learnable structure; a deterministic `splitMovementDataset`; and a
+  **generalization eval harness** (`evaluateMovementPolicy`) reporting
+  next-token accuracy, exact-replay rate, and backoff rate on held-out sequences.
+- `src/index.ts`: additive re-exports of the new surface.
+
+**Test results:** new `movement-policy.test.ts` — **14/14 passing** (exact
+replay, deterministic ranking, backoff generalization on an unseen context,
+token derivation, synthetic determinism, and a learned-structure eval that beats
+chance). `typecheck:src` ✅ CLEAN. Build ✅ (dts + esm). Full suite **185/188**.
+
+**Pre-existing blocker (NOT introduced this run — verified via `git stash -u`,
+fails identically on a clean checkout):** 3 background-task tests fail with a
+JSON parse error in `BackgroundTaskExecutionService.readState`
+(`operator-runtime`, `server`, `app`). Root cause is the **shell launcher's
+`sed`-templated state writer** emitting malformed JSON in this environment
+(same fragile pattern as `runner.ts`'s `renderStateWriterPython`). Logged to
+ROADMAP as a focused follow-up; deliberately not bundled here to keep this diff
+reviewable and additive.
+
+**New idea:** promote the movement-policy through the existing training pipeline —
+have `LocalTrainingExporter` emit a `MovementDataset` alongside the reviewed
+export, and add a `MovementPolicyBackend` implementation that *wraps* the
+`mlx`/`axolotl` runner for the real on-device path while the Markov backend
+serves as the always-available cloud/CI reference + smoke-test oracle. Then the
+eval harness becomes a regression gate on real trained policies, not just the
+mock.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

@@ -431,3 +431,31 @@ export type {
   FailTrainingJobParams,
   TrainingJobStoreShape,
 } from "./training/job-store.js";
+export {
+  MarkovMovementBackend,
+  MOVEMENT_END,
+  movementSequenceFromReplayEvents,
+  movementSequenceFromTrajectory,
+  movementTokenFromAction,
+} from "./training/policy/movement-policy.js";
+export type {
+  GenerateMovementOptions,
+  MovementDataset,
+  MovementPolicyBackend,
+  MovementPolicyModel,
+  MovementPrediction,
+  MovementSequence,
+  MovementToken,
+  TrainMovementPolicyOptions,
+} from "./training/policy/movement-policy.js";
+export {
+  DEFAULT_MOVEMENT_TEMPLATES,
+  evaluateMovementPolicy,
+  generateSyntheticMovementDataset,
+  splitMovementDataset,
+} from "./training/policy/synthetic.js";
+export type {
+  MovementPolicyEvaluation,
+  MovementTaskTemplate,
+  SyntheticDatasetOptions,
+} from "./training/policy/synthetic.js";

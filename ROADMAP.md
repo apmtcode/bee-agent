@@ -59,16 +59,35 @@ unchecked items are queued. Keep this richer than you found it each run.
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
 (exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
-      objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
-      deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+- [x] Inventory what `src/capture` + `src/training` already implement vs. the
+      objective's five pieces (run 9): capture ✅, schema ✅ (trajectory/replay),
+      dataset ✅ (reviewed export), replay ✅ (manifest) — the gap was **train +
+      infer** (pieces c/d), now filled by `src/training/policy/`.
+- [x] Pluggable local-model backend interface for the training runner with a
+      deterministic mock backend (run 9) — `MovementPolicyBackend` +
+      `MarkovMovementBackend` in `src/training/policy/movement-policy.ts`. Seam
+      for a real on-device model is the interface; documented in SELF_EVOLUTION.
+- [x] Synthetic event-stream generator to validate capture→dataset→replay
+      round-trips without real OS input (run 9) — `generateSyntheticMovementDataset`
+      (seeded, deterministic) in `src/training/policy/synthetic.ts`.
+- [x] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories (run 9) — `evaluateMovementPolicy`
+      (next-token accuracy, exact-replay rate, backoff rate).
+- [ ] Wire the movement policy into `LocalTrainingExporter` (emit a
+      `MovementDataset` next to the reviewed export) and add a real on-device
+      `MovementPolicyBackend` that wraps the `mlx`/`axolotl` runner, with the
+      Markov backend as the cloud/CI reference oracle + eval regression gate.
+
+## Reliability
+- [ ] **Fix the shell-launcher state-writer JSON corruption** (surfaced run 9):
+      3 background-task tests (`operator-runtime`, `server`, `app`) fail because
+      `BackgroundTaskExecutionService.readState` parses malformed JSON produced
+      by the `sed`-templated state writer in this environment (same fragile
+      pattern as `training/runner.ts`'s `renderStateWriterPython`). Replace the
+      shell `sed`/placeholder substitution with a Node-side atomic JSON write (or
+      a robust Python heredoc) so state files are always valid JSON regardless of
+      the host `sed`/`date`. Pre-existing (fails on clean `main`), not a run-9
+      regression.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
