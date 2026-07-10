@@ -6,6 +6,67 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-10 (run 9) — Pluggable movement-model backend (obj #2d) + fixed a deterministic launch-script JSON-corruption bug
+
+**Audited:** Standing objective #2 (local-movement learning). The capture
+subsystem already records movement trajectories (`src/capture/*`) and the runner
+(`src/training/runner.ts`) emits shell plans for real on-device training
+(mlx/axolotl), but there was **no pluggable model backend** — nothing that
+actually *learns* to repeat recorded movements or *generalizes* to new ones, and
+nothing runnable in-cloud. This is the ROADMAP's queued "pluggable local-model
+backend + deterministic mock" item and directly serves objective #2(d).
+
+**Changed (additive):**
+- **New `src/training/movement-model.ts`** — the model seam between capture and
+  training:
+  - `MovementToken` schema + `movementTokenFromAction` normalizer (derives
+    tool/gesture/target/direction from recorded `TrajectoryAction`s), plus full
+    (`movementTokenKey`) and coarse (`movementGestureKey`) key functions.
+  - `buildMovementDataset(trajectories)` → ordered per-trajectory movement
+    sequences + de-duplicated vocabulary (timestamp-sorted, empty spans skipped).
+  - `MovementModelBackend` / `TrainedMovementModel` interfaces (the pluggable
+    seam for a real on-device small model) with a registry
+    (`registerMovementBackend` / `createMovementBackend` / `listMovementBackends`).
+  - `MarkovMovementBackend` — a **fully deterministic** n-gram (default order 2)
+    reference/mock backend: learns transition frequencies at every order on the
+    full token identity **and** a parallel coarse (tool+gesture) table.
+    `predict` tries exact contexts longest-first (repeat recorded movements),
+    then coarse contexts (**generalize** to unseen targets, flagged
+    `generalized:true`), then an unconditional prior; ties break lexicographically
+    so results are reproducible with no `Math.random`. `generate` autoregresses
+    from a seed. Runs entirely in-cloud on synthetic streams.
+  - Barrel exports added to `src/index.ts`.
+- **Fixed a real, pre-existing reliability bug in `src/harness/background-tasks.ts`**
+  (surfaced as 3 failing tests on this run's fresh container; run 8 had reported
+  174/174 in a differently-timed environment). Root cause found by faithful
+  repro: the launch script built the initial "running" state JSON via
+  `printf '%s' <shell-quoted JSON> | sed … > state.json`. For a task whose
+  `command` contains newlines/quotes (the test uses
+  `printf 'line-1\nline-2\n'`), the JSON.stringify escapes get mangled by the
+  single-quote shell-escaping + sed layering → **deterministically malformed
+  JSON**, and the redirect was also **non-atomic** (partial reads under
+  concurrency). Replaced the `printf|sed` construction with a quoted heredoc that
+  emits the single-line JSON **verbatim** (no shell can corrupt it) + a Python
+  fixup that injects pid/timestamp and writes **atomically** via temp +
+  `os.replace`. Also made the completed/failed Python writer atomic the same way.
+
+**Test results:** **11 new movement-model tests** (dataset extraction,
+repeat-recorded-movement prediction + sequence regeneration, coarse-backoff
+generalization to unseen targets, deterministic tie-breaking, registry). Full
+suite **174 → 185, all green across 3 consecutive runs** (the 3 pre-existing
+background-task failures are now fixed). `typecheck:src` ✅ (exit 0). Build ✅.
+
+**New idea:** now that a `MovementModelBackend` exists, add a **generalization
+eval harness** (ROADMAP): hold out related-but-unseen synthetic trajectories,
+measure the model's `predict`/`generate` fidelity (exact-match on seen contexts,
+gesture-match on generalized ones), and record the score to a metrics file so
+backend swaps (mock → real on-device model) are comparable over time. Second
+idea: wire the movement backend into the training `execution-service` so a job
+can optionally run the deterministic model as a pre-flight "does this dataset
+teach a learnable policy?" check before dispatching an expensive on-device run.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

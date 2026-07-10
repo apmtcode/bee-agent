@@ -62,15 +62,35 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
+      for a real on-device small model. **DONE run 9** —
+      `src/training/movement-model.ts`: `MovementModelBackend`/`TrainedMovementModel`
+      interfaces + registry (`register`/`create`/`listMovementBackends`), a
+      deterministic `MarkovMovementBackend` (n-gram with coarse-key backoff for
+      generalization), and `buildMovementDataset` from recorded trajectories.
 - [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      round-trips without real OS input. (Partially seeded: run 9's tests build
+      synthetic trajectory spans; next, a reusable generator that also drives the
+      recorder/replay path, not just the model dataset.)
+- [ ] **Generalization eval harness** (next movement increment): hold out
+      related-but-unseen synthetic trajectories; score `MovementModel.predict`/
+      `generate` fidelity (exact-match on seen contexts, gesture-match on
+      generalized `generalized:true` predictions); record the score to a metrics
+      file so mock→real backend swaps are comparable over time.
+- [ ] Wire the movement backend into `training/execution-service` as an optional
+      pre-flight "is this dataset learnable?" check (train the deterministic
+      Markov backend, assert non-trivial predictive coverage) before dispatching
+      an expensive on-device run.
 
 ## Innovation backlog
+- [x] **Atomic, corruption-proof background-task state writes** — DONE run 9.
+      Launch script now emits the initial state JSON via a quoted heredoc
+      (verbatim, no shell/sed escaping) + a Python fixup writing atomically via
+      `os.replace`; completed/failed writers made atomic too. Fixed 3
+      deterministic/flaky test failures. Follow-up: add a regression test that
+      starts a background task whose `command` contains newlines & quotes and
+      asserts the persisted state parses.
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in
       project health over time.
