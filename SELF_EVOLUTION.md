@@ -6,6 +6,68 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-10 (run 9) — 🧠 Movement-learning: pluggable model backend + trainable/inferable mock
+
+**Audited:** The local-movement learning subsystem (standing objective #2).
+`src/capture/` covers capture → schema → replay; `src/training/` covers
+export → launch-plan (`runner.ts`) → job/execution stores. **Gap found:** the
+runner only emits `mlx`/`axolotl` *shell commands* that require a real
+Apple-silicon device — so parts (c) "post-train a local model" and (d)
+"generalize to related movements" had **no code that actually trains or infers**,
+and nothing runnable/testable in the cloud. This is the roadmap's #1
+movement item ("pluggable local-model backend + deterministic mock backend").
+
+**Changed (additive, two new modules + barrel exports):**
+- `src/training/movement-dataset.ts` — reshapes replay timelines
+  (`ReplayTimelineEvent`) into supervised `(context → action)` transitions.
+  Each action gets a bounded-window `context` signature **and** a coarse
+  `backoffContext` (single most-recent event) for generalization. Exposes
+  `buildMovementDataset`, `movementDatasetFromExport` (consumes a
+  `ReviewedExportManifest`), and a deterministic `splitMovementDataset`
+  (every Nth sequence → holdout, no RNG).
+- `src/training/movement-model.ts` — the pluggable seam:
+  `MovementModelBackend` interface (`train` → `TrainedMovementModel`; `load` →
+  `MovementInferenceSession`) so the real deployment swaps an on-device small
+  model while cloud/CI uses the in-process
+  `DeterministicMarkovMovementBackend`. The mock is a **real count-based Markov
+  next-action model**: training tallies context→action counts (+ a backoff
+  table); inference is argmax with lexicographic tie-break (fully deterministic,
+  no `Date`/`Math.random`), backing off to the coarse table on unseen contexts.
+  `MovementModelTrainer` ties dataset → train → `evaluate()` with a
+  next-action fidelity report (exact vs backoff vs miss) — the generalization
+  eval harness the roadmap wanted. JSON-serializable params (on-device
+  persistence contract).
+- Barrel (`src/index.ts`): exported all new classes/types.
+
+**Test results:** 2 new test files, **14 new tests, all passing** (reproduction
+fidelity = 1.0; held-out-split generalization = 1.0; backoff-to-related-context;
+deterministic-params; tie-break + calibrated confidence; cross-backend load
+rejection). The synthetic workflow generator in the test doubles as the
+roadmap's synthetic event-stream generator. `npm run typecheck:src` ✅ (exit 0).
+`npm run build` ✅. Full suite **185/188**.
+
+**⚠️ Pre-existing, unrelated failures (NOT introduced here):** 3 tests fail on
+the *clean* tree too (verified via `git stash`): `operator-runtime.test.ts`,
+`server.test.ts`, `app.test.ts`, all in the background-task reconciliation path.
+Root cause is environmental — `renderStateWriterPython`/the bash launch script
+writes task state via `sed` substitution that yields **malformed JSON**
+(`SyntaxError: Expected ',' or '}' … position 311`) in *this* sandbox shell, so
+`readJsonFile` throws. Run 8 saw 174/174 on a different container; the shell/
+`date`/`sed` behavior here differs. My change is pure in-process TS (no
+subprocess, no fs) and is fully green in isolation. Logged to ROADMAP as a
+next-run target. Pushed to the designated branch `claude/peaceful-dirac-90lk0f`.
+
+**New idea:** now that a backend produces a `TrainedMovementModel` with a
+serialized transition table, add a **model registry + versioned artifact store**
+(mirroring `job-store.ts`) so trained movement models are persisted, diffed
+across capture batches, and A/B-scored by the eval harness — turning "train
+once" into a continuously-improving policy with regression tracking. Second
+idea: a `HybridBackend` that runs the Markov model as a fast prior and defers
+low-confidence contexts to a heavier on-device model, so the deterministic
+backend stays useful in production, not just CI.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

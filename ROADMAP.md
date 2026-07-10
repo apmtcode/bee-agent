@@ -62,13 +62,40 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      for a real on-device small model. — DONE run 9. `MovementModelBackend`
+      interface + `DeterministicMarkovMovementBackend` (count-based next-action
+      model, argmax w/ lexicographic tie-break, backoff) in
+      `src/training/movement-model.ts`; dataset schema/conversion in
+      `src/training/movement-dataset.ts`.
+- [x] Synthetic event-stream generator to validate capture→dataset→replay
+      round-trips without real OS input. — DONE run 9 (the synthetic workflow
+      generator in `movement-model.test.ts`; formalize into a shared helper next).
+- [x] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories. — DONE run 9. `MovementModelTrainer.evaluate`
+      + `splitMovementDataset` → `MovementEvalReport` (exact/backoff/miss fidelity).
+- [ ] **Movement model registry + versioned artifact store** (mirror
+      `job-store.ts`): persist `TrainedMovementModel`s, diff across capture
+      batches, A/B-score via the eval harness for regression tracking.
+- [ ] **HybridBackend**: Markov model as a fast prior; defer low-confidence
+      contexts to a heavier on-device model — keeps the deterministic backend
+      useful in production, not only CI.
+- [ ] Promote the synthetic event-stream generator out of the test file into a
+      reusable `src/capture` helper (parameterized workflows, noise injection).
+
+## Known failing tests (environmental)
+- [ ] **Background-task state JSON corruption in-sandbox** (surfaced run 9). 3
+      tests fail on the clean tree — `operator-runtime.test.ts`,
+      `server.test.ts`, `app.test.ts` — all in the background-task
+      reconciliation path. `renderStateWriterPython` / the bash launch script
+      writes task state via `sed` substitution that produces malformed JSON
+      (`SyntaxError: Expected ',' or '}' … position 311`) in this container's
+      shell, so `readJsonFile` throws. Run 8 was 174/174 on a different
+      container. Make state-writing shell-independent (write valid JSON without
+      `sed` string surgery — e.g. emit via a small `python3`/`node` heredoc that
+      `json.dumps` the whole object) so the suite is green regardless of host
+      shell/`date`/`sed` behavior.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
