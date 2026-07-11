@@ -83,6 +83,11 @@ describe("OperatorControlPlaneServer", () => {
     const rootDir = await makeTempDir();
     const runtime = new StandaloneOperatorRuntime({
       rootDir,
+      // Use an inert spawn so background tasks don't launch real detached
+      // subprocesses whose async state/output writes would race with the
+      // manually-staged state this test asserts on. Liveness stays injected
+      // as "not running" so recovery marks abandoned tasks failed.
+      backgroundTaskSpawnProcess: () => ({ pid: 4242, unref() {} }),
       backgroundTaskIsProcessRunning: () => false,
       delivery: new OperatorDeliveryService(rootDir, {
         sendBrowserPush: async () => {},

@@ -6,6 +6,53 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-11 (run 9) — Kill the background-task spawn race: red suite → 175/175 green & deterministic
+
+**Audited:** The test suite was **red on the branch HEAD** (4 failing tests) even
+though run 8 logged 174/174. Root-caused all four to a single reliability bug —
+not a date rollover but a **spawn/state race**: `FileBackgroundTaskStore.start()`
+launches a *detached* subprocess whose launch script (`renderLaunchScript`) wrote
+an initial `"running"` execution-state file **asynchronously**. That write (and
+the script's `"starting …"` output line) races with — and clobbers — any state a
+caller stages right after `start()` returns. Every affected test implicitly
+assumes `start()` writes *no* state file (the `background-tasks.test.ts` suite
+even injects a no-op spawn and stages state by hand). In the current cloud
+sandbox the race is lost **consistently**, surfacing as: `control=mixed`/
+`degraded` instead of `active`, "No active run or background task", recover
+returning `missing-process` instead of `unchanged`, and partial-JSON `readState`
+parse errors.
+
+**Changed (additive, reversible):**
+- `src/harness/background-tasks.ts` — the launch script now authors **only
+  terminal** (completed/failed) states; the redundant initial `"running"` write
+  is removed. Liveness of a just-started task is already tracked by the task
+  record's `processId` (set by `markStarted`) and reconciled via
+  `isProcessRunning` when no state file exists (`reconcileMissingState`), so
+  `sync()`/recovery lazily author a *consistent* running state from Node instead
+  of a racy detached shell. Dropped the now-dead `quotedStatePayload`/`started_at`.
+- `src/harness/background-tasks.test.ts` — **new regression guard**: `start()`
+  writes no execution-state file, and the rendered script contains no initial
+  running-state marker.
+- `src/orchestrator/operator-runtime.test.ts` & `src/control-plane/server.test.ts`
+  — the two real-spawn tests that stage state manually now inject an inert
+  `backgroundTaskSpawnProcess` (matching the established `background-tasks.test.ts`
+  pattern), so no detached subprocess writes output/state behind the assertions.
+
+**Test results:** full suite **red (4 failed / 170 passed) → 175/175 passing**
+(added 1 test); **stable across 5 consecutive runs** (was deterministically red).
+`typecheck:src` ✅, build ✅. No source behavior change for production beyond
+"state file is authored lazily on first sync/recover rather than eagerly by the
+launch script" — a strict consistency improvement.
+
+**New idea:** add a **flake sentinel** to the engine's pre-push self-check — run
+`npm test` **twice** (or with `--sequence.shuffle`) and diff pass/fail sets; any
+test that isn't stable across both runs blocks the push and is logged here. This
+class of bug (a test that passes only when a background write loses a race) would
+have been caught the run it was introduced instead of surfacing hours later.
+Cheap insurance now that the suite is green.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

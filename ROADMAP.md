@@ -38,8 +38,17 @@ unchecked items are queued. Keep this richer than you found it each run.
     `skills.executable.*`, `push.subscriptions.*`, `trajectories.*`, `replays.*`,
     `cron.runs`/misc — plus a few genuine test-only typings. Map the rest, then
     fix residual test-only typings.
+- [x] **Fix the background-task spawn/state race** (2026-07-11, run 9). The
+      detached launch script wrote an initial `running` state asynchronously,
+      clobbering caller-staged state and making 4 tests deterministically red in
+      the cloud sandbox. Script now writes only terminal states; liveness tracked
+      via `processId`. Suite 170→175 passing, stable across 5 runs. Regression
+      guard added.
 - [ ] Add a `verify` npm script (`typecheck && build && test`) and have the
       engine run it as a pre-push self-check each cycle.
+- [ ] **Flake sentinel** in the pre-push self-check: run the suite twice (or with
+      `--sequence.shuffle`) and block the push on any test whose pass/fail differs
+      between runs. Would have caught the run-9 spawn race the run it landed.
 - [x] Interim **source-only typecheck gate** — DONE run 7. `tsconfig.src.json`
       (excludes `**/*.test.ts`) + `typecheck:src` script; passes (exit 0). Next:
       have the engine run it as a per-run pre-push self-check.

@@ -109,6 +109,31 @@ describe("FileBackgroundTaskStore", () => {
     });
   });
 
+  it("does not author an execution-state file on start (only terminal states)", async () => {
+    // Regression guard: the detached launch script must NOT write an initial
+    // "running" state. Doing so races with — and clobbers — callers that stage
+    // state immediately after start() (recovery reconciliation, tests). Liveness
+    // is tracked via the task record's processId until a terminal state lands.
+    const rootDir = await makeTempDir();
+    const filePath = path.join(rootDir, "background-tasks.json");
+    const store = new FileBackgroundTaskStore(filePath, () => ({ pid: 4242, unref() {} }), () => true);
+
+    const task = await store.start({
+      title: "Watch logs",
+      command: "tail -f app.log",
+      cwd: rootDir,
+      kind: "monitor",
+    });
+
+    // No state file exists yet: start() left the store's status authoritative.
+    await expect(store.executionService.readState(task)).resolves.toBeUndefined();
+
+    // The rendered launch script writes only terminal states (no initial running).
+    const script = await fs.readFile(path.join(rootDir, task.execution.launchScript), "utf8");
+    expect(script).not.toContain('"status": "running"');
+    expect(script).not.toContain("__OPENCLAW_STARTED_AT__");
+  });
+
   it("cancels running tasks and records cancelled state", async () => {
     const rootDir = await makeTempDir();
     const filePath = path.join(rootDir, "background-tasks.json");
