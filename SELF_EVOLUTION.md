@@ -6,6 +6,61 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-11 (run 9) — Movement subsystem: pluggable in-process model backend + deterministic Markov reference
+
+**Audited:** Standing objective #2 (local-movement learning) and the top queued
+roadmap item under it. Inventoried `src/training/`: the pipeline could *export* a
+reviewed dataset (`exporter.ts`), *plan* a job (`job-manifest.ts`), and *launch*
+external Python trainers (`runner.ts` → `mlx_lm.lora`/`axolotl` via a generated
+shell script). **Gap:** there was no in-process, testable model that actually
+*learns to repeat recorded movements* and *generalizes* — objective #2(c)/(d).
+Every "training" path shelled out to a GPU runtime that cannot run in the cloud,
+so the train→infer→evaluate loop was never exercised by a test.
+
+**Changed (additive):** new module `src/training/movement-model.ts`:
+- **`MovementModelBackend`** — the pluggable seam: `id` + `train(dataset) →
+  TrainedMovementModel`. A real on-device small model implements this without
+  touching call sites.
+- **Dataset format** derived from the real `ReplayManifest` shape:
+  `buildMovementDataset(manifests)` groups `action` events by `trajectoryId` in
+  timestamp order, retains `observation` sources as context, ignores transcript
+  events, and emits a sorted de-duplicated vocabulary.
+- **`MarkovMovementBackend`** — deterministic order-N Markov policy over action
+  tokens with stupid-backoff. It **reproduces** a recorded sequence exactly
+  (repeat) and **generalizes** to a novel context by falling back to the most
+  frequent shorter-context continuation (perform new-but-related). START/END
+  sentinels let it learn where sequences begin/terminate.
+- **Inference + eval:** `generate({maxSteps})` rolls out a full movement
+  sequence (with a non-termination guard); `scoreFidelity(reference)` gives a
+  teacher-forced replay-fidelity metric (seeds the generalization eval harness).
+  Stable sorted `toJSON()` for persistence/diffing.
+- `trainMovementModelFromReplays(manifests, backend?)` convenience (defaults to
+  the hermetic Markov backend); all 12 symbols exported via `src/index.ts`.
+
+**Test results:** new `movement-model.test.ts` — **10/10 pass** (dataset
+grouping/ordering, exact repeat, fidelity=1, backoff generalization,
+determinism, JSON round-trip, maxSteps guard, alt-backend injection).
+`typecheck:src` ✅ (exit 0). Build ✅ (tsdown, 5 files). Full `npm test`:
+**181 passed / 3 failed** — the **3 failures pre-exist on the clean baseline**
+(verified via `git stash`: 3 failed / 47 passed without my change). They are the
+background-task shell-script state-writer tests (`operator-runtime`, `app`,
+`server`) hitting `SyntaxError: … JSON at position 311` — the launched
+`bash`+`sed`+`$$` state writer produces malformed JSON **in this cloud
+container's shell**, an environmental integration flake unrelated to this
+change. My diff touches only new files + a barrel export.
+
+**New idea:** the shell-script state writers (`runner.ts::renderLaunchScript`
+and the background-task equivalent) build JSON by `sed`-substituting `$$`/dates
+into a pre-serialized string — brittle across `sed`/`date` implementations (this
+is the source of the 3 env failures). Replace the substitution with a tiny
+`python3 -c`/`node -e` that assembles the state object from argv and dumps real
+JSON, eliminating an entire class of quoting bugs. Second idea: add a
+`MovementReplayEngine` that takes a `TrainedMovementModel` + a live
+observation-context stream and emits generalized action sequences, closing the
+loop from the trained policy back into the replay/execution surface.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

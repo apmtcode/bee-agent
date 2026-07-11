@@ -59,18 +59,35 @@ unchecked items are queued. Keep this richer than you found it each run.
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
 (exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
-      objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
-      deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+- [x] Inventory `src/training` vs. the objective's five pieces (2026-07-11,
+      run 9): export ✅, plan ✅, launch-external ✅ — **gap was in-process
+      train→infer→evaluate**, now filled by `movement-model.ts`.
+- [x] **Pluggable local-model backend interface** with a deterministic mock
+      backend (2026-07-11, run 9): `MovementModelBackend` seam +
+      `MarkovMovementBackend` (order-N Markov w/ backoff) in
+      `src/training/movement-model.ts`. Reproduces recorded movements and
+      generalizes via backoff; hermetic (no GPU/OS). Documented seam for a real
+      on-device small model.
+- [~] Generalization eval harness: `scoreFidelity(reference)` gives teacher-
+      forced replay fidelity (run 9). **Next:** a held-out split harness that
+      trains on N-1 synthetic trajectories and reports fidelity on the held-out
+      one, plus an aggregate generalization score across a synthetic corpus.
+- [ ] Synthetic event-stream generator to produce related-but-varied
+      trajectories (parameterized templates) feeding the eval harness above —
+      validates capture→dataset→train→infer→replay round-trips without real OS
+      input.
+- [ ] `MovementReplayEngine`: bridge a `TrainedMovementModel` + a live
+      observation-context stream back into the replay/execution surface, so a
+      trained policy can drive generalized action sequences end to end.
 
 ## Innovation backlog
+- [ ] **Robust process-state writers** (surfaced run 9): `runner.ts`'s
+      `renderLaunchScript` and the background-task state writer build JSON by
+      `sed`-substituting `$$`/timestamps into a pre-serialized string — brittle
+      across `sed`/`date` implementations and the root cause of 3 environmental
+      test failures in the cloud container (`SyntaxError: … JSON at position
+      311`). Replace substitution with a small `node -e`/`python3 -c` that
+      assembles the state object from argv and dumps real JSON.
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in
       project health over time.
