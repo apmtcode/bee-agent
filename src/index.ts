@@ -58,6 +58,7 @@ export {
 export {
   FileBackgroundTaskStore,
   BackgroundTaskExecutionService,
+  createInertBackgroundSpawn,
   type BackgroundTaskExecution,
   type BackgroundTaskExecutionState,
   type BackgroundTaskKind,

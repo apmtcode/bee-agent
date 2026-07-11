@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { StandaloneOperatorRuntime } from "./operator-runtime.js";
+import { createInertBackgroundSpawn } from "../harness/background-tasks.js";
 import { resolveOperatorCliExecutionConfig } from "../cli/config.js";
 import { runOperatorHooks } from "../cli/execution-policy.js";
 import type { ReviewedExportManifest } from "../training/export-manifest.js";
@@ -531,6 +532,10 @@ describe("StandaloneOperatorRuntime", () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
       backgroundTaskIsProcessRunning: () => false,
+      // Inert launcher: this test drives execution state explicitly, so a real
+      // detached shell would only race its own async state writes against the
+      // assertions (and risk torn reads of a half-written state file).
+      backgroundTaskSpawnProcess: createInertBackgroundSpawn(),
     });
     const session = await runtime.startSession({ title: "Tasks", agentId: "main" });
 

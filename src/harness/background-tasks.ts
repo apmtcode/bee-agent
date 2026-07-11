@@ -133,6 +133,32 @@ function nowIso(): string {
   return new Date().toISOString();
 }
 
+/**
+ * A {@link SpawnBackgroundProcess} strategy that starts no real OS process.
+ *
+ * It returns a synthetic child handle with a deterministic, monotonically
+ * increasing pid and never writes execution state or output. Callers therefore
+ * drive task state explicitly (via {@link BackgroundTaskExecutionService.writeState}
+ * / {@link BackgroundTaskExecutionService.writeOutput}) instead of depending on
+ * an asynchronously-spawned shell script.
+ *
+ * Two uses:
+ *  - Hermetic tests: avoids flakiness from racing a real detached process's
+ *    state writes against assertions, and from torn reads of a half-written
+ *    state file.
+ *  - Hosts that manage process lifecycle out-of-band (e.g. a cloud runtime that
+ *    cannot detach long-lived OS processes) can supply their own launcher and
+ *    reconcile state through the store API.
+ */
+export function createInertBackgroundSpawn(options: { basePid?: number } = {}): SpawnBackgroundProcess {
+  let counter = 0;
+  const basePid = options.basePid ?? 900_000;
+  return () => {
+    counter += 1;
+    return { pid: basePid + counter, unref() {} };
+  };
+}
+
 function defaultIsProcessRunning(pid: number): boolean {
   if (!Number.isFinite(pid) || pid <= 0) {
     return false;

@@ -70,6 +70,23 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Generalization eval harness: measure replay fidelity on held-out but
       related synthetic trajectories.
 
+## Reliability / test hygiene
+- [x] **Hermetic background-task launcher** (2026-07-11, run 9) —
+      `createInertBackgroundSpawn()` + `OperatorCliApp` spawn seams; de-flaked the
+      3 real-process tests that were red on the cloud runner (now 175/175
+      deterministic).
+- [ ] **Atomic shell-side state writes** (real bug, found run 9): the background
+      task launch script writes `state.json` non-atomically (`sed > file` and
+      python `write_text`), so a concurrent reader on the recovery path can hit a
+      torn read and throw a JSON `SyntaxError`. Make the shell writer write to a
+      temp file + `mv` (matching `writeJsonAtomic`), so production recovery can't
+      crash on a half-written state file. Add a test that reads state concurrently
+      with a completing task.
+- [ ] **"No real spawn" test guard**: a shared vitest setup that stubs
+      `child_process.spawn` to throw unless a test opts in, so real-process
+      flakiness can never silently re-enter the suite. Tests that need a launcher
+      use `createInertBackgroundSpawn()` or an explicit mock.
+
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in

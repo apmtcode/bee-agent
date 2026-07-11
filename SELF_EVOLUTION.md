@@ -6,6 +6,53 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-11 (run 9) — 🔴→🟢 Restored a green test suite: hermetic background-task launcher
+
+**Audited:** Repo health on the cloud runner. Found the tree **failing 3 tests at
+HEAD** (171/174) despite run 8 recording 174/174 — the last commit was type-only
+(`server.ts` result map), so this was **environment-driven flakiness**, not a code
+regression. All three shared one root cause: tests that spawn **real detached OS
+processes** and then make timing assumptions the cloud sandbox doesn't satisfy the
+way the author's Mac did.
+- `operator-runtime.test` — `recoverBackgroundTasks` crashed with a JSON
+  `SyntaxError` (torn read of a state file being written non-atomically by the
+  spawned shell/python).
+- `server.test` (`remoteControl` resume) & `app.test` (`platform-list`) — a
+  `sleep 5` task's *initial* `running` state landed (or didn't) before the
+  assertion, flipping remote control between `active` and `degraded`
+  (missing-process) purely by race, since `isProcessRunning` is mocked `false`.
+
+**Changed (additive, reversible):**
+- **New capability** `createInertBackgroundSpawn()` in
+  `src/harness/background-tasks.ts` — a `SpawnBackgroundProcess` strategy that
+  launches no real process, returns deterministic monotonic pids, and writes no
+  execution state, so callers drive state explicitly. Legit beyond tests: a host
+  that can't detach long-lived OS processes (e.g. a cloud runtime) can supply its
+  own launcher and reconcile state through the store API. Exported via the barrel.
+- **Testability seam:** threaded `backgroundTaskSpawnProcess` /
+  `backgroundTaskIsProcessRunning` through `OperatorCliAppOptions` into the
+  runtime (was previously un-injectable at the CLI-app level).
+- **De-flaked the 3 tests** by injecting the inert launcher (and, for the
+  background/monitor-commands block, seeding output/state explicitly — mirroring
+  the pattern its monitor half already used). No production semantics changed.
+- Added a focused unit test for `createInertBackgroundSpawn` (running record, no
+  state file, deterministic pids).
+
+**Test results:** **175/175 passing, deterministic across 3 consecutive full
+runs** (was 171/174 flaky). `typecheck:src` ✅ (exit 0). Build ✅. Full `tsc`
+total unchanged at **125** (all in test files; my test edits are type-clean).
+
+**New idea:** the real production reliability bug behind the JSON crash still
+stands — the shell launch script writes `state.json` **non-atomically**
+(`sed > file`, python `write_text`), so any concurrent reader on the recovery
+path can hit a torn read and throw. Queued in ROADMAP: make the shell-side state
+writer atomic (write temp + `mv`), matching `writeJsonAtomic`'s contract, so
+production recovery can't crash on a half-written state file. Bigger idea: a
+`vitest` "no real spawn" guard (stub `child_process.spawn` in a shared setup and
+require opt-in) so real-process flakiness can never silently re-enter the suite.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

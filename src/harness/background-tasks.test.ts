@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   BackgroundTaskExecutionService,
   FileBackgroundTaskStore,
+  createInertBackgroundSpawn,
   type BackgroundTaskExecutionState,
 } from "./background-tasks.js";
 
@@ -18,6 +19,29 @@ async function makeTempDir(): Promise<string> {
 
 afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
+});
+
+describe("createInertBackgroundSpawn", () => {
+  it("starts a running record without launching a process or writing execution state", async () => {
+    const rootDir = await makeTempDir();
+    const filePath = path.join(rootDir, "background-tasks.json");
+    // Inert launcher: no real process, deterministic monotonic pids, and it
+    // never writes an execution state file. isProcessRunning is fixed false to
+    // mirror the "process not present" condition hermetic tests rely on.
+    const store = new FileBackgroundTaskStore(filePath, createInertBackgroundSpawn({ basePid: 500_000 }), () => false);
+
+    const first = await store.start({ sessionId: "sess-inert", title: "Watch logs", command: "sleep 5", kind: "monitor" });
+    const second = await store.start({ sessionId: "sess-inert", title: "Watch more", command: "sleep 5", kind: "monitor" });
+
+    // Record is "running" (start marks it started), pids are deterministic and distinct.
+    expect(first.status).toBe("running");
+    expect(first.execution.processId).toBe(500_001);
+    expect(second.execution.processId).toBe(500_002);
+
+    // No execution state file was written by the (absent) process, so callers
+    // control state explicitly — readState yields undefined, not a torn read.
+    await expect(store.executionService.readState(first)).resolves.toBeUndefined();
+  });
 });
 
 describe("FileBackgroundTaskStore", () => {
