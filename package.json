@@ -23,7 +23,8 @@
     "typecheck": "tsc --noEmit",
     "typecheck:src": "tsc --noEmit --project tsconfig.src.json",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "verify": "npm run typecheck:src && npm run build && npm test"
   },
   "devDependencies": {
     "@types/node": "^26.0.0",

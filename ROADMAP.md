@@ -38,8 +38,22 @@ unchecked items are queued. Keep this richer than you found it each run.
     `skills.executable.*`, `push.subscriptions.*`, `trajectories.*`, `replays.*`,
     `cron.runs`/misc — plus a few genuine test-only typings. Map the rest, then
     fix residual test-only typings.
-- [ ] Add a `verify` npm script (`typecheck && build && test`) and have the
-      engine run it as a pre-push self-check each cycle.
+- [x] Add a `verify` npm script — DONE run 9. `verify` =
+      `typecheck:src && build && test` (uses the passing source-only gate, since
+      full `typecheck` still carries test-file debt). Next: have the engine run
+      `npm run verify` as its pre-push self-check each cycle, and upgrade
+      `typecheck:src` → full `typecheck` once the test-file debt clears.
+- [x] **Hermetic background-task tests** — DONE run 9. Threaded injectable
+      `backgroundTaskSpawnProcess` / `backgroundTaskIsProcessRunning` through
+      `OperatorCliApp`; mocked the spawn at all 9 spawn-triggering test sites so
+      no test launches a real detached OS process. Fixed 3 hard failures + 1
+      flake; suite now 174/174 across 10 consecutive runs.
+- [ ] **Test-hermeticity guard:** scan `*.test.ts` for spawn-triggering calls
+      (`startBackgroundTask`, `background-start`, `monitor-start`,
+      `tasks.start`) and fail if the owning app/runtime construction doesn't
+      inject `backgroundTaskSpawnProcess`. Prevents "real OS process in a cloud
+      test" from recurring. Generalize to a `no-real-io-in-tests` guard
+      (spawn/exec/network).
 - [x] Interim **source-only typecheck gate** — DONE run 7. `tsconfig.src.json`
       (excludes `**/*.test.ts`) + `typecheck:src` script; passes (exit 0). Next:
       have the engine run it as a per-run pre-push self-check.

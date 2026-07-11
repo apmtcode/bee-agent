@@ -6,6 +6,53 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-11 (run 9) — 🟢 Restored a reliable green gate: hermetic background-task tests + `verify` script
+
+**Audited:** The build/test baseline itself. On a fresh install the suite was
+**not** 174/174 — **3 tests failed** (`operator-runtime.test.ts`,
+`server.test.ts`, `app.test.ts`, all in the background-task family) and a 4th
+(`app.test.ts` "supports background and monitor task commands") flaked
+intermittently. Root cause: those tests injected `backgroundTaskIsProcessRunning`
+but **not** a spawn, so `startBackgroundTask` launched **real detached OS
+processes** (`printf`, `sleep`, `tail -f`, even `rm -rf build`). The live launch
+script writes the task's state file via `sed`/`python3`, racing the test's own
+`writeState` → the state JSON got corrupted (`SyntaxError: Expected ',' or '}'…`)
+and results were environment-dependent. This directly violates the guardrail
+"guard OS-interacting features behind interfaces and provide a mock so cloud/CI
+tests pass" — and it silently blocked every future run, since the engine must not
+push on a red suite.
+
+**Changed (additive, production-safe):**
+- **`src/cli/app.ts`:** threaded two new optional `OperatorCliAppOptions` —
+  `backgroundTaskSpawnProcess` and `backgroundTaskIsProcessRunning` (typed via
+  `StandaloneOperatorOptions[…]`) — into the `StandaloneOperatorRuntime` it
+  constructs. Production behaviour unchanged (both default to the real
+  `child_process` spawn / `process.kill(pid,0)` probe); tests can now inject a
+  deterministic mock, exactly as `background-tasks.test.ts` already did at the
+  store level.
+- **Tests made hermetic** — injected a mock spawn (`() => ({ pid, unref(){} })`)
+  at every site that starts a background task:
+  `operator-runtime.test.ts` (1), `server.test.ts` (4: main + drifting + breaker
+  runtimes + the streaming-events test), `app.test.ts` (4 tests). For the one
+  test that reads task *output*/watch state, also injected a `() => true`
+  liveness probe and wrote the running output/state the launch script would have
+  produced. **No test spawns a real OS process any more.**
+- **`package.json`:** added the queued `verify` script
+  (`typecheck:src && build && test`) — the canonical green gate.
+
+**Test results:** `npm run verify` ✅ exit 0. Suite **174/174**, and **10/10
+consecutive full runs green** (was 171/174 + 1 flaky before). `build` ✅,
+`typecheck:src` ✅ (source stays clean — `app.ts` change typechecks).
+
+**New idea:** add a tiny lint/test that scans `*.test.ts` for
+`startBackgroundTask` / `background-start` / `monitor-start` / `tasks.start`
+against constructions that inject `backgroundTaskSpawnProcess`, and fails if any
+spawn-triggering test lacks a mock — so "real OS process in a cloud test" becomes
+a caught regression rather than a rediscovered flake. More broadly: a
+`no-real-io-in-tests` guard covering spawn/exec/network defaults.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
