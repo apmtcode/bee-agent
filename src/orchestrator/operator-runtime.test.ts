@@ -531,6 +531,11 @@ describe("StandaloneOperatorRuntime", () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
       backgroundTaskIsProcessRunning: () => false,
+      // Use a no-op spawn so the launch script never runs as a real detached
+      // subprocess. This test drives every execution state via explicit
+      // writeState/writeOutput calls; a real subprocess would race those writes
+      // on the shared state file and make recovery assertions flaky.
+      backgroundTaskSpawnProcess: () => ({ pid: 4321, unref() {} }),
     });
     const session = await runtime.startSession({ title: "Tasks", agentId: "main" });
 

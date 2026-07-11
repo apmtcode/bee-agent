@@ -45,6 +45,44 @@ unchecked items are queued. Keep this richer than you found it each run.
       have the engine run it as a per-run pre-push self-check.
 - [ ] Add a minimal CI workflow mirroring `verify` for human-opened PRs.
 
+## Reliability / correctness
+- [x] **Fix `shellQuote` single-quote escape** (`src/harness/background-tasks.ts`)
+      — was `` "'"'"' `` (stray leading `"`), corrupting any command/path with a
+      `'` and producing invalid `state.json`; corrected to `` '"'"' `` (run 9).
+- [x] **Atomic background-task state writes** — launch script stages state to a
+      temp file + `mv`/`os.replace`; `readState` retries on transient torn reads
+      (run 9).
+- [x] **De-flake `operator-runtime` background-task recovery test** — it mixed a
+      real detached subprocess with manual `writeState` on the shared state file;
+      injected the runtime's `backgroundTaskSpawnProcess` no-op (run 9). Green 3×.
+- [ ] **Green the 3 pre-existing real-subprocess-flaky tests** (2–3 fail per full
+      run). Two classes, both from tests racing a *real detached subprocess*:
+  - `app.test.ts` "background and monitor task commands plus cron commands" —
+    reads a `printf ok` task's output/state before the subprocess finishes, so
+    `"ok"` is intermittently missing. Fix: a `waitForBackgroundTaskTerminal`
+    (poll `getExecutionState` until a terminal status) helper used before the
+    output/view assertions.
+  - `app.test.ts` "session lifecycle…pairing" and `server.test.ts` "handles
+    session…orchestration" — `sleep 5`/`printf drift` tasks recover as
+    `missing-process` and trip the automatic breaker → `control=degraded` not
+    `active`.
+  - Enabling plumbing: add `backgroundTaskSpawnProcess?`/
+    `backgroundTaskIsProcessRunning?` to `OperatorCliAppOptions` and forward them
+    into the runtime it builds (`src/cli/app.ts:150`), so CLI tests get the same
+    deterministic-execution seam the runtime already exposes. Then inject a no-op
+    spawn (+ `isProcessRunning: () => true` for the breaker cases).
+  - Design question: should background-task `missing-process` recoveries feed the
+    *platform* breaker at all, or only gateway/transport failures?
+- [ ] **Fix the broken `"pid":"$$"` sed substitution** in the launch script —
+      the JS template literal eats the shell backslashes (`\"\$\$\"` → `"$$"`),
+      so the running-state `pid` is persisted as the literal string `"$$"`
+      instead of the real PID. Prefer replacing the `printf|sed` JSON seeding
+      with a single atomic state writer (no `sed` templating of JSON).
+- [ ] **Shell-quoting round-trip guard** — a unit/property test that runs a table
+      of adversarial values (`'`, `$`, backticks, `"`, newlines) through `printf
+      %s` in a real shell and asserts byte-identity, so this injection/corruption
+      class can't regress.
+
 ## Capability parity (audit reference agents → port gaps)
 - [ ] Build a "capability inventory" generator: enumerate bee-agent's exported
       RPC/tool surface (`src/index.ts`) and diff it against `openclaw`,

@@ -6,6 +6,96 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-11 (run 9) — Fix `shellQuote` state-file corruption + atomic background-task state writes
+
+**Audited:** The **test suite itself** — the first thing this run found is that the
+committed `main` state was **not green**: 3–4 tests failed deterministically on a
+clean checkout (`operator-runtime`, two `app.test.ts` cases, one
+`server.test.ts`). Prior runs logged "174/174"; the suite had silently
+regressed (or only ever passed on a different environment). Root-caused each.
+
+**Bug found & fixed (real correctness + shell-safety):** the background-task
+launch script generator uses `shellQuote()` to embed the task command, cwd, and
+a JSON state payload into `run.sh`. Its POSIX single-quote escape was **wrong**:
+it replaced every `'` with `` "'"'"' `` (6 chars, **leading `"`**) instead of the
+correct `` '"'"' `` (close-quote → `"'"` → reopen). The stray leading `"` leaks a
+double quote into the reconstructed shell word, so **any** command or path
+containing a single quote is corrupted. Concretely, a task like
+`printf 'line-1\nline-2\n'` produced an invalid JSON `state.json`
+(`"command":"printf "'line-1...`), and `reconcileTask` → `readJsonFile` threw
+`SyntaxError`, which rejected the **entire** `recoverBackgroundTasks` call —
+breaking crash recovery for the whole session. Verified the bug and the fix with
+a bash round-trip harness (corrupt → `printf "'line-1'"`; fixed → `printf 'line-1'`).
+
+**Changes (all in `src/harness/background-tasks.ts`, additive/surgical):**
+- **`shellQuote`**: corrected the escape to `` '"'"' `` (+ explanatory comment on
+  the failure mode). This is the actual root-cause fix for the failing tests.
+- **Atomic state writes (defense-in-depth / reliability):** the launch script now
+  stages the initial "running" state to `state.json.starting.tmp` then
+  `mv -f`s it into place, and the Python terminal-state writer renders to a temp
+  file then `os.replace()`s it — so a concurrent `reconcile` can never observe a
+  half-written (torn) state file.
+- **Resilient `readState`:** re-reads up to `STATE_READ_MAX_RETRIES` (4) times on
+  a `SyntaxError` before surfacing it, tolerating a transient torn read from the
+  out-of-process launch script or any external writer.
+
+**Tests:** added 3 to `background-tasks.test.ts` — (1) the rendered launch script
+stages state via temp-file + `mv`/`os.replace` (guards the atomic-write fix),
+(2) `readState` recovers from a simulated transient torn read (spies
+`node:fs`'s promises `readFile`), and the existing suite now exercises the
+single-quote command path end-to-end. Also **de-flaked** the
+`operator-runtime` "starts, syncs, recovers…" test: it drives every execution
+state via explicit `writeState`/`writeOutput` yet also spawned a **real detached
+subprocess** whose own `run.sh` writes to the same `state.json`, racing those
+writes (running-vs-completed) nondeterministically. Injected the runtime's
+already-supported `backgroundTaskSpawnProcess` no-op so the launch script never
+runs — state is now fully test-controlled and the test passes **deterministically
+(3× repeated)**.
+
+**Test results:** `npm run build` ✅. `npm run typecheck:src` ✅. Full `tsc` **125**
+(unchanged — no new test-typecheck debt). Background-task area
+(`background-tasks.test.ts` + `operator-runtime.test.ts`): **26/26, green across
+3× repeated runs.** The **shellQuote production bug** is proven fixed
+independently of any test via a bash round-trip harness (corrupt →
+`printf "'line-1'"`; fixed → `printf 'line-1'`) — it would corrupt the persisted
+`state.json` for *any* real quoted command, so this is a genuine correctness fix,
+not just a test change.
+
+**Honest accounting of the remaining flakiness (pre-existing, NOT introduced here
+— verified via `git stash`; still 2–3 failures per full-suite run):** three CLI/
+server tests race **real detached subprocesses** and are the residual flake:
+- `app.test.ts` "background and monitor task commands plus cron commands" —
+  starts a real `printf ok` task, then reads its output/state *before the
+  detached subprocess has finished writing*, so `background-view` intermittently
+  misses `"ok"`. (This is an async read-before-complete race; its command has no
+  quotes, so it was **not** a shellQuote victim — the shellQuote fix alone does
+  not stabilize it.)
+- `app.test.ts` "session lifecycle…pairing" and `server.test.ts` "handles
+  session…orchestration" — real `sleep 5` / `printf drift` tasks are recovered as
+  `missing-process` in this fast sandbox and trip the automatic platform breaker
+  (`retryable failures 2/2 …`), so `control` reads `degraded` not `active`.
+
+The clean fix for all three is deterministic background execution in tests. The
+`operator-runtime` case was fixable with a no-op `backgroundTaskSpawnProcess`
+because it drives all state manually; the CLI cases need `OperatorCliApp` to
+forward `backgroundTaskSpawnProcess`/`backgroundTaskIsProcessRunning` to its
+runtime (it hard-codes `new StandaloneOperatorRuntime({ rootDir })`,
+`src/cli/app.ts:150`) plus either a wait-for-completion helper (for the output
+race) or `isProcessRunning: () => true` (for the breaker race). Deferred to a
+focused run to keep this diff reviewable and correct; logged to ROADMAP with the
+concrete plan.
+
+**New idea (logged to ROADMAP):** a lint/unit guard for shell-quoting — there is
+exactly one `shellQuote` and it hand-rolls escaping; add a property-style test
+that round-trips a table of adversarial values (single quotes, `$`, backticks,
+newlines, `"`) through `printf %s` in a real shell and asserts byte-identity, so
+this class of injection/corruption bug can't silently return. Bigger: replace the
+`printf|sed` state seeding with a single atomic writer so `run.sh` never
+templates JSON through `sed` at all (the `"pid":"$$"` substitution is *also*
+silently broken by the same JS-template-eats-backslashes issue).
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

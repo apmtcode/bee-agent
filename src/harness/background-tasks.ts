@@ -4,6 +4,10 @@ import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { ensureParentDir, readJsonFile, writeJsonAtomic } from "../shared/fs.js";
 
+// Number of extra re-reads tolerated when the launch script's state file appears
+// mid-write (torn read) before a JSON parse error is surfaced to the caller.
+const STATE_READ_MAX_RETRIES = 4;
+
 export type BackgroundTaskKind = "task" | "monitor";
 export type BackgroundTaskStatus = "planned" | "running" | "completed" | "failed" | "cancelled";
 
@@ -231,10 +235,20 @@ export class BackgroundTaskExecutionService {
   }
 
   async readState(task: BackgroundTaskRecord): Promise<BackgroundTaskExecutionState | undefined> {
-    return await readJsonFile<BackgroundTaskExecutionState | undefined>(
-      path.join(this.rootDir, task.execution.stateFile),
-      undefined,
-    );
+    const statePath = path.join(this.rootDir, task.execution.stateFile);
+    // The state file is authored by an out-of-process launch script. Even though
+    // that script now writes atomically, guard against a transient torn read from
+    // any external writer by re-reading a few times before surfacing a parse error.
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        return await readJsonFile<BackgroundTaskExecutionState | undefined>(statePath, undefined);
+      } catch (error) {
+        if (error instanceof SyntaxError && attempt < STATE_READ_MAX_RETRIES) {
+          continue;
+        }
+        throw error;
+      }
+    }
   }
 
   async writeOutput(task: BackgroundTaskRecord, content: string): Promise<void> {
@@ -731,6 +745,7 @@ function applyExecutionState(task: BackgroundTaskRecord, state: BackgroundTaskEx
 
 function renderLaunchScript(task: BackgroundTaskRecord): string {
   const quotedStatePath = shellQuote(task.execution.stateFile);
+  const quotedStateTmpPath = shellQuote(`${task.execution.stateFile}.starting.tmp`);
   const quotedOutputFile = shellQuote(task.execution.outputFile);
   const quotedCwd = shellQuote(task.cwd);
   const quotedCommand = shellQuote(task.command);
@@ -754,7 +769,9 @@ function renderLaunchScript(task: BackgroundTaskRecord): string {
     "set -euo pipefail",
     `mkdir -p $(dirname ${quotedStatePath}) $(dirname ${quotedOutputFile})`,
     "started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-    `printf '%s' ${quotedStatePayload} | sed "s/__OPENCLAW_STARTED_AT__/$started_at/g; s/\"\$\$\"/$$/g" > ${quotedStatePath}`,
+    // Write the initial state through a temp file + atomic rename so a concurrent
+    // reconcile can never observe a half-written (torn) state.json.
+    `printf '%s' ${quotedStatePayload} | sed "s/__OPENCLAW_STARTED_AT__/$started_at/g; s/\"\$\$\"/$$/g" > ${quotedStateTmpPath} && mv -f ${quotedStateTmpPath} ${quotedStatePath}`,
     `printf '%s\n' "starting ${task.kind} ${task.id}" >> ${quotedOutputFile}`,
     `if cd ${quotedCwd} && bash -lc ${quotedCommand} >> ${quotedOutputFile} 2>&1; then`,
     "  completed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
@@ -776,6 +793,7 @@ function renderLaunchScript(task: BackgroundTaskRecord): string {
 function renderStateWriterPython(status: BackgroundTaskExecutionState["status"]): string[] {
   return [
     "import json",
+    "import os",
     "import pathlib",
     "import sys",
     "state_path = pathlib.Path(sys.argv[1])",
@@ -789,10 +807,18 @@ function renderStateWriterPython(status: BackgroundTaskExecutionState["status"])
     "state['completedAt'] = timestamp",
     "state['exitCode'] = exit_code",
     `state['error'] = None if '${status}' == 'completed' else f'background task exited non-zero ({exit_code})'`,
-    "state_path.write_text(json.dumps(state, indent=2) + '\\n')",
+    // Atomic write: render to a temp file, then os.replace() so a concurrent
+    // reconcile never reads a truncated/partial state file.
+    "tmp_path = state_path.with_name(state_path.name + '.done.tmp')",
+    "tmp_path.write_text(json.dumps(state, indent=2) + '\\n')",
+    "os.replace(tmp_path, state_path)",
   ];
 }
 
 function shellQuote(value: string): string {
-  return `'${value.replaceAll(`'`, `"'"'"'`)}'`;
+  // POSIX single-quote escaping: close the quote, emit a double-quoted single
+  // quote, reopen — i.e. every `'` becomes `'"'"'`. (A leading `"` here would
+  // leak a stray double quote into the reconstructed word and corrupt any value
+  // containing a single quote, e.g. `printf 'x'`.)
+  return `'${value.replaceAll(`'`, `'"'"'`)}'`;
 }

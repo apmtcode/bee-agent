@@ -1,7 +1,8 @@
 import fs from "node:fs/promises";
+import nodeFs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   BackgroundTaskExecutionService,
   FileBackgroundTaskStore,
@@ -369,5 +370,73 @@ describe("BackgroundTaskExecutionService", () => {
     await expect(fs.readFile(path.join(rootDir, task.execution.launchScript), "utf8")).resolves.toContain("bash -lc");
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
+  });
+
+  it("renders the launch script to write state atomically (temp file + rename)", async () => {
+    const rootDir = await makeTempDir();
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"), () => ({ pid: 2222, unref() {} }));
+    const task = await store.start({
+      title: "Collect logs",
+      command: "printf 'line-1\nline-2\n'",
+      cwd: rootDir,
+    });
+
+    const script = await fs.readFile(path.join(rootDir, task.execution.launchScript), "utf8");
+    // Initial "running" state must be staged in a temp file then renamed into place,
+    // never redirected directly onto the live state.json (which would allow torn reads).
+    expect(script).toMatch(/state\.json\.starting\.tmp' && mv -f/);
+    expect(script).not.toMatch(/> '[^']*state\.json'\n/);
+    // The terminal (completed/failed) state writer must use an atomic os.replace().
+    expect(script).toContain("os.replace(tmp_path, state_path)");
+    expect(script).toContain("import os");
+  });
+
+  it("tolerates a transient torn read of the state file", async () => {
+    const rootDir = await makeTempDir();
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"), () => ({ pid: 3333, unref() {} }));
+    const task = await store.start({
+      title: "Collect logs",
+      command: "printf 'done'",
+      cwd: rootDir,
+    });
+    const statePath = path.join(rootDir, task.execution.stateFile);
+
+    const goodState: BackgroundTaskExecutionState = {
+      version: 1,
+      taskId: task.id,
+      kind: "task",
+      status: "completed",
+      pid: 3333,
+      startedAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:10:00.000Z",
+      completedAt: "2026-01-01T00:10:00.000Z",
+      exitCode: 0,
+      outputFile: task.execution.outputFile,
+      cwd: rootDir,
+      command: task.command,
+    };
+    await store.executionService.writeState(task, goodState);
+
+    // Simulate an external writer mid-truncate: the first read sees a half-written
+    // file, later reads see the whole document. readState must recover, not throw.
+    // readJsonFile reads through node:fs's promises API, so intercept there.
+    const realReadFile = nodeFs.promises.readFile.bind(nodeFs.promises) as (...a: unknown[]) => Promise<unknown>;
+    let calls = 0;
+    const spy = vi.spyOn(nodeFs.promises, "readFile").mockImplementation(((target: unknown, ...rest: unknown[]) => {
+      if (target === statePath && calls++ === 0) {
+        return Promise.resolve('{"version":1,"taskId":"' + task.id + '","stat');
+      }
+      return realReadFile(target, ...rest);
+    }) as typeof nodeFs.promises.readFile);
+    try {
+      await expect(store.executionService.readState(task)).resolves.toMatchObject({
+        taskId: task.id,
+        status: "completed",
+        exitCode: 0,
+      });
+      expect(calls).toBeGreaterThan(1);
+    } finally {
+      spy.mockRestore();
+    }
   });
 });
