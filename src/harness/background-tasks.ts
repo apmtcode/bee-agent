@@ -740,7 +740,7 @@ function renderLaunchScript(task: BackgroundTaskRecord): string {
       taskId: task.id,
       kind: task.kind,
       status: "running",
-      pid: "$$",
+      pid: "__OPENCLAW_PID__",
       startedAt: "__OPENCLAW_STARTED_AT__",
       updatedAt: "__OPENCLAW_STARTED_AT__",
       outputFile: task.execution.outputFile,
@@ -752,19 +752,26 @@ function renderLaunchScript(task: BackgroundTaskRecord): string {
   return [
     "#!/usr/bin/env bash",
     "set -euo pipefail",
-    `mkdir -p $(dirname ${quotedStatePath}) $(dirname ${quotedOutputFile})`,
+    `state_path=${quotedStatePath}`,
+    `output_file=${quotedOutputFile}`,
+    `mkdir -p "$(dirname "$state_path")" "$(dirname "$output_file")"`,
     "started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-    `printf '%s' ${quotedStatePayload} | sed "s/__OPENCLAW_STARTED_AT__/$started_at/g; s/\"\$\$\"/$$/g" > ${quotedStatePath}`,
-    `printf '%s\n' "starting ${task.kind} ${task.id}" >> ${quotedOutputFile}`,
-    `if cd ${quotedCwd} && bash -lc ${quotedCommand} >> ${quotedOutputFile} 2>&1; then`,
+    // Substitute the placeholders with the real timestamp and pid, then rename
+    // atomically so a concurrent reader never observes a half-written state file.
+    // The pid token is a plain literal ("__OPENCLAW_PID__") rather than "$$" so the
+    // sed replacement can't be misread as a regex end-of-line anchor.
+    `printf '%s' ${quotedStatePayload} | sed "s/__OPENCLAW_STARTED_AT__/$started_at/g; s/\\"__OPENCLAW_PID__\\"/$$/g" > "$state_path.tmp"`,
+    `mv -f "$state_path.tmp" "$state_path"`,
+    `printf '%s\n' "starting ${task.kind} ${task.id}" >> "$output_file"`,
+    `if cd ${quotedCwd} && bash -lc ${quotedCommand} >> "$output_file" 2>&1; then`,
     "  completed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-    `  python3 - ${quotedStatePath} $$ "$completed_at" 0 <<'PY'`,
+    `  python3 - "$state_path" $$ "$completed_at" 0 <<'PY'`,
     ...renderStateWriterPython("completed"),
     "PY",
     "else",
     "  exit_code=$?",
     "  completed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-    `  python3 - ${quotedStatePath} $$ "$completed_at" "$exit_code" <<'PY'`,
+    `  python3 - "$state_path" $$ "$completed_at" "$exit_code" <<'PY'`,
     ...renderStateWriterPython("failed"),
     "PY",
     '  exit "$exit_code"',
@@ -789,10 +796,18 @@ function renderStateWriterPython(status: BackgroundTaskExecutionState["status"])
     "state['completedAt'] = timestamp",
     "state['exitCode'] = exit_code",
     `state['error'] = None if '${status}' == 'completed' else f'background task exited non-zero ({exit_code})'`,
-    "state_path.write_text(json.dumps(state, indent=2) + '\\n')",
+    // Write to a sibling temp file then atomically replace, so readers never see a
+    // partially written state document.
+    "tmp_path = state_path.parent / (state_path.name + '.tmp')",
+    "tmp_path.write_text(json.dumps(state, indent=2) + '\\n')",
+    "tmp_path.replace(state_path)",
   ];
 }
 
 function shellQuote(value: string): string {
-  return `'${value.replaceAll(`'`, `"'"'"'`)}'`;
+  // Wrap in single quotes and escape any embedded single quote as '\'' — close the
+  // quoted span, emit an escaped literal quote, then reopen. The previous encoding
+  // ("'"'"') inserted a stray double quote, corrupting commands that contain a
+  // single quote (e.g. `printf 'x'`) and, in turn, the JSON state they wrote.
+  return `'${value.replaceAll(`'`, `'\\''`)}'`;
 }

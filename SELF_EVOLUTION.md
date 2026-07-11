@@ -6,6 +6,57 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-11 (run 9) — Reliability: fix background-task launch-script corruption; suite back to green
+
+**Audited:** Project health first (the required build+test gate). The suite had
+regressed to **3 failing tests** on this environment (server.test, app.test,
+operator-runtime.test), all in the background-task subsystem. Root-caused three
+real, latent bugs in `src/harness/background-tasks.ts` — none environment-specific,
+all previously masked by favorable timing:
+
+1. **`shellQuote` corrupted commands containing single quotes.** It replaced `'`
+   with `"'"'"'` (a stray leading `"`) instead of the correct `'\''`. Any command
+   like `printf 'line-1'` produced malformed shell, which wrote **invalid JSON**
+   into the task's `state.json` → `readState` threw `SyntaxError` mid-reconcile.
+2. **The running-state `pid` was the literal string `"$$"`.** The launch script's
+   sed replacement `s/\"\$\$\"/$$/g` never matched, because in a sed regex `$` is an
+   end-of-line anchor. So every still-running task had a non-numeric pid and
+   `isProcessRunning("$$")` always returned false → spurious `missing-process` →
+   the platform circuit breaker tripped to `degraded`/`paused`.
+3. **Non-atomic state writes.** Both the shell `>` redirect and Python's
+   `write_text` truncate-in-place, so a concurrent reader could observe a
+   half-written document.
+
+**Changed (additive):**
+- `renderLaunchScript`: pid now uses a plain placeholder token `__OPENCLAW_PID__`
+  (substituted with `$$` → the real numeric pid), and the running-state write goes
+  to `state.json.tmp` then `mv -f` (atomic rename). Paths are held in shell vars and
+  properly quoted.
+- `renderStateWriterPython`: writes to a sibling temp then `Path.replace()` (atomic).
+- `shellQuote`: correct `'\''` single-quote escaping.
+- **New regression test** (`background-tasks.test.ts`): runs the *real* launch
+  script end-to-end for a single-quoted command, polls until terminal, and asserts
+  the state file is always valid JSON with a **numeric** pid and exit 0.
+- **Hermeticity:** the three reconcile-*logic* tests (`operator-runtime` +
+  `server.test` drift/breaker runtimes) inject a deterministic no-op
+  `backgroundTaskSpawnProcess` so they no longer depend on real subprocess timing
+  (`sleep`/`tail -f`/`printf` racing their own async state writes). `app.test`
+  deliberately keeps a real spawn, so the pid fix retains true end-to-end coverage.
+
+**Test results:** **175/175 passing** (was 171/174), green on 3 consecutive runs.
+Build ✅. `typecheck:src` ✅ (exit 0). Full `tsc` unchanged at **125** (no new
+test-type debt introduced).
+
+**New idea:** add a tiny **project-health metrics file** (append-only JSONL: date,
+run, test pass/total, build ms, tsc count) that each engine run stamps *after* the
+green gate — turning "the suite regressed since run 8" into an explicit, diffable
+signal instead of something rediscovered by re-running. Pairs naturally with the
+already-queued "self-check telemetry" idea. Also worth: a lint that flags any test
+constructing a runtime *without* injecting `backgroundTaskSpawnProcess`, so
+real-subprocess flakiness can't silently creep back into logic tests.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

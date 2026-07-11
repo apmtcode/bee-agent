@@ -370,4 +370,48 @@ describe("BackgroundTaskExecutionService", () => {
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
   });
+
+  it("runs the real launch script and writes a valid, atomic state file for a quoted command", async () => {
+    // Regression coverage for two launch-script bugs:
+    //  1. shellQuote mis-escaped single quotes, corrupting the state JSON for any
+    //     command containing a single quote (e.g. `printf 'line-1'`).
+    //  2. the running-state pid was the literal string "$$" (the sed replacement
+    //     treated `$` as an end-of-line anchor), so `isProcessRunning` always failed.
+    const rootDir = await makeTempDir();
+    // Default constructor => real spawn + real liveness check (true end-to-end run).
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"));
+    const task = await store.start({
+      title: "Quoted printf",
+      command: "printf 'line-1\\nline-2\\n'",
+      cwd: rootDir,
+      kind: "task",
+    });
+    const statePath = path.join(rootDir, task.execution.stateFile);
+
+    // Poll until the launch script has written a terminal state. Every intermediate
+    // read must parse cleanly — atomic (temp + rename) writes guarantee no partial JSON.
+    let state: BackgroundTaskExecutionState | undefined;
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      let raw: string;
+      try {
+        raw = await fs.readFile(statePath, "utf8");
+      } catch {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        continue;
+      }
+      const parsed = JSON.parse(raw) as BackgroundTaskExecutionState;
+      expect(typeof parsed.pid).toBe("number");
+      state = parsed;
+      if (parsed.status === "completed" || parsed.status === "failed") {
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+
+    expect(state).toBeDefined();
+    expect(state?.status).toBe("completed");
+    expect(state?.exitCode).toBe(0);
+    expect(Number.isInteger(state?.pid)).toBe(true);
+    await expect(store.executionService.readOutput(task, { lineLimit: 2 })).resolves.toContain("line-2");
+  });
 });

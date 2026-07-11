@@ -528,9 +528,14 @@ describe("StandaloneOperatorRuntime", () => {
   });
 
   it("starts, syncs, recovers, lists, and cancels background tasks", async () => {
+    // Inject a deterministic no-op spawn so this reconcile-logic test does not
+    // depend on the timing of a real OS subprocess writing its state file
+    // asynchronously. All execution state below is written explicitly by the test.
+    let spawnPid = 40000;
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
       backgroundTaskIsProcessRunning: () => false,
+      backgroundTaskSpawnProcess: () => ({ pid: (spawnPid += 1), unref() {} }),
     });
     const session = await runtime.startSession({ title: "Tasks", agentId: "main" });
 

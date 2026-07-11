@@ -70,7 +70,20 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Generalization eval harness: measure replay fidelity on held-out but
       related synthetic trajectories.
 
+## Reliability
+- [x] **Background-task launch-script correctness** (2026-07-11, run 9). Fixed
+      `shellQuote` single-quote corruption, the literal `"$$"` running-state pid
+      (sed `$` anchor bug), and made state writes atomic (temp + rename). Suite
+      restored to green (175/175). Added a real-launch-script regression test and
+      made the reconcile-logic tests hermetic via an injected no-op spawn.
+- [ ] Lint/guard: flag any test that constructs a `StandaloneOperatorRuntime`
+      which starts background tasks *without* injecting `backgroundTaskSpawnProcess`,
+      so real-subprocess timing can't reintroduce flakiness into logic tests.
+
 ## Innovation backlog
+- [ ] Project-health metrics file (append-only JSONL): each engine run stamps
+      date/run/test-pass-total/build-ms/tsc-count *after* the green gate, so a
+      regression like run 9's (suite silently red since run 8) is a diffable signal.
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in
       project health over time.
