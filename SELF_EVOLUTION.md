@@ -6,6 +6,60 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-11 (run 9) — 🐞 Fix shell-quoting + launch-script state corruption (3 red tests → green)
+
+**Audited:** Full `npm test` on the current environment — found **3 failing
+tests** that run 8 recorded as green (`operator-runtime`, `server`, `app`). Root
+cause was a **real correctness bug**, not flake: recovering/syncing a background
+task whose command contains shell-special characters threw
+`SyntaxError: Expected ',' or '}' after property value in JSON` from
+`readState`. Traced it end-to-end by rendering the actual `run.sh` and its
+`state.json`.
+
+**Two genuine bugs found & fixed:**
+1. **`shellQuote` in `src/harness/background-tasks.ts` was wrong.** It escaped a
+   literal `'` as `"'"'"'` (leading `"`), but correct POSIX single-quote escaping
+   is `'"'"'` (close-quote, `"'"`, reopen). Verified empirically:
+   `shellQuote("it's")` produced `it"'s` (invalid) instead of `it's`. This
+   corrupted **every** background-task command/path containing a single quote —
+   both mangling the persisted JSON *and* making the command exit non-zero at
+   runtime (`printf 'line-1\nline-2\n'` ran as `printf "'line-1…"'` → exit 2).
+   The training runner's copy of `shellQuote` was already correct, confirming a
+   copy-paste divergence. One-line fix + explanatory comment.
+2. **Fragile `printf '%s' … | sed "s/\"\$\$\"/$$/g"` running-state writer** (in
+   both `background-tasks.ts` and `training/runner.ts`). The `"$$"` inside the
+   bash double-quoted sed arg *broke the quoting*, so the pid placeholder was
+   never substituted (running state kept `"pid":"$$"` as a string). Replaced the
+   `printf|sed`-on-JSON hack with a `python3` heredoc that takes values as
+   **argv** and `json.dumps` them — same robust pattern already used for the
+   completed/failed writers. No JSON is ever assembled by shell string
+   interpolation now.
+
+**Changed:**
+- `src/harness/background-tasks.ts`: corrected `shellQuote`; rewrote
+  `renderLaunchScript`'s initial-state write via new `renderRunningStateWriterPython()`.
+- `src/training/runner.ts`: rewrote the analogous initial-state write via a new
+  `renderRunningStateWriterPython()` (command passed as JSON argv); removed the
+  now-dead `quotedStatePayload`.
+- `src/harness/background-tasks.test.ts`: new regression test — a command mixing
+  single quotes, newlines and a literal `$$` now yields a **valid** state file
+  that reaches `completed` with the command preserved byte-for-byte.
+- `src/training/runner.test.ts`: updated the launch-script assertion to the new
+  python writer (was asserting the old `> 'stateFile'` sed redirect).
+
+**Test results:** `npm test` **171→175 passing (was 3 failing)**; `npm run build`
+✅; `npm run typecheck:src` ✅ (source stays clean); full `tsc` unchanged at
+**125** (all pre-existing, test-only). Changes are additive/behaviour-correcting,
+no source regressions.
+
+**New idea:** the two `renderLaunchScript`/`renderStateWriterPython`/`shellQuote`
+trios in `harness/background-tasks.ts` and `training/runner.ts` are near-identical
+and already **drifted** (one buggy `shellQuote`, one correct). Extract a shared
+`src/shared/launch-script.ts` (a `shellQuote` + a `renderStatefulLaunchScript({
+statePath, extraFields, command, … })` builder) so the two subsystems can't
+diverge again, and add a tiny unit test asserting `shellQuote` round-trips
+adversarial strings (quotes, `$`, newlines, backticks) through a real `bash -c`.
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

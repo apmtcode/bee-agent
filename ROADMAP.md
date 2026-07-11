@@ -70,6 +70,20 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Generalization eval harness: measure replay fidelity on held-out but
       related synthetic trajectories.
 
+## Reliability / correctness
+- [x] Fix `shellQuote` POSIX single-quote escaping in
+      `harness/background-tasks.ts` (`"'"'"'` → `'"'"'`) and replace the fragile
+      `printf|sed` running-state writer with a python-argv writer in both
+      `background-tasks.ts` and `training/runner.ts` (2026-07-11, run 9). Fixed 3
+      env-dependent red tests caused by invalid state JSON for special-char
+      commands.
+- [ ] **Extract a shared `src/shared/launch-script.ts`** (`shellQuote` +
+      `renderStatefulLaunchScript`) so `harness/background-tasks.ts` and
+      `training/runner.ts` stop maintaining near-identical, already-drifted copies
+      of the launch-script/state-writer logic. Add a `shellQuote` round-trip test
+      that pipes adversarial strings (quotes, `$`, backticks, newlines) through a
+      real `bash -c` and asserts byte-identical output.
+
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in

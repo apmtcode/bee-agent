@@ -112,10 +112,12 @@ describe("LocalAppleSiliconTrainingRunner", () => {
       runtime: "mlx",
       replayEvalPath: `training-jobs/${job.id}/replay-eval.json`,
     });
-    await expect(runner.readLaunchScript({ ...job, execution })).resolves.toEqual(
-      expect.stringContaining(`> '${execution.stateFile}'`),
-    );
-    await expect(runner.readLaunchScript({ ...job, execution })).resolves.toContain("mlx_lm.lora");
+    const launchScript = await runner.readLaunchScript({ ...job, execution });
+    // The initial running state is written by python with the state path as argv,
+    // and the command is passed as JSON so special characters can't corrupt it.
+    expect(launchScript).toContain(`python3 - '${execution.stateFile}'`);
+    expect(launchScript).toContain("'status': 'running'");
+    expect(launchScript).toContain("mlx_lm.lora");
     await expect(fs.readFile(path.join(rootDir, execution.datasetDir, "manifest.json"), "utf8")).resolves.toContain(
       '"reviewedBy": "operator"',
     );

@@ -6,6 +6,7 @@ import {
   BackgroundTaskExecutionService,
   FileBackgroundTaskStore,
   type BackgroundTaskExecutionState,
+  type BackgroundTaskRecord,
 } from "./background-tasks.js";
 
 const tempDirs: string[] = [];
@@ -370,4 +371,33 @@ describe("BackgroundTaskExecutionService", () => {
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
   });
+
+  it("writes a valid state file for commands with shell-special characters", async () => {
+    const rootDir = await makeTempDir();
+    // A command that mixes single quotes, newlines and a literal `$$` — all of
+    // which broke the previous printf/sed state writer and yielded invalid JSON
+    // that threw SyntaxError on recovery/sync.
+    const command = "printf 'line-1\nline-2\n'; echo \"pid=$$\"";
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"));
+    const task = await store.start({ title: "Collect logs", command, cwd: rootDir });
+
+    // Poll the raw state file the launch script writes. readState throws on
+    // invalid JSON, so a corrupt running/completed state fails the test here
+    // rather than surfacing as a SyntaxError deep inside recovery.
+    const state = await waitForTerminalState(store, task);
+
+    expect(state).toMatchObject({ status: "completed", command, taskId: task.id, exitCode: 0 });
+    expect(typeof state.pid).toBe("number");
+  });
 });
+
+async function waitForTerminalState(store: FileBackgroundTaskStore, task: BackgroundTaskRecord) {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    const state = await store.executionService.readState(task);
+    if (state && state.status !== "running") {
+      return state;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  throw new Error(`background task ${task.id} did not reach a terminal state`);
+}
