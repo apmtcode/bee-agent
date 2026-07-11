@@ -754,7 +754,9 @@ function renderLaunchScript(task: BackgroundTaskRecord): string {
     "set -euo pipefail",
     `mkdir -p $(dirname ${quotedStatePath}) $(dirname ${quotedOutputFile})`,
     "started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-    `printf '%s' ${quotedStatePayload} | sed "s/__OPENCLAW_STARTED_AT__/$started_at/g; s/\"\$\$\"/$$/g" > ${quotedStatePath}`,
+    `python3 - ${quotedStatePath} ${quotedStatePayload} "$started_at" $$ <<'PY'`,
+    ...renderInitStateWriterPython(),
+    "PY",
     `printf '%s\n' "starting ${task.kind} ${task.id}" >> ${quotedOutputFile}`,
     `if cd ${quotedCwd} && bash -lc ${quotedCommand} >> ${quotedOutputFile} 2>&1; then`,
     "  completed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
@@ -771,6 +773,26 @@ function renderLaunchScript(task: BackgroundTaskRecord): string {
     "fi",
     "",
   ].join("\n");
+}
+
+function renderInitStateWriterPython(): string[] {
+  // Writes the initial "running" state from the JSON payload (argv[2]), patching
+  // the runtime-resolved timestamp and PID. Using Python's json module keeps the
+  // write robust across shells/`sed` versions where regex substitution over the
+  // escaped payload corrupts embedded quotes/newlines in the command field.
+  return [
+    "import json",
+    "import pathlib",
+    "import sys",
+    "state_path = pathlib.Path(sys.argv[1])",
+    "state = json.loads(sys.argv[2])",
+    "started_at = sys.argv[3]",
+    "pid = int(sys.argv[4])",
+    "state['startedAt'] = started_at",
+    "state['updatedAt'] = started_at",
+    "state['pid'] = pid",
+    "state_path.write_text(json.dumps(state, indent=2) + '\\n')",
+  ];
 }
 
 function renderStateWriterPython(status: BackgroundTaskExecutionState["status"]): string[] {

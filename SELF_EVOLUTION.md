@@ -6,6 +6,77 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-11 (run 9) — Movement subsystem: trainable in-process model + synthetic streams + eval; fixed a cross-platform state-writer bug
+
+**Audited:** Standing objective #2 (local-movement learning), which had not
+advanced since run 1 — runs 2–8 were all typecheck-debt paydown. Inventoried
+`src/capture` + `src/training`: capture → trajectory → replay manifest →
+reviewed export → a training *runner* exist, but the runner only **shells out**
+to external Python (`mlx`/`axolotl`). There was **no in-process trainable model
+and no inference / next-action prediction** — objective 2(c) *train* and 2(d)
+*generalize* were entirely unrealized, and nothing could be exercised in the
+cloud.
+
+**Changed (additive):**
+- **`src/training/movement-model.ts`** — the core of 2(c)+2(d):
+  - `MovementStep`/`MovementSequence`/`MovementDataset` schema and a
+    *structural* tokenizer (`movementStepToken` = `tool:gesture`, deliberately
+    excluding `target`/`summary`) so a learned policy captures task *shape*, not
+    memorized targets — the basis for performing new-but-related movements.
+  - `MovementModelBackend` **pluggable interface** + `TrainedMovementModel`
+    (`predictNext` / `generate` / `serialize`), documenting the seam for a real
+    on-device small model.
+  - `MarkovMovementBackend` — a deterministic, dependency-free order-k Markov
+    model with **Katz-style backoff** (longest observed context wins; backs off
+    to shorter contexts for unseen prefixes → generalization). Learns an end
+    sentinel so `generate()` terminates naturally. JSON `serialize()` /
+    `fromSerialized()` for artifact persistence.
+  - `evaluateMovementModel` — the **generalization eval harness** (next-step
+    top-1 accuracy + coverage over held-out sequences).
+  - Bridges `movementSequenceFromReplayEvents` / `movementSequenceFromTrajectory`
+    connect real captured data (replay manifests, trajectory spans) to the model.
+- **`src/training/synthetic-stream.ts`** — seeded (mulberry32), fully
+  reproducible synthetic movement-stream generator over UI task grammars
+  (`DEFAULT_MOVEMENT_TASKS`) with optional/repeat steps for structural variation,
+  plus `splitMovementDataset` for a fair train/held-out split. This is how the
+  pipeline is validated in the cloud with no real OS input.
+- Barrel exports wired into `src/index.ts`.
+- **Reliability fix (found while testing):** the background-task and training
+  launch scripts wrote their initial `state.json` via
+  `printf '%s' <json> | sed "…s/\"$$\"/…/"`. On GNU sed 4.9 (this environment)
+  that regex corrupts the escaped `command` field (embedded quotes/newlines) and
+  leaves `pid` as the literal `"$$"`, producing **malformed JSON** — which broke
+  `readState` during task recovery. Replaced the `printf|sed` init-write with a
+  Python `json.dumps` writer (mirroring the already-robust *completion* writer)
+  in both `src/harness/background-tasks.ts` and `src/training/runner.ts`. This
+  deterministically fixed the `operator-runtime` recovery test.
+
+**Test results:** `typecheck:src` ✅ (source gate clean). Build ✅.
+New movement tests **10/10**; my touched areas (movement + runner +
+background-tasks + operator-runtime) pass **36/36 deterministically across
+repeated runs** (the sed→python fix stabilized the previously-failing
+`operator-runtime` recovery test). Full-suite fully-green runs (**184/184**)
+observed.
+
+**Known pre-existing blocker (NOT introduced here):** on clean `main` this
+environment fails **3–4 tests** nondeterministically. My change removes the
+deterministic `operator-runtime` sed-bug failure, leaving one residual **flaky**
+test — `server.test.ts > "handles session, transcript, approval, trajectory,
+memory, and orchestration methods"`. It is a single large test whose breaker
+section races: a platform breaker auto-trips to `degraded` before a `mixed`
+assertion depending on wall-clock timing (flaky even single-threaded — observed
+1-fail then 0-fail on consecutive runs). Untouched by this run; queued in
+ROADMAP to de-flake by injecting a clock / disabling background reconcile in the
+test harness.
+
+**New idea:** give `MarkovMovementBackend` a *pluggable tokenizer* so callers can
+trade off specificity vs. generalization (structural `tool:gesture` ↔
+`tool:gesture:target`), and add an RL-style reward-weighted variant that biases
+next-step probabilities by trajectory `outcome.reward` — turning the reviewed
+export's reward signal into a better local policy without any external trainer.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

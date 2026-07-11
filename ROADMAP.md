@@ -58,17 +58,30 @@ unchecked items are queued. Keep this richer than you found it each run.
 ## Local-movement learning subsystem
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
-(exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
-      objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
-      deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+(exporter, job store/manifest, runner, execution service, **movement-model**,
+**synthetic-stream**). Next increments:
+- [x] Inventory what `src/capture` + `src/training` already implement vs. the
+      objective's five pieces (run 9): capture/schema/dataset/replay existed; the
+      runner only shelled out to external Python — **no in-process train/infer**.
+- [x] Pluggable local-model backend interface for the training runner with a
+      deterministic mock backend (run 9): `MovementModelBackend` +
+      `MarkovMovementBackend` (order-k Markov w/ backoff, serializable), plus a
+      documented seam for a real on-device small model.
+- [x] Synthetic event-stream generator to validate capture→dataset→replay
+      round-trips without real OS input (run 9): `generateSyntheticMovementDataset`
+      (seeded mulberry32) + `splitMovementDataset`.
+- [x] Generalization eval harness (run 9): `evaluateMovementModel` — next-step
+      top-1 accuracy + coverage on held-out related synthetic trajectories.
+- [ ] Wire the movement model into the training runner/execution path: let
+      `MarkovMovementBackend` produce a persisted `model.json` artifact from a
+      reviewed export's replay manifests, alongside the existing mlx/axolotl
+      launch plan, so a real train step exists even without Apple-silicon tooling.
+- [ ] Pluggable tokenizer for `MarkovMovementBackend` (structural
+      `tool:gesture` ↔ instance `tool:gesture:target`) + a reward-weighted
+      variant that biases next-step probabilities by trajectory `outcome.reward`.
+- [ ] Round-trip a *device-adapter* capture stream (gestures) through
+      `movementSequenceFromTrajectory` → train → `generate` and assert replay
+      fidelity, closing the capture→train→replay loop end-to-end.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
@@ -84,3 +97,14 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
       count to a baseline file and fail if a module regresses above it. Lets the
       engine pay debt down module-by-module without one green-gate blocking
       progress, and prevents backsliding while the total is still > 0.
+- [ ] **De-flake `server.test.ts`'s big "handles session…" test** (found run 9):
+      its breaker section races — a platform breaker auto-trips to `degraded`
+      before a `mixed` assertion depending on wall-clock timing (flaky even
+      single-threaded). Fix by injecting a deterministic clock and/or disabling
+      background reconcile in the test harness. This is the last pre-existing
+      full-suite flake in this environment now that the state-writer sed bug is
+      fixed.
+- [x] **Make the launch-script state writer portable** (run 9): replaced the
+      fragile `printf|sed` init-`state.json` write (corrupted escaped JSON on GNU
+      sed 4.9) with a Python `json.dumps` writer in `background-tasks.ts` and
+      `training/runner.ts`.
