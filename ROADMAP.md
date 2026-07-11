@@ -59,18 +59,37 @@ unchecked items are queued. Keep this richer than you found it each run.
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
 (exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
-      objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Inventory what `src/capture` + `src/training` already implement vs. the
+      objective's five pieces (2026-07-11, run 9). capture→schema→dataset→replay
+      exist; the gap was train/infer/generalize with no cloud-runnable backend —
+      filled by `movement-model.ts`.
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      for a real on-device small model (2026-07-11, run 9) —
+      `MovementModelBackend` + `MarkovMovementBackend` in
+      `src/training/movement-model.ts`.
+- [x] Synthetic event-stream generator to validate capture→dataset→replay
+      round-trips without real OS input (2026-07-11, run 9) — the synthetic
+      gesture-stream generator in `movement-model.test.ts`.
+- [x] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories (2026-07-11, run 9) — `evaluateNextMovement`
+      + `splitMovementDataset`.
+- [ ] Wire the movement backend into `runner.ts`/`LocalTrainingExecutionService`
+      as a `backend: "mock" | "mlx" | "axolotl"` selector so an end-to-end
+      train→eval loop runs in the cloud (mock) and emits a real launch plan
+      on-device — one code path, two backends.
+- [ ] Real on-device backend adapter: implement `MovementModelBackend` over a
+      small local model (MLX/llama.cpp), keeping the Markov backend as the CI
+      default and fidelity baseline.
 
 ## Innovation backlog
+- [ ] **Fix flaky background-task recovery tests** (found run 9): under the full
+      suite, 3 tests fail with a corrupt-JSON state file (`readState` /
+      `readJsonFile` hits a partial write); only 1 fails in isolation → temp-path
+      pollution across tests. Give each test an isolated temp dir, and/or make
+      `readState` tolerate/retry a torn state write (also hardens the real runner
+      against a partially-written state file). Pre-existing; blocks a green full
+      suite.
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in
       project health over time.

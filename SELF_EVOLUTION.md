@@ -6,6 +6,64 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-11 (run 9) — Movement-learning model: pluggable backend + train/predict/generate/eval
+
+**Audited:** Standing objective #2 (local-movement learning) — the neglected
+core mission after 7 runs of typecheck-debt paydown. Inventoried the existing
+subsystem: `src/capture/` has the capture→trajectory→replay pipeline and event
+schema; `src/training/` has the exporter (reviewed dataset) and the `runner.ts`
+that emits *launch plans* for real on-device trainers (mlx/axolotl). **Gap:**
+objective parts (c) "post-train a model to repeat recorded movements" and (d)
+"generalize to new but related movements" had NO cloud-runnable implementation —
+the runner only shells out to external GPU tooling, so nothing could be trained,
+inferred, or evaluated in CI.
+
+**Changed (additive) — new `src/training/movement-model.ts`:**
+- `MovementModelBackend` interface (`train`/`predict`) so the model backend is
+  pluggable — the documented seam for a real on-device small LLM/MLX adapter.
+- `MarkovMovementBackend`: a deterministic variable-order n-gram model with
+  stupid-backoff. Reproduces recorded movements exactly from seen context (part
+  c) and generalizes to novel-but-related movements by backing off to shorter
+  shared sub-motifs (part d). Pure, no clock/RNG — policy serializes to plain
+  JSON (round-trip test included).
+- Dataset layer: `defaultMovementTokenizer` (prefers structured device-gesture
+  metadata: `gesture:direction/target`, falls back to `tool:summary` slug),
+  `buildMovementDataset`, and `buildMovementDatasetFromReplays` (adapts
+  `ReplayManifest` action events straight into training sequences).
+- `generateMovements` (greedy, deterministic tie-break, confidence floor) closes
+  the replay loop; `evaluateNextMovement` + `splitMovementDataset` are the
+  **generalization eval harness** — next-movement prediction fidelity on
+  held-out sequences.
+- Exported the full surface from `src/index.ts`.
+
+**Tests (`movement-model.test.ts`, 15):** include a synthetic gesture-stream
+generator (stands in for real OS capture). Cover tokenizer, dataset build,
+exact-repeat (confidence 1, full context), START-context first-move prediction,
+backoff on novel prefixes, JSON round-trip, greedy generation + confidence-floor
+stop, perfect-fidelity eval on repeated motifs, and **above-chance generalization
+on held-out related-but-novel motifs** (shared prefix + `save→confirm` tail
+recovered across a novel middle gesture → ~0.67 vs chance).
+
+**Test results:** new suite ✅ **15/15**. `typecheck:src` ✅ clean. Build ✅ (5
+files, 545 kB). Full suite 186 passing; **3 pre-existing flaky failures**
+(operator-runtime/background-tasks) confirmed present on the clean tree via
+`git stash` — a corrupt-JSON state file during background-task recovery,
+order-dependent (only 1 fails in isolation, 3 under full run). NOT introduced by
+this change. Pushed to the designated feature branch (not `main`) per the branch
+requirements; my change itself is fully green.
+
+**New idea:** the 3 flaky failures point to **test-pollution on a shared temp
+path** in the background-task recovery tests (a state file is read mid-write and
+fails JSON.parse). Worth a focused run: give each background-task test an
+isolated temp dir (or make `readState` tolerate/retry a partially-written file),
+which would also harden the real runner against a torn state write. Second idea:
+wire this backend into `runner.ts` as a `backend: "mock" | "mlx" | "axolotl"`
+selector so `LocalTrainingExecutionService` can run an end-to-end train→eval loop
+in the cloud (mock backend) and emit a real launch plan on-device — one code path,
+two backends.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
