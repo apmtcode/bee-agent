@@ -6,6 +6,64 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-11 (run 9) — 🐛 Fix background-task state corruption + flaky real-spawn tests
+
+**Audited:** Project health first. The suite was **RED on checkout** — 3 tests
+failed (`operator-runtime`, `app`, `server` — all the background-task lifecycle
+paths). Two root causes, both genuine product/quality bugs, not test noise.
+
+**Bug 1 (product, `src/harness/background-tasks.ts`):** the background-task
+*launch script* wrote its initial `running` state by embedding the state JSON
+into a shell string with a `"$$"` PID placeholder and then running it through
+`printf '%s' … | sed 's/"$$"/<pid>/g'`. `sed` treats `$` as a regex anchor and
+the shell re-quoting of the embedded JSON was fragile, so **any command
+containing single quotes, double quotes, `$`, or a newline** (e.g.
+`printf 'line-1\nline-2\n'`) produced a **corrupt `state.json`** on disk — the
+`command` field's quotes leaked and the PID was left as the literal string
+`"$$"`. Recovery (`reconcileTask → readState → JSON.parse`) then **threw**
+(`SyntaxError: Expected ',' or '}' …`), crashing `recoverBackgroundTasks` and
+every RPC that reconciles tasks.
+- **Fix:** stop string-substituting the state into the script entirely. The
+  initial state payload now travels through the **environment variable**
+  `OPENCLAW_BACKGROUND_STATE_PAYLOAD` (set in `launch()`), and a small Python
+  writer (mirroring the existing completed/failed writers) `json.loads` it and
+  fills in `pid`/`startedAt`/`updatedAt`. Env vars carry arbitrary bytes with no
+  shell/regex quoting, so hostile commands can no longer corrupt state. Added
+  `buildInitialRunningState(task)` (shared by `launch()` and the writer) and
+  `renderInitialStateWriterPython()`; removed the `sed` line and the `$$`
+  placeholder. Also fixed a latent stray-newline in the `printf` "starting…"
+  line (`\n` in the TS template was a real newline; now `\\n`).
+- **Verified end-to-end** against `dist/`: started a real detached task with the
+  hostile command `printf '%s' "a'b\"c" && echo "$$ line1\nline2"` → `state.json`
+  is now **valid JSON** with a numeric `pid` and the command field intact
+  (previously: unparseable).
+
+**Bug 2 (test isolation):** the background-task tests inject
+`backgroundTaskIsProcessRunning: () => false` but used the **real** `spawn`, so a
+detached bash launch script ran the state writer **asynchronously** and raced the
+tests' own explicit `writeState`/`writeOutput` calls. This made reconciliation
+counts (and platform-breaker `state`/`failureCount`/`threshold`)
+**non-deterministic** — the big `server.test` "handles …orchestration methods"
+test flaked ~1-in-3 (e.g. breaker `failureCount 2↔3`, `degraded↔paused`).
+- **Fix:** added a deterministic `stubBackgroundSpawn` (returns a fake numeric
+  pid, `unref` no-op, runs nothing) and wired it via the existing
+  `backgroundTaskSpawnProcess` seam into the three runtimes that start tasks and
+  then drive state explicitly (`server.test.ts` main/drifting/breaker;
+  `operator-runtime.test.ts` lifecycle). Tests now own the only state on disk.
+
+**Test results:** **174/174** — stable across **8×** focused re-runs of the three
+previously-flaky files and **6×** full-suite runs (was 3 red, then 1-in-3 flaky).
+`typecheck:src` ✅ (source gate still clean). Build ✅.
+
+**New idea:** add a tiny **launch-script fuzz test** — render + execute the real
+launch script (with the stub *disabled*) for a table of adversarial commands
+(embedded `'`, `"`, `` ` ``, `$VAR`, `$$`, newlines, unicode, a 100 KB command)
+and assert `readState` round-trips valid JSON for each. That locks Bug 1 shut at
+the shell boundary where a unit test with a mocked spawn can't reach, and would
+have caught this regression the moment it was introduced.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

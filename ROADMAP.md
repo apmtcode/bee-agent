@@ -3,6 +3,20 @@
 Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
+## Project health (keep green)
+- [x] **Background-task state corruption fixed** (2026-07-11, run 9): the launch
+      script's `sed`/`"$$"`-placeholder templating corrupted `state.json` for any
+      command containing quotes/`$`/newlines, crashing recovery. Now the initial
+      state travels via the `OPENCLAW_BACKGROUND_STATE_PAYLOAD` env var + a Python
+      writer (no shell interpolation of state).
+- [x] **De-flaked background-task tests** (2026-07-11, run 9): injected a
+      deterministic `stubBackgroundSpawn` via `backgroundTaskSpawnProcess` so the
+      lifecycle/breaker tests no longer race a real detached launch script.
+- [ ] **Launch-script fuzz test**: render + run the *real* launch script (stub
+      disabled) over adversarial commands (`'`, `"`, `` ` ``, `$VAR`, `$$`,
+      newlines, unicode, oversized) and assert `readState` round-trips valid JSON
+      each time — locks the shell boundary a mocked-spawn unit test can't reach.
+
 ## Foundations / DX
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.

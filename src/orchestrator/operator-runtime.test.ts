@@ -15,6 +15,15 @@ async function makeTempDir(): Promise<string> {
   return dir;
 }
 
+// Deterministic background-task spawn stub: run nothing, return a fake pid.
+// The lifecycle test writes execution state explicitly, so a real detached
+// launch script would race those writes and corrupt reconciliation outcomes.
+let stubPidCounter = 200000;
+function stubBackgroundSpawn(): { pid: number; unref(): void } {
+  stubPidCounter += 1;
+  return { pid: stubPidCounter, unref() {} };
+}
+
 function buildHookCaptureCommand(outputFile: string): string {
   const script = [
     "import fs from 'node:fs';",
@@ -531,6 +540,7 @@ describe("StandaloneOperatorRuntime", () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
       backgroundTaskIsProcessRunning: () => false,
+      backgroundTaskSpawnProcess: stubBackgroundSpawn,
     });
     const session = await runtime.startSession({ title: "Tasks", agentId: "main" });
 

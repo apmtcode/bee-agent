@@ -176,6 +176,11 @@ export class BackgroundTaskExecutionService {
         ...process.env,
         OPENCLAW_BACKGROUND_TASK_ID: task.id,
         OPENCLAW_BACKGROUND_TASK_KIND: task.kind,
+        // Pass the initial state as JSON through the environment rather than
+        // string-substituting it into the shell script. Env vars carry arbitrary
+        // bytes without shell/regex quoting, so commands containing quotes,
+        // newlines, or `$` no longer corrupt the on-disk state.json.
+        OPENCLAW_BACKGROUND_STATE_PAYLOAD: JSON.stringify(buildInitialRunningState(task)),
       },
       stdio: "ignore",
       detached: true,
@@ -729,33 +734,40 @@ function applyExecutionState(task: BackgroundTaskRecord, state: BackgroundTaskEx
   };
 }
 
+function buildInitialRunningState(task: BackgroundTaskRecord): Omit<
+  BackgroundTaskExecutionState,
+  "pid" | "startedAt" | "updatedAt"
+> {
+  return {
+    version: 1,
+    taskId: task.id,
+    kind: task.kind,
+    status: "running",
+    outputFile: task.execution.outputFile,
+    cwd: task.cwd,
+    command: task.command,
+  };
+}
+
 function renderLaunchScript(task: BackgroundTaskRecord): string {
   const quotedStatePath = shellQuote(task.execution.stateFile);
   const quotedOutputFile = shellQuote(task.execution.outputFile);
   const quotedCwd = shellQuote(task.cwd);
   const quotedCommand = shellQuote(task.command);
-  const quotedStatePayload = shellQuote(
-    JSON.stringify({
-      version: 1,
-      taskId: task.id,
-      kind: task.kind,
-      status: "running",
-      pid: "$$",
-      startedAt: "__OPENCLAW_STARTED_AT__",
-      updatedAt: "__OPENCLAW_STARTED_AT__",
-      outputFile: task.execution.outputFile,
-      cwd: task.cwd,
-      command: task.command,
-    }),
-  );
+  const startingLine = shellQuote(`starting ${task.kind} ${task.id}`);
 
   return [
     "#!/usr/bin/env bash",
     "set -euo pipefail",
     `mkdir -p $(dirname ${quotedStatePath}) $(dirname ${quotedOutputFile})`,
     "started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-    `printf '%s' ${quotedStatePayload} | sed "s/__OPENCLAW_STARTED_AT__/$started_at/g; s/\"\$\$\"/$$/g" > ${quotedStatePath}`,
-    `printf '%s\n' "starting ${task.kind} ${task.id}" >> ${quotedOutputFile}`,
+    // The initial running state is supplied via OPENCLAW_BACKGROUND_STATE_PAYLOAD
+    // (set by launch()), so no command text is interpolated into the shell or a
+    // sed program — arbitrary commands can no longer corrupt state.json.
+    `python3 - ${quotedStatePath} $$ "$started_at" <<'PY'`,
+    ...renderInitialStateWriterPython(),
+    "PY",
+    `printf '%s\\n' ${startingLine} >> ${quotedOutputFile}`,
     `if cd ${quotedCwd} && bash -lc ${quotedCommand} >> ${quotedOutputFile} 2>&1; then`,
     "  completed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
     `  python3 - ${quotedStatePath} $$ "$completed_at" 0 <<'PY'`,
@@ -771,6 +783,23 @@ function renderLaunchScript(task: BackgroundTaskRecord): string {
     "fi",
     "",
   ].join("\n");
+}
+
+function renderInitialStateWriterPython(): string[] {
+  return [
+    "import json",
+    "import os",
+    "import pathlib",
+    "import sys",
+    "state_path = pathlib.Path(sys.argv[1])",
+    "pid = int(sys.argv[2])",
+    "timestamp = sys.argv[3]",
+    "state = json.loads(os.environ['OPENCLAW_BACKGROUND_STATE_PAYLOAD'])",
+    "state['pid'] = pid",
+    "state['startedAt'] = timestamp",
+    "state['updatedAt'] = timestamp",
+    "state_path.write_text(json.dumps(state, indent=2) + '\\n')",
+  ];
 }
 
 function renderStateWriterPython(status: BackgroundTaskExecutionState["status"]): string[] {
