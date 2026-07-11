@@ -109,6 +109,41 @@ describe("FileBackgroundTaskStore", () => {
     });
   });
 
+  it("emits valid state JSON when the real launch script runs a single-quoted command", async () => {
+    // Regression: shellQuote used a malformed single-quote escape ("'"'"' instead
+    // of '"'"'), which mangled quotes in the templated state payload and produced
+    // invalid JSON in state.json for any command containing a single quote.
+    const rootDir = await makeTempDir();
+    const filePath = path.join(rootDir, "background-tasks.json");
+    const store = new FileBackgroundTaskStore(filePath);
+
+    const command = "printf 'line-1\\nline-2\\n'";
+    const task = await store.start({
+      sessionId: "sess-real",
+      title: "Real launch",
+      command,
+      cwd: rootDir,
+      kind: "task",
+    });
+
+    // Wait for the detached launch script to reach a terminal state.
+    const deadline = Date.now() + 5000;
+    let state: BackgroundTaskExecutionState | undefined;
+    while (Date.now() < deadline) {
+      state = await store.executionService.readState(task);
+      if (state && (state.status === "completed" || state.status === "failed")) {
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+
+    expect(state).toBeDefined();
+    // The command (with its single quotes) must survive round-tripping intact.
+    expect(state?.command).toBe(command);
+    expect(state?.status).toBe("completed");
+    expect(state?.exitCode).toBe(0);
+  });
+
   it("cancels running tasks and records cancelled state", async () => {
     const rootDir = await makeTempDir();
     const filePath = path.join(rootDir, "background-tasks.json");

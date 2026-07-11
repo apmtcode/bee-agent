@@ -4,6 +4,13 @@ Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
 ## Foundations / DX
+- [x] **Restore a green, deterministic test suite** (2026-07-11, run 9). Fixed a
+      real source bug — `shellQuote` in `background-tasks.ts` used a malformed
+      single-quote escape (`"'"'"'` → `'"'"'`) that wrote invalid JSON to
+      `state.json` for any single-quoted command — plus the pre-existing
+      real-spawn test races in `operator-runtime`/`server`/`app` tests. Added an
+      `OperatorCliApp` spawn/liveness injection seam and a regression test.
+      Suite: 175/175, verified deterministic across repeated runs.
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`
@@ -71,6 +78,14 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
       related synthetic trajectories.
 
 ## Innovation backlog
+- [ ] **Flaky-test guard** for the engine's pre-push self-check: run the suite
+      N× (e.g. 3×) and fail if the pass/fail set differs across runs, so
+      nondeterministic tests are caught before they erode the build gate. (Run 9
+      hit exactly this — a suite that passed "sometimes".)
+- [ ] **Real-spawn-in-tests lint:** flag any test that constructs a
+      runtime/`OperatorCliApp` with `backgroundTaskIsProcessRunning` but no
+      `backgroundTaskSpawnProcess` — the shape that launches real detached OS
+      processes during tests (root cause of the run-9 flakiness).
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in
       project health over time.

@@ -801,7 +801,23 @@ describe("OperatorCliApp", () => {
 
   it("supports session lifecycle, transcript, approvals, pairing, config, and prompt commands", async () => {
     const rootDir = await makeTempDir();
-    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    // Deterministic background tasks without real OS processes: each launch gets
+    // a distinct PID that reads as alive until we explicitly retire it, so we can
+    // model one long-running task and one that has exited (used below to assert
+    // both the "running" and "degraded:background task failed" control states).
+    const alivePids = new Set<number>();
+    let nextBackgroundPid = 5000;
+    const app = new OperatorCliApp({
+      rootDir,
+      cwd: rootDir,
+      currentDate: "2026-05-25",
+      backgroundTaskSpawnProcess: () => {
+        const pid = nextBackgroundPid++;
+        alivePids.add(pid);
+        return { pid, unref() {} };
+      },
+      backgroundTaskIsProcessRunning: (pid) => alivePids.has(pid),
+    });
     const firstSession = await app.runtime.startSession({ title: "first", cwd: rootDir, agentId: "operator-cli" });
     const secondSession = await app.runtime.startSession({ title: "second", cwd: rootDir, agentId: "operator-cli" });
 
@@ -888,6 +904,12 @@ describe("OperatorCliApp", () => {
       command: "printf drift",
       kind: "task",
     });
+    // Simulate this task's process having already exited so recovery reports it
+    // as failed (drives the degraded control assertion below). The remote task's
+    // PID stays alive, so it remains "running".
+    if (typeof degradedTask.execution.processId === "number") {
+      alivePids.delete(degradedTask.execution.processId);
+    }
     const remoteListOutput = await app.dispatchSlashCommand({ kind: "remote-list" });
     expect(remoteListOutput).toContain(`remote=${pairedBootstrap.result.session.metadata.remoteId}`);
     expect(remoteListOutput).toContain("source=gateway");
@@ -1063,7 +1085,18 @@ describe("OperatorCliApp", () => {
 
   it("supports background and monitor task commands plus cron commands", async () => {
     const rootDir = await makeTempDir();
-    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    const app = new OperatorCliApp({
+      rootDir,
+      cwd: rootDir,
+      currentDate: "2026-05-25",
+      // Deterministic background tasks: the no-op spawn never launches a real
+      // process (whose output/state would land asynchronously and race with the
+      // assertions below), and PIDs read as alive so tasks stay "running" until
+      // explicitly stopped. Output is written explicitly, mirroring the monitor
+      // half of this test.
+      backgroundTaskSpawnProcess: () => ({ pid: 4242, unref() {} }),
+      backgroundTaskIsProcessRunning: () => true,
+    });
     const session = await app.runtime.startSession({ title: "CLI ops", cwd: rootDir, agentId: "operator-cli" });
 
     const startOutput = await app.dispatchSlashCommand(
@@ -1078,6 +1111,8 @@ describe("OperatorCliApp", () => {
     if (!task) {
       throw new Error("expected background task");
     }
+    // The no-op spawn writes no output, so seed the expected launcher output.
+    await app.runtime.backgroundTasks.executionService.writeOutput(task, "ok\n");
 
     const listOutput = await app.dispatchSlashCommand({ kind: "background-list" });
     expect(listOutput).toContain(task.id);

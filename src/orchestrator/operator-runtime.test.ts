@@ -531,6 +531,11 @@ describe("StandaloneOperatorRuntime", () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
       backgroundTaskIsProcessRunning: () => false,
+      // Inject a no-op spawn so `startBackgroundTask` never launches real
+      // detached processes. The real launcher writes state.json asynchronously
+      // (and `tail -f` monitors never exit), which raced with the explicit
+      // writeState() calls below and made this test flaky.
+      backgroundTaskSpawnProcess: () => ({ pid: 4242, unref() {} }),
     });
     const session = await runtime.startSession({ title: "Tasks", agentId: "main" });
 

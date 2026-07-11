@@ -6,6 +6,65 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-11 (run 9) — Fix background-task JSON corruption + green a flaky suite
+
+**Audited:** Repo health first (the required build/test gate). `npm test` was
+**red** on arrival — 3–4 failing tests that varied run-to-run
+(`operator-runtime`, `control-plane/server`, `cli/app`). A prior run's log
+claimed 174/174, so this was either a regression or environment-dependent
+flakiness that had been masked. Root-caused both before touching anything.
+
+**Two distinct bugs found:**
+
+1. **Deterministic correctness bug — malformed shell escaping corrupts
+   `state.json` (source bug).** `renderLaunchScript` in
+   `src/harness/background-tasks.ts` builds the initial background-task state
+   payload as JSON and pipes it through a shell launcher. Its `shellQuote`
+   helper escaped embedded single quotes with `"'"'"'` instead of the correct
+   POSIX sequence `'"'"'`. For **any command containing a single quote** (e.g.
+   `printf 'line-1\nline-2\n'`), the launcher wrote **invalid JSON** to
+   `state.json`, so every later `readState` threw
+   `SyntaxError: Expected ',' or '}'…`. Verified byte-for-byte by reproducing
+   the exact `printf | sed > state.json` pipeline in isolation. The training
+   runner's own `shellQuote` already used the correct form — this was a one-off
+   typo in the harness copy. **Fix: one character-class change**
+   (`"'"'"'` → `'"'"'`). Added an integration regression test that runs the
+   **real** launch script for a single-quoted command and asserts `state.json`
+   parses and round-trips the command intact.
+
+2. **Pre-existing test flakiness — real detached processes racing (test bug).**
+   `operator-runtime`, `server`, and `app` tests started background tasks with
+   `backgroundTaskIsProcessRunning: () => false` but **no spawn override**, so
+   the real launcher spawned detached OS processes (`sleep 5`, `tail -f`,
+   `printf …`) that (a) leaked and (b) wrote `state.json` asynchronously,
+   racing with each test's explicit `writeState()`/status assertions. Made them
+   deterministic by injecting no-op / per-PID spawns:
+   - `operator-runtime.test.ts` + `server.test.ts`: no-op spawn
+     (`() => ({ pid, unref })`) on the runtimes that only use `writeState`.
+   - `app.test.ts`: needed a testability **seam** — `OperatorCliApp` hard-wired
+     its runtime with no injection point. Added optional
+     `backgroundTaskSpawnProcess` / `backgroundTaskIsProcessRunning` to
+     `OperatorCliAppOptions` (additive, production default unchanged) and
+     threaded them through. The "session lifecycle" test needs one task
+     *running* and another *failed* simultaneously, so it now uses a per-PID
+     `alivePids` set and retires the failing task's PID — modelling both control
+     states without any real process.
+
+**Test results:** `npm run build` ✅. `npm run typecheck:src` ✅ (exit 0, source
+stays green). `npm test` ✅ **175/175** and **deterministic** — ran the full
+suite 3× and each affected file 3–4× with zero failures (was 3–4 flaky failures
+before). +1 net test (the new regression test).
+
+**New idea (logged to ROADMAP):** A **flaky-test guard** for the engine's
+pre-push self-check: run the suite N times (e.g. 3×) and fail if the pass set
+isn't identical across runs, so nondeterministic tests are caught at authoring
+time instead of silently eroding the build gate. Bigger idea: a lint that flags
+any test constructing a runtime/app with `backgroundTaskIsProcessRunning` but no
+`backgroundTaskSpawnProcess` — the exact shape that spawns real processes in
+tests — so this class of race can't reappear.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
