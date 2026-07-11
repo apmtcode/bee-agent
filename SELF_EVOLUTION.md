@@ -6,6 +6,64 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-11 (run 9) — 🐛 Fix 2 real background-task bugs + de-flake the whole suite
+
+**Audited:** The actual `npm test` baseline — which was **NOT green** (the log's
+"174/174" was from a prior machine). In this environment **4 tests failed
+deterministically and the suite was flaky** (repeated full runs gave 0, 1, or 2
+failures). Root-caused every failure to the background-task launcher.
+
+**Bug #1 — corrupt state JSON (deterministic failure).**
+`renderLaunchScript` wrote the initial `"running"` state via `printf '%s' <json>
+| sed "…s/\"\$\$\"/$$/g"` string-munging, embedding `task.command` raw. For any
+command with quotes/newlines/`$` (e.g. the test's `printf 'line-1\nline-2\n'`)
+the shell+sed pipeline emitted **invalid JSON**, so `readState`/`reconcileTask`
+threw `SyntaxError` on recovery. **Fix:** write the initial state with Python's
+`json.dumps` (the same robust approach the completion path already used),
+passing every field as **argv** — never interpolated into JSON text — via a new
+`renderInitialStateWriterPython()`. Removed the `pid:"$$"` placeholder + sed
+substitution entirely.
+
+**Bug #2 — `shellQuote` mangled single quotes (found by the new regression
+test).** `src/harness/background-tasks.ts`'s `shellQuote` replaced `'` with
+`"'"'"'` (stray leading `"`) instead of the POSIX-correct `'"'"'`. It only ever
+"worked" because prior test commands had no single quotes. Any command / cwd /
+path containing a `'` was corrupted **both** in the persisted state **and** in
+the actual `bash -lc <command>` execution — a live correctness bug, not just a
+test issue. (`src/training/runner.ts`'s copy was already correct.) Verified the
+corrected escape round-trips 5 hostile inputs through `bash`→`python argv`.
+
+**Flakiness — real detached-process races.** Several tests did
+`startBackgroundTask` (real `spawn`) then `writeState` to simulate a state; the
+detached launch script raced to clobber it. Fixed by using the runtime's
+existing `backgroundTaskSpawnProcess` seam: added it (plus
+`backgroundTaskIsProcessRunning`) to `OperatorCliAppOptions` (mirrors the
+documented `configHome` test-isolation seam) and injected a no-op spawn into the
+4 racy runtimes (operator-runtime tasks test, server drifting+breaker runtimes,
+app session-lifecycle test) — all of which drive state/output explicitly, so the
+real process was pure racing noise.
+
+**New coverage:** `background-tasks.test.ts` now executes the *real* generated
+launch script with a quote/newline/`$`/backslash-laden command and asserts the
+state file parses as valid JSON and round-trips the command — guarding both bugs
+above (nothing else exercises the real launcher with a hostile command anymore).
+
+**Test results:** **175/175 passing, 6/6 consecutive full runs** (was
+174 nominal but flaky + 4 deterministic failures; +1 regression test). Build ✅.
+`typecheck:src` ✅ (exit 0). Full `tsc` debt unchanged at **125** (all in test
+files). Files touched: `src/harness/background-tasks.ts` (both fixes),
+`src/cli/app.ts` (new seam), and 3 test files.
+
+**New idea:** the engine's pre-push self-check should run the suite **≥3×** (or
+`vitest --sequence.shuffle` / `--retry=0` with a repeat), not once — a
+single-pass gate would have declared this flaky suite "green" and pushed a
+latent race. Cheap insurance: add a `test:flake` script (`vitest run` looped
+3×) and treat any non-deterministic failure as a hard blocker. Longer term,
+consider a lint that flags `startBackgroundTask(...)` followed by `writeState`
+in tests without a `backgroundTaskSpawnProcess` override.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

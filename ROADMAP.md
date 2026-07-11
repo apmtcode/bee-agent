@@ -8,6 +8,20 @@ unchecked items are queued. Keep this richer than you found it each run.
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`
       (2026-06-22).
+- [x] **Fix background-task launcher bugs + de-flake the suite** (run 9,
+      2026-07-11). (1) Initial `"running"` state now written via Python
+      `json.dumps` (argv, not string-munging) — no more corrupt-JSON `SyntaxError`
+      on recovery for commands with quotes/newlines/`$`. (2) `shellQuote` in
+      `background-tasks.ts` fixed (`"'"'"'` → `'"'"'`) — single-quoted
+      commands/paths no longer mangled in state *or* execution. (3) Added the
+      `backgroundTaskSpawnProcess` test seam to `OperatorCliAppOptions` and
+      injected no-op spawns into racy runtimes → suite is deterministic
+      (175/175, 6/6 runs). Regression test executes the real launch script with
+      a hostile command.
+- [ ] **Multi-pass / shuffled test gate.** Add a `test:flake` script that runs
+      the suite ≥3× (and/or `--sequence.shuffle`) and wire it into the engine's
+      pre-push self-check, so a flaky suite can't be pushed as "green" on a lucky
+      single pass (run 9 caught a latent race only by looping full runs).
 - [ ] **Pay down typecheck debt** (surfaced by the `typecheck` script). Full
       `tsc --noEmit` count was **397** on 2026-06-22; now **125**. 🎯 ALL source
       (`src/**` non-test) files typecheck clean since run 7; remaining 125 errors

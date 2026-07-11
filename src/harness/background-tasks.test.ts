@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -369,5 +370,50 @@ describe("BackgroundTaskExecutionService", () => {
     await expect(fs.readFile(path.join(rootDir, task.execution.launchScript), "utf8")).resolves.toContain("bash -lc");
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
+  });
+
+  it("generates an initial state file that is valid JSON even for commands with quotes, newlines, and $", async () => {
+    const rootDir = await makeTempDir();
+    // A command loaded with shell- and JSON-hostile characters: single and
+    // double quotes, a newline, a `$`, a `#`, and a backslash. The earlier
+    // `printf | sed` launch-script writer corrupted the state JSON for such
+    // commands; the Python `json.dumps` writer must round-trip them safely.
+    const nastyCommand =
+      `printf 'has "double" and '\\''single'\\'' quotes'\n` +
+      `# comment with $HOME and a backslash \\`;
+    let launchedScript = "";
+    const store = new FileBackgroundTaskStore(
+      path.join(rootDir, "background-tasks.json"),
+      (command) => {
+        launchedScript = command;
+        return { pid: 4242, unref() {} };
+      },
+      () => true,
+    );
+    const task = await store.start({
+      sessionId: "sess-json",
+      title: "Nasty command",
+      command: nastyCommand,
+      cwd: rootDir,
+      kind: "task",
+    });
+
+    // Execute the generated launch script for real and wait for completion.
+    // The command's exit code is irrelevant here (it may even be a shell syntax
+    // error); what matters is that the launch script writes a *valid JSON* state
+    // file in every branch, which the old `printf | sed` writer failed to do.
+    try {
+      execFileSync("bash", [launchedScript], { cwd: rootDir, stdio: "ignore" });
+    } catch {
+      // Non-zero exit still writes a "failed" state file — asserted below.
+    }
+
+    const stateRaw = await fs.readFile(path.join(rootDir, task.execution.stateFile), "utf8");
+    // Must not throw — the whole point of the fix.
+    const state = JSON.parse(stateRaw) as BackgroundTaskExecutionState;
+    expect(state.taskId).toBe(task.id);
+    expect(state.command).toBe(nastyCommand);
+    expect(typeof state.pid).toBe("number");
+    expect(["running", "completed", "failed"]).toContain(state.status);
   });
 });
