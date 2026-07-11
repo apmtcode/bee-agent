@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -369,5 +370,39 @@ describe("BackgroundTaskExecutionService", () => {
     await expect(fs.readFile(path.join(rootDir, task.execution.launchScript), "utf8")).resolves.toContain("bash -lc");
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
+  });
+
+  it("runs the launch script and writes valid state JSON for commands containing quotes", async () => {
+    const rootDir = await makeTempDir();
+    // Synchronously execute the generated launch script so we exercise the real
+    // shell -> python state pipeline (not a mocked spawn). Regression guard for
+    // the initial-state writer: a command containing single quotes must survive
+    // JSON serialization and the state file must stay parseable so the
+    // completion writer's json.loads succeeds and the task reaches a terminal
+    // status (previously the printf|sed placeholder writer corrupted it).
+    const command = "echo 'hello world'";
+    const store = new FileBackgroundTaskStore(
+      path.join(rootDir, "background-tasks.json"),
+      (script, _args, options) => {
+        const result = spawnSync("bash", [script], { cwd: options.cwd });
+        return { pid: result.pid ?? 4242, unref() {} };
+      },
+      () => false,
+    );
+
+    const task = await store.start({ title: "Quoted command", command, cwd: rootDir });
+
+    const raw = await fs.readFile(path.join(rootDir, task.execution.stateFile), "utf8");
+    // Must be parseable JSON — the whole point of the regression.
+    const parsed = JSON.parse(raw) as BackgroundTaskExecutionState;
+    expect(parsed.command).toBe(command);
+    expect(typeof parsed.pid).toBe("number");
+    expect(parsed.taskId).toBe(task.id);
+    // Command exits 0, so the script drives the state to a terminal status.
+    expect(parsed.status).toBe("completed");
+    expect(parsed.exitCode).toBe(0);
+
+    const reloaded = await store.getExecutionState(task.id);
+    expect(reloaded).toMatchObject({ taskId: task.id, status: "completed", exitCode: 0 });
   });
 });

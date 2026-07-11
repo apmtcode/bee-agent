@@ -4,6 +4,16 @@ Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
 ## Foundations / DX
+- [x] **Fix background-task launch-script bugs** (2026-07-11, run 9): invalid
+      `state.json` from a `printf|sed` initial-state writer (now a base64 →
+      python3 writer) and a broken `shellQuote` escape (`"'"'"'` → `'"'"'`) that
+      failed every single-quote command. Suite 174→175, all green. Added a
+      regression test that runs the *real* launch script.
+- [ ] **Hermetic-spawn guard**: forbid tests constructing a
+      `FileBackgroundTaskStore` / `StandaloneOperatorRuntime` with the default
+      (real) spawn — require an injected mock. Prevents subprocess races/leaks
+      like the ones fixed in run 9. Pair with a shell-quoting integration matrix
+      (quotes/newlines/non-zero-exit/unicode) against the real script.
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`

@@ -6,6 +6,64 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-11 (run 9) — 🐞 Fixed two real background-task bugs (invalid state JSON + broken shell quoting); suite 174→175 green
+
+**Audited:** The project's own test health as the first act of the run. Found the
+suite **red at HEAD** — 3 tests failing (`operator-runtime`, `server`, `app`) —
+a regression the prior run's log recorded as green (it was green in a *different*
+environment; the failures are environment/timing-sensitive but deterministic
+here). Two are genuine source bugs in `src/harness/background-tasks.ts`, both in
+the launch-script generator that runs a background task via a real shell:
+
+1. **Invalid `state.json`.** `renderLaunchScript` wrote the initial `running`
+   state with a fragile `printf '%s' <json> | sed "s/__PLACEHOLDER__/…/; s/\"$$\"/…/"`
+   pipeline. The `sed` pass **mangled the `command` field** (any quotes) and
+   **never substituted the `"$$"` PID placeholder**, so `state.json` was invalid
+   JSON. The completion writer then did `json.loads(state_path.read_text())`,
+   which threw, leaving the task stuck at `running` and later mis-recovered as
+   `missing-process`. Symptom: `SyntaxError: Expected ',' or '}' … position 311`.
+2. **Broken `shellQuote`.** It escaped an embedded `'` as `"'"'"'` (6 chars)
+   instead of the POSIX idiom `'"'"'` (5 chars). Result: any command/path with a
+   single quote produced a command line `bash -lc` could not parse
+   (`unexpected EOF while looking for matching '`) → every single-quote command
+   exited 2. E.g. `echo 'hi'` decoded to `echo "'hi"'`.
+
+**Changed (additive, `src/harness/background-tasks.ts`):**
+- Replaced the `printf|sed` initial-state writer with a **python3 writer** (the
+  same runtime the completion/failure writers already require) that decodes a
+  **base64-encoded** static payload and fills `pid`/timestamps from argv — so the
+  arbitrary command string never passes through shell quoting/`sed` at all
+  (`renderRunningStateWriterPython`).
+- Corrected `shellQuote` to emit `'"'"'`.
+
+**Tests (`+1`, and made 3 racy tests deterministic):**
+- New regression in `background-tasks.test.ts`: executes the **real** launch
+  script (`spawnSync`) for a single-quoted command and asserts `state.json` is
+  valid JSON, the command round-trips exactly, and the task reaches `completed`
+  (exit 0). This is the first test that exercises the real shell→python pipeline
+  rather than a mocked spawn.
+- Injected a no-op `backgroundTaskSpawnProcess` into the 3 runtime/server test
+  fixtures that previously used the **default (real) spawn** and raced the
+  subprocess's async `state.json` writes (operator-runtime bg-tasks test; server
+  drifting/breaker/main runtimes). Assertions unchanged; this also stops leaking
+  detached `sleep 5` processes from the test suite.
+
+**Test results:** **174 → 175 passing**, all green, stable across 2 full runs.
+`typecheck:src` ✅. Build ✅. Full `tsc` test-debt unchanged at **125** (no new
+debt). End-to-end verified: a `printf`/`echo` task with single quotes now writes
+valid JSON and reaches `completed` when run through the real script.
+
+**New idea:** a **hermetic-spawn guard** for the test suite — a lint (or a shared
+test factory) that forbids constructing a `FileBackgroundTaskStore` /
+`StandaloneOperatorRuntime` with the *default* spawn, requiring an explicit
+injection. Real-subprocess races and process leaks then become impossible to
+introduce. Complement it with a small **shell-quoting integration matrix**
+(commands with single/double quotes, newlines, non-zero exit, unicode) run
+against the real launch script, so quoting regressions like the `shellQuote` bug
+are caught by construction rather than by luck of timing.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
