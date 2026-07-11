@@ -6,6 +6,69 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-11 (run 9) — Pluggable local-model backend: real in-process train → infer → generalize
+
+**Audited:** Standing objective #2 (local-movement learning subsystem) against
+what `src/training/` already implements. Finding: the stack could *export* a
+reviewed dataset and *launch* on-device trainers (mlx/axolotl via shelled-out
+launch scripts in `runner.ts`), but there was **no code that actually trains a
+model or runs inference** — the top ROADMAP movement item ("pluggable local-model
+backend interface with a deterministic mock backend"). Objective pieces 2(c)
+train and 2(d) generalize were entirely unimplemented.
+
+**Changed (additive, new files only + one barrel edit):**
+- **`src/training/model-backend.ts`** — the missing seam:
+  - `LocalModelBackend<TParams>` interface (`train(dataset)` → serializable
+    `TrainedLocalModel`, `infer(model, request)` → `MovementPrediction`), so a
+    real on-device small model and the cloud-safe mock share one contract.
+  - `MockLocalModelBackend` — a dependency-free, **deterministic** backend that
+    learns a first-order observation→action policy from the existing
+    `ReplayTimelineEvent` schema (reuses `src/capture/replay.ts`, no new schema).
+    Exact-match prediction with a confidence score; **generalizes to unseen but
+    related observations via Jaccard token overlap** (objective 2d); falls back to
+    the globally most-frequent action otherwise. Fully JSON-serializable model.
+  - `LocalModelBackendRegistry` (register/resolve/list/has) +
+    `createDefaultLocalModelBackendRegistry()` — the pluggable backend seam.
+- **`src/training/synthetic-movements.ts`** — deterministic synthetic
+  event-stream generator (seeded LCG, no wall-clock/`Math.random`) to exercise the
+  capture→dataset→train→infer loop offline in the cloud (another ROADMAP item).
+- **`src/index.ts`** — barrel-exported the new public surface.
+- Tests: **`src/training/model-backend.test.ts`** (9 cases) covers exact match,
+  seeded order-invariance/determinism, generalization, context-based inference,
+  fallback, empty-dataset (undefined), serialization round-trip, and the registry.
+
+**Test results:** new tests **9/9** ✅ (deterministic). `typecheck:src` ✅ CLEAN.
+Build ✅ (dist 546 kB). Full `npm test`: my feature adds 9 passing tests and
+introduces **zero** failures.
+
+**Pre-existing failures (NOT introduced this run):** the clean, untouched base
+(== `origin/main`) already fails **3 tests flakily** (count varies 3–5 run to
+run): `operator-runtime.test.ts > starts, syncs, recovers…`, plus its downstream
+`app.test.ts` / `server.test.ts` background+monitor cases. **Root cause I traced:**
+`BackgroundTaskExecutionService` launch scripts write `state.json`
+**non-atomically** from *real spawned subprocesses* (`printf | sed`, then a
+`python3 json.dumps` rewrite). A concurrent `recoverBackgroundTasks` either (a)
+reads the file mid-write → `SyntaxError` crash, or (b) reads a fresh "running"
+state the async launch script re-wrote *after* the test's manual recovery →
+`missing-process/changed:true` instead of the expected `unchanged`. It's a
+subprocess **timing race**, environment-dependent (prior runs' greener container
+happened to win the race), and outside this run's subsystem. I tried a defensive
+`readState` catch but it only converts the crash into a wrong value (the second
+race remains), so I reverted it to keep this diff focused and logged the real fix
+below.
+
+**New idea / next fix (added to ROADMAP):** make the background-task and training
+launch scripts write state **atomically** (write temp + `mv`, and gate the reader
+on a `.done` marker), mirroring `writeJsonAtomic`. That removes the race at the
+source and makes the recovery tests deterministic in any environment. Second idea:
+wire `LocalModelBackendRegistry` into the training execution service so a
+`--backend mock` job can run a full offline train+eval as a CI smoke test of the
+movement loop, and add a **generalization eval harness** that scores replay
+fidelity on held-out synthetic trajectories (ROADMAP item now unblocked by the
+synthetic generator).
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

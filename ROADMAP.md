@@ -62,13 +62,30 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
+      for a real on-device small model. **DONE run 9** —
+      `src/training/model-backend.ts`: `LocalModelBackend` interface +
+      `MockLocalModelBackend` (learns observation→action policy, generalizes via
+      token overlap) + `LocalModelBackendRegistry`.
+- [x] Synthetic event-stream generator to validate capture→dataset→replay
+      round-trips without real OS input. **DONE run 9** —
+      `src/training/synthetic-movements.ts` (seeded LCG, deterministic).
 - [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      related synthetic trajectories. (Unblocked by run 9's synthetic generator +
+      mock backend — score `infer()` predictions against held-out synthetic
+      steps, report exact/generalized/fallback hit rates.)
+- [ ] Wire `LocalModelBackendRegistry` into the training execution service so a
+      `--backend mock` job runs a full offline train+eval as a CI smoke test of
+      the movement loop.
+- [ ] **Atomic launch-script state writes** (background-tasks + training). The
+      launch scripts write `state.json` non-atomically from real subprocesses
+      (`printf | sed`, then a `python3` rewrite), so a concurrent
+      `recoverBackgroundTasks` can read a partial file (→ `SyntaxError` crash) or
+      a stale re-written "running" state. Root cause of the 3 flaky recovery tests
+      seen on `main` in the cloud env (run 9). Fix: write temp + `mv` (mirror
+      `writeJsonAtomic`) and/or gate reads on a `.done` marker so recovery is
+      deterministic in any environment.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

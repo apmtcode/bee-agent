@@ -431,3 +431,27 @@ export type {
   FailTrainingJobParams,
   TrainingJobStoreShape,
 } from "./training/job-store.js";
+export {
+  LocalModelBackendRegistry,
+  MockLocalModelBackend,
+  createDefaultLocalModelBackendRegistry,
+} from "./training/model-backend.js";
+export type {
+  LocalModelBackend,
+  MockModelParameters,
+  MovementDataset,
+  MovementInferenceRequest,
+  MovementPrediction,
+  MovementPredictionMatch,
+  MovementTransition,
+  TrainOptions,
+  TrainedLocalModel,
+} from "./training/model-backend.js";
+export {
+  createSeededRandom,
+  generateSyntheticMovementDataset,
+} from "./training/synthetic-movements.js";
+export type {
+  SyntheticMovementOptions,
+  SyntheticStep,
+} from "./training/synthetic-movements.js";
