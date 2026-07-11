@@ -400,6 +400,30 @@ export type {
   LocalTrainingRuntime,
   TrainingJobPlan,
 } from "./training/runner.js";
+export {
+  MOVEMENT_END_TOKEN,
+  MarkovMovementBackend,
+  TOKEN_FIELD_SEPARATOR,
+  buildMovementDataset,
+  defaultTokenize,
+  evaluateNextTokenAccuracy,
+  evaluateReplayFidelity,
+} from "./training/movement-model.js";
+export type {
+  LocalMovementModelBackend,
+  MovementDataset,
+  MovementDatasetOptions,
+  MovementPrediction,
+  MovementSequence,
+  MovementToken,
+  MovementTrainingConfig,
+  NextTokenAccuracy,
+  ReplayEventLike,
+  ReplayFidelityReport,
+  ReplaySource,
+  SerializedMovementModel,
+  TrainedMovementModel,
+} from "./training/movement-model.js";
 export type {
   ExportedMemoryReference,
   ExportedPromotedSkill,

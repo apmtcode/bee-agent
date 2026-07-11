@@ -6,6 +6,69 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-11 (run 9) — 🧠 Local-movement model: trainable backend that repeats + generalizes recorded movements
+
+**Audited:** The movement-learning subsystem (standing objective #2). Traced the
+existing pipeline end-to-end: `capture/` (recorder → trajectory → replay
+manifest) → `training/exporter.ts` (reviewed export with per-trajectory action
+event streams) → `training/runner.ts`. Found runner only emits *shell plans/launch
+scripts* for real on-device runtimes (mlx/axolotl) — there was **no actual
+trainable model** in-repo, so objective #2 pieces **(c) post-train a model to
+repeat recorded movements** and **(d) generalize to related movements** were
+unimplemented and untestable in the cloud.
+
+**Changed (additive) — new `src/training/movement-model.ts` (+ full test file):**
+- **`buildMovementDataset(replays, opts)`** — turns replay/export manifests
+  (`ReplayManifest` **and** `ExportedReplayManifest` both fit `ReplaySource`)
+  into a replayable `MovementDataset`: action events grouped by trajectory (or
+  session), sorted by ts, tokenized. Pluggable `tokenize` (default = tool + a `\u0001` field separator so tool/summary boundaries never collide) and a
+  sorted vocabulary.
+- **`LocalMovementModelBackend` seam** + **`MarkovMovementBackend`** — a fully
+  deterministic n-gram model with stupid-backoff (configurable `order`,
+  `minCount` pruning). It is a legitimate CPU-only on-device model with **zero
+  deps**: exact replay of learned movements (high fidelity) *and* generalization
+  to unseen prefixes via backoff to shorter contexts. Ties broken by count desc
+  then token asc → reproducible. A real neural/local-LLM backend implements the
+  same interface and drops in unchanged (the pluggability objective #2 asks for).
+- **`TrainedMovementModel`** — `predictNext(context)` (returns token + prob +
+  backoff order), `generate(seed, maxSteps)` (rolls out until a learned END
+  sentinel or the step cap), and `serialize()` / `MarkovMovementBackend.fromSerialized()`
+  for persistence + restore.
+- **Eval harness** — `evaluateNextTokenAccuracy` (teacher-forced) and
+  `evaluateReplayFidelity` (free-running exact-match + positional overlap on
+  held-out but related sequences) → makes "did it learn to repeat / generalize?"
+  a **measurable** number.
+- Exported the whole surface from `src/index.ts`.
+
+**Test results:** new `src/training/movement-model.test.ts` — **15/15 passing**,
+deterministic across 3 repeat runs. Covers dataset extraction/grouping/custom
+tokenizer, exact replay (fidelity=1), conditioned next-token accuracy,
+generalization-via-backoff, most-frequent + deterministic tie-break, minCount
+pruning, empty-model safety, serialization round-trip, held-out generalization,
+and the END-sentinel/field-separator invariants. `npm run typecheck:src` ✅
+(exit 0). `npm run build` ✅ (545 kB). Full `npm test`: **186 passed**, my 15
+included.
+
+**⚠️ Pre-existing flaky failures (NOT caused by this run):** 3 tests fail
+non-deterministically (count varies 2–4 across runs, and they fail on the base
+commit / with my changes stashed): `server.test.ts`, `app.test.ts`,
+`operator-runtime.test.ts` — all the background-task recovery path, error
+`SyntaxError: Expected ',' or '}' after property value in JSON` — a file
+read-mid-write race in `FileBackgroundTaskStore.recoverBySession`. My module is
+isolated (nothing imports it) and deterministically green; these predate it.
+Logged as a roadmap item to fix the race (atomic read / tolerate partial JSON).
+Because the failures are pre-existing and unrelated, and my contribution passes
+the source gate + build + its own suite with zero regressions, pushing to the
+designated feature branch.
+
+**New idea:** a **generalization stress harness** — synthesize families of
+"related" trajectories by parametric perturbation of a canonical workflow (insert
+a redundant step, reorder commutative sub-movements, swap an equivalent tool) and
+plot replay-fidelity vs. perturbation distance. That turns objective #2(d)
+("generalize to *new but related* movements") into a regression curve the engine
+can track run-over-run, and gives the future neural backend a concrete target to
+beat the Markov baseline on.
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

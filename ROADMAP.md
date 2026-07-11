@@ -62,13 +62,39 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
+      for a real on-device small model. — DONE run 9
+      (`src/training/movement-model.ts`): `LocalMovementModelBackend` seam +
+      deterministic `MarkovMovementBackend` (n-gram + stupid-backoff), dataset
+      builder from replay manifests, `predictNext`/`generate`, serialize/restore.
 - [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      round-trips without real OS input. (Tests use inline synthetic replays; a
+      reusable generator that emits full capture-adapter event streams — mouse /
+      key / window with realistic timing — is still open.)
+- [x] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories. — DONE run 9 (`evaluateReplayFidelity` +
+      `evaluateNextTokenAccuracy`). Next: a *stress* variant that perturbs a
+      canonical workflow and plots fidelity vs. perturbation distance (below).
+- [ ] Generalization **stress** harness: synthesize families of related
+      trajectories by parametric perturbation (insert redundant step, reorder
+      commutative sub-movements, swap equivalent tool) and track replay-fidelity
+      vs. perturbation distance as a run-over-run regression curve — a concrete
+      target for the future neural backend to beat the Markov baseline on.
+- [ ] Wire a `runtime: "mock"` path into `LocalAppleSiliconTrainingRunner` (or a
+      sibling in-process runner) that trains a `MarkovMovementBackend` from the
+      reviewed export's replays and persists the serialized model as an artifact,
+      so the end-to-end train→infer loop is exercisable without mlx/axolotl.
+
+## Known flaky / bugs
+- [ ] **Background-task recovery test race** (pre-existing, surfaced run 9):
+      `server.test.ts`, `app.test.ts`, `operator-runtime.test.ts` fail
+      non-deterministically (2–4 tests, varies per run) with
+      `SyntaxError: Expected ',' or '}' after property value in JSON` from
+      `FileBackgroundTaskStore.recoverBySession` reading a file mid-write. Fix by
+      reading task-state files atomically (read-then-parse with retry, or tolerate
+      a partial trailing record) so the recovery path is deterministic. This is
+      the last thing standing between the suite and a fully green `npm test`.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
