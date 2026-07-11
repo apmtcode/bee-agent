@@ -12,6 +12,17 @@ import type { ReviewedExportManifest } from "../training/export-manifest.js";
 
 const tempDirs: string[] = [];
 
+// Deterministic background-task spawn stub: hands back a fake child with a
+// unique pid and never launches a real detached process. Without it, a launched
+// task asynchronously writes its own "running" state file, which races with the
+// manual writeState/recover calls these tests use to drive recovery and
+// breaker/inventory scenarios — making derived control state depend on OS
+// process-launch timing rather than the state the test set up.
+function stubBackgroundSpawn(): () => { pid: number; unref(): void } {
+  let pid = 5000;
+  return () => ({ pid: (pid += 1), unref() {} });
+}
+
 async function makeTempDir(): Promise<string> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "control-plane-"));
   tempDirs.push(dir);
@@ -84,6 +95,7 @@ describe("OperatorControlPlaneServer", () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir,
       backgroundTaskIsProcessRunning: () => false,
+      backgroundTaskSpawnProcess: stubBackgroundSpawn(),
       delivery: new OperatorDeliveryService(rootDir, {
         sendBrowserPush: async () => {},
       }),
@@ -953,6 +965,7 @@ describe("OperatorControlPlaneServer", () => {
     const driftingRuntime = new StandaloneOperatorRuntime({
       rootDir: driftingRootDir,
       backgroundTaskIsProcessRunning: () => false,
+      backgroundTaskSpawnProcess: stubBackgroundSpawn(),
     });
     const driftingServer = new OperatorControlPlaneServer({ runtime: driftingRuntime });
     const driftingBootstrap = await driftingServer.handle({
@@ -1019,6 +1032,7 @@ describe("OperatorControlPlaneServer", () => {
     const breakerRuntime = new StandaloneOperatorRuntime({
       rootDir: breakerRootDir,
       backgroundTaskIsProcessRunning: () => false,
+      backgroundTaskSpawnProcess: stubBackgroundSpawn(),
     });
     const breakerServer = new OperatorControlPlaneServer({ runtime: breakerRuntime });
     const breakerOne = await breakerServer.handle({

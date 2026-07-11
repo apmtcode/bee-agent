@@ -38,8 +38,9 @@ unchecked items are queued. Keep this richer than you found it each run.
     `skills.executable.*`, `push.subscriptions.*`, `trajectories.*`, `replays.*`,
     `cron.runs`/misc — plus a few genuine test-only typings. Map the rest, then
     fix residual test-only typings.
-- [ ] Add a `verify` npm script (`typecheck && build && test`) and have the
-      engine run it as a pre-push self-check each cycle.
+- [x] Add a `verify` npm script — DONE run 9 (`typecheck:src && build && test`;
+      passes exit 0). Engine now runs it as the pre-push green gate. Next: widen
+      to the full `typecheck` (incl. tests) once the test-file debt clears.
 - [x] Interim **source-only typecheck gate** — DONE run 7. `tsconfig.src.json`
       (excludes `**/*.test.ts`) + `typecheck:src` script; passes (exit 0). Next:
       have the engine run it as a per-run pre-push self-check.
@@ -84,3 +85,23 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
       count to a baseline file and fail if a module regresses above it. Lets the
       engine pay debt down module-by-module without one green-gate blocking
       progress, and prevents backsliding while the total is still > 0.
+
+## Reliability / correctness (run 9)
+- [x] Fix `shellQuote` POSIX escaping bug + broken pid substitution in the
+      background-task launch script — DONE run 9. Commands containing single
+      quotes produced invalid `state.json`; pid was written as the string
+      `"$$"` instead of a number.
+- [ ] **Kill the launched-process test-race class for good.** Add a shared
+      `makeTestRuntime()` factory whose `backgroundTaskSpawnProcess` defaults to
+      a deterministic stub, and migrate the existing runtimes in
+      `server.test.ts` / `operator-runtime.test.ts` to it, so no future test can
+      construct a state-driving runtime that also launches real processes.
+- [ ] **Startup grace window in the source launch path.** A freshly launched
+      task that hasn't written state yet is currently eligible for immediate
+      `missing-process` diagnosis under a `() => false` process check; give it a
+      short grace/"starting" window so real-world launch races don't flap a
+      remote to `degraded`.
+- [ ] Add a launch-script golden test: render `renderLaunchScript` for commands
+      containing quotes/newlines/`$`/backticks, execute it in a sandbox, and
+      assert `state.json` parses and `pid` is numeric — locking in the run-9 fix
+      against regressions.

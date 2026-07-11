@@ -740,7 +740,7 @@ function renderLaunchScript(task: BackgroundTaskRecord): string {
       taskId: task.id,
       kind: task.kind,
       status: "running",
-      pid: "$$",
+      pid: "__OPENCLAW_PID__",
       startedAt: "__OPENCLAW_STARTED_AT__",
       updatedAt: "__OPENCLAW_STARTED_AT__",
       outputFile: task.execution.outputFile,
@@ -754,7 +754,12 @@ function renderLaunchScript(task: BackgroundTaskRecord): string {
     "set -euo pipefail",
     `mkdir -p $(dirname ${quotedStatePath}) $(dirname ${quotedOutputFile})`,
     "started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-    `printf '%s' ${quotedStatePayload} | sed "s/__OPENCLAW_STARTED_AT__/$started_at/g; s/\"\$\$\"/$$/g" > ${quotedStatePath}`,
+    // Substitute the timestamp (plain token) and the pid placeholder. The pid
+    // placeholder is quoted in the JSON (`"__OPENCLAW_PID__"`) and is replaced
+    // with the bare numeric pid so `pid` stays a JSON number. The pid sed script
+    // is single-quoted so its embedded double quotes are literal, with `$$`
+    // spliced in via a double-quoted segment.
+    `printf '%s' ${quotedStatePayload} | sed -e "s/__OPENCLAW_STARTED_AT__/$started_at/g" -e 's/"__OPENCLAW_PID__"/'"$$"'/g' > ${quotedStatePath}`,
     `printf '%s\n' "starting ${task.kind} ${task.id}" >> ${quotedOutputFile}`,
     `if cd ${quotedCwd} && bash -lc ${quotedCommand} >> ${quotedOutputFile} 2>&1; then`,
     "  completed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
@@ -794,5 +799,10 @@ function renderStateWriterPython(status: BackgroundTaskExecutionState["status"])
 }
 
 function shellQuote(value: string): string {
-  return `'${value.replaceAll(`'`, `"'"'"'`)}'`;
+  // POSIX single-quote escaping: end the quote, emit an escaped single quote,
+  // then reopen the quote — i.e. each `'` becomes `'\''`. The previous encoding
+  // (`"'"'"'`) started with a double quote, which mangled any value containing a
+  // single quote (e.g. a command like `printf 'x'`) and produced invalid JSON in
+  // the launch script's state file.
+  return `'${value.replaceAll(`'`, `'\\''`)}'`;
 }

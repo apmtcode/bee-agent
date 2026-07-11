@@ -6,6 +6,60 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-11 (run 9) — 🐛 Fix launch-script shell-quoting bug; green a red suite (174/174 stable)
+
+**Audited:** The actual `npm test` result on a fresh checkout — not the debt
+counters, but *does the suite pass right now*. It did **not**: 3–4 tests failed
+(the count flapping between runs was the tell). Root-caused all of them.
+
+**Genuine production bug found & fixed** in `src/harness/background-tasks.ts`:
+- `shellQuote()` used the wrong POSIX single-quote escape. It replaced `'` with
+  `"'"'"'` (6 chars, *starts with a double quote*) instead of the canonical
+  `'\''` / `'"'"'`. Any task whose `command` contained a single quote — e.g.
+  `printf 'line-1\nline-2\n'` — got mangled when embedded into the launch
+  script's initial state-file write, producing **invalid JSON** in `state.json`.
+  On recovery, `readJsonFile` then threw `SyntaxError: Expected ',' or '}'`,
+  which surfaced as the operator-runtime recovery test rejecting instead of
+  resolving. Fixed the escape and documented why.
+- The pid placeholder was `"$$"` and the substitution was
+  `sed "…; s/\"\$\$\"/$$/g"` — but the embedded `"` chars *close* the
+  double-quoted sed argument, so it degenerated to `s/<pid>/<pid>/g` (a no-op)
+  and `pid` stayed the literal string `"$$"` (a type error waiting to bite
+  reconcile's `isProcessRunning(state.pid)`). Renamed the placeholder to
+  `"__OPENCLAW_PID__"` and rewrote the sed with a single-quoted script so `pid`
+  is now written as a bare JSON **number**. Verified end-to-end by rendering &
+  running the launch script in a sandbox before touching source.
+
+**Test flakiness fixed** (test-only, `src/orchestrator/operator-runtime.test.ts`
++ `src/control-plane/server.test.ts`): three sub-scenarios constructed runtimes
+with `backgroundTaskIsProcessRunning: () => false` but **real** spawn, then drove
+recovery/breaker/inventory logic via manual `writeState`. The launched detached
+processes (`sleep 5`, `printf 'drift'`) asynchronously wrote their own "running"
+state, racing the manual state and making derived control state
+(active/degraded/mixed) depend on OS launch timing. Injected a deterministic
+`backgroundTaskSpawnProcess` stub (the pattern already used in
+`background-tasks.test.ts`) via a shared `stubBackgroundSpawn()` helper. No
+source/logic changes — the scenarios now exercise exactly the state they set up.
+
+**DX:** added the queued `verify` npm script (`typecheck:src && build && test`)
+as the canonical green gate / pre-push self-check.
+
+**Test results:** full `npm test` **174/174**, stable across 3 consecutive runs
+(was flapping 170–171/174). `npm run build` ✅. `npm run typecheck:src` ✅ (exit
+0). `npm run verify` ✅ (exit 0).
+
+**New idea:** the two failing tests were both *launched-process races* hiding
+behind `() => false` process checks. Add a tiny lint/test-helper convention:
+any runtime built in a test that also calls `writeState`/`recover` MUST pass a
+spawn stub — enforce it with a shared `makeTestRuntime()` factory that defaults
+`backgroundTaskSpawnProcess` to a deterministic stub, so future tests can't
+reintroduce this class of flake. Longer term, consider having the *source*
+launch path treat a freshly-launched-but-stateless task as "starting" (a grace
+window) rather than immediately eligible for missing-process diagnosis, so
+real-world startup races don't flap a remote to `degraded`.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

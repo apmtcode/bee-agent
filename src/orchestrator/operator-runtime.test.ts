@@ -528,9 +528,15 @@ describe("StandaloneOperatorRuntime", () => {
   });
 
   it("starts, syncs, recovers, lists, and cancels background tasks", async () => {
+    // Use a deterministic spawn stub so the launch script never runs as a real
+    // detached process. Otherwise the child would asynchronously rewrite the
+    // task's state file, racing with the manual writeState/recover calls below
+    // and making recovery results nondeterministic.
+    let nextPid = 4100;
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
       backgroundTaskIsProcessRunning: () => false,
+      backgroundTaskSpawnProcess: () => ({ pid: (nextPid += 1), unref() {} }),
     });
     const session = await runtime.startSession({ title: "Tasks", agentId: "main" });
 
