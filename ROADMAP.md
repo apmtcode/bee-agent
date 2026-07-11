@@ -70,6 +70,32 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Generalization eval harness: measure replay fidelity on held-out but
       related synthetic trajectories.
 
+## Reliability / test hermeticity
+- [x] **Atomic background-task state writes** (run 9): the spawned launch script
+      now writes `state.json` via temp-file + `mv`/`os.replace` (bash and Python
+      paths), so a concurrent recovery read can never observe a torn file.
+- [x] **Corruption-tolerant state reads** (run 9): `readJsonFile` gained opt-in
+      `tolerateParseErrors`; `readState` uses it so a half-written/corrupt state
+      file degrades recovery gracefully instead of throwing.
+- [x] **Deterministic spawn stand-in** (run 9): `mockSpawnBackgroundProcess`
+      (`background-tasks.testkit.ts`); `operator-runtime.test.ts` background-task
+      test now stable. `OperatorCliApp` forwards the spawn/liveness seams.
+- [ ] **Make `server.test.ts` + `app.test.ts` omnibus tests hermetic.** They
+      spawn real OS processes (`sleep 5`, `printf …`) and assert on
+      process-liveness/lifecycle state → flaky in the full run (pass in
+      isolation). Inject `mockSpawnBackgroundProcess` + a per-task
+      `isProcessRunning`/synthetic `writeState` timeline so every asserted state
+      is deterministic. NOTE (run 9): the drift-remote assertions expect a task
+      to read `active` early then `degraded:background task failed` after an
+      explicit `writeState`+`sync`; a naive uniform `() => true` liveness reads
+      it back `running`. Needs the state timeline modeled per assertion, not a
+      blanket liveness stub. The app seam for this already landed in run 9.
+- [ ] **State-write ordering guard:** add a monotonic `seq`/`writeGeneration` to
+      `BackgroundTaskExecutionState`; `writeState` and the launch script only
+      overwrite when incoming `seq` ≥ persisted. Makes writes ordering-safe (a
+      late write from a lingering process can't roll status backward) and would
+      make the omnibus tests deterministic without mocking spawn at all.
+
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in

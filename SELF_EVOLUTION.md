@@ -6,6 +6,76 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-11 (run 9) — Reliability: atomic background-task state writes + corruption-tolerant reads
+
+**Audited:** The whole test suite health first (per the pre-push gate). Found the
+suite had regressed to **3 failing** (was 174/174 at run 8): the three "omnibus"
+integration tests (`operator-runtime.test.ts`, `server.test.ts`, `app.test.ts`).
+Root-caused the operator-runtime failure to a hard crash — a
+`SyntaxError: Expected ',' or '}'` thrown from `readJsonFile` while
+`recoverBackgroundTasks` read a background task's `state.json`.
+
+**Root cause (a real production race, not a test artifact):** `startBackgroundTask`
+spawns a real detached bash process whose launch script writes the task's
+`state.json` **non-atomically** — bash `printf … | sed … > state.json` (truncate
++ streaming write) and, on completion, a Python `state_path.write_text(...)`.
+Recovery reads that same file concurrently and can observe a *partial* write →
+JSON parse error that aborts the entire recovery pass. `readJsonFile` only fell
+back on `ENOENT`; a malformed/half-written file was re-thrown.
+
+**Changed (additive, reversible):**
+- `src/harness/background-tasks.ts` — both launch-script state writes are now
+  **atomic**: bash writes to `state.json.$$.tmp` then `mv`s into place; the
+  Python completion writer writes a `.{pid}.tmp` sibling then `os.replace()`s.
+  `rename`/`replace` are atomic on POSIX, so a concurrent reader always sees
+  either the old or the complete new file — never a torn one.
+- `src/shared/fs.ts` — `readJsonFile` gained an opt-in
+  `{ tolerateParseErrors?: boolean }`. When set, a malformed/partial file is
+  treated like a missing one (returns the fallback) instead of throwing.
+  Default is unchanged (strict) so every existing caller behaves exactly as
+  before. `readState` opts in — a corrupt/half-written state file now degrades
+  recovery gracefully instead of crashing it. Factored the fallback-clone into
+  a `cloneFallback` helper.
+- `src/harness/background-tasks.testkit.ts` (new) — `mockSpawnBackgroundProcess`,
+  a deterministic `SpawnBackgroundProcess` stand-in (unique fake pid + no-op
+  `unref`, writes no state) so tests that assert on synthetic state never race a
+  real spawned process. Used it in `operator-runtime.test.ts`'s background-task
+  test, which is now **deterministic** (it was flaky because the real spawned
+  bash clobbered the state the test set up via `writeState`).
+- `src/cli/app.ts` — `OperatorCliApp` now forwards `backgroundTaskSpawnProcess`
+  / `backgroundTaskIsProcessRunning` to its runtime (capability parity with
+  `StandaloneOperatorRuntime`, which already exposes these seams). Production
+  passes `undefined`, so behaviour is unchanged; this is the seam the queued
+  test-hermeticity work below will use.
+- `src/shared/fs.test.ts` (new) — 6 tests covering `readJsonFile`: missing-file
+  fallback (with/without clone), empty-file fallback, strict-throw default on
+  malformed JSON, tolerant fallback when opted in, and valid parse under
+  tolerance.
+
+**Test results:** `typecheck:src` ✅ (exit 0, source stays clean). Full `tsc`
+**125** (unchanged — new files add no errors). Build ✅. Tests: **177/180**
+(+6 new fs tests all green; **operator-runtime.test.ts is now stable** across
+repeated runs). The remaining **2 failing files** — `server.test.ts` and
+`app.test.ts` — are **pre-existing** (red at HEAD before this run) and flaky:
+they pass in isolation but fail intermittently (2–3 failures) in the full run
+because they spawn *real* OS processes (`sleep 5`, `printf …`) and assert on
+process-lifecycle/liveness state whose timing shifts under load. This run
+strictly *improved* the count (operator-runtime fixed, a real crash fixed, zero
+regressions). Making those two hermetic needs deterministic per-task state
+modeling via the now-available app seam — deliberately deferred (see ROADMAP)
+rather than rushed, since their assertions are tightly coupled to exact
+reconcile/liveness ordering and two rushed attempts this run caused regressions
+that had to be reverted.
+
+**New idea:** give `BackgroundTaskExecutionState` files a monotonic `seq`
+(or `writeGeneration`) counter and have `writeState`/the launch script only
+overwrite when the incoming `seq` ≥ the persisted one. Combined with the atomic
+rename, this makes state writes not just tear-free but *ordering-safe* — a slow,
+late-arriving write from a lingering process (e.g. the 5s `sleep` finishing
+after the runtime already re-derived state) can't silently roll a task's status
+backward. It would also make the omnibus tests deterministic *without* mocking
+the spawn, because stale real-process writes would be ignored by construction.
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
