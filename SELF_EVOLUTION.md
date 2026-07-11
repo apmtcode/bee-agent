@@ -6,6 +6,61 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-11 (run 9) — Reliability: fixed a real launch-script JSON-corruption bug + made the test suite deterministic
+
+**Audited:** Test-suite health. Baseline was **flaky** — repeated `npm test` runs
+produced **2–4 failures each**, varying run-to-run across `operator-runtime`,
+`server`, and `app` test files. Flaky tests silently erode the pre-push gate the
+whole engine depends on, so this run chased reliability rather than typecheck debt.
+
+**Root-caused two distinct defects (one production, one test-determinism):**
+
+1. **Production bug — corrupt background-task `state.json`.** `renderLaunchScript`
+   (`src/harness/background-tasks.ts`) built the *initial* running-state file by
+   `printf`-ing a pre-stringified JSON blob through `sed` to substitute the pid
+   and timestamp: `... | sed "s/__OPENCLAW_STARTED_AT__/$started_at/g; s/\"\$\$\"/$$/g"`.
+   Two failures baked in: (a) the pid pattern `"$$"` treats `$` as a regex
+   *end-anchor*, so it never matched — the pid stayed the literal string `"$$"`;
+   (b) any task **command containing quotes or backslashes** (e.g.
+   `printf "line-1\nline-2\n"`) had its JSON escaping mangled by the shell/sed
+   pipeline, yielding an **unparseable `state.json`**. Reading it back
+   (`getBackgroundTaskExecutionState`, `recover*`) then threw
+   `SyntaxError: Expected ',' or '}' …` — permanently, for that task. Confirmed by
+   instrumenting `readJsonFile` and dumping the raw file. **Fix:** write the
+   initial state with the same safe Python `json.dumps` path the completion/failure
+   writers already use (`renderInitialStateWriterPython`), passing every
+   task-defined field as argv — no shell string-building of JSON, correct escaping
+   for any command. Eliminates the `sed` hack and the `pid:"$$"` placeholder.
+
+2. **Test-determinism / missing seam.** The background-task tests injected
+   `backgroundTaskIsProcessRunning` but **not** a spawner, so `start()` launched a
+   **real detached process** that wrote `state.json` asynchronously — racing the
+   assertions and clobbering state the test had just written (flaky only under
+   parallel load; deterministic in isolation). **Fix:** inject a fake spawner
+   (`{ pid, unref }`, launches nothing) everywhere a test starts a task:
+   `operator-runtime.test.ts`, `server.test.ts` (×3 runtimes), `app.test.ts`.
+   Since `OperatorCliApp` built its runtime with `rootDir` only, added
+   `backgroundTaskSpawnProcess` / `backgroundTaskIsProcessRunning` to
+   `OperatorCliAppOptions` and threaded them through (production defaults
+   unchanged — `undefined` falls back to real `spawn` + real OS check). The
+   second app test additionally writes its task output explicitly (the fake
+   spawner runs no real command) and uses a live-process variant so the task
+   stays "running" through the sync/watch assertions.
+
+**Test results:** flaky **2–4 failures/run → 15/15 clean full-suite runs**;
+`npm test` **174/174**; `npm run build` ✅; `npm run typecheck:src` exit **0**;
+full `tsc` unchanged at **125** (new test code is well-typed). Behaviour change is
+limited to the corrupt-state fix (a strict improvement) + additive test seams.
+
+**New idea:** add a **`test:stress` script** (`vitest run --repeat=10` or a small
+loop) and have the engine run it as part of the per-run pre-push self-check —
+flakes like this one only surface under repetition, and a single green run hid a
+~40%-failure suite for multiple prior runs. Complementary guard: a lint that any
+test calling `startBackgroundTask`/`background.tasks.start` must also inject
+`backgroundTaskSpawnProcess`, so real OS processes can never leak into unit tests.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

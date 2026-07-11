@@ -70,6 +70,23 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Generalization eval harness: measure replay fidelity on held-out but
       related synthetic trajectories.
 
+## Reliability
+- [x] **Fix corrupt background-task `state.json`** (run 9, 2026-07-11). The launch
+      script built the initial state via `sed` munging of a pre-stringified JSON
+      blob — the `"$$"` pid pattern never matched (regex anchor) and any command
+      with quotes/backslashes produced unparseable JSON that could never be read
+      back. Now written via the safe Python `json.dumps` path (argv-passed values).
+- [x] **De-flake the test suite** (run 9). Baseline was 2–4 failures/run from real
+      detached processes racing assertions. Injected fake spawners in all
+      background-task tests and added `backgroundTaskSpawnProcess`/
+      `backgroundTaskIsProcessRunning` seams to `OperatorCliApp`. Now 15/15 clean.
+- [ ] **`test:stress` pre-push gate**: `vitest run --repeat=N` (or a loop) run by
+      the engine each cycle so flakes surface before push, not after. A single
+      green run hid a ~40%-failure suite for several prior runs.
+- [ ] **Unit-test isolation lint**: flag any test that starts a background task
+      (`startBackgroundTask` / `background.tasks.start`) without injecting
+      `backgroundTaskSpawnProcess`, so real OS processes can't leak into tests.
+
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in
