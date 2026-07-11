@@ -6,6 +6,59 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-11 (run 9) — Fix background-task launcher: `shellQuote` corruption + non-deterministic real spawns → suite green 175/175
+
+**Audited:** Baseline test health before picking a feature. Found the suite was
+**not** at the "174/174" run 8 claimed — **3 tests failed nondeterministically**
+(`operator-runtime`, `control-plane/server`, `cli/app`). All three trace to
+`FileBackgroundTaskStore` spawning **real detached bash processes** in tests,
+whose asynchronous state-file writes race with the tests' explicit
+`writeState`/`writeOutput` calls.
+
+**Root cause (a genuine latent correctness bug), `src/harness/background-tasks.ts`:**
+- `shellQuote()` used a **malformed** POSIX single-quote escape — `"'"'"'`
+  (6 chars) instead of `'\''` (close-quote, escaped literal quote, reopen). Any
+  value containing a `'` was corrupted. Proven with a round-trip: `it's a 'test'`
+  came back as `it"'s a "'test"'`. This broke (a) the launch script's JSON state
+  payload → `python json.loads` failed → **no state file written** → readers hit
+  `SyntaxError`/`ENOENT`, and (b) `bash -lc <command>` for any quoted command.
+
+**Changed (additive, `src/harness/background-tasks.ts`):**
+1. **Fixed `shellQuote`** to the correct `'\''` escaping.
+2. **Rewrote launch-script state writing** to be robust and atomic: the running
+   state payload is handed to `python3` as a single `argv` value (`json.loads`)
+   instead of `printf | sed` text-munging; pid/startedAt/updatedAt are injected
+   in python; both the running and terminal (completed/failed) writers now write
+   to a temp file and `os.replace()` (atomic) so concurrent readers never see a
+   partial file.
+3. **Deterministic dry-launch mode** — env `OPENCLAW_BACKGROUND_TASK_DRY_RUN=1`
+   makes `launch()` return a synthetic pid without spawning a real process (read
+   per-call; only applies to the *default* spawn, so injected-spawn tests are
+   untouched). Enabled suite-wide via `vitest.config.ts` `test.env`.
+4. `OperatorCliApp` now forwards `backgroundTaskSpawnProcess` /
+   `backgroundTaskIsProcessRunning` to its runtime (testability seam).
+
+**Tests:**
+- New `src/harness/background-tasks-launch.test.ts` exercises the **real**
+  launcher (clears the dry-run flag) with a command containing single quotes,
+  `#`, and `\n` escapes, asserting the resulting state file is valid JSON with
+  the command round-tripped byte-for-byte.
+- Made the `app.test.ts` background/monitor test deterministic (explicit
+  output/state; `isProcessRunning: () => true` so the synthetic pid reads live).
+
+**Results:** **175/175 tests pass, deterministically across 5 consecutive full
+runs** (was 3 flaky failures). Build ✅. `typecheck:src` CLEAN. Full `tsc`
+**125** (unchanged — new test typechecks clean).
+
+**New idea:** add a `test:flake` script (`vitest run --repeat` or an N-times
+loop) the engine runs as part of its pre-push self-check, so nondeterministic
+regressions like this are caught the run they appear instead of being masked by
+a lucky single pass. Longer term: a fuzz test feeding adversarial command
+strings (embedded quotes, `$`, backticks, newlines, unicode) through the
+launcher to guard the shell-quoting/serialization boundary.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

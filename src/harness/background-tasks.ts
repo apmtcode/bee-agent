@@ -4,6 +4,10 @@ import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { ensureParentDir, readJsonFile, writeJsonAtomic } from "../shared/fs.js";
 
+// Synthetic pid returned by launch() when OPENCLAW_BACKGROUND_TASK_DRY_RUN=1.
+// Deliberately positive so downstream `typeof pid === "number"` guards hold.
+const DRY_LAUNCH_PID = 2_147_483_647;
+
 export type BackgroundTaskKind = "task" | "monitor";
 export type BackgroundTaskStatus = "planned" | "running" | "completed" | "failed" | "cancelled";
 
@@ -153,11 +157,21 @@ function defaultIsProcessRunning(pid: number): boolean {
 }
 
 export class BackgroundTaskExecutionService {
+  private readonly spawnProcess: SpawnBackgroundProcess;
+  private readonly isProcessRunningImpl: IsProcessRunning;
+  // Only the default (real) spawn is subject to dry-launch; an injected spawn is
+  // already a caller-controlled, deterministic stub and must be honoured as-is.
+  private readonly usesDefaultSpawn: boolean;
+
   constructor(
     private readonly rootDir: string,
-    private readonly spawnProcess: SpawnBackgroundProcess = (command, args, options) => spawn(command, args, options),
-    private readonly isProcessRunningImpl: IsProcessRunning = defaultIsProcessRunning,
-  ) {}
+    spawnProcess?: SpawnBackgroundProcess,
+    isProcessRunningImpl: IsProcessRunning = defaultIsProcessRunning,
+  ) {
+    this.usesDefaultSpawn = spawnProcess === undefined;
+    this.spawnProcess = spawnProcess ?? ((command, args, options) => spawn(command, args, options));
+    this.isProcessRunningImpl = isProcessRunningImpl;
+  }
 
   async writeArtifacts(task: BackgroundTaskRecord): Promise<void> {
     const launchScriptPath = path.join(this.rootDir, task.execution.launchScript);
@@ -170,6 +184,13 @@ export class BackgroundTaskExecutionService {
 
   async launch(task: BackgroundTaskRecord): Promise<{ pid: number }> {
     const launchScriptPath = path.join(this.rootDir, task.execution.launchScript);
+    // Deterministic mode (tests/CI): skip spawning a real detached process. A
+    // real launch writes the state/output files asynchronously and races with
+    // callers that write those files explicitly to control task state. The flag
+    // is read per-call so an individual test can opt back into a real launch.
+    if (this.usesDefaultSpawn && process.env.OPENCLAW_BACKGROUND_TASK_DRY_RUN === "1") {
+      return { pid: DRY_LAUNCH_PID };
+    }
     const child = this.spawnProcess(launchScriptPath, [], {
       cwd: this.rootDir,
       env: {
@@ -734,15 +755,17 @@ function renderLaunchScript(task: BackgroundTaskRecord): string {
   const quotedOutputFile = shellQuote(task.execution.outputFile);
   const quotedCwd = shellQuote(task.cwd);
   const quotedCommand = shellQuote(task.command);
-  const quotedStatePayload = shellQuote(
+  // The running-state payload is passed to python3 as a single argv value
+  // (json.loads(sys.argv[4])). This is robust for commands containing quotes,
+  // newlines, or `$$`/`&` — unlike the previous `printf | sed` munging, which
+  // corrupted the JSON for such commands. pid/startedAt/updatedAt are injected
+  // by python from argv so no in-band placeholder substitution is needed.
+  const quotedRunningPayload = shellQuote(
     JSON.stringify({
       version: 1,
       taskId: task.id,
       kind: task.kind,
       status: "running",
-      pid: "$$",
-      startedAt: "__OPENCLAW_STARTED_AT__",
-      updatedAt: "__OPENCLAW_STARTED_AT__",
       outputFile: task.execution.outputFile,
       cwd: task.cwd,
       command: task.command,
@@ -754,7 +777,9 @@ function renderLaunchScript(task: BackgroundTaskRecord): string {
     "set -euo pipefail",
     `mkdir -p $(dirname ${quotedStatePath}) $(dirname ${quotedOutputFile})`,
     "started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-    `printf '%s' ${quotedStatePayload} | sed "s/__OPENCLAW_STARTED_AT__/$started_at/g; s/\"\$\$\"/$$/g" > ${quotedStatePath}`,
+    `python3 - ${quotedStatePath} $$ "$started_at" ${quotedRunningPayload} <<'PY'`,
+    ...renderRunningStateWriterPython(),
+    "PY",
     `printf '%s\n' "starting ${task.kind} ${task.id}" >> ${quotedOutputFile}`,
     `if cd ${quotedCwd} && bash -lc ${quotedCommand} >> ${quotedOutputFile} 2>&1; then`,
     "  completed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
@@ -773,9 +798,35 @@ function renderLaunchScript(task: BackgroundTaskRecord): string {
   ].join("\n");
 }
 
+// Atomically replace the state file (temp write + os.replace) so concurrent
+// readers never observe a partially written file.
+const PY_ATOMIC_WRITE = [
+  "tmp = state_path.with_name(state_path.name + '.launch.tmp')",
+  "tmp.write_text(json.dumps(state, indent=2) + '\\n')",
+  "os.replace(tmp, state_path)",
+];
+
+function renderRunningStateWriterPython(): string[] {
+  return [
+    "import json",
+    "import os",
+    "import pathlib",
+    "import sys",
+    "state_path = pathlib.Path(sys.argv[1])",
+    "pid = int(sys.argv[2])",
+    "timestamp = sys.argv[3]",
+    "state = json.loads(sys.argv[4])",
+    "state['pid'] = pid",
+    "state['startedAt'] = timestamp",
+    "state['updatedAt'] = timestamp",
+    ...PY_ATOMIC_WRITE,
+  ];
+}
+
 function renderStateWriterPython(status: BackgroundTaskExecutionState["status"]): string[] {
   return [
     "import json",
+    "import os",
     "import pathlib",
     "import sys",
     "state_path = pathlib.Path(sys.argv[1])",
@@ -789,10 +840,14 @@ function renderStateWriterPython(status: BackgroundTaskExecutionState["status"])
     "state['completedAt'] = timestamp",
     "state['exitCode'] = exit_code",
     `state['error'] = None if '${status}' == 'completed' else f'background task exited non-zero ({exit_code})'`,
-    "state_path.write_text(json.dumps(state, indent=2) + '\\n')",
+    ...PY_ATOMIC_WRITE,
   ];
 }
 
 function shellQuote(value: string): string {
-  return `'${value.replaceAll(`'`, `"'"'"'`)}'`;
+  // POSIX-safe single-quoting: end the quote, emit an escaped literal quote,
+  // then reopen — i.e. each `'` becomes `'\''`. The previous form (`"'"'"'`)
+  // was malformed and corrupted any value containing a single quote (e.g. a
+  // command like `printf 'x'` or the JSON state payload).
+  return `'${value.replaceAll("'", `'\\''`)}'`;
 }

@@ -45,6 +45,21 @@ unchecked items are queued. Keep this richer than you found it each run.
       have the engine run it as a per-run pre-push self-check.
 - [ ] Add a minimal CI workflow mirroring `verify` for human-opened PRs.
 
+## Reliability / test determinism
+- [x] **Fix background-task launcher corruption + flakiness** (run 9). Corrected
+      the malformed `shellQuote` POSIX escape (was `"'"'"'`, now `'\''`) that
+      corrupted any command/JSON payload containing a single quote; moved the
+      launch-script state write off `printf | sed` onto an argv-passed
+      `python3 json.loads` + atomic `os.replace`; added a deterministic
+      dry-launch mode (env-gated, default-spawn only) enabled suite-wide. Suite
+      went from 3 flaky failures to a stable 175/175 across 5 runs.
+- [ ] Add a `test:flake` script (run the suite N times / `--repeat`) and wire it
+      into the engine's pre-push self-check so nondeterministic regressions are
+      caught the run they appear.
+- [ ] Launcher fuzz test: feed adversarial command strings (embedded quotes,
+      `$`, backticks, newlines, unicode) through `renderLaunchScript` + a real
+      launch and assert valid round-tripped state JSON.
+
 ## Capability parity (audit reference agents → port gaps)
 - [ ] Build a "capability inventory" generator: enumerate bee-agent's exported
       RPC/tool surface (`src/index.ts`) and diff it against `openclaw`,
