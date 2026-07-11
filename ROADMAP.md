@@ -70,6 +70,20 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Generalization eval harness: measure replay fidelity on held-out but
       related synthetic trajectories.
 
+## Test reliability
+- [x] **Hermetic background-task spawns** (2026-07-11, run 9). Added
+      `src/harness/simulated-background-process.ts`
+      (`createSimulatedBackgroundSpawn` / `simulatedProcessLiveness`) and
+      `OperatorCliApp` spawn/liveness injection; wired into the 4 tests that had
+      been launching real detached processes. Suite went 172–174/174
+      (nondeterministic) → **179/179 stable across 5 runs**.
+- [ ] **Anti-flake lint/CI gate:** flag any `*.test.ts` block that constructs a
+      runtime/app and calls `startBackgroundTask`/`background-start` without
+      injecting `backgroundTaskSpawnProcess`. Make hermetic background tasks an
+      enforced invariant so environmental process/timing flakes can't recur.
+- [ ] Have the engine run `npm test` **twice** (or `--repeat`) in its pre-push
+      self-check to catch nondeterminism before it reaches `main`.
+
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in

@@ -6,6 +6,58 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-11 (run 9) — 🟢 Restore a deterministic, green test suite (fix 3 real-process flakes)
+
+**Audited:** Project health at HEAD. Discovered the committed suite was **no
+longer green in the cloud sandbox**: `npm test` deterministically failed 3 tests
+and intermittently a 4th (172–174/174 depending on wall-clock). Run 8's log
+claimed 174/174 — the regression is environmental, not a code change.
+
+**Root cause (one class, four tests):** several tests exercise **real OS
+background-task launches**. `startBackgroundTask` shells out to a detached
+process that writes its `state.json`/`output.log` asynchronously and relies on
+process-group signalling (`process.kill(-pid, 0)`) for liveness. In a sandbox
+none of that is deterministic — detached process-group probes are unreliable, and
+the subprocess's async writes race the tests' own `writeState`/`writeOutput`. So:
+- `server.test.ts` "handles session…orchestration": after a remote `resume`, the
+  healthy `sleep 5` task's late-written `running` state + `isProcessRunning:()=>false`
+  flipped control `active → degraded` (missing-process). Deterministic fail.
+- `app.test.ts` "session lifecycle…": the gateway platform aggregate read
+  `control=degraded:…missing-process` instead of `active` for the same reason.
+- `app.test.ts` "background and monitor…": `printf ok` completed and sync marked
+  it inactive, so `watch-active` found no task (`[task …]` missing).
+- `orchestrator/operator-runtime.test.ts` "starts, syncs, recovers…": the real
+  `printf` output + `tail -f` (leaked!) raced the explicit writeState/writeOutput.
+
+**Changed (additive, per the OS-simulation guardrail):**
+- **New `src/harness/simulated-background-process.ts`** (exported from the
+  barrel): `createSimulatedBackgroundSpawn({ pid, output? })` returns a
+  `SpawnBackgroundProcess` that never touches the OS — fixed pid, optional
+  deterministic `output.log` seed, and (deliberately) **no** `state.json` so the
+  store's `reconcileMissingState` derives liveness purely from the injected
+  `IsProcessRunning`. Plus `simulatedProcessLiveness(...pids)`.
+- **`OperatorCliApp`** now accepts `backgroundTaskSpawnProcess` /
+  `backgroundTaskIsProcessRunning` and forwards them to the runtime — a real
+  testability/DX seam so the CLI can be driven hermetically (and a host could
+  plug a dry-run process backend).
+- Wired the simulated backend into the 4 flaky tests (server ×3 runtimes, app ×2
+  tests, runtime ×1) + added `simulated-background-process.test.ts` (5 tests).
+
+**Test results:** 🟢 **179/179** (was 174, +5 new), **stable across 5
+consecutive full runs** (previously 172–174, nondeterministic). `typecheck:src`
+✅ (0). Full `tsc` unchanged at **125** (all test-only, no new debt). Build ✅.
+
+**New idea:** add an **anti-flake lint / CI gate** that greps `*.test.ts` for a
+`StandaloneOperatorRuntime`/`OperatorCliApp` constructed **without** an injected
+`backgroundTaskSpawnProcess` in the same block as a `startBackgroundTask`/
+`background-start`, and flags it. Real-process launches in tests are the single
+recurring flake source; making "hermetic background tasks" an enforced invariant
+(rather than a per-test remembering) prevents the next environmental regression.
+Complementary: run `npm test` **twice** in the engine's pre-push self-check to
+catch nondeterminism before it reaches `main`.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

@@ -6,6 +6,7 @@ import process from "node:process";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 import { OperatorCliApp, parseSlashCommand } from "./app.js";
+import { createSimulatedBackgroundSpawn } from "../harness/simulated-background-process.js";
 
 const tempDirs: string[] = [];
 const execFileAsync = promisify(execFile);
@@ -801,7 +802,15 @@ describe("OperatorCliApp", () => {
 
   it("supports session lifecycle, transcript, approvals, pairing, config, and prompt commands", async () => {
     const rootDir = await makeTempDir();
-    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    const app = new OperatorCliApp({
+      rootDir,
+      cwd: rootDir,
+      currentDate: "2026-05-25",
+      // Simulate background-task spawns so the healthy "sleep 5" remote task stays
+      // deterministically alive (no real detached process / process-group probe).
+      backgroundTaskSpawnProcess: createSimulatedBackgroundSpawn({ pid: 4242 }),
+      backgroundTaskIsProcessRunning: () => false,
+    });
     const firstSession = await app.runtime.startSession({ title: "first", cwd: rootDir, agentId: "operator-cli" });
     const secondSession = await app.runtime.startSession({ title: "second", cwd: rootDir, agentId: "operator-cli" });
 
@@ -1063,7 +1072,15 @@ describe("OperatorCliApp", () => {
 
   it("supports background and monitor task commands plus cron commands", async () => {
     const rootDir = await makeTempDir();
-    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    const app = new OperatorCliApp({
+      rootDir,
+      cwd: rootDir,
+      currentDate: "2026-05-25",
+      // Simulate the task spawn: seed deterministic output and keep the process
+      // "alive" so the task stays active through sync/watch without a real shell.
+      backgroundTaskSpawnProcess: createSimulatedBackgroundSpawn({ pid: 4242, output: "starting task\nok\n" }),
+      backgroundTaskIsProcessRunning: () => true,
+    });
     const session = await app.runtime.startSession({ title: "CLI ops", cwd: rootDir, agentId: "operator-cli" });
 
     const startOutput = await app.dispatchSlashCommand(
