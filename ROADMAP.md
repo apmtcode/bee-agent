@@ -62,13 +62,39 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      for a real on-device small model. — DONE run 9 (`src/training/movement-model.ts`:
+      `MovementModelBackend` + `DeterministicMovementBackend` +
+      `resolveMovementBackend`/`defaultMovementBackends` registry).
+- [x] Synthetic event-stream generator to validate capture→dataset→replay
+      round-trips without real OS input. — DONE run 9 (synthetic trajectory
+      generator in the test drives capture→dataset→train→infer→eval).
+- [x] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories. — DONE run 9 (`evaluateMovementModel`:
+      accuracy + tool-accuracy + separate generalized-prediction quality).
+- [ ] **Movement-model backend conformance kit** (run 9 idea): a shared suite any
+      backend (mock or real MLX) must pass — deterministic repeat on seen contexts,
+      non-trivial generalization on held-out related trajectories, no-op on
+      unrelated input — so the deterministic backend is the executable spec for the
+      real on-device one.
+- [ ] Wire the movement backend into the training pipeline: after
+      `LocalTrainingExporter` produces a reviewed export, build a `MovementDataset`
+      from its replays and expose train/eval via the operator runtime + control
+      plane RPC (`movement.train` / `movement.evaluate` / `movement.predict`).
+- [ ] Real on-device backend behind `MovementModelBackend` (MLX small model),
+      consuming the same dataset the deterministic backend does.
+
+## Reliability / test health
+- [ ] **Fix flaky background-task recovery** (surfaced run 9): `npm test` shows 3–4
+      *non-deterministic* failures in `operator-runtime.test.ts` (background-task
+      recovery), `app.test.ts`, `server.test.ts`. Root cause:
+      `BackgroundTaskStore.reconcileTask` → `readState` reads a shell-written state
+      file **mid-write**, so `readJsonFile` throws `SyntaxError: Expected ',' or '}'`.
+      Fix: write state atomically (temp file + rename) in the launch script's state
+      writer, and/or make `readState` tolerant of a partial read (retry once / treat
+      as `running`). Pre-existing (reproducible with run-9 changes stashed); not a
+      regression from the movement-model work.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

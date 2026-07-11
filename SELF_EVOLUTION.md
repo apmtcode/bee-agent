@@ -6,6 +6,61 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-11 (run 9) — Pluggable movement-model backend: train → infer → generalize (objective 2c/2d)
+
+**Audited:** The local-movement learning subsystem (standing objective #2) against
+its five required pieces. Found the gap: `src/capture/` covers capture → schema →
+dataset → replay, and `src/training/runner.ts` + `execution-service.ts` emit real
+Apple-Silicon MLX/axolotl **launch scripts** — but there was **no backend that can
+actually train a policy and run inference in the cloud/CI**. Objectives 2(c)
+("post-train a local model … to repeat the recorded movements") and 2(d)
+("generalize to new but related movements") had zero exercisable implementation;
+everything required the user's real Mac. This matched the top queued ROADMAP item.
+
+**Changed (additive, self-contained) — new `src/training/movement-model.ts`:**
+- **Pluggable backend interface** `MovementModelBackend` (`train` / `predict`) — the
+  seam a real on-device small model drops into later, with a `defaultMovementBackends()`
+  registry + `resolveMovementBackend(id)` and a documented `mlx` seam.
+- **Deterministic reference backend** `DeterministicMovementBackend`: learns a
+  frequency table `contextKey → action distribution`; exact-context hits return the
+  modal action (repeat objective), misses fall back to the most feature-similar
+  learned context via Jaccard overlap (generalize objective). Fully deterministic
+  (ties broken by first-seen order) so cloud/CI runs are reproducible.
+- **Dataset builders** `buildMovementDataset(trajectories)` (recovers gesture/target/
+  direction from action metadata) and `buildMovementDatasetFromReplay(events)` — the
+  capture→dataset seam wired to the existing `TrajectorySpan` / `ReplayTimelineEvent`
+  schemas.
+- **Rollout** `rolloutMovements(...)` (self-feeding replay) and **generalization eval
+  harness** `evaluateMovementModel(...)` (accuracy + tool-accuracy + separate
+  generalized-prediction quality on held-out related trajectories).
+- Exported all of it from the barrel `src/index.ts`.
+- **Synthetic event-stream generator** in the tests stands in for real OS capture
+  (unavailable in the cloud), validating the full capture→dataset→train→infer→eval
+  loop end-to-end.
+
+**Test results:** new `src/training/movement-model.test.ts` **14/14** ✅.
+`npm run typecheck:src` CLEAN (exit 0) ✅. `npm run build` ✅ (5 files, 547 kB).
+Honest limitation surfaced & encoded in a test: a stateless policy can't self-feed
+a rollout across steps with *distinct* observations — so "repeat" is demonstrated by
+per-recorded-context prediction, and rollout is tested on a stable-observation flow.
+
+**Pre-existing flakiness (NOT caused by this change):** the full `npm test` shows
+3–4 *non-deterministic* failures in `operator-runtime.test.ts` (background-task
+recovery), `app.test.ts`, and `server.test.ts` — all reproducible **with my changes
+stashed**, varying run-to-run (3 vs 4 failures). Root cause: `BackgroundTaskStore`
+reconciliation reads a shell-written state file mid-write → `SyntaxError: Expected
+',' or '}' … in JSON` from `readJsonFile`. These use real `spawn`/`python3`/`date`
+and are timing-sensitive in this sandbox. Logged as a new ROADMAP item. My diff is
+isolated and additive; pushed to the designated feature branch.
+
+**New idea:** a **movement-model backend conformance test kit** — a shared suite any
+future backend (mock or real MLX) must pass (deterministic repeat on seen contexts,
+non-trivial generalization on held-out related trajectories, no-op on unrelated
+input), so a new backend is validated against the *contract* rather than ad-hoc,
+and the deterministic backend becomes the executable spec for the real one.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
