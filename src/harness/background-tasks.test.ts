@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -369,5 +370,34 @@ describe("BackgroundTaskExecutionService", () => {
     await expect(fs.readFile(path.join(rootDir, task.execution.launchScript), "utf8")).resolves.toContain("bash -lc");
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
+  });
+
+  it("writes a valid JSON state file when the command contains single quotes", async () => {
+    // Regression: the launch script serializes the task command into a JSON
+    // state payload and reconstructs it through a single-quoted shell argument.
+    // A broken shell-quote escape used to insert a spurious `"` before every
+    // embedded single quote, prematurely terminating the JSON string and
+    // corrupting the state file. Run the real launch script synchronously and
+    // assert the persisted state parses back to the exact command.
+    const rootDir = await makeTempDir();
+    const filePath = path.join(rootDir, "background-tasks.json");
+    const command = "printf 'hello '\\''quoted'\\'' world\\n'";
+    const store = new FileBackgroundTaskStore(
+      filePath,
+      (script, _args, options) => {
+        // Run the launch script to completion so the state file is written
+        // before start() returns — makes the assertion deterministic.
+        execFileSync("bash", [script], { cwd: options.cwd, stdio: "ignore" });
+        return { pid: 4242, unref() {} };
+      },
+      () => false,
+    );
+
+    const task = await store.start({ title: "Quoted command", command, cwd: rootDir, kind: "task" });
+    const raw = await fs.readFile(path.join(rootDir, task.execution.stateFile), "utf8");
+    // Must be parseable — the bug produced invalid JSON here.
+    const state = JSON.parse(raw) as BackgroundTaskExecutionState;
+    expect(state.command).toBe(command);
+    expect(state.status).toBe("completed");
   });
 });

@@ -794,5 +794,9 @@ function renderStateWriterPython(status: BackgroundTaskExecutionState["status"])
 }
 
 function shellQuote(value: string): string {
-  return `'${value.replaceAll(`'`, `"'"'"'`)}'`;
+  // Wrap in single quotes and escape any embedded single quote as the POSIX
+  // idiom `'\''` (close-quote, escaped literal quote, reopen-quote). The prior
+  // implementation emitted `"'"'"'`, which reconstructs to an extra `"`
+  // character — corrupting JSON state payloads whose command contains a quote.
+  return `'${value.replaceAll(`'`, `'\\''`)}'`;
 }

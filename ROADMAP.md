@@ -40,6 +40,15 @@ unchecked items are queued. Keep this richer than you found it each run.
     fix residual test-only typings.
 - [ ] Add a `verify` npm script (`typecheck && build && test`) and have the
       engine run it as a pre-push self-check each cycle.
+- [ ] **Flake sentinel (run 9 idea):** run `vitest` N× in the pre-push check and
+      fail on ANY red run. Run 9 found a clean checkout was reliably red on this
+      environment (3 hard failures + flakes) while the log claimed 174/174 — a
+      single-run gate hid timing/ordering nondeterminism for runs 2–8.
+- [ ] **No-real-spawn test guard (run 9 idea):** lint/test that forbids real
+      `spawn`/detached child processes in `*.test.ts` unless an explicit
+      `allowRealSpawn` marker is present. Background-task tests should use the
+      `backgroundTaskSpawnProcess` seam (now on both the runtime and
+      `OperatorCliApp`) so subprocess timing never races hand-written state.
 - [x] Interim **source-only typecheck gate** — DONE run 7. `tsconfig.src.json`
       (excludes `**/*.test.ts`) + `typecheck:src` script; passes (exit 0). Next:
       have the engine run it as a per-run pre-push self-check.

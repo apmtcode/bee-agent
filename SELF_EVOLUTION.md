@@ -6,6 +6,60 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-11 (run 9) — Green + stabilize the suite: real `shellQuote` bug fix + kill 3 hard failures & 2 flakes
+
+**Audited:** Overall test-suite health as the pre-push gate. Despite run 8
+logging 174/174, a clean checkout on this environment was **reliably RED** —
+`npm test` failed **3 tests every run** (server.test "handles session…",
+app.test "supports session lifecycle…", operator-runtime "starts, syncs,
+recovers…"), plus two rarer load-dependent flakes. Environment/timing
+differences had exposed latent nondeterminism. Verified against a pristine
+`git stash` (3 hard failures every run; a 4th flaked ~1/5).
+
+**Root cause 1 — genuine production bug (`src/harness/background-tasks.ts`).**
+`shellQuote()` escaped an embedded single quote as `"'"'"'`, which the shell
+reconstructs to an **extra `"`** before every quote. The background-task launch
+script serializes the task command into a JSON state payload and rebuilds it
+through a single-quoted shell arg — so **any command containing a `'`** (e.g.
+`printf 'x'`) produced a **corrupt state file** (`"command":"printf "'…` →
+premature string termination → JSON parse error at read time). Fixed to the
+POSIX idiom `'\''`. Added a **deterministic regression test**
+(`background-tasks.test.ts`) that runs the real launch script synchronously with
+a quoted command and asserts a valid-JSON round-trip; confirmed it FAILS on the
+old escape and passes on the fix. This is a real on-device correctness fix, not
+just a test repair.
+
+**Root cause 2 — test determinism.** Several tests started **real detached
+subprocesses** (`sleep 5`, `printf …`, `tail -f`) whose async state-file writes
+raced the state the tests write by hand, making remote/platform diagnostics
+(missing-process → automatic breaker trip) nondeterministic (active/degraded/
+paused/mixed flapping). Added a `backgroundTaskSpawnProcess` +
+`backgroundTaskIsProcessRunning` DI seam to `OperatorCliApp` (mirrors the
+runtime's existing seam, forwarded only when provided → zero prod behaviour
+change) and injected deterministic no-op spawns into the affected tests
+(operator-runtime; server.test's main/drifting/breaker runtimes; app.test's two
+failing tests), driving task output/state explicitly.
+
+**Root cause 3 — timer fragility.** gateway-transport "healthy after pong" test
+used a 20 ms heartbeat timeout that spuriously expired under parallel-worker
+event-loop starvation. Raised the **healthy-path** timeouts to 2 s and the
+ping-wait to 100 ms (pong is still sent promptly, so the larger timeout never
+elapses — intent preserved). Left the dedicated *timeout-behaviour* test
+(`heartbeatTimeoutMs: 5`) untouched.
+
+**Test results:** suite went from reliably-red → **12/12 full-suite runs green**
+(175 tests, +1 regression). `npm run build` ✅. `npm run typecheck:src` exit 0.
+Full `tsc` unchanged at **125** (all in test files; no new debt).
+
+**New idea:** add a **flake sentinel** to the engine's pre-push self-check — run
+`vitest` N× (e.g. 5) and treat any red run as failure, so timing/ordering
+nondeterminism (which a single run hides, as it did through runs 2–8) is caught
+before it reaches `main`. Companion: a lint/test guard that forbids real
+`spawn`/detached child processes in `*.test.ts` unless an explicit
+`allowRealSpawn` marker is present, steering new tests to the injectable seam.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

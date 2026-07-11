@@ -407,7 +407,11 @@ describe("OperatorGatewayTransportConnection", () => {
     const firstTransport = new InMemoryGatewayTransport();
     const firstConnection = new OperatorGatewayTransportConnection(server, firstTransport, {
       heartbeatIntervalMs: 5,
-      heartbeatTimeoutMs: 20,
+      // Generous timeout: this test asserts the connection stays healthy, so the
+      // heartbeat must not spuriously expire when the event loop is starved by
+      // parallel test workers. The pong below is sent promptly, so a large
+      // timeout never actually elapses — it only removes the load-race.
+      heartbeatTimeoutMs: 2_000,
     });
 
     await firstConnection.receive({
@@ -450,7 +454,7 @@ describe("OperatorGatewayTransportConnection", () => {
     const secondTransport = new InMemoryGatewayTransport();
     const secondConnection = new OperatorGatewayTransportConnection(server, secondTransport, {
       heartbeatIntervalMs: 5,
-      heartbeatTimeoutMs: 20,
+      heartbeatTimeoutMs: 2_000,
     });
     await secondConnection.receive({
       type: "bootstrap",
@@ -467,7 +471,9 @@ describe("OperatorGatewayTransportConnection", () => {
     expect(secondBootstrap.result.events.some((event) => event.type === "run.progress" && (event.payload as { message?: string }).message === "Second progress")).toBe(true);
     expect(secondBootstrap.result.events.some((event) => event.type === "run.progress" && (event.payload as { message?: string }).message === "First progress")).toBe(false);
 
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    // Wait comfortably longer than the 5ms heartbeat interval so the ping is
+    // reliably present even when the event loop is contended under parallel runs.
+    await new Promise((resolve) => setTimeout(resolve, 100));
     const ping = secondTransport.sent.find((message) => message.type === "ping");
     if (!ping || ping.type !== "ping") {
       throw new Error("expected ping");
