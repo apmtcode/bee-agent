@@ -138,6 +138,35 @@ export interface ControlPlaneResultMap {
   "teams.teammates.get": NonNullable<Awaited<ReturnType<StandaloneOperatorRuntime["getTeammate"]>>>;
   "teams.teammates.update": NonNullable<Awaited<ReturnType<StandaloneOperatorRuntime["updateTeammateStatus"]>>>;
   "teams.teammates.message": Awaited<ReturnType<StandaloneOperatorRuntime["sendTeammateMessage"]>>;
+  // Local-movement learning subsystem (objective #2) — capture → dataset → replay → train.
+  // Capture: consent-gated recording of device/browser/OS movement.
+  "capture.device.record": Awaited<ReturnType<StandaloneOperatorRuntime["recordDeviceCapture"]>>;
+  "capture.browser.record": Awaited<ReturnType<StandaloneOperatorRuntime["recordBrowserCapture"]>>;
+  "capture.os.observe": Awaited<ReturnType<StandaloneOperatorRuntime["recordOsObservation"]>>;
+  "capture.consents.create": Awaited<ReturnType<StandaloneOperatorRuntime["createCaptureConsent"]>>;
+  "capture.consents.list": Awaited<ReturnType<StandaloneOperatorRuntime["listActiveCaptureConsents"]>>;
+  "capture.consents.revoke": NonNullable<Awaited<ReturnType<StandaloneOperatorRuntime["revokeCaptureConsent"]>>>;
+  // Trajectories + replays: the recorded, reviewable movement dataset surface.
+  "trajectories.list": Awaited<ReturnType<StandaloneOperatorRuntime["listTrajectories"]>>;
+  "trajectories.review": NonNullable<Awaited<ReturnType<StandaloneOperatorRuntime["reviewTrajectory"]>>>;
+  "trajectories.reviewed": Awaited<ReturnType<StandaloneOperatorRuntime["listReviewedTrajectories"]>>;
+  "replays.get": NonNullable<Awaited<ReturnType<StandaloneOperatorRuntime["getReplay"]>>>;
+  "replays.list": Awaited<ReturnType<StandaloneOperatorRuntime["listReplays"]>>;
+  // Training: post-train + inference job lifecycle over the exported dataset.
+  "training.exports.create": Awaited<ReturnType<StandaloneOperatorRuntime["createReviewedExport"]>>;
+  "training.jobs.create": Awaited<ReturnType<StandaloneOperatorRuntime["createTrainingJob"]>>;
+  "training.jobs.get": NonNullable<Awaited<ReturnType<StandaloneOperatorRuntime["getTrainingJob"]>>>;
+  "training.jobs.list": Awaited<ReturnType<StandaloneOperatorRuntime["listTrainingJobs"]>>;
+  "training.jobs.update": NonNullable<Awaited<ReturnType<StandaloneOperatorRuntime["updateTrainingJobStatus"]>>>;
+  "training.jobs.prepare": NonNullable<Awaited<ReturnType<StandaloneOperatorRuntime["prepareTrainingJob"]>>>;
+  "training.jobs.start": NonNullable<Awaited<ReturnType<StandaloneOperatorRuntime["startTrainingJob"]>>>;
+  "training.jobs.complete": NonNullable<Awaited<ReturnType<StandaloneOperatorRuntime["completeTrainingJob"]>>>;
+  "training.jobs.fail": NonNullable<Awaited<ReturnType<StandaloneOperatorRuntime["failTrainingJob"]>>>;
+  "training.jobs.sync": NonNullable<Awaited<ReturnType<StandaloneOperatorRuntime["syncTrainingJob"]>>>;
+  "training.jobs.plan": NonNullable<Awaited<ReturnType<StandaloneOperatorRuntime["getTrainingJobPlan"]>>>;
+  "training.jobs.script": NonNullable<Awaited<ReturnType<StandaloneOperatorRuntime["getTrainingJobLaunchScript"]>>>;
+  "training.jobs.state": NonNullable<Awaited<ReturnType<StandaloneOperatorRuntime["getTrainingJobExecutionState"]>>>;
+  "training.jobs.log": NonNullable<Awaited<ReturnType<StandaloneOperatorRuntime["getTrainingJobLog"]>>>;
 }
 
 /** Resolve the typed result for a method, defaulting to `unknown` when unmapped. */

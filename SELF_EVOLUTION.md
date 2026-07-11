@@ -6,6 +6,57 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-11 (run 9) — Movement-subsystem RPC map + enforcing coverage guard
+
+**Audited:** The `ControlPlaneResultMap` coverage gap. The dispatcher
+(`server.ts` `handle()`) has 117 `case "x.y":` labels; only 52 had typed map
+entries, so 65 RPCs silently returned `result: unknown`. Past runs rediscovered
+this drift by grepping each cycle — there was no test enforcing it.
+
+**Changed (additive):**
+- **Mapped the entire local-movement learning RPC surface (objective #2)** in
+  `src/control-plane/server.ts` — 25 new `ControlPlaneResultMap` entries, all
+  referencing runtime return types via `Awaited<ReturnType<…>>` (`NonNullable<>`
+  on the handlers that do `x ? ok(x) : notFound`):
+  - `capture.device.record / browser.record / os.observe / consents.create /
+    consents.list / consents.revoke` (6).
+  - `trajectories.list / review / reviewed`, `replays.get / list` (5) — the
+    recorded-movement dataset surface.
+  - `training.exports.create` + `training.jobs.{create,get,list,update,prepare,
+    start,complete,fail,sync,plan,script,state,log}` (14) — the post-train +
+    inference job lifecycle.
+- **New enforcing test** `src/control-plane/result-map-coverage.test.ts`
+  (the queued map-coverage guard): scrapes every dispatched `case` and every
+  `ControlPlaneResultMap` key from server.ts source, and asserts each dispatched
+  method is either mapped or in an explicit sorted `ALLOW_UNKNOWN` list (the 40
+  still-unmapped methods). Adding a new RPC now forces a deliberate choice —
+  map it or allow-list it — instead of silently degrading to `unknown`. Also
+  guards against stale/dead map + allow-list entries and keeps the allow-list
+  sorted & duplicate-free. 6 tests, all green.
+
+**Test results:** `typecheck:src` ✅ (all 25 new entries reference valid runtime
+methods). Build ✅. New coverage test ✅ 6/6. Unmapped RPCs **65 → 40**.
+
+**⚠️ Pre-existing flakiness found (NOT introduced here):** 3–4 tests in
+`operator-runtime.test.ts` / `server.test.ts` / `app.test.ts` fail
+non-deterministically — same code yields 4 failures one run, 3 the next. Root
+cause is a race in background-task state IO: `readState` does
+`readJsonFile(stateFile)` while a task writes it, and hits
+`SyntaxError: Expected ',' or '}' … in JSON` — a torn read despite
+`writeJsonAtomic`. My type-level diff cannot affect this. Queued as a roadmap
+item (atomic/isolated background-task state IO in tests). Because these
+pre-existing failures gate a `main` push per the run procedure, this run is
+pushed to the designated feature branch `claude/peaceful-dirac-5gyyb8`.
+
+**New idea:** generate a **typed client facade** `createControlPlaneClient(server)`
+straight off `ControlPlaneResultMap` — one method per mapped RPC with inferred
+params/results — and have the coverage test additionally assert the facade
+exposes exactly the mapped set. That turns "unmapped ⇒ unknown" into
+"unmapped ⇒ the call site doesn't exist," the strongest possible guard, and
+gives every consumer autocompletion over the movement + orchestration surface.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

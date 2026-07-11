@@ -25,9 +25,14 @@ unchecked items are queued. Keep this richer than you found it each run.
     status), fixed a real delivery-target bug (`formatDeliveryTargetLabel` covers
     `browser-push`, not just local/webhook), and loosened the status-line
     controller's `stdout` to `NodeJS.WritableStream`.
-  - [ ] Map-coverage test: assert every `case "x.y":` in `handle`'s switch has a
+  - [x] Map-coverage test: assert every `case "x.y":` in `handle`'s switch has a
     `ControlPlaneResultMap` entry or is explicitly allow-listed as `unknown`, so
     new untyped RPC methods are caught instead of silently `unknown`.
+    DONE run 9 (`result-map-coverage.test.ts`). Also mapped the entire
+    local-movement RPC surface (capture/trajectories/replays/training, 25
+    entries) — unmapped RPCs **65 → 40**; the 40 remain in `ALLOW_UNKNOWN`
+    (background.tasks.*, plugins.*, push.*, skills.*, subagents.*, memory.recall,
+    monitors.active, notifications.send, messages.get, runs.active/events/update).
 - [ ] Typed client facade `createControlPlaneClient(server)`: one method per
     mapped RPC with inferred params/results, so call sites read
     `client.cronList()` and unmapped methods are a compile error, not `unknown`.
@@ -70,7 +75,24 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Generalization eval harness: measure replay fidelity on held-out but
       related synthetic trajectories.
 
+## Test reliability
+- [ ] **Fix background-task state-IO flakiness** (found run 9). 3–4 tests in
+      `operator-runtime.test.ts` / `server.test.ts` / `app.test.ts` fail
+      non-deterministically: `BackgroundTaskExecutionService.readState` reads a
+      state file with `readJsonFile` while a task writes it and hits
+      `SyntaxError: … in JSON` — a torn read. `writeState` uses `writeJsonAtomic`
+      (temp+rename), so the tear is likely a real spawned process writing the
+      state file non-atomically, or a read that predates the rename. Make the
+      test harness use an isolated temp `rootDir` per test and/or have
+      `readState` tolerate/retry a mid-write parse. Until fixed, the run
+      procedure's `main`-push gate stays red and work lands on the feature branch.
+
 ## Innovation backlog
+- [ ] **Typed control-plane client facade** (run 9 idea): generate
+      `createControlPlaneClient(server)` off `ControlPlaneResultMap` — one method
+      per mapped RPC with inferred params/results — so unmapped RPCs become a
+      missing call site (compile error) rather than `unknown`, and extend the
+      coverage test to assert the facade exposes exactly the mapped set.
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in
       project health over time.
