@@ -62,13 +62,29 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
+      for a real on-device small model — DONE run 9 (`src/training/backend.ts`:
+      `TrainingBackend`, `AppleSiliconTrainingBackend`, `MockTrainingBackend`,
+      `TrainingBackendRegistry`). The mock's `simulateTraining` + `node -e` launch
+      command run the train step end-to-end under a bare node.
 - [ ] Synthetic event-stream generator to validate capture→dataset→replay
       round-trips without real OS input.
 - [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      related synthetic trajectories. Now unblocked — `MockTrainingBackend`
+      trains in-process and yields a deterministic fingerprint+weights signal to
+      score against (run 9).
+
+## Known regressions (fix soon)
+- [ ] **Background-task launch-script state JSON is unparseable in cloud/CI.**
+      `operator-runtime.test.ts` (background-task sync), `server.test.ts`, and
+      `app.test.ts` fail with a JSON `SyntaxError` from `readState` because the
+      real shell/`sed`-based launch-script state writer emits malformed JSON in
+      this environment. Pre-existing (confirmed via `git stash` on clean HEAD;
+      3 failed / 47 passed there too on 2026-07-11). Fix: make the state writer
+      robust (write via a small python/node helper instead of `sed`
+      interpolation, mirroring the training runner's `renderStateWriterPython`),
+      then re-green the 3 suites.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

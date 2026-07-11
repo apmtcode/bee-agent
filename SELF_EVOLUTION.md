@@ -6,6 +6,69 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-11 (run 9) — Pluggable training backends + deterministic mock (movement subsystem #2d)
+
+**Audited:** `src/training/` against standing objective #2 (local-movement
+learning) and the ROADMAP item *"Pluggable local-model backend interface for the
+training runner with a deterministic mock backend."* Found the training runner
+(`LocalAppleSiliconTrainingRunner`) hardcoded a single Apple-Silicon path — SFT
+via `mlx_lm.lora`, RL via `axolotl` — with the plan-shaping logic inlined in
+`buildPlan`. There was **no seam** to target a different local runtime and, more
+importantly, **no way to exercise the train step in the cloud/CI** (the emitted
+command needs python + a GPU), so objective #2(c/d) could never be validated
+end-to-end here.
+
+**Changed (additive, backward-compatible):**
+- **New `src/training/backend.ts`** — the pluggable seam:
+  - `TrainingBackend` interface (`id`, `supports(job)`, `buildPlan(job, exec)`).
+  - `AppleSiliconTrainingBackend` — the *exact* prior mlx/axolotl logic, extracted
+    verbatim so existing runner behaviour is byte-identical.
+  - `MockTrainingBackend implements InProcessTrainingBackend` — a
+    dependency-free, deterministic backend. Its `simulateTraining(job)` returns a
+    reproducible `TrainedModelArtifact` (sha256 fingerprint + normalized
+    per-signal weights derived from the reviewed dataset), and its `buildPlan`
+    emits a self-contained `node -e` launch command that actually writes the
+    artifact to disk with **nothing but node available** — so the full
+    capture→dataset→train→infer loop now runs in the cloud.
+  - `TrainingBackendRegistry` + `createDefaultTrainingBackendRegistry()` —
+    resolve by explicit id (must exist *and* support the job) or first supporting
+    backend; throws loudly on misconfiguration.
+- **`src/training/runner.ts`** — `LocalAppleSiliconTrainingRunner` now takes an
+  optional `TrainingBackend` (defaults to `AppleSiliconTrainingBackend`) and
+  delegates `buildPlan` to it. `TrainingJobPlan`/`LocalTrainingRuntime` moved to
+  `backend.ts` and **re-exported** from runner.js, so `job-store.ts`,
+  `operator-runtime.ts`, and the barrel keep compiling unchanged. `runtime` union
+  extended with `"mock"`; plan `targetPlatform` widened to include `"portable"`.
+- **`src/index.ts`** — exported the new backend surface.
+- **New `src/training/backend.test.ts`** (9 cases): apple-silicon parity,
+  mock determinism, generalization (different datasets → different fingerprints),
+  a spawn-the-real-command test proving the mock plan writes the artifact under a
+  bare `node`, and registry resolution/error paths.
+
+**Test results:** `npm run build` ✅. `npm run typecheck:src` ✅ (source stays
+green). Training module **19/19** (incl. 9 new). Runner's existing 2 tests still
+pass unchanged (proves the extraction is behaviour-preserving).
+
+**⚠️ Pre-existing blocker (NOT introduced this run):** the full `npm test` now
+shows **3 failures** — `operator-runtime.test.ts` (background-task sync),
+`server.test.ts`, `app.test.ts`. Confirmed pre-existing by `git stash` + re-run
+on clean `HEAD` (3 failed / 47 passed there too). Root cause is
+environment/date-dependent: those tests spawn the *real* background-task launch
+script, whose shell/`sed`-based state writer emits state JSON that
+`readState` then fails to parse in this cloud environment (a JSON `SyntaxError`,
+not an assertion mismatch). Runs ≤8 reported 174/174 on 2026-06-23; the tests
+regressed with the environment/clock, not with any source change. Logged to
+ROADMAP for a dedicated fix.
+
+**New idea:** now that a backend can *train in-process* (`simulateTraining`),
+add a **generalization eval harness** that trains the mock on one synthetic
+trajectory set and scores replay-fidelity on a *held-out but related* set —
+turning objective #2's "generalize to new but related movements" from aspiration
+into a measurable, CI-runnable metric. The mock's fingerprint+weights already
+give a deterministic signal to diff against.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
