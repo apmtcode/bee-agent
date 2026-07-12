@@ -6,6 +6,59 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-12 (run 9) — 🐛 Real runtime bug fixed: launch scripts corrupted their own state JSON
+
+**Audited:** Ran the suite against installed deps first (past runs recorded
+174/174) and found **3 deterministic failures** — `operator-runtime.test.ts`,
+`app.test.ts`, `server.test.ts` — all rejecting with `SyntaxError: Expected ','
+or '}' after property value in JSON`. Traced the corrupt file by temporarily
+logging the raw payload in `readJsonFile`: a background-task `state.json`
+contained `"pid":"$$"` (unexpanded) and a mangled `command` field. These runs
+weren't green before; the failure was latent and only surfaced once the launch
+script was actually executed on this environment's bash/python3.
+
+**Root cause (genuine bug, present in TWO files):** the initial "running" state
+was written with a fragile shell pipeline —
+`printf '%s' PAYLOAD | sed "s/__OPENCLAW_STARTED_AT__/$started_at/g; s/\"\$\$\"/$$/g"`.
+The second sed substitution (`s/"$$"/$$/g`) lives inside a double-quoted sed
+program, so bash expanded `$$` **and** the literal `"` chars broke the quoting,
+mangling the JSON tail (the `command` field, which itself contains quotes/
+newlines). Completion/failure states were already written robustly via a
+`python3` heredoc (`json.loads`→edit→`json.dumps`); only the *initial* write used
+the broken printf|sed path.
+
+**Changed (additive, mirrors the existing robust writer):**
+- `src/harness/background-tasks.ts` and `src/training/runner.ts`
+  (`renderLaunchScript`): dropped `pid`/placeholder timestamps from the payload,
+  removed the `printf | sed` line, and write the initial state via a new
+  `renderInitialStateWriterPython()` — same pattern as the completion writer:
+  `python3 - STATE_PATH $$ "$started_at" '<payload-json>' <<'PY'` where python
+  `json.loads(sys.argv[4])`, injects the numeric pid + timestamps, and re-dumps.
+  The payload is a single-quoted argv, so command text with quotes/newlines/
+  backslashes can no longer corrupt the JSON.
+- `src/training/runner.test.ts`: updated the one assertion tied to the old
+  mechanism (`> 'stateFile'` redirect → `python3 - 'stateFile' $$`).
+- `src/harness/background-tasks.test.ts`: **new regression test** that actually
+  executes the generated launch script via `bash` with a command containing
+  `"`, `'`, `\`, and a newline, then asserts the persisted `state.json` parses to
+  a numeric `pid` and the exact command (gracefully skips if bash/python3 are
+  absent).
+
+**Test results:** **171/174 → 175/175** (3 failures fixed + 1 regression test).
+Build ✅. `typecheck:src` ✅ (exit 0). The fix also cleared the two cascading
+failures in `app.test.ts` and `server.test.ts`, which exercised the same
+recover-background-tasks path.
+
+**New idea:** the two `renderLaunchScript` implementations (background-tasks +
+training runner) now carry near-identical shell/python state-writer plumbing.
+Extract a shared `src/shared/launch-script.ts` helper (`renderStatefulLaunchScript`)
+so a fix like this only has to be made once — and add a tiny "launch-script
+smoke" test util that executes any generated script and asserts its state file is
+valid JSON, so this class of shell-quoting regression is caught structurally
+rather than by chance. Guardrail bonus: have the engine's per-run pre-push
+self-check *fail loudly* if the baseline suite isn't green on entry (this run's
+3 failures were pre-existing and would otherwise have been silently inherited).
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

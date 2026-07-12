@@ -70,6 +70,21 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Generalization eval harness: measure replay fidelity on held-out but
       related synthetic trajectories.
 
+## Reliability / correctness
+- [x] **Launch-script state-JSON corruption** (run 9): the initial "running"
+      state in `renderLaunchScript` (both `src/harness/background-tasks.ts` and
+      `src/training/runner.ts`) was written with a `printf | sed` pipeline whose
+      `s/"$$"/$$/g` had broken shell quoting, corrupting the JSON for any command
+      containing quotes/newlines. Replaced with the robust `python3` writer used
+      for completion/failure; added an execute-the-script regression test.
+- [ ] Extract a shared `src/shared/launch-script.ts` (`renderStatefulLaunchScript`)
+      so the near-identical background-task + training shell/python state-writer
+      plumbing lives in one place — a fix like run 9's is then made once, not twice.
+- [ ] Launch-script smoke-test util: execute any generated script and assert its
+      state file parses as valid JSON, catching shell-quoting regressions
+      structurally. Also: have the engine's pre-push self-check fail loudly if the
+      baseline suite isn't green *on entry* (run 9 inherited 3 pre-existing fails).
+
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in

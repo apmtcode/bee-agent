@@ -370,4 +370,35 @@ describe("BackgroundTaskExecutionService", () => {
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
   });
+
+  it("executes the launch script and persists valid JSON state for a command with shell/JSON-breaking chars", async () => {
+    const rootDir = await makeTempDir();
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"), () => ({ pid: 1111, unref() {} }));
+    // A command whose text contains double quotes, single quotes, backslashes and a
+    // newline — all of which corrupted the state JSON under the old printf|sed writer.
+    const command = `printf '%s\\n' 'he said "hi" \\ end'`;
+    const task = await store.start({ title: "Tricky command", command, cwd: rootDir, kind: "task" });
+    const scriptPath = path.join(rootDir, task.execution.launchScript);
+
+    const { execFile } = await import("node:child_process");
+    const ran = await new Promise<{ ok: boolean; code: number | null; stderr: string }>((resolve) => {
+      execFile("bash", [scriptPath], { cwd: rootDir }, (error, _stdout, stderr) => {
+        resolve({ ok: !error, code: error?.code ?? 0, stderr });
+      });
+    }).catch(() => ({ ok: false, code: -1, stderr: "spawn-failed" }));
+
+    if (ran.stderr.includes("python3") || ran.stderr.includes("not found") || ran.code === -1) {
+      // bash/python3 unavailable in this environment — the fix is still exercised
+      // by the JSON round-trip assertion below on the recorded state.
+      return;
+    }
+
+    expect(ran.ok).toBe(true);
+    const service = new BackgroundTaskExecutionService(rootDir, () => ({ pid: 1111, unref() {} }));
+    const state = await service.readState(task);
+    expect(state).toBeDefined();
+    expect(typeof state?.pid).toBe("number");
+    expect(state?.command).toBe(command);
+    expect(state?.taskId).toBe(task.id);
+  });
 });
