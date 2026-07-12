@@ -6,6 +6,56 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-12 (run 9) — Fix background-task launch script: pid + atomic state writes (4 failing tests → 0)
+
+**Audited:** Ran the full suite on this machine as a baseline (previous runs
+optimized the `tsc` count but did not re-verify behavior). Found **4 failing
+tests** across `operator-runtime.test.ts`, `app.test.ts`, and `server.test.ts` —
+all in code that spawns real background-task processes.
+
+**Root cause (production bug in `src/harness/background-tasks.ts`,
+`renderLaunchScript`):** the launched bash wrote its initial "running" state file
+with two defects:
+1. **pid never substituted.** The payload had `"pid":"$$"` and a
+   `sed "…; s/"$$"/$$/g"` was meant to swap in the real pid. But bash word-splits
+   the unquoted `$$` inside the double-quoted sed arg, so the expression collapses
+   to `s/<pid>/<pid>/g` — a no-op. The state file kept the literal string
+   `"pid":"$$"`. Reconciliation then did `isProcessRunning("$$")` →
+   `Number.isFinite` false → every task was flagged **missing-process**, cascading
+   into `control=degraded` / "monitor is not running" / platform-breaker
+   miscounts. Verified by rendering and running the real script (`"pid":"$$"`).
+2. **non-atomic write.** State was written with `printf | sed > file`
+   (truncate-then-stream) while readers `JSON.parse` it concurrently, yielding
+   intermittent `SyntaxError: Expected ',' or '}'` (the operator-runtime failure).
+
+**Changed (additive, behavior-preserving):**
+- Rewrote the initial-state write to a small `python3` heredoc
+  (`renderInitialStateWriterPython`) that takes the pid/paths/command as `argv`
+  (injection-safe, no placeholder substitution), emits a **numeric** pid, and
+  writes **atomically** via a `.tmp` file + `os.replace`.
+- Made the completion/failure writers (`renderStateWriterPython`) atomic the same
+  way (tmp + `os.replace`).
+- Ran the user command in a subshell `( cd … && bash -lc … )` so its `cd` no
+  longer leaks into the script and break relative state paths for tasks that
+  actually complete.
+- `server.test.ts`: gave the platform-breaker runtime a **no-op
+  `backgroundTaskSpawnProcess`** so the breaker-escalation staging (failureCount
+  1→2→3) is driven only by the test's manual `writeState` calls, not by a real
+  `sleep 5` process asynchronously writing a competing state file and being
+  reconciled out of order. This removed the last flake.
+
+**Test results:** `npm test` **174/174 passing** (was 170/174). Previously-racy
+trio verified stable across 4 back-to-back runs (50/50 each). `npm run
+typecheck:src` clean (exit 0). `npm run build` ✅.
+
+**New idea (logged to ROADMAP):** Add a `verify` npm script and a per-run
+behavioral smoke gate — this run showed the engine had been ratcheting the
+typecheck count while a real runtime regression sat in `main` unnoticed because
+no run re-executed the suite. The engine should treat a red suite on `main` as
+the highest-priority finding every cycle.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

@@ -1018,6 +1018,11 @@ describe("OperatorControlPlaneServer", () => {
     const breakerRootDir = await makeTempDir();
     const breakerRuntime = new StandaloneOperatorRuntime({
       rootDir: breakerRootDir,
+      // Use a no-op spawn so the breaker-escalation staging below is driven
+      // solely by the manual writeState() calls. A real launched process would
+      // asynchronously write its own "running" state file and be reconciled as
+      // a failure out of order, making the failure-count progression flaky.
+      backgroundTaskSpawnProcess: () => ({ pid: 424242, unref() {} }),
       backgroundTaskIsProcessRunning: () => false,
     });
     const breakerServer = new OperatorControlPlaneServer({ runtime: breakerRuntime });

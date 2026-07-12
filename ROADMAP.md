@@ -45,6 +45,20 @@ unchecked items are queued. Keep this richer than you found it each run.
       have the engine run it as a per-run pre-push self-check.
 - [ ] Add a minimal CI workflow mirroring `verify` for human-opened PRs.
 
+## Reliability / correctness (behavioral regressions)
+- [x] **Fix background-task launch script** (run 9, 2026-07-12). `renderLaunchScript`
+      wrote `"pid":"$$"` (broken `sed` substitution → every task looked
+      missing-process) and wrote state non-atomically (truncated-JSON reads).
+      Rewrote via atomic `python3` state writers with a numeric pid; ran the user
+      command in a subshell so its `cd` can't break relative state paths. Fixed 4
+      failing tests → 174/174 green.
+- [ ] **Behavioral pre-push gate.** Runs 2–8 optimized the `tsc` count but never
+      re-ran the suite, so a real runtime regression sat in `main`. Add a `verify`
+      script (`typecheck:src && build && test`) and make each engine run treat a
+      red suite as its top-priority finding before any parity/movement work.
+- [ ] Audit remaining shell-generation code paths (training runner, replay
+      service) for the same non-atomic-write / unquoted-`$$` classes of bug.
+
 ## Capability parity (audit reference agents → port gaps)
 - [ ] Build a "capability inventory" generator: enumerate bee-agent's exported
       RPC/tool surface (`src/index.ts`) and diff it against `openclaw`,
