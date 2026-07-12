@@ -6,6 +6,64 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-12 (run 9) — 🧠 In-process movement model: train + infer + generalize (objective 2c/2d)
+
+**Audited:** The local-movement learning subsystem (`src/capture/` + `src/training/`)
+against objective #2's five pieces. Found the gap: capture → schema → dataset →
+replay all exist, but **train/infer did not** — `src/training/runner.ts` only
+emits shell *plans* that shell out to on-device `mlx`/`axolotl`, which cannot run
+or be tested in the cloud. So bee-agent had no runnable way to (c) post-train a
+model to repeat recorded movements or (d) generalize to related ones. This also
+matched three queued ROADMAP items (pluggable backend + mock, synthetic
+generator, generalization eval).
+
+**Changed (additive, new module `src/training/movement-model.ts`):**
+- **Pluggable backend interface** `MovementModelBackend` + `TrainedMovementModel`
+  (train / predictNext / generate / serialize) — the documented seam for a real
+  on-device small model.
+- **Deterministic in-process reference backend** `NgramMovementModelBackend`:
+  n-gram counts with **stupid-backoff**. A *seen* context predicts the exact
+  recorded next movement (objective **2c, repeat**); an *unseen* full context
+  backs off to shorter contexts and still predicts a related movement (objective
+  **2d, generalize**). No `Math.random`/`Date.now` — ties break by count desc
+  then token asc, so training + inference are byte-for-byte reproducible.
+- **Tokenizers** from both rich `TrajectoryAction`s (gesture/direction/target
+  metadata) and replay-timeline action events, plus
+  `sequencesFrom{Trajectories,ReplayEvents,ReplayManifests}` to feed the model
+  straight from the existing reviewed-export pipeline.
+- **Generalization eval harness** `evaluateMovementModel` — next-token replay
+  fidelity + a backoff-depth histogram (run on training seqs → repeat fidelity;
+  on held-out related seqs → generalization).
+- **Deterministic synthetic stream generator** `generateSyntheticMovementSequences`
+  (seeded LCG, template grammar with drop/duplicate perturbations) so the whole
+  capture→train→infer loop is validated with zero real OS input.
+- Exported all of the above from the `src/index.ts` barrel.
+
+**Test results:** new `movement-model.test.ts` — **12/12 pass** (repeat fidelity
+= 1.0 on a single trajectory; deterministic argmax + serialization; genuine
+backoff generalization: `edit→save` bigram fires for the unseen `["reopen",
+"edit"]` context; held-out perturbed accuracy > 0.5 ≫ chance with backoff
+confirmed used). `typecheck:src` ✅ CLEAN. Build ✅ (546 kB). Full suite **183/186**.
+
+**Pre-existing failure (NOT mine, documented):** `operator-runtime.test.ts >
+… background tasks` fails with `SyntaxError` in `readJsonFile` during
+`recoverBySession` — a malformed background-task **state file on disk** parsed
+during recovery. Confirmed present on clean HEAD with my changes stashed (HEAD
+also red: 4 failed), and the full-suite count fluctuates 3↔4 → cross-test
+interference on shared temp state. Isolated `operator-runtime.test.ts` fails 1/17
+deterministically. Filed in ROADMAP; out of scope for this focused diff. Because
+this repo's designated dev branch is `claude/peaceful-dirac-cdpc1r` and my own
+changes are green (source typecheck + build + 12 new tests), I push the focused,
+green movement-model work to that branch.
+
+**New idea:** add a `MovementPolicyBackend` that consumes the trained model to
+*drive* the existing `ReplayEngine` — closing the loop from "learn movements" to
+"perform new related movements" end-to-end. And a KL/perplexity metric alongside
+next-token accuracy so backend swaps (n-gram → real on-device model) are
+comparable on the same held-out synthetic eval set.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

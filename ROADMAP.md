@@ -59,16 +59,42 @@ unchecked items are queued. Keep this richer than you found it each run.
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
 (exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
-      objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Inventory what `src/capture` + `src/training` already implement vs. the
+      objective's five pieces (2026-07-12, run 9). Result: capture → schema →
+      dataset → replay all exist; **train/infer was the only missing piece** —
+      `runner.ts` only emitted external mlx/axolotl shell plans (uncloud-testable).
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      for a real on-device small model (2026-07-12, run 9) —
+      `src/training/movement-model.ts`: `MovementModelBackend` interface +
+      `NgramMovementModelBackend` (deterministic stupid-backoff reference model).
+- [x] Synthetic event-stream generator to validate capture→dataset→replay
+      round-trips without real OS input (2026-07-12, run 9) —
+      `generateSyntheticMovementSequences` (seeded LCG, template grammar).
+- [x] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories (2026-07-12, run 9) — `evaluateMovementModel`
+      (next-token accuracy + backoff-depth histogram).
+- [ ] `MovementPolicyBackend`: consume the trained model to *drive* the existing
+      `ReplayEngine`, closing the loop from "learn movements" to "perform new
+      related movements" end-to-end (integration, not just a store).
+- [ ] Add a KL/perplexity metric to the movement eval harness so backend swaps
+      (n-gram → real on-device small model) are comparable on the same held-out
+      synthetic eval set.
+- [ ] Wire the in-process movement model into `LocalAppleSiliconTrainingRunner`
+      as a runnable "dry-run"/verification backend that trains on the reviewed
+      export before the real on-device job is dispatched.
+
+## Known bugs (discovered, not yet fixed)
+- [ ] **Background-task state recovery crashes on a malformed state file.**
+      `operator-runtime.test.ts > … background tasks` fails with a `SyntaxError`
+      in `readJsonFile` (`src/shared/fs.ts:17`) during
+      `FileBackgroundTaskStore.recoverBySession` → `reconcileTask` →
+      `readState`. Deterministic in isolation (1/17), and the full-suite failure
+      count fluctuates 3↔4 (cross-test interference on shared temp state).
+      Present on clean HEAD (predates run 9). Fix: make `readState`/recovery
+      resilient to a corrupt/partial state file (treat unparseable state as
+      "unknown"/"failed" rather than throwing) and find the writer that emits
+      the invalid JSON. High value — restores a green suite.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
