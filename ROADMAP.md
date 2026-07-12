@@ -62,13 +62,34 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
-      deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
+- [x] Pluggable local-model backend interface with a deterministic mock backend
+      (so cloud/CI tests pass) and a documented seam for a real on-device small
+      model — DONE run 9 (`src/training/movement-model.ts`:
+      `MovementModelBackend` + `DeterministicMarkovMovementBackend` +
+      `MovementModelTrainer`; 16 tests). Repeats recorded movements (#2c) and
+      generalizes via backoff (#2d).
+- [x] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories — DONE run 9 (`MovementModelTrainer.evaluate`
+      = teacher-forced next-token accuracy, per-sequence + aggregate).
 - [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      round-trips without real OS input (a seeded, deterministic generator that
+      emits `DeviceCaptureInput`/`OsObservationInput` streams; run 9 tests use
+      hand-built trajectories — generalize that into a reusable generator).
+- [ ] Wire `MovementModelTrainer` into `LocalTrainingExporter` so a reviewed
+      export carries a pre-trained deterministic movement artifact as a
+      baseline/eval reference alongside the MLX/axolotl launch plan.
+- [ ] Real on-device backend: implement `MovementModelBackend` over a small
+      local model (MLX/GGUF) behind the same interface; keep the deterministic
+      mock as the CI/eval baseline.
+
+## Test hermeticity
+- [ ] Make the 3 sandbox-red tests hermetic: inject the mock
+      `SpawnBackgroundProcess` + `IsProcessRunning` seams (already supported by
+      `FileBackgroundTaskStore`) at the `StandaloneOperatorRuntime` /
+      `OperatorCliApp` construction sites so background-task liveness is
+      simulated deterministically. Currently `operator-runtime.test.ts`,
+      `app.test.ts`, and `server.test.ts` fail in the cloud because they spawn
+      real detached processes and probe `process.kill(-pid, 0)` (surfaced run 9).
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

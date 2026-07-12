@@ -6,6 +6,63 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-12 (run 9) — Movement policy model: pluggable backend + deterministic train→replay→generalize loop
+
+**Audited:** Standing objective #2 (local-movement learning subsystem). The
+capture→schema→dataset→replay pipeline (`src/capture/*`) and the training
+*launch* pipeline (`src/training/runner.ts` → MLX/axolotl launch scripts)
+already exist, but there was **no in-process, testable model** that actually
+(c) repeats recorded movements or (d) generalizes to related ones — the runner
+only emits shell commands for external tools that can't run in the cloud. This
+was the top gap for objective #2 and had sat unaddressed while runs 2–8 paid
+down typecheck debt.
+
+**Changed (additive):** new `src/training/movement-model.ts`:
+- `MovementModelBackend` — a **pluggable** interface (`train` / `predictNext` /
+  `generate`) so a real on-device small model (MLX/GGUF) can slot in unchanged.
+- `DeterministicMarkovMovementBackend` — a dependency-free order-k Markov model
+  with stupid-backoff. Trains counts for every context length 0..order; predicts
+  the longest *seen* context's argmax and backs off to shorter contexts for
+  novel prefixes (that backoff **is** the generalization). Fully deterministic:
+  argmax ties break on token order, no clocks/RNG — identical inputs give
+  identical artifacts. Serializes to plain JSON.
+- `MovementModelTrainer` facade: `train`, `replay` (repeat recorded movements —
+  #2c), `evaluate` (teacher-forced next-token fidelity on held-out sequences —
+  the generalization eval harness, #2d).
+- Tokenization bridges from the existing schema: `movementSequenceFromTrajectory`,
+  `movementSequenceFromReplayManifest`, `movementTokenFromReplayEvent` (transcript
+  events → undefined; obs/action → canonical `obs:src:summary` /
+  `action:tool:summary` tokens). Exported all via the barrel.
+
+**Test results:** new `movement-model.test.ts` — **16/16 passing**
+(exact-replay reproduction, determinism, tie-break, backoff generalization,
+order sensitivity, empty-model, maxSteps/end-token, JSON round-trip, fidelity
+eval, custom-backend injection, and end-to-end trajectory→trainer). Full suite
+**187 passing / 190** — the +16 are all mine, zero regressions.
+`typecheck:src` ✅ CLEAN. Build ✅.
+
+**⚠️ Pre-existing blocker (NOT caused by this run):** 3 tests fail *in this
+cloud sandbox* — `operator-runtime.test.ts` (bg-task recover), plus the
+downstream `app.test.ts` / `server.test.ts` platform-control assertions. They
+use the **real** `spawnProcess` to launch detached OS processes and assert
+process-group liveness (`process.kill(-pid, 0)`), which resolves differently in
+the sandbox (a spawned `tail -f` stays alive / group semantics differ), so
+`control` reads `degraded:...missing-process` instead of `active`. They were red
+on a pristine checkout *before* any change this run. Pushed to the designated
+feature branch per the branch workflow; documented here rather than papered over.
+
+**New idea:** make those 3 tests **hermetic** — inject the mock
+`SpawnBackgroundProcess` + `IsProcessRunning` seams (already supported by
+`FileBackgroundTaskStore`'s constructor) at the `StandaloneOperatorRuntime` /
+`OperatorCliApp` construction sites in tests, so background-task liveness is
+simulated deterministically instead of depending on real OS process semantics.
+That would turn the suite green everywhere and is the next obvious increment.
+Second idea: wire `MovementModelTrainer` into `LocalTrainingExporter` so a
+reviewed export can carry a pre-trained deterministic movement artifact as a
+baseline/eval reference alongside the MLX/axolotl launch plan.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
