@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { ensureParentDir, readJsonFile, writeJsonAtomic } from "../shared/fs.js";
+import { shellQuote } from "../shared/shell.js";
 import type { TrainingExecutionState } from "./execution-service.js";
 import type {
   LocalTrainingExecution,
@@ -222,8 +223,4 @@ function renderStateWriterPython(status: TrainingExecutionState["status"]): stri
     `state['error'] = None if '${status}' == 'completed' else 'training process exited non-zero'`,
     "state_path.write_text(json.dumps(state, indent=2) + '\\n')",
   ];
-}
-
-function shellQuote(value: string): string {
-  return `'${value.replaceAll(`'`, `'"'"'`)}'`;
 }

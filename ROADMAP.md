@@ -71,6 +71,23 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
       related synthetic trajectories.
 
 ## Innovation backlog
+- [x] **Canonical `shellQuote`** (2026-07-12, run 9) — de-duplicated into
+      `src/shared/shell.ts` with real-`bash` round-trip tests. Fixed a corruption
+      bug (6-char `"'"'"'` escape → malformed launch-script JSON for any
+      single-quoted command). See SELF_EVOLUTION run 9.
+- [x] **De-flaked the test suite** (2026-07-12, run 9) — replaced real detached
+      process spawns in `operator-runtime`/`app`/`server` tests with a
+      deterministic stub via the new `backgroundTaskSpawnProcess` seam. Suite is
+      now green 5/5 consecutive full runs (190/190).
+- [ ] **Flakiness sentinel**: a self-check/CI step that runs the suite N× and
+      fails if any test's pass/fail verdict flips across runs, catching
+      non-determinism at introduction. Pair with a shared `spawnStub` test helper
+      so background-task tests are hermetic by default.
+- [ ] **Race-free task-exit protocol**: the launch script should write a
+      terminal `state.json` (completed/failed) *atomically before* the OS process
+      is reaped, so `reconcile` never misclassifies a just-completed task as
+      `missing-process`. Removes the last real-process race and would let the
+      hermetic-stub tests exercise the real script deterministically.
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in
       project health over time.

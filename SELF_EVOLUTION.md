@@ -6,6 +6,59 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-12 (run 9) — Root-caused a corruption bug + de-flaked the whole suite (green 190/190)
+
+**Audited:** The self-verification gate itself. On a fresh `npm install`, `npm
+test` was **red and non-deterministic** — 3–4 failures that changed identity
+between runs (a JSON `SyntaxError` in one run, `control=degraded` assertions in
+the next). A broken/flaky gate silently defeats the whole "test before you push"
+procedure, so this was the highest-value target.
+
+**Root cause #1 (real product bug).** `shellQuote` in
+`src/harness/background-tasks.ts` escaped an embedded single quote as `"'"'"'`
+(6 chars) instead of the canonical POSIX `'"'"'` (5 chars). The 6-char form is
+*unbalanced* — any command containing a single quote (`printf 'x'`,
+`git commit -m 'msg'`, `bash -lc '…'`) produced a corrupt shell launch script,
+which wrote **malformed JSON** to the task's `state.json`. Reading it back threw
+`SyntaxError`, and the task was misreported as failed. Proven with a real-shell
+round-trip: buggy → `printf "'line-1"'`, correct → `printf 'line-1'`. The sibling
+copy in `src/training/runner.ts` already had the correct escape — the two had
+silently diverged.
+
+**Root cause #2 (test flakiness).** Several integration tests
+(`operator-runtime`, `app`, `server`) launched **real detached OS processes**
+(`sleep 5`, `tail -f`, `printf`) that raced the assertions and polluted timing
+under parallel load — deterministic in isolation, flaky in the full suite.
+
+**Changed (additive, reversible):**
+- New `src/shared/shell.ts` — single canonical `shellQuote` + `shellQuoteCommand`,
+  with `src/shared/shell.test.ts` (16 cases incl. real-`bash` round-trips of
+  quotes, newlines, metacharacters). Both `background-tasks.ts` and
+  `training/runner.ts` now import it, killing the divergence.
+- Added an injectable `backgroundTaskSpawnProcess` / `backgroundTaskIsProcessRunning`
+  seam to `OperatorCliAppOptions` (mirrors the existing `configHome` seam),
+  forwarded into the runtime. Lets CLI-level tests run deterministically.
+- Made the flaky tests hermetic: a stable-pid spawn stub + a
+  `isProcessRunning: pid => pid === stubPid` predicate, so runtime-launched tasks
+  stay "running" while tasks the tests explicitly re-state with a bogus pid still
+  exercise the missing-process/degradation path (intent preserved). The one test
+  asserting real launch output now writes that output explicitly, like its
+  monitor sibling already did.
+
+**Test results:** `typecheck:src` ✅ (exit 0). `npm run build` ✅. `npm test`
+✅ **190/190**, green **5/5 consecutive full runs** (was 174 tests w/ 3–4 flaky
+failures). Full `tsc --noEmit` debt unchanged at **125** (test-file-only;
+new files are clean). Pure reliability + one real correctness fix — no behaviour
+change to green paths.
+
+**New idea (logged to ROADMAP):** *Flakiness sentinel* — a CI/self-check step
+that runs the suite N× (e.g. 3–5) and fails if any test's pass/fail flips, so
+non-determinism is caught the moment it's introduced rather than rediscovered by
+a future run staring at a heisenbug. Bigger seam: a shared `spawnStub` test
+helper so future background-task tests are hermetic by default.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
