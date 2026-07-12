@@ -8,6 +8,21 @@ unchecked items are queued. Keep this richer than you found it each run.
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`
       (2026-06-22).
+- [x] **Fix background-task launch-script quoting bugs** (2026-07-12, run 9) —
+      corrupt state JSON from a malformed `shellQuote` single-quote escape;
+      `pid` written as a string instead of a number (broken sed pattern); and
+      non-atomic state writes. Suite went from 3–4 flaky failures to a stable
+      174/174 across 5 runs. Exposed a `backgroundTaskSpawnProcess` seam on
+      `OperatorCliApp` and made the simulation tests hermetic.
+- [ ] **Replace the hand-quoted launch script with a Python state writer.** The
+      running-state write is still `printf | sed > file` — a fragile shell/sed
+      quoting surface that hid three bugs (run 9). Python is already a hard
+      dependency for the completion write; move the running-state write to it,
+      passing task fields as `argv`, emitting typed atomic JSON. Add a unit test
+      that renders + executes `renderLaunchScript` and asserts the on-disk state
+      is valid JSON with a numeric pid and a command containing `'"$`+newline
+      round-trips — catching quoting bugs at authoring time, not via flaky
+      integration tests.
 - [ ] **Pay down typecheck debt** (surfaced by the `typecheck` script). Full
       `tsc --noEmit` count was **397** on 2026-06-22; now **125**. 🎯 ALL source
       (`src/**` non-test) files typecheck clean since run 7; remaining 125 errors

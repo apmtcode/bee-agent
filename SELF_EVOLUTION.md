@@ -6,6 +6,64 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-12 (run 9) — 🐛 Fix 3 background-task launch-script bugs; suite 171→174 green & stable
+
+**Audited:** The engine's own pre-push green gate. On a *clean* tree `npm test`
+was flaky — 3–4 of 174 tests failed nondeterministically across
+`background-tasks`-touching suites (`operator-runtime`, `control-plane/server`,
+`cli/app`). Run 8 logged "174/174", so this was environment-sensitive rot, not a
+regression. Root-caused three real production bugs in the background-task launch
+script (`src/harness/background-tasks.ts`), all masked in slower environments:
+
+1. **Corrupt state JSON from a broken `shellQuote`** (the headline bug). The
+   single-quote escape was `"'"'"'` (6 chars, stray leading `"`) instead of the
+   POSIX idiom `'"'"'` (5 chars). Any launch command containing a single quote
+   (e.g. `printf 'line-1\nline-2\n'`) had a literal `"` injected into its
+   shell-rendered payload, so the running-state file was **invalid JSON** →
+   `readState` threw `SyntaxError: Expected ',' or '}'` and crashed
+   `syncBackgroundTask` / `getExecutionState` / recovery. Reproduced the exact
+   corruption, fixed the escape, verified round-trip.
+2. **`pid` written as a string, not a number.** The running-state payload used
+   `pid: "$$"` with `sed s/"$$"/$$/g` to numify it — but bash expanded `$$` in
+   the sed *pattern* too, so it searched for the PID number (never present) and
+   left `"pid":"$$"`. Worse, my first fix attempt used an unescaped `"` in the
+   sed pattern, which closed bash's double-quote and left `"pid":"4600"` (a
+   *string*). A string pid fails `typeof pid === "number"` in
+   `executionService.stop()` → `"Background task … is not running"` on every
+   `/task-stop` / `/monitor-stop`. Fixed by a `__OPENCLAW_PID__` placeholder and
+   a **backslash-escaped** sed pattern (`\\"…\\"`) so the quotes survive bash and
+   sed strips them → `pid` is a JSON number.
+3. **Non-atomic state writes.** Both the bash running-state write (`> file`) and
+   the Python completion write (`write_text`) truncated in place, so a concurrent
+   reader could see a torn document. Made both write-temp-then-rename
+   (`mv -f` / `os.replace`) — atomic on POSIX.
+
+**Also (additive):** exposed a test seam on `OperatorCliApp` —
+`backgroundTaskSpawnProcess` / `backgroundTaskIsProcessRunning` forwarded to the
+runtime — and injected an inert spawn into the *simulation* tests (that manually
+drive execution state) so they no longer race a real child process. Left the one
+genuine integration test (`printf ok` real-output assertions) on the real spawn;
+the pid/JSON fixes made it deterministic.
+
+**Test results:** `npm test` **174/174**, green **5/5** consecutive runs (was
+3–4 failing before). The previously-flaky monitor test passed **6/6** in
+isolation. `npm run build` ✅. `npm run typecheck:src` ✅ (exit 0). Source-only
+diff is focused: `background-tasks.ts` (the 3 fixes) + `app.ts` (test seam) +
+3 test files (inert-spawn injection).
+
+**New idea:** the launch script is a fragile string of hand-quoted bash/sed/python
+— it hid three quoting bugs for months. Replace the ad-hoc
+`printf | sed > file` running-state write with a single Python writer (Python is
+*already* a hard dependency for the completion write) that takes task fields as
+`argv` and emits typed, atomic JSON — no shell/sed quoting surface at all. Add a
+unit test that renders `renderLaunchScript`, executes it against a stub command,
+and asserts the on-disk state file is valid JSON with a **numeric** pid and a
+command containing metacharacters (`'`, `"`, `$`, newline) round-trips intact —
+so this class of quoting bug is caught at authoring time, not by flaky
+integration tests.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

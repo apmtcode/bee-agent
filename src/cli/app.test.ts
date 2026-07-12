@@ -16,6 +16,15 @@ async function makeTempDir(): Promise<string> {
   return dir;
 }
 
+// Inert background-task spawn: returns a fake pid and never launches a real
+// worker process, so background-task assertions stay deterministic (no async
+// launch script racing the test's own state/output writes).
+let inertPidSeq = 40000;
+function inertSpawn(): { pid: number; unref(): void } {
+  inertPidSeq += 1;
+  return { pid: inertPidSeq, unref() {} };
+}
+
 afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })));
 });
@@ -801,7 +810,7 @@ describe("OperatorCliApp", () => {
 
   it("supports session lifecycle, transcript, approvals, pairing, config, and prompt commands", async () => {
     const rootDir = await makeTempDir();
-    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25", backgroundTaskSpawnProcess: inertSpawn });
     const firstSession = await app.runtime.startSession({ title: "first", cwd: rootDir, agentId: "operator-cli" });
     const secondSession = await app.runtime.startSession({ title: "second", cwd: rootDir, agentId: "operator-cli" });
 
