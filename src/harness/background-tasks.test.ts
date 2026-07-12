@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -369,5 +370,55 @@ describe("BackgroundTaskExecutionService", () => {
     await expect(fs.readFile(path.join(rootDir, task.execution.launchScript), "utf8")).resolves.toContain("bash -lc");
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
+  });
+
+  it("emits atomic state writes and quote-safe payloads in the launch script", async () => {
+    const rootDir = await makeTempDir();
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"), () => ({ pid: 1212, unref() {} }));
+    const task = await store.start({
+      title: "Quoted command",
+      command: "printf 'a-b'",
+      cwd: rootDir,
+    });
+    const script = await fs.readFile(path.join(rootDir, task.execution.launchScript), "utf8");
+
+    // Atomic write: render to a temp file then rename, so readers never see a
+    // half-written state file.
+    expect(script).toContain(`mv -f "$state_path.$$.tmp" "$state_path"`);
+    expect(script).toContain("os.replace(tmp_path, state_path)");
+
+    // Quote-safe single-quote escaping: the buggy `"'"'"'` sequence injected a
+    // stray double quote that corrupted the emitted JSON. The correct escape is
+    // `'"'"'` — never `"'` — so the quoted command survives verbatim.
+    expect(script).not.toContain(`printf "'`);
+    expect(script).toContain(`'"'"'`);
+  });
+
+  it("writes a valid, uncorrupted running state for single-quoted commands", async () => {
+    const rootDir = await makeTempDir();
+    // Run the generated launch script synchronously and leave its state file in
+    // place, so we can assert the emitted JSON is well-formed.
+    const store = new FileBackgroundTaskStore(
+      path.join(rootDir, "background-tasks.json"),
+      (scriptPath, _args, options) => {
+        execFileSync("bash", [scriptPath], { cwd: options.cwd, env: options.env, stdio: "ignore" });
+        return { pid: 3131, unref() {} };
+      },
+      () => true,
+    );
+    // A command containing single quotes is exactly what triggered the state
+    // corruption before the shellQuote fix.
+    const task = await store.start({
+      title: "Quoted command",
+      command: "printf 'x-y-z'",
+      cwd: rootDir,
+    });
+
+    // Previously this JSON.parse threw on torn/corrupt output.
+    const state = await store.executionService.readState(task);
+    expect(state).toBeDefined();
+    expect(state?.command).toBe("printf 'x-y-z'");
+    await expect(store.executionService.readOutput(task)).resolves.toContain("x-y-z");
+    await expect(store.sync(task.id)).resolves.toMatchObject({ id: task.id });
   });
 });

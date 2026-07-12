@@ -45,6 +45,26 @@ unchecked items are queued. Keep this richer than you found it each run.
       have the engine run it as a per-run pre-push self-check.
 - [ ] Add a minimal CI workflow mirroring `verify` for human-opened PRs.
 
+## Reliability / correctness
+- [x] **Fix `shellQuote` state-file corruption** (2026-07-12, run 9). Single-quote
+      escape used `"'"'"'` instead of POSIX `'"'"'`, corrupting launch-script
+      state JSON for any command/path containing a `'`. Also made the launch
+      scripts' state writes atomic (temp + `mv`/`os.replace`).
+- [x] **De-flake the background-task tests** (2026-07-12, run 9). They spawned
+      real detached shells and asserted on timing-dependent status. Added spawn/
+      liveness injection to `OperatorCliApp` and a test-support
+      `background-task-simulation` module (`createIdleBackgroundSpawn`,
+      `createReplayBackgroundSpawn`); suite now 176/176 stable.
+- [ ] **Static launch-script assertion / shell-lint.** Render each launch script
+      for a fixture set of quote-heavy commands/paths and assert the emitted
+      state payload is valid JSON (dry `bash` parse) and no non-atomic
+      `> state_path` redirects remain — for both `background-tasks.ts` and
+      `training/runner.ts`. Catches quoting/atomicity regressions without
+      spawning real work.
+- [ ] **Promote a first-class `SimulatedProcessBackend`.** Generalize the
+      test-support spawns into a supported deterministic process model so the
+      movement-subsystem replay/training runners can execute fully in-cloud.
+
 ## Capability parity (audit reference agents → port gaps)
 - [ ] Build a "capability inventory" generator: enumerate bee-agent's exported
       RPC/tool surface (`src/index.ts`) and diff it against `openclaw`,

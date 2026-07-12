@@ -6,6 +6,66 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-12 (run 9) — Fix shell-quoting state corruption + de-flake background-task tests
+
+**Audited:** The test suite health on a fresh checkout. Found the baseline was
+**red in this environment**: 4 pre-existing failures, all in the background-task
+subsystem (`operator-runtime.test`, `server.test`, and two `app.test` cases).
+Root-caused each rather than papering over.
+
+**Real correctness bug found + fixed (`src/harness/background-tasks.ts`):**
+`shellQuote()` escaped single quotes with the sequence `"'"'"'` instead of the
+correct POSIX `'"'"'`. The stray leading `"` injected literal double quotes into
+the launch script whenever a command/path contained a `'` — so a task like
+`printf 'line-1\nline-2\n'` produced a **corrupt state file**
+(`"command":"printf "'line-1...`, invalid JSON). The Python completion writer
+then crashed on `json.loads`, leaving the corrupt file, and every subsequent
+recovery/sync/health read threw `SyntaxError`, cascading into control-health and
+CLI failures. This is a latent shell-injection-adjacent defect for *any* real
+command containing a quote, not just tests. One-line fix; `training/runner.ts`
+already had the correct escape.
+
+**Robustness (both `background-tasks.ts` and `training/runner.ts`):** the launch
+scripts wrote their state file non-atomically (`> state_path` redirect / Python
+`write_text`), so a concurrent reader could observe a half-written file. Made
+both writers atomic — render to `"$state_path.$$.tmp"` then `mv -f`, and Python
+`os.replace(tmp, state_path)` — mirroring the TS `writeJsonAtomic` seam.
+
+**De-flaked the background-task tests deterministically.** The failures were
+races: these tests spawn *real detached shells* and assert on timing-dependent
+status (`getActiveBackgroundTask` reads store status without reconciling; control
+health degrades when a task's state file says `running` but the real pid is
+gone). Added `backgroundTaskSpawnProcess` + `backgroundTaskIsProcessRunning`
+options to `OperatorCliApp` (forwarded to the runtime; production unchanged) and
+a new test-support module `src/harness/background-task-simulation.ts` exporting
+`createIdleBackgroundSpawn` (launches nothing) and `createReplayBackgroundSpawn`
+(runs the real script synchronously for output, then drops the terminal state so
+the task reads as a live process). Injected these into the four flaky tests so
+they exercise the recovery/control logic instead of the OS scheduler.
+
+**Tests added:** two deterministic regressions in `background-tasks.test.ts` —
+one asserts the launch script emits atomic-write markers + quote-safe payloads
+(guards the `shellQuote` fix at authoring time), one runs the real script with a
+single-quoted command and asserts the state file parses and the command
+round-trips verbatim.
+
+**Test results:** full suite **176/176** (was 174 + 2 new), **stable across 4
+consecutive runs** (baseline: 4 failing, intermittently 3–5). `npm run build` ✅.
+`typecheck:src` ✅ (exit 0). Full `tsc` debt unchanged at **125** (all test-file,
+pre-existing). The shipped bundle is unchanged (532 kB) — the simulation module
+is test-only and tree-shaken out.
+
+**New idea (logged to ROADMAP):** *Static launch-script assertion / shell-lint.*
+The `shellQuote` bug survived because nothing validated the *generated* shell.
+Add a tiny check that renders each launch script for a fixture set of
+quote-heavy commands/paths and asserts (a) the emitted state payload is valid
+JSON after a dry `bash`-parse and (b) no `> state_path` non-atomic redirects
+remain — catching quoting/atomicity regressions in either the background-task or
+training runner without spawning real work. Bigger idea: a shared, first-class
+`SimulatedProcessBackend` (promoting the test-support spawns) so the movement
+subsystem's replay/training runners can run fully in-cloud against a
+deterministic process model.
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
