@@ -6,6 +6,69 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-12 (run 9) — 🧠 In-process movement model backend (objective #2d: train → infer, cloud-testable)
+
+**Audited:** The local-movement learning subsystem (`src/capture/` + `src/training/`)
+against objective #2's five pieces (capture → schema → dataset → replay →
+train/infer). Gap found: **the whole train/infer leg was un-runnable in the
+cloud.** `LocalAppleSiliconTrainingRunner` only *emits external command plans*
+(mlx `lora` / axolotl) that need a real GPU + OS — there was no in-process model
+that actually learns from a recorded movement dataset, so neither "repeat the
+recorded movements" nor "generalize to related movements" (objective #2d) could
+be exercised or tested here. The pluggable-backend + synthetic-generator +
+generalization-eval items were all still unchecked in ROADMAP.
+
+**Changed (additive) — new `src/training/movement-model.ts` (+ test):**
+- **Tokenizer** bridging the capture schema into discrete movement tokens:
+  `tokenizeAction` prefers structured gesture metadata
+  (`gesture`/`direction`/`target`, e.g. `device:tap:save-button`) and falls back
+  to a summary slug so every action yields a token; `tokenizeActions` (ts-sorted)
+  and `tokenizeTrajectory` (honors `review.redactedActions`).
+- **`MovementModelBackend` interface** — the pluggable seam: `id` +
+  `train(sequences, {order}) → MovementModel`. A real on-device small model can
+  implement the same interface and drop in.
+- **`MarkovMovementBackend`** — a deterministic variable-order (default 3)
+  Markov model with **Katz-style backoff**. It learns per-order successor counts
+  and appends an internal end-of-sequence sentinel so replays terminate naturally
+  at the recorded length. `predictNext` ranks successors (prob desc, token asc for
+  stable ties) using the longest matching context, **backing off** to shorter
+  contexts for unseen n-grams — that backoff *is* the generalization mechanism.
+  `generate` is greedy + deterministic (faithful replay); `toJSON` /
+  `deserializeMovementModel` persist a model as a replayable artifact.
+- **`evaluateMovementModel`** eval harness: teacher-forced top-1
+  `nextTokenAccuracy` + `replayFidelity` (longest-common-prefix ratio of greedy
+  rollout vs ground truth), per-sequence and aggregate.
+- **Synthetic event-stream generator** (in the test) drives capture→dataset→
+  train→infer with no real OS input, validating exact replay, natural
+  termination, unseen-context backoff generalization, JSON round-trip, and a
+  held-out generalization split.
+- Barrel-exported all public symbols from `src/index.ts`.
+
+**Test results:** `typecheck:src` ✅ CLEAN. Build ✅. New suite ✅ **14/14**
+(`movement-model.test.ts`). Full suite: **184 passed**, my module adds **zero**
+new failures.
+
+**⚠️ Pre-existing failures discovered (NOT caused by this run):** the suite is no
+longer 174/174 as run 8 logged — **3 tests fail on clean HEAD**, one per file in
+isolation, all in subsystems this run did not touch:
+`control-plane/server.test.ts:719` (a `toMatchObject` result-shape assertion),
+`cli/app.test.ts:906` (`control=active` session-control status), and
+`orchestrator/operator-runtime.test.ts:605` (a background-task `readJsonFile`
+**mid-write JSON race** — `Expected ',' or '}'`). A 4th intermittent failure
+(same operator-runtime race) appears only under full-suite load → flaky, not
+deterministic. Confirmed pre-existing by stashing this run's diff (clean HEAD:
+same 3 failures). Logged as the **top priority for run 10**. Because these are
+pre-existing and my diff is fully green, I pushed to the designated feature
+branch (per branch policy) rather than gating on unrelated debt.
+
+**New idea:** add an **online/continual movement learner** — wrap the backend so
+newly-approved trajectories update the counts incrementally (a `partialFit`
+seam), letting bee-agent keep learning from fresh recordings without a full
+retrain. Pairs naturally with a **backoff-confidence gate**: when `predictNext`
+only resolves at order 0 (pure unigram) the model is effectively guessing, so the
+replay engine should surface low confidence / request human confirmation rather
+than blindly executing a generalized movement on the real OS.
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

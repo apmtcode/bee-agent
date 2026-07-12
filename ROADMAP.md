@@ -59,16 +59,44 @@ unchecked items are queued. Keep this richer than you found it each run.
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
 (exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
-      objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
-      deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+- [x] Inventory what `src/capture` + `src/training` already implement vs. the
+      objective's five pieces (2026-07-12, run 9). Gap: the train/infer leg was
+      un-runnable in the cloud — the runner only emits external mlx/axolotl
+      command plans, no in-process learning model.
+- [x] Pluggable local-model backend interface for the training runner with a
+      deterministic backend (so cloud/CI tests pass) and a documented seam for a
+      real on-device small model — DONE run 9 (`src/training/movement-model.ts`:
+      `MovementModelBackend` interface + deterministic `MarkovMovementBackend`
+      with Katz backoff; a real small model implements the same interface).
+- [x] Synthetic event-stream generator to validate capture→dataset→replay
+      round-trips without real OS input — DONE run 9 (in `movement-model.test.ts`;
+      drives train→infer end-to-end with no OS).
+- [x] Generalization eval harness: measure replay fidelity + next-token accuracy
+      on held-out but related synthetic trajectories — DONE run 9
+      (`evaluateMovementModel`).
+- [ ] **Online/continual movement learner:** a `partialFit` seam so newly
+      approved trajectories update the model incrementally without a full retrain.
+- [ ] **Backoff-confidence gate:** when `predictNext` only resolves at order 0
+      (unigram) the model is guessing — have the replay engine surface low
+      confidence / require human confirmation before executing a generalized
+      movement on the real OS.
+- [ ] Wire the in-process `MovementModelBackend` into the training runner/exec
+      service as a selectable backend (`markov-backoff` for cloud/dry-run,
+      mlx/axolotl for real on-device), so the same job manifest can train either.
+
+## ⚠️ Regressions to fix (top priority — discovered run 9)
+The suite is no longer 174/174 (run 8's logged green). **3 tests fail on clean
+HEAD**, one per file in isolation, in subsystems run 9 did not touch:
+- [ ] `orchestrator/operator-runtime.test.ts:605` — background-task
+      `readJsonFile` reads a **partially-written** state file (`Expected ',' or
+      '}'`). Likely a non-atomic state write in `background-tasks.ts` racing the
+      reader. Also the intermittent 4th full-suite failure. Fix: ensure the state
+      writer uses `writeJsonAtomic` (temp file + rename).
+- [ ] `control-plane/server.test.ts:719` — a `toMatchObject` result-shape
+      assertion now sees more keys than expected; reconcile the expected shape
+      with the current handler output.
+- [ ] `cli/app.test.ts:906` — session-control status no longer renders
+      `control=active`; trace the platform/remote control status builder.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
