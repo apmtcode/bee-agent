@@ -6,6 +6,60 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-12 (run 9) — Fix two real background-task bugs + de-flake the suite (green, deterministic)
+
+**Audited:** Baseline `npm test`. Prior runs logged 174/174, but this run's
+baseline showed **3 deterministic failures** (operator-runtime, control-plane
+server, cli app) plus run-to-run flakiness — the verification gate was quietly
+broken. Traced all of it to the background-task launch path.
+
+**Root causes found (two genuine production bugs + one test-design flaw):**
+1. **Corrupt initial `state.json`** (`renderLaunchScript`). The initial execution
+   state was written by `printf '%s' <pre-serialized-json> | sed …`. Threading
+   JSON through the shell strips a level of backslashes, so any command
+   containing quotes/backslashes/newlines produced **invalid JSON**; `readState`
+   then threw a `SyntaxError` mid-recovery, cascading into the 3 failures.
+2. **Malformed `shellQuote`** (the deeper root cause). Its POSIX single-quote
+   escape was `"'"'"'` — wrong; the correct sequence is `'\''`. **Every** command
+   containing a single quote (e.g. `printf 'x'`) was mangled, both when executed
+   via `bash -lc` and when embedded in the persisted state. Verified the fix
+   round-trips a fuzz corpus (quotes, backslashes, newlines) through real bash.
+3. **Real-process test races.** Higher-level runtime tests forked **real detached
+   OS processes** whose async state writes raced the tests' hand-written state
+   files (the direct `background-tasks.test.ts` already stubs `spawn`; the
+   runtime/server/app tests forgot to).
+
+**Changed (additive, reversible):**
+- `src/harness/background-tasks.ts`: fixed `shellQuote` (`'\''`); replaced the
+  fragile `printf|sed` initial-state write with a Python `json.dumps` writer that
+  receives every dynamic field as a **separate argv value** (never re-parsed as
+  JSON) — mirrors the already-robust completion writer.
+- `src/shared/fs.ts`: `readJsonFile` now wraps parse errors with the file path
+  (`Failed to parse JSON file <path>: …`) — this is what pinpointed the bug.
+- `src/cli/app.ts`: added an optional `backgroundTaskSpawnProcess` to
+  `OperatorCliAppOptions`, threaded into the runtime (production unchanged; lets
+  tests inject a deterministic spawn — the seam already existed on the runtime).
+- Tests: injected a no-op `spawn` stub into the runtime/server/app tests that
+  start background tasks (server ×4, operator-runtime ×1, app ×1), matching the
+  established `() => ({ pid, unref() {} })` pattern.
+- **New regression test** (`background-tasks.test.ts`): runs the real launch
+  script for a command with quotes+backslashes and asserts the persisted state
+  is valid JSON and the command round-trips exactly.
+
+**Test results:** **175/175** (was 3–4 failing/flaky) — **deterministic across
+8+ consecutive full runs**. Build ✅. `typecheck:src` ✅. Full `tsc` unchanged at
+**125** (my test additions typecheck clean). Behaviour fixes only; no code
+removed.
+
+**New idea:** add a property/fuzz test for `shellQuote` (round-trip an arbitrary
+byte corpus through `printf %s` in bash) so this class of quoting bug is caught
+generatively, not just by one hand-picked string. Second idea: write the initial
+running-state synchronously from TS at `start()` (after obtaining the pid) to
+close the brief window where `state.json` is absent right after `start()` returns
+— the launch script would then only own the terminal write.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

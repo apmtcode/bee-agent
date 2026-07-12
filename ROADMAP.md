@@ -70,6 +70,26 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Generalization eval harness: measure replay fidelity on held-out but
       related synthetic trajectories.
 
+## Correctness / reliability
+- [x] **Fix corrupt background-task `state.json`** (run 9) — the initial state
+      write went through `printf|sed` and mangled JSON for commands with
+      quotes/backslashes/newlines. Rewrote it as an argv-based Python
+      `json.dumps` writer.
+- [x] **Fix malformed `shellQuote`** (run 9) — POSIX single-quote escape was
+      `"'"'"'`; corrected to `'\''`. Was silently mangling every command
+      containing a single quote when executed and when persisted.
+- [x] **De-flake the runtime/server/app tests** (run 9) — they forked real
+      detached OS processes that raced hand-written state files; injected a
+      deterministic no-op spawn via the existing `backgroundTaskSpawnProcess`
+      seam (added an app option for it). Suite is now 175/175 and deterministic.
+- [ ] **Property/fuzz test for `shellQuote`** — round-trip an arbitrary byte
+      corpus through `printf %s` in real bash to catch quoting regressions
+      generatively rather than with one hand-picked string.
+- [ ] **Synchronous initial state write** — write the running-state from TS at
+      `start()` (after obtaining the pid) so there is no window where
+      `state.json` is absent immediately after `start()` returns; the launch
+      script would then own only the terminal write.
+
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in

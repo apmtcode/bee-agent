@@ -9,6 +9,12 @@ import type { ReviewedExportManifest } from "../training/export-manifest.js";
 
 const tempDirs: string[] = [];
 
+// Deterministic spawn stub: keep background-task unit tests from forking real
+// OS processes that asynchronously write execution state and race the state
+// files these tests hand-write to simulate task lifecycles.
+let stubPid = 42000;
+const noopSpawn = () => ({ pid: (stubPid += 1), unref() {} });
+
 async function makeTempDir(): Promise<string> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "operator-runtime-"));
   tempDirs.push(dir);
@@ -531,6 +537,7 @@ describe("StandaloneOperatorRuntime", () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
       backgroundTaskIsProcessRunning: () => false,
+      backgroundTaskSpawnProcess: noopSpawn,
     });
     const session = await runtime.startSession({ title: "Tasks", agentId: "main" });
 

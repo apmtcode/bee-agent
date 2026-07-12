@@ -370,4 +370,40 @@ describe("BackgroundTaskExecutionService", () => {
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
   });
+
+  // Regression: the launch script previously built the initial state.json via
+  // `printf | sed`, which stripped a level of backslashes and corrupted the JSON
+  // for any command containing quotes, backslashes, or newlines. Run the real
+  // launch script end-to-end and assert the persisted state parses and the exact
+  // command round-trips.
+  it("persists valid state JSON for commands with quotes, backslashes, and newlines", async () => {
+    const rootDir = await makeTempDir();
+    const service = new BackgroundTaskExecutionService(rootDir);
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"));
+    const trickyCommand = `printf '%s' 'quote:" backslash:\\ seq:\\n end'`;
+    const task = await store.start({
+      title: "Tricky command",
+      command: trickyCommand,
+      cwd: rootDir,
+      kind: "task",
+    });
+
+    // The real detached process writes state.json (initial + completion). Poll
+    // until a terminal state lands, then assert the file is well-formed JSON.
+    const deadline = Date.now() + 5000;
+    let state: BackgroundTaskExecutionState | undefined;
+    while (Date.now() < deadline) {
+      state = await service.readState(task);
+      if (state && (state.status === "completed" || state.status === "failed")) {
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+
+    const raw = await fs.readFile(path.join(rootDir, task.execution.stateFile), "utf8");
+    expect(() => JSON.parse(raw)).not.toThrow();
+    expect(state).toBeDefined();
+    expect(state?.command).toBe(trickyCommand);
+    expect(state?.taskId).toBe(task.id);
+  });
 });
