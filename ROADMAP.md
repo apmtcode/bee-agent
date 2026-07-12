@@ -70,6 +70,26 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Generalization eval harness: measure replay fidelity on held-out but
       related synthetic trajectories.
 
+## Reliability / correctness (added run 9)
+- [x] **Fix background-task launch script** — DONE run 9. `shellQuote` used a
+      broken single-quote escape (`"'"'"'` → literal, corrupting any word with a
+      `'`) and the initial-state `sed` emitted unescaped quotes so the `"$$"` pid
+      placeholder was never replaced (pid left as the string `"$$"`). Both fixed;
+      cascaded into `missing-process` diagnostics and `degraded`/`mixed` control
+      states. Added an end-to-end launch-script test that runs real bash and
+      asserts valid-JSON state + numeric live pid (fails if either fix regresses).
+- [x] **De-race the background-task integration tests** — DONE run 9. Three
+      runtimes mocked `isProcessRunning` but let real bash spawn; added a matching
+      spawn mock so lifecycle is deterministic.
+- [ ] **Flake/determinism pre-push gate:** run `npm test` twice and require both
+      green with identical counts before pushing to `main`; record counts to the
+      metrics file below. Motivation: run 8 logged 174/174 but HEAD was red in the
+      run-9 environment — a single pass in one environment isn't trustworthy.
+- [ ] **Harness-consistency lint:** flag any test that injects a liveness probe
+      (`isProcessRunning`) without also injecting a spawn mock (or vice-versa) —
+      mixing a real subprocess with a mocked probe is inherently racy (the exact
+      bug found in run 9).
+
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in

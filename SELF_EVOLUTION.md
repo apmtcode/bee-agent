@@ -6,6 +6,60 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-12 (run 9) — 🐛 Fix background-task launcher: red tree (171/174) → green (175/175)
+
+**Audited:** Project health at HEAD. The tree was **deterministically RED** — 3
+tests failed on every run (`app.test.ts`, `server.test.ts`,
+`operator-runtime.test.ts`) despite run 8 logging 174/174. Root-caused two real
+source bugs in the background-task launch script plus a racy test harness.
+
+**Two genuine source bugs fixed in `src/harness/background-tasks.ts`:**
+1. **`shellQuote` used a broken escape.** It replaced each `'` with `"'"'"'`
+   (starts with `"`), but that `"` sits *inside the still-open* outer single
+   quote, so it was taken literally instead of closing the quote — mangling any
+   shell word containing a `'`. This corrupted the launch script's state-JSON
+   payload (→ `readState` threw `SyntaxError`, crashing recovery) and the
+   executed command. Fixed to the correct POSIX idiom `'"'"'` (close-quote,
+   quoted-quote, reopen).
+2. **The initial-state `sed` line emitted unescaped quotes.** The JS template
+   literal `s/\"\$\$\"/$$/g` collapsed `\"`→`"` and `\$`→`$`, so the generated
+   script contained `s/"$$"/$$/g`. Those bare `"` prematurely closed the shell's
+   double-quoted `sed` arg and `$$` expanded on *both* sides — the `"$$"` pid
+   placeholder was never replaced, leaving `pid` as the literal **string** `"$$"`
+   which fails every `isProcessRunning` check. Fixed by double-escaping in the JS
+   source (`s/\\"\\$\\$\\"/$$/g`) so the script gets literal `\"`/`\$`.
+
+**Cascade these caused:** corrupt state.json → recovery crash
+(`operator-runtime.test`); string pid → spurious `background task
+missing-process` diagnostics → remote control state reported `degraded`/`mixed`
+instead of `active` (`app.test`, `server.test`).
+
+**Test-harness inconsistency fixed (`server.test.ts`, `operator-runtime.test.ts`):**
+three integration runtimes injected `backgroundTaskIsProcessRunning: () => false`
+but let a **real** bash launch script run — racing a live "running" state file
+against the always-dead probe (a process that both exists per `ps` and is
+"dead" per the mock). Added a matching `backgroundTaskSpawnProcess` mock (exactly
+what the unit tests already do) so lifecycle is fully deterministic.
+
+**New protective test:** `background-tasks.test.ts` now has an end-to-end test
+that runs the **real** launch script (the only suite that still does) and asserts
+the recorded state is valid JSON with a **numeric** pid whose process group is
+live. Verified it fails (`pid` is `"string"`) when either source fix is reverted.
+
+**Test results:** **171/174 → 175/175** (green across 3 consecutive runs).
+`npm run build` ✅. `npm run typecheck:src` ✅ (0). Full `tsc` unchanged at **125**
+(all test-only, pre-existing). Focused, additive diff.
+
+**New idea:** the deeper failure is that run 8 recorded "174/174" yet HEAD was
+red here — the engine trusted a single pass in a different environment. Two
+guards: (a) a **flake/determinism gate** — run `npm test` twice pre-push and only
+push if both are green with identical counts, recording them to a metrics file
+(the queued self-check telemetry); (b) a **harness-consistency lint** — flag any
+test that injects `backgroundTaskIsProcessRunning`/`isProcessRunning` without also
+injecting a spawn mock (or vice-versa), since mixing a real subprocess with a
+mocked liveness probe is inherently racy. This exact class of flake just cost a
+full run to diagnose; catching it at authoring time is cheap.
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

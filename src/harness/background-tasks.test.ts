@@ -370,4 +370,54 @@ describe("BackgroundTaskExecutionService", () => {
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
   });
+
+  // End-to-end guard for the generated launch script. All other suites mock the
+  // spawn, so this is the only place the real shell script runs. It protects two
+  // fixes:
+  //   1. shellQuote must POSIX-escape embedded single quotes so a command
+  //      containing quotes produces a state.json that is valid JSON (readState
+  //      would otherwise throw on a parse error).
+  //   2. the initial-state `sed` substitution must replace the `"$$"` pid
+  //      placeholder with the real numeric pid, not leave the literal string
+  //      "$$" (which fails every downstream `isProcessRunning` check).
+  it("runs the real launch script and records a valid state with a numeric pid", async () => {
+    const rootDir = await makeTempDir();
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"));
+    // Single quotes exercise shellQuote; the trailing sleep keeps the process
+    // group alive long enough to observe a "running" state with a live pid.
+    const task = await store.start({
+      title: "Quoted long runner",
+      command: "printf 'go\\n'; sleep 30",
+      cwd: rootDir,
+      kind: "task",
+    });
+
+    // Wait for the detached launch script to write its initial state file.
+    // readState parses the JSON — a shellQuote regression makes this throw.
+    let state: BackgroundTaskExecutionState | undefined;
+    for (let attempt = 0; attempt < 200 && !state; attempt += 1) {
+      state = await store.executionService.readState(task);
+      if (!state) {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+    }
+
+    try {
+      expect(state).toBeDefined();
+      expect(state?.status).toBe("running");
+      // Regression guard for the sed pid substitution.
+      expect(typeof state?.pid).toBe("number");
+      expect(Number.isFinite(state?.pid ?? Number.NaN)).toBe(true);
+      // The live process group is detectable by the default liveness probe.
+      expect(store.executionService.isProcessRunning(state?.pid ?? -1)).toBe(true);
+    } finally {
+      if (typeof state?.pid === "number") {
+        try {
+          process.kill(-state.pid, "SIGKILL");
+        } catch {
+          // process group already gone — nothing to clean up
+        }
+      }
+    }
+  });
 });
