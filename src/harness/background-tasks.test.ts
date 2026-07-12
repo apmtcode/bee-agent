@@ -1,3 +1,4 @@
+import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -369,5 +370,30 @@ describe("BackgroundTaskExecutionService", () => {
     await expect(fs.readFile(path.join(rootDir, task.execution.launchScript), "utf8")).resolves.toContain("bash -lc");
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
+  });
+
+  it("emits a parseable initial state.json for commands with quotes, newlines, and $$", async () => {
+    const rootDir = await makeTempDir();
+    // A command that would corrupt a printf|sed-built JSON payload: double
+    // quotes, apostrophes, a literal `$$`, a backslash, and an embedded newline.
+    const command = [
+      `echo "a double-quote, an apostrophe ', a dollar $$ and a backslash \\\\"`,
+      `printf 'second\\n'`,
+    ].join("\n");
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"), () => ({ pid: 1, unref() {} }));
+    const task = await store.start({ title: "Hostile command", command, cwd: rootDir, kind: "task" });
+
+    // Execute the real generated launch script (mock spawn above never ran it).
+    const scriptPath = path.join(rootDir, task.execution.launchScript);
+    await new Promise<void>((resolve) => {
+      execFile("bash", [scriptPath], { cwd: rootDir }, () => resolve());
+    });
+
+    const raw = await fs.readFile(path.join(rootDir, task.execution.stateFile), "utf8");
+    const state = JSON.parse(raw) as BackgroundTaskExecutionState;
+    expect(state.command).toBe(command);
+    expect(state.taskId).toBe(task.id);
+    expect(typeof state.pid).toBe("number");
+    expect(String(state.pid)).not.toBe("$$");
   });
 });

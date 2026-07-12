@@ -6,6 +6,55 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-12 (run 9) — 🐞 Fix background-task state corruption (shellQuote + printf|sed) → suite green & stable
+
+**Audited:** Project health. The baseline suite was **consistently red** (3
+failing tests: `operator-runtime` "starts, syncs, recovers…", `app` "supports
+session lifecycle…", `server` "handles session…") — contradicting run 8's
+"174/174". Root-caused it to real bugs, not environment drift.
+
+**Two real production bugs found & fixed** (`src/harness/background-tasks.ts`,
+both in the background-task launch-script generator):
+1. **`shellQuote` mis-escaped single quotes.** It emitted `"'"'"'` for each `'`
+   instead of the canonical POSIX `'\''`. Any command containing an apostrophe
+   (e.g. the extremely common `printf 'x'`) was corrupted when embedded in the
+   generated `run.sh`, producing invalid shell **and** invalid JSON in the
+   task's `state.json`. → replaced with `value.replaceAll("'", "'\\''")`.
+2. **Initial `state.json` was built with `printf '%s' … | sed …`.** The `sed`
+   `"$$"`→pid substitution used `$` (a regex metachar) so it silently failed,
+   and the whole approach mangled JSON once the command held quotes/newlines. A
+   downstream `recoverBackgroundTasks` then threw `SyntaxError` parsing the
+   corrupt file (the observed failure). → the initial running-state is now
+   written by a small `python3 json.loads`/`json.dumps` step
+   (`renderInitialStateWriterPython`), mirroring the already-robust completion
+   writer; the static payload is passed as an argv-quoted string and pid/times
+   are injected safely. No new dependency (python3 was already required).
+
+**Test hardening (hermetic, deterministic):** three `server.test.ts` runtimes
+and one `operator-runtime.test.ts` runtime spawned **real detached processes**
+and relied on the *old crash* writing no usable state. With the script fixed,
+those real writes raced the tests' manual `writeState` (e.g. the breaker test's
+careful 1→mixed, 2→degraded, 3→paused progression). Injected a no-op
+`backgroundTaskSpawnProcess` on each so execution state is driven solely by
+`writeState`, matching the tests' design intent. Added a dedicated regression
+test in `background-tasks.test.ts` that **executes the real generated launch
+script** with a hostile command (double/single quotes, `$$`, backslash,
+newline) and asserts `state.json` parses and round-trips the command verbatim.
+
+**Test results:** full suite **175/175**, verified stable across **6
+consecutive full runs** and 10 isolated `server.test.ts` runs (was flaky
+1–2/8 mid-fix, now 0 failures). `npm run build` ✅. `npm run typecheck:src` ✅
+(exit 0, source stays green). Diff is +64/−5 across 4 files, no reference code
+touched.
+
+**New idea (queued in ROADMAP):** add a **`renderLaunchScript` golden/property
+test** — fuzz `task.command` over a corpus of shell-hostile strings, execute
+the script, and assert `state.json` always parses and preserves the command.
+More broadly, the `printf|sed` anti-pattern hid for many runs behind a
+consistently-red suite; a **pre-push "no-flake" gate** (run the suite N× and
+require identical green results) would have caught the masked flakiness the
+moment the crash was fixed, instead of after manual bisection.
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

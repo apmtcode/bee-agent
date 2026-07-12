@@ -70,6 +70,23 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Generalization eval harness: measure replay fidelity on held-out but
       related synthetic trajectories.
 
+## Reliability / correctness
+- [x] **Fix background-task `state.json` corruption** (2026-07-12, run 9).
+      `shellQuote` mis-escaped `'` (`"'"'"'` → correct `'\''`) and the initial
+      state was built via a fragile `printf|sed` pipeline; both corrupted the
+      file for commands with quotes/newlines, throwing on recovery. Now the
+      initial running-state is written with `python3 json.*` like the completion
+      writer. Suite went from consistently-red (3 fails) to stable 175/175.
+- [ ] **`renderLaunchScript` property/fuzz test:** run the generated script over
+      a corpus of shell-hostile `task.command` strings and assert `state.json`
+      always parses and preserves the command verbatim (extends the run-9
+      regression test from one case to many).
+- [ ] **Pre-push "no-flake" gate:** run the suite N× (e.g. 3) as part of the
+      engine's per-run self-check and require identical green results before
+      pushing to `main`. Run 9's masked flakiness only surfaced after the
+      launch-script crash was fixed; a repeat-run gate would catch this class
+      of nondeterminism automatically.
+
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in
