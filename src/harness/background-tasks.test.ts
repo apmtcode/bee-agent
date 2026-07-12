@@ -370,4 +370,51 @@ describe("BackgroundTaskExecutionService", () => {
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
   });
+
+  // Regression: the generated launch script writes state.json via the shell.
+  // A bug in shellQuote's single-quote escaping (`"'"'"'` instead of `'"'"'`)
+  // leaked a literal `"` into the command field, so any command containing a
+  // single quote produced INVALID JSON that later crashed readState/recovery.
+  // Every other test mocks the spawn, so only a real run catches this.
+  it("runs the real launch script and writes valid state JSON for quote-heavy commands", async () => {
+    for (const command of [
+      "printf 'line-1\nline-2\n'", // single quotes — the original corruption case
+      'echo "hi there"', // double quotes
+      "sh -c 'exit 4'", // single quotes + non-zero exit
+    ]) {
+      const rootDir = await makeTempDir();
+      // Create the record with a mock spawn so no process runs yet...
+      const store = new FileBackgroundTaskStore(
+        path.join(rootDir, "background-tasks.json"),
+        () => ({ pid: 1, unref() {} }),
+      );
+      const task = await store.start({ title: "quoting", command, cwd: rootDir });
+      // ...then drive the REAL launch script through the default spawn.
+      const service = new BackgroundTaskExecutionService(rootDir);
+      await service.writeArtifacts(task);
+      const { pid } = await service.launch(task);
+      expect(typeof pid).toBe("number");
+
+      // Poll for the shell to finish writing terminal state.
+      let state: BackgroundTaskExecutionState | undefined;
+      for (let attempt = 0; attempt < 40; attempt += 1) {
+        state = await service.readState(task); // must never throw on partial/invalid JSON
+        if (state && (state.status === "completed" || state.status === "failed")) {
+          break;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+
+      // The state file must be valid, parseable JSON with the command intact.
+      const raw = await fs.readFile(path.join(rootDir, task.execution.stateFile), "utf8");
+      const parsed = JSON.parse(raw) as BackgroundTaskExecutionState;
+      expect(parsed.command).toBe(command);
+      expect(typeof parsed.pid).toBe("number");
+      const expectedStatus = command.includes("exit 4") ? "failed" : "completed";
+      expect(state?.status).toBe(expectedStatus);
+      if (expectedStatus === "failed") {
+        expect(parsed.exitCode).toBe(4);
+      }
+    }
+  });
 });

@@ -6,6 +6,68 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-12 (run 9) — 🐛 Real bug: `shellQuote` corrupted background-task state JSON
+
+**Audited:** Project health first — a fresh `npm install && npm test` showed
+3–4 tests failing *nondeterministically* (the log claimed 174/174). Isolated the
+worst offender (`operator-runtime.test.ts` "starts, syncs, recovers…") to a
+deterministic `SyntaxError: Expected ',' or '}'` while reading a background task's
+`state.json`. Instrumented `readJsonFile` to dump the corrupt file: it was
+written by the **launch script** (the generated shell script), not the atomic
+writer — `"pid":"$$"` unexpanded and `"command":"printf "'…"'"` with a leaked
+double quote.
+
+**Root cause (genuine production bug):** `shellQuote()` in
+`src/harness/background-tasks.ts` escaped single quotes as `"'"'"'` (leading `"`)
+instead of the POSIX-correct `'"'"'`. Inside a single-quoted string the leading
+`"` is emitted literally *before* the quote-escape, injecting a stray `"` into
+every quoted value. So any task whose command (or cwd/path) contained a single
+quote — e.g. the ubiquitous `printf 'line-1\nline-2\n'` — wrote **invalid JSON**
+to `state.json`, which then crashed `readState`/recovery. The *identical* helper
+in `src/training/runner.ts` already had the correct sequence — a copy-paste
+divergence. Isolated a shell+python round-trip harness: old escaping passed 1/5
+command shapes, corrected escaping passes 5/5.
+
+**Changed (additive, source):**
+- **`src/harness/background-tasks.ts`** — corrected `shellQuote` (the fix) with a
+  comment explaining the escape. Also hardened `renderLaunchScript`: replaced the
+  fragile `printf … | sed "s/\"\$\$\"/$$/g"` initial-state write (which relied on
+  substituting into JSON) with a Python writer (`renderInitialStateWriterPython`)
+  that injects `pid`/`startedAt` into a parsed object — matching how the
+  completed/failed writers already work. No more string-munging of JSON.
+- **`src/cli/app.ts`** — `OperatorCliApp` now forwards optional
+  `backgroundTaskSpawnProcess` / `backgroundTaskIsProcessRunning` to its runtime
+  (a clean embedding/testing seam that was previously unreachable).
+
+**Changed (tests):**
+- **New `src/harness/background-task-test-spawn.ts`** — a shared deterministic
+  `createDeterministicBackgroundSpawn()` so tests can drive state/recovery
+  scenarios without the real launch script racing their manual `writeState`
+  calls (the second source of the flakiness). Wired into the three previously
+  flaky suites (`operator-runtime`, `server`, `app`).
+- **New regression test** in `background-tasks.test.ts` that executes the *real*
+  launch script (default spawn) for single-quote / double-quote / non-zero-exit
+  commands and asserts `state.json` is valid JSON with the command intact and the
+  right terminal status. Verified it FAILS on the reverted `shellQuote` and
+  passes on the fix — every other test mocks spawn, so only this catches it.
+
+**Test results:** full suite **174 → 175** (added the regression test), green
+**5×** consecutively (was 3–4 flaky failures per run before). `npm run build` ✅,
+`npm run typecheck:src` ✅ (exit 0). End-to-end: real launch scripts now produce
+valid JSON for `printf 'line-1\nline-2\n'`, `echo "hi there"`,
+`node -e "console.log('x')"`, and `sh -c 'exit 3'` (status/exit code correct).
+
+**New idea:** *Property-based launch-script fuzz test.* Generate random command
+strings mixing single quotes, double quotes, backslashes, `$`, backticks, and
+newlines; render + execute each launch script; assert the resulting `state.json`
+round-trips and `command` is preserved. shellQuote-class bugs are exactly the
+kind that a handful of hand-picked cases can miss but fuzzing reliably surfaces.
+Second idea: a tiny `assertValidShellQuote` unit that checks
+`bash -c "printf %s <quoted>" === input` for an adversarial corpus, shared by
+both `renderLaunchScript` implementations so they can never diverge again.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

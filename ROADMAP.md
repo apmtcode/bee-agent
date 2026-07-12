@@ -4,6 +4,12 @@ Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
 ## Foundations / DX
+- [x] **Fix `shellQuote` single-quote escaping bug** (2026-07-12, run 9). The
+      background-task launch script wrote invalid `state.json` for any command
+      containing a single quote (`"'"'"'` should be `'"'"'`), crashing recovery.
+      Also replaced the `sed`-on-JSON initial-state write with a Python writer,
+      added a real-launch-script regression test, and a shared deterministic
+      spawn helper to de-flake the affected suites (174→175, green 5×).
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`
@@ -80,6 +86,16 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Barrel-collision lint: scan `src/index.ts` re-exports for names exported
       from more than one module and flag them, so duplicate-identifier debt is
       caught at authoring time instead of accumulating silently.
+- [ ] **Property-based launch-script fuzz test** (proposed run 9): generate
+      random commands mixing single/double quotes, backslashes, `$`, backticks,
+      and newlines; render + run each launch script; assert `state.json`
+      round-trips with `command` preserved. Catches shellQuote-class bugs a few
+      hand-picked cases miss.
+- [ ] **Shared `assertValidShellQuote` + single `shellQuote`** (proposed run 9):
+      `background-tasks.ts` and `training/runner.ts` each define their own
+      `shellQuote` — one had the bug, one didn't. Extract one implementation into
+      `src/shared/` with an adversarial round-trip unit test so they can't
+      diverge again.
 - [ ] Per-module typecheck ratchet: record each module's current `tsc` error
       count to a baseline file and fail if a module regresses above it. Lets the
       engine pay debt down module-by-module without one green-gate blocking
