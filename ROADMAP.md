@@ -59,16 +59,39 @@ unchecked items are queued. Keep this richer than you found it each run.
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
 (exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
-      objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Inventory what `src/capture` + `src/training` already implement vs. the
+      objective's five pieces (run 9): capture/schema/replay ✅ in `src/capture`;
+      dataset export + job orchestration ✅ in `src/training`; **train/infer was
+      the gap** — `runner.ts` only emitted MLX/axolotl launch commands.
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
+      for a real on-device small model — DONE run 9 (`src/training/model-backend.ts`:
+      `MovementModelBackend` seam + deterministic `MarkovMovementBackend` n-gram
+      that repeats recorded movements and generalizes via backoff; 12 tests).
 - [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      round-trips without real OS input. (Partially seeded by run 9's dataset
+      builders; still want a generator that emits raw device/OS events.)
+- [ ] Generalization eval harness: measure replay fidelity (fraction of
+      next-token predictions correct) on held-out but related trajectories, so
+      "does it generalize?" becomes a tracked per-run metric and future real
+      backends can be scored against the run-9 Markov baseline.
+- [ ] Beam/temperature inference mode for the movement backend: propose *k*
+      candidate continuations for human approval (matches reviewed-export safety).
+- [ ] Wire the trained movement model into the replay engine so a saved snapshot
+      can drive `generate()`-based playback of a *new* related task, not just
+      re-emit a stored timeline.
+
+## Known pre-existing failures (not introduced by any single run — triage)
+- [ ] `app.test.ts` "supports session lifecycle…": expects `control=active` but
+      gets `control=deactivated` — timing/ordering sensitive.
+- [ ] `server.test.ts` "handles session…orchestration methods": a `result` object
+      now has 10 keys where the test asserts a 2-key subset shape.
+- [ ] `operator-runtime.test.ts` "starts, syncs, recovers…background tasks":
+      `readJsonFile` throws `SyntaxError` on a background-task state file — a
+      concurrent/partial-write JSON corruption in the recovery path. Highest-value
+      of the three (a real robustness bug, not just a brittle assertion): make
+      `BackgroundTaskExecutionService.readState` tolerate a truncated/partial
+      state file instead of throwing.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

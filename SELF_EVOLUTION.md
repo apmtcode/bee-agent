@@ -6,6 +6,58 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-12 (run 9) — 🧠 Pluggable local-model backend: movements can now be *trained* and *replayed by a model*
+
+**Audited:** The movement-learning subsystem (standing objective #2) against its
+five required pieces — capture → schema → dataset → replay → **train/infer**.
+`src/capture/` covers capture/schema/replay and `src/training/` had export +
+job orchestration, but `runner.ts` only *emits MLX/axolotl launch commands*:
+there was **no in-process model** that could actually (c) repeat recorded
+movements or (d) generalize to new-but-related ones, and nothing tested that
+capability. This is the exact roadmap item "Pluggable local-model backend
+interface … with a deterministic mock backend."
+
+**Changed (additive) — new `src/training/model-backend.ts`:**
+- **`MovementModelBackend`** interface (`train`/`restore`) — the pluggable seam a
+  real on-device small model (MLX/GGUF sequence model) would implement.
+- **`MarkovMovementBackend`** — a dependency-free, fully deterministic reference
+  backend: an order-k n-gram with stupid-backoff over movement tokens.
+  - **(c) Repeat:** a context seen in training resolves at full order to the exact
+    next token, so `generate()` from a learned prefix reproduces the trajectory.
+  - **(d) Generalize:** an unseen full-order context backs off to shorter suffixes
+    (ultimately the unigram distribution), yielding a plausible continuation drawn
+    from *related* trajectories instead of failing.
+  - Learns an end-of-sequence sentinel so generation stops naturally; deterministic
+    argmax (count desc, first-seen tie-break); JSON `serialize()`/`restore()`.
+- **`MovementModelSnapshot`** — serializable transition tables (per order),
+  round-trippable through `JSON.parse(JSON.stringify(...))`.
+- **Dataset bridges** `datasetFromReplays()` (from the reviewed-export
+  `ReplayManifest` format, excluding transcript dialogue) and
+  `datasetFromTrajectories()` (action stream, ts-ordered), plus a customizable
+  `tokenizeReplayEvent()`. Barrel-exported from `src/index.ts`.
+
+**Test results:** new `model-backend.test.ts` — **12/12 green**, proving train
+determinism, exact repeat, EOS prediction, generalization via backoff, unigram
+fallback, serialize/restore parity, sentinel suppression, maxSteps bound, and both
+dataset builders. `npm run build` ✅. `typecheck:src` ✅ (source stays clean).
+**Full suite 183/186**; the 3 failures are **pre-existing and flaky** — they fail
+identically on the clean pre-change tree (verified by stashing this run's diff:
+4 failed there) and live in `app.test.ts` (control=active timing),
+`server.test.ts` (orchestration result shape), and `operator-runtime.test.ts`
+(a background-task state-file JSON parse). None touch training/capture; this
+run introduced no failures. Logged as a roadmap item.
+
+**New idea:** add a **generalization eval harness** that, given held-out
+trajectories, measures replay fidelity = fraction of next-token predictions the
+trained model gets right (exact-repeat should score ~1.0; related held-out
+sequences give a real generalization number). That turns "does it generalize?"
+into a tracked metric per run and lets us compare future real backends against
+the Markov baseline. Second idea: a **beam/temperature inference mode** so the
+model can propose *k* candidate movement continuations for a human to approve,
+matching the reviewed-export safety posture.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
