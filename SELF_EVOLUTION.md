@@ -6,6 +6,70 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-12 (run 9) — Fix background-task launch-script state corruption; de-flake the suite (green in cloud)
+
+**Audited:** The actual `npm test` baseline in this cloud environment — **3 tests
+failing deterministically/flakily** (not the 174/174 the log claimed; prior runs
+ran on a different machine). All three exercise the real background-task launch
+script (`renderLaunchScript`) that spawns detached processes and reconciles their
+on-disk execution state.
+
+**Root causes found (two real production bugs + a test-timing flaw):**
+1. **Broken `shellQuote` in `src/harness/background-tasks.ts`** — it escaped a
+   single quote as `` "'"'"' `` (starts with `"`) instead of the canonical
+   `` '"'"' `` (as `runner.ts` correctly does). Any task command containing a
+   single quote (e.g. `printf 'line-1\nline-2\n'`) produced a **corrupt,
+   unparseable** state file → `readState` threw `SyntaxError` mid-reconcile.
+2. **Premature `$$` expansion in the `sed` running-state writer** — the source
+   `s/\"\$\$\"/$$/g` looks right, but the JS template literal eats the
+   backslashes, so the file contained `s/"$$"/$$/g`; bash then expands the `$$`
+   in the *pattern* too, so the substitution never matched and the pid stayed the
+   literal string `"$$"`. `isProcessRunning("$$")` → `false`, so healthy
+   `sleep 5` tasks were misclassified `missing-process` → platform control
+   flipped to `degraded`.
+3. **Test flakiness** — `server.test`/`operator-runtime.test` spawn *real*
+   processes while manually `writeState()`-ing tasks to stage health scenarios,
+   but the real launch script asynchronously writes its own "running" state,
+   racing the assertions (e.g. `failureCount` 2 vs 3, `control: active` vs
+   `degraded`).
+
+**Changed (additive):**
+- Replaced the fragile `printf | sed` running-state writer with a **python3
+  writer** (mirroring the existing completed/failed writers): it parses the JSON
+  payload and injects `pid`/`startedAt` from argv, so the pid is always a real
+  number and the JSON is always valid. Payload placeholders became `pid: 0`,
+  `startedAt: ""` (python overwrites them). Applied to **both**
+  `background-tasks.ts` and `training/runner.ts`.
+- Fixed `shellQuote` to the canonical `'"'"'` escape.
+- Made **all** launch-script state writes **atomic** (temp file + `os.replace` /
+  `mv -f`), so concurrent readers never see a torn file.
+- **De-flaked** `server.test.ts` (3 constructors) and `operator-runtime.test.ts`
+  (1) by injecting a deterministic `backgroundTaskSpawnProcess` mock (returns a
+  pid, never runs the launch script) so on-disk state is controlled solely by the
+  tests' explicit `writeState()` calls. Kept `app.test.ts` on the **real** spawn
+  — with the fixes it now passes deterministically and serves as the end-to-end
+  integration check of the launch script.
+- Added a focused regression test (`background-tasks.test.ts`) that runs the real
+  launch script and asserts a **numeric pid** + **single-quote-safe command
+  round-trip** in the on-disk running state (guards both bugs).
+- Updated `runner.test.ts`'s stale assertion (it checked the removed `> 'state'`
+  sed redirect) to assert the new `python3 - '<state>' $$ …` writer.
+
+**Test results:** `npm test` **175/175** (was 171/174), **green 3× in a row**;
+each affected file green 5×. `npm run build` ✅. `npm run typecheck:src` ✅ (exit
+0). Full `tsc` test-file debt unchanged (125) — untouched this run.
+
+**New idea:** add a tiny `scripts/verify.mjs` (or `verify` npm script) that runs
+`typecheck:src && build && test` and have the engine invoke it as the per-run
+pre-push gate — this run had to hand-run each; a single canonical gate makes the
+"don't push if red" rule mechanical. Bigger idea: a **launch-script lint** — a
+unit test that renders every launch script and asserts it is a syntactically
+valid bash script AND that its embedded JSON payloads parse, so shell/JSON
+templating regressions (exactly this class of bug) are caught at authoring time
+instead of only via flaky live-spawn integration tests.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

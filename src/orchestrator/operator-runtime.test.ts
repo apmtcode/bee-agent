@@ -9,6 +9,12 @@ import type { ReviewedExportManifest } from "../training/export-manifest.js";
 
 const tempDirs: string[] = [];
 
+// Deterministic stand-in for a spawned background process: it returns a pid but
+// never executes the launch script, so the on-disk execution state is controlled
+// solely by the test's explicit writeState() calls. Without this, the real launch
+// script asynchronously writes a "running" state that races health assertions.
+const mockBackgroundSpawn = (): { pid: number; unref(): void } => ({ pid: 424242, unref() {} });
+
 async function makeTempDir(): Promise<string> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "operator-runtime-"));
   tempDirs.push(dir);
@@ -531,6 +537,7 @@ describe("StandaloneOperatorRuntime", () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
       backgroundTaskIsProcessRunning: () => false,
+      backgroundTaskSpawnProcess: mockBackgroundSpawn,
     });
     const session = await runtime.startSession({ title: "Tasks", agentId: "main" });
 

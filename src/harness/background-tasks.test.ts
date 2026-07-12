@@ -370,4 +370,46 @@ describe("BackgroundTaskExecutionService", () => {
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
   });
+
+  // Regression: the generated launch script must write valid JSON execution state
+  // with a real numeric pid, and must not corrupt commands that contain single
+  // quotes. Previously the running state was produced by a fragile `printf | sed`
+  // pipeline whose `$$` pattern was pre-expanded by bash (leaving the literal
+  // string "$$" as the pid) and whose shellQuote helper mis-escaped single quotes
+  // (producing invalid JSON). This exercises the *real* launch script end-to-end.
+  it("writes valid running state with a numeric pid and preserves single-quoted commands", async () => {
+    const rootDir = await makeTempDir();
+    // No injected spawn -> the real launch script actually executes.
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"));
+    const task = await store.start({
+      title: "Quoted echo",
+      command: "printf '%s' 'line-1'",
+      cwd: rootDir,
+      kind: "task",
+    });
+
+    const statePath = path.join(rootDir, task.execution.stateFile);
+    let raw = "";
+    for (let attempt = 0; attempt < 200; attempt += 1) {
+      try {
+        const candidate = await fs.readFile(statePath, "utf8");
+        if (candidate.trim()) {
+          raw = candidate;
+          break;
+        }
+      } catch {
+        // launch script has not written state yet
+      }
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+
+    expect(raw.trim()).not.toBe("");
+    // Atomic writes guarantee the reader never sees a torn file, so this parses.
+    const state = JSON.parse(raw) as BackgroundTaskExecutionState;
+    expect(typeof state.pid).toBe("number");
+    expect(Number.isFinite(state.pid)).toBe(true);
+    expect(state.pid).toBeGreaterThan(0);
+    // The single-quoted command round-trips intact.
+    expect(state.command).toBe("printf '%s' 'line-1'");
+  });
 });

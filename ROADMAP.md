@@ -4,6 +4,20 @@ Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
 ## Foundations / DX
+- [x] **Suite is green in the cloud env** (2026-07-12, run 9). Baseline here was
+      3 failing background-task tests (two real launch-script bugs + test-timing
+      races), not the 174/174 the log claimed. Fixed `shellQuote`, replaced the
+      `sed` running-state writer with a python writer (numeric pid + valid JSON),
+      made all launch-script state writes atomic, and de-flaked the affected tests
+      with an injected spawn mock. Now 175/175, green repeatedly.
+- [ ] Add a `verify` npm script / `scripts/verify.mjs` = `typecheck:src && build
+      && test`, and have the engine run it as the per-run pre-push gate (this run
+      had to hand-run each step). Makes "don't push if red" mechanical.
+- [ ] **Launch-script lint** (new, run 9): a unit test that renders every
+      generated launch script (background-tasks + training runner) and asserts it
+      is valid bash *and* that its embedded JSON payloads parse. Catches
+      shell/JSON templating regressions (the exact class of bug fixed in run 9) at
+      authoring time instead of only via live-spawn integration tests.
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`
