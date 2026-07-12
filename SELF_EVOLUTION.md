@@ -6,6 +6,62 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-12 (run 9) — 🧠 Movement learning: pluggable local-model backend + trainable n-gram model
+
+**Audited:** The local-movement learning subsystem (`src/capture` + `src/training`).
+Prior runs had built capture → trajectory → replay → reviewed-export → a training
+*runner* that emits an external MLX/axolotl launch script. The gap: nothing could
+actually *train a model and do inference in-process*, so objective 2(c)/2(d)
+("post-train a local model to repeat recorded movements, and generalize to new but
+related movements") had no runnable, testable implementation and no pluggable
+backend seam. This was the top movement-subsystem item in the ROADMAP.
+
+**Changed (all additive, new files only + barrel exports):**
+- `src/training/movement-dataset.ts` — the replayable dataset schema. Turns
+  trajectory spans (or reviewed replay manifests) into per-trajectory token
+  *sequences*. Each `MovementToken` carries a canonical modeling `symbol`
+  (`action:<channel>:<verb>`, e.g. `action:mouse:click`) plus payload for replay.
+  `buildMovementDataset()` and `buildMovementDatasetFromReplays()` connect it to
+  the existing capture + export paths.
+- `src/training/model-backend.ts` — the **pluggable backend seam**:
+  `LocalMovementModelBackend` (`train`/`load`), `TrainedMovementModel`
+  (`predict`/`distribution`/`generate`/`serialize`), and a
+  `MovementModelBackendRegistry` so a real on-device model (MLX/LoRA of a small
+  local model) can register under its own id without changing callers.
+- `src/training/ngram-backend.ts` — the **default deterministic reference model**:
+  an n-gram Markov model with stupid-backoff. Trains fully in-process (no deps),
+  *reproduces* recorded movement sequences exactly via `generate()` when the full
+  context is known, and *generalizes* to unseen prefixes by backing off to shorter
+  context windows. Serialize/load round-trips losslessly (control-char-separated,
+  reversible context keys).
+- `src/training/synthetic-movements.ts` — deterministic (seeded LCG, no
+  `Math.random`) synthetic trajectory generator over a small UI-movement grammar,
+  so the capture→dataset→train→replay pipeline is validated against simulated event
+  streams (we have no real machine in the cloud).
+- Barrel exports for all four modules in `src/index.ts`.
+
+**Test results:** 3 new test files, **16 new tests, all passing**. Suite
+**174 → 187 passing**. Source typecheck (`typecheck:src`) ✅ clean. Build ✅.
+NOTE: 3 pre-existing failures remain (`app.test.ts` ×2, `server.test.ts` ×1,
+`operator-runtime.test.ts` ×1) — verified identical on a clean `git stash -u`
+tree, so **not a regression from this run**. Root cause is environmental: the
+background-task launch scripts shell out to `bash`/`python3`/`date` and produce
+malformed state JSON in this sandbox (`SyntaxError` in `background-tasks.readState`).
+Tracked as a new ROADMAP item. Because these are pre-existing and unrelated to
+this diff, and per the git guardrail to develop on the designated branch, this run
+pushes to `claude/peaceful-dirac-t8nqk5` (not `main`).
+
+**New idea:** a **generalization eval harness** that scores a trained movement
+model on held-out synthetic trajectories — not just "can it predict *something*"
+(this run's smoke test) but next-movement top-1 accuracy and full-sequence replay
+fidelity (edit distance to the recorded sequence) across a train/test split by
+seed. That gives the engine a real, trending capability metric for the movement
+subsystem instead of a boolean. Second idea: harden the background-task launch
+script's state JSON (quote/escape `$$` and timestamp substitution) so the
+pre-existing sandbox test failures clear — likely a small `renderLaunchScript` fix.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

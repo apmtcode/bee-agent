@@ -62,13 +62,32 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
-      deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+- [x] Pluggable local-model backend interface for the training runner with a
+      deterministic backend (so cloud/CI tests pass) and a documented seam for a
+      real on-device small model — DONE run 9. `model-backend.ts`
+      (`LocalMovementModelBackend`/`TrainedMovementModel` + registry),
+      `ngram-backend.ts` (deterministic n-gram Markov reference model that trains,
+      infers, generalizes via backoff, and serializes), `movement-dataset.ts`
+      (replayable token-sequence schema + builders from trajectories/replays).
+- [x] Synthetic event-stream generator to validate capture→dataset→replay
+      round-trips without real OS input — DONE run 9. `synthetic-movements.ts`
+      (seeded LCG over a UI-movement grammar; deterministic, no `Math.random`).
+- [ ] **Generalization eval harness** (next): score a trained movement model on
+      held-out synthetic trajectories — next-movement top-1 accuracy + full-sequence
+      replay fidelity (edit distance vs. recorded), train/test split by seed. Turns
+      the run-9 smoke test into a trending capability metric.
+- [ ] Wire the movement backend into the training runner/`job-store` so a
+      reviewed export can drive an in-process reference train + a real on-device
+      backend behind the same registry, selected by id.
+
+## Known failing tests (environmental)
+- [ ] `app.test.ts` (×2), `server.test.ts` (×1), `operator-runtime.test.ts` (×1)
+      fail in the cloud sandbox: the background-task launch script
+      (`renderLaunchScript`) shells out to `bash`/`python3`/`date` and writes
+      malformed state JSON (`$$`/timestamp substitution), so
+      `background-tasks.readState` throws `SyntaxError`. Pre-existing (verified on
+      a clean tree run 9), not a regression. Fix by quoting/escaping the state
+      payload substitution, or by making the state writer robust to it.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
