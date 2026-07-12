@@ -6,6 +6,63 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-12 (run 9) — 🐛 Fix `shellQuote` quote-corruption + flaky background-task tests
+
+**Audited:** Project health first. `npm test` on a fresh checkout was **not**
+174/174 as the run-8 log claimed — it failed 3–4 tests non-deterministically with
+`SyntaxError: Expected ',' or '}' after property value in JSON` thrown from
+`readJsonFile` while reconciling background-task state. Traced it end-to-end.
+
+**Two real, latent runtime bugs found (not test-only):**
+1. **`shellQuote` (src/harness/background-tasks.ts)** used the replacement
+   `"'"'"'` for embedded single quotes instead of the canonical POSIX `'\''`.
+   For any value containing a `'`, the shell expanded the result with a
+   **spurious `"` inserted**: `shellQuote("a'b")` → `'a"'"'"'b'` → `a"'b`. This
+   silently corrupted every command / cwd / path spliced into a background task's
+   launch script.
+2. **Initial-state templating** wrote `state.json` via a `printf '%s' <payload> |
+   sed …` pipeline. Combined with bug #1 it produced **unparseable JSON** for any
+   quoted command (crashing `readState`/`recoverBackgroundTasks`/`sync`), and the
+   `sed` pid substitution `s/"$$"/…/` **never matched** (a bare `$` is a BRE
+   end-of-line anchor), so `pid` stayed the literal string `"$$"` instead of a
+   number.
+
+**Changed (additive, `src/harness/background-tasks.ts`):**
+- Fixed `shellQuote` to the canonical `'\''` escaping.
+- Replaced the `printf|sed` initial-state write with a `python3` heredoc
+  (`renderInitialStateWriterPython`) that builds the JSON via `json.dumps` from
+  fields passed as **separate argv** — the same safe pattern the completion/failure
+  writers already use. No shell string ever gets spliced into JSON; the pid is a
+  real `int($$)`.
+
+**Flakiness fix (tests):** the `operator-runtime`/`server` integration tests
+constructed the runtime with `backgroundTaskIsProcessRunning: () => false` **but
+no spawn mock**, so they launched **real detached** launch scripts whose async
+state writes raced the tests' own `writeState`/reads. Injected a deterministic
+`backgroundTaskSpawnProcess: () => ({ pid, unref })` at those 4 constructor sites
+(matches the existing `background-tasks.test.ts` pattern).
+
+**New regression test** (`background-tasks.test.ts`): runs the *real* launch
+script to completion for a command containing a single quote (`printf '%s'
+"it's done"`) and asserts the state file is valid JSON, `pid` is numeric, the
+command round-trips **unmangled**, and the output contains the intended text.
+The pre-existing unit tests all mock `spawn`, so the launch script was never
+actually executed — that's the coverage hole that let these bugs persist.
+
+**Test results:** `typecheck:src` ✅ (exit 0). Build ✅. Tests ✅ **175/175**,
+and — the real win — **7 consecutive full-suite runs green** (previously 3–4
+failed per run). No source regressions.
+
+**New idea:** add a tiny `verify` npm script (`typecheck:src && build && test`)
+and, more importantly, a **launch-script golden/exec test harness** — a helper
+that renders `renderLaunchScript` for a matrix of adversarial commands (embedded
+`'`, `"`, `\`, `$`, newlines, `%`) and actually executes each, asserting the
+resulting state JSON parses and round-trips. Shell-string generation is a
+recurring footgun; a small adversarial exec-matrix would catch the next
+`shellQuote`-class bug at authoring time instead of via flaky JSON-parse crashes.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

@@ -4,6 +4,13 @@ Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
 ## Foundations / DX
+- [x] **Fix `shellQuote` quote-corruption + de-flake background-task tests**
+      (2026-07-12, run 9). `shellQuote` used `"'"'"'` instead of the canonical
+      `'\''`, injecting a spurious `"` into any quoted command/path; the initial
+      `state.json` was written via `printf|sed` (unparseable JSON for quoted
+      commands, and the pid was never substituted). Fixed both + added a real
+      launch-script exec regression test. Suite went from 3–4 flaky failures/run
+      to 7/7 green runs, 175/175.
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`
@@ -40,6 +47,12 @@ unchecked items are queued. Keep this richer than you found it each run.
     fix residual test-only typings.
 - [ ] Add a `verify` npm script (`typecheck && build && test`) and have the
       engine run it as a pre-push self-check each cycle.
+- [ ] **Launch-script adversarial exec-matrix test** (new, run 9): a harness that
+      renders `renderLaunchScript` for a matrix of nasty commands (embedded `'`,
+      `"`, `\`, `$`, newlines, `%`), executes each, and asserts the resulting
+      state JSON parses and the command round-trips unmangled. Shell-string
+      generation is a recurring footgun (see the run-9 `shellQuote` bug); this
+      would catch the next such regression at authoring time.
 - [x] Interim **source-only typecheck gate** — DONE run 7. `tsconfig.src.json`
       (excludes `**/*.test.ts`) + `typecheck:src` script; passes (exit 0). Next:
       have the engine run it as a per-run pre-push self-check.

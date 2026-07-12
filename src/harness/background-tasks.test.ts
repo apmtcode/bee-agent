@@ -1,7 +1,11 @@
+import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
+
+const execFileAsync = promisify(execFile);
 import {
   BackgroundTaskExecutionService,
   FileBackgroundTaskStore,
@@ -369,5 +373,37 @@ describe("BackgroundTaskExecutionService", () => {
     await expect(fs.readFile(path.join(rootDir, task.execution.launchScript), "utf8")).resolves.toContain("bash -lc");
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
+  });
+
+  it("persists a valid, parseable state file when the command contains quotes and JSON", async () => {
+    const rootDir = await makeTempDir();
+    const store = new FileBackgroundTaskStore(
+      path.join(rootDir, "background-tasks.json"),
+      () => ({ pid: 2222, unref() {} }),
+    );
+    // A command embedding a single quote — the exact input that corrupted the
+    // old shellQuote (spurious double quote on expansion) and the old printf|sed
+    // JSON templating (unparseable state file, and pid never substituted).
+    const command = `printf '%s' "it's done"`;
+    const task = await store.start({ title: "Emit quoted output", command, cwd: rootDir });
+    const service = new BackgroundTaskExecutionService(rootDir);
+    const scriptPath = path.join(rootDir, task.execution.launchScript);
+
+    // The store mock above never actually ran the launch script — run the real
+    // one to completion so both the initial and terminal state writes execute.
+    await execFileAsync("bash", [scriptPath], { cwd: rootDir });
+
+    // readState() parses via readJsonFile, so a corrupt state file throws here.
+    const state = await service.readState(task);
+    expect(state).toBeDefined();
+    expect(state?.status).toBe("completed");
+    expect(state?.exitCode).toBe(0);
+    // pid must be a real number (the old sed pattern left the literal "$$").
+    expect(typeof state?.pid).toBe("number");
+    // The command survives the round-trip through the launch script unmangled —
+    // no spurious characters injected by shell quoting.
+    expect(state?.command).toBe(command);
+    // The command actually executed with the intended quoting.
+    await expect(service.readOutput(task)).resolves.toContain("it's done");
   });
 });
