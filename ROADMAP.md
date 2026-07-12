@@ -59,18 +59,39 @@ unchecked items are queued. Keep this richer than you found it each run.
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
 (exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
-      objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
-      deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+- [x] Inventory what `src/capture` + `src/training` already implement vs. the
+      objective's five pieces — DONE run 9. Gap found: full *external* pipeline
+      existed (export → mlx/axolotl launch scripts → spawn) but **no in-process
+      model and no inference at all**. Filled below.
+- [x] Pluggable local-model backend interface with a deterministic in-process
+      backend — DONE run 9. `src/training/movement-model.ts`:
+      `MovementModelBackend` + `MovementModelBackendRegistry`;
+      `MarkovMovementBackend` (order-k + stupid-backoff: repeats recorded
+      movements AND generalizes) and `MemorizingMovementBackend` (exact-replay
+      baseline). Snapshot/restore serialization. Real on-device small model
+      registers behind the same seam next.
+- [x] Synthetic event-stream generator — DONE run 9.
+      `src/training/synthetic-movements.ts` (seeded mulberry32, no `Math.random`)
+      emits reproducible replay streams over a UI-motif grammar.
+- [x] Generalization eval harness — DONE run 9. `evaluateMovementModel()` slides
+      prefixes over held-out sequences → top-1/top-K accuracy + abstention; test
+      proves Markov > memorizing baseline on held-out related streams.
+- [ ] **Online movement assist:** feed a trained `MovementModel` into
+      `replay-service` so bee-agent proposes the next movement during a live
+      session (predict → confirm → act) — turn the offline model into an online
+      assist behind a consent/approval gate.
+- [ ] **Real on-device backend:** implement a `MovementModelBackend` that wraps a
+      small local model (e.g. tiny transformer via the mlx/axolotl seam) producing
+      a `TrainedMovementModel`, so `predictNext`/`generate` run against a learned
+      net instead of n-gram counts. Keep the Markov backend as the CI default.
 
 ## Innovation backlog
+- [ ] **Harden `readJsonFile` against the reconcile race** (blocks a green full
+      suite). `FileBackgroundTaskStore.reconcileTask` intermittently reads a state
+      file mid-write and `readJsonFile` throws on the partial JSON — surfaces as
+      flaky failures in `operator-runtime`/`server`/`app` tests (3–4 fail per run,
+      present on untouched HEAD). Fix: retry-on-parse-error, or route reads through
+      the atomic temp path, so the full suite becomes a deterministic green gate.
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in
       project health over time.

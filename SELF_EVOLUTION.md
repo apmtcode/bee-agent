@@ -6,6 +6,61 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-12 (run 9) — 🧠 In-process movement model: pluggable train + infer + generalize
+
+**Audited:** Standing objective #2(d) — the "post-train a local model to repeat
+recorded movements and generalize." Found `src/training/` had a full external
+pipeline (exporter → reviewed-export manifest → `runner.ts` that emits mlx/axolotl
+*launch scripts* → execution-service that spawns them), but **no in-process model
+at all**: nothing that actually trains on the replay dataset, and *zero inference*
+— the "generalize to new but related movements" clause had no code. Also unmet:
+the roadmap's "pluggable local-model backend with a deterministic mock" and
+"synthetic event-stream generator."
+
+**Changed (additive, new files only — no existing code touched except the barrel):**
+- `src/training/movement-model.ts` — the missing train/infer core, dependency-free
+  and fully deterministic so it runs in the cloud:
+  - `buildMovementDataset(replays)` tokenizes `ReplayTimelineEvent[]` (actions, and
+    observations when asked) into normalized, comparable `MovementToken`s + a sorted
+    vocab — the replayable dataset format the objective calls for.
+  - `MovementModelBackend` **pluggable interface** + `MovementModelBackendRegistry`
+    (register/get/default/list). The real on-device small model registers behind
+    the same seam later.
+  - `MarkovMovementBackend` — order-k Markov chain with **stupid-backoff**: high-order
+    matches *repeat* recorded movements exactly; lower orders *generalize* to unseen
+    prefixes. `predictNext()` returns ranked, probability-normalized candidates;
+    `generate()` greedily rolls out movements; `snapshot()`/`restoreMovementModel()`
+    serialize a trained model with no retrain.
+  - `MemorizingMovementBackend` — exact-replay baseline (no backoff) as a control.
+  - `evaluateMovementModel()` — generalization eval harness: slides prefixes over
+    held-out sequences, reports top-1/top-K accuracy + abstention.
+- `src/training/synthetic-movements.ts` — seeded (`mulberry32`, no `Math.random`)
+  synthetic movement-stream generator over a small UI "grammar" of motifs, so the
+  capture→dataset→train→infer→eval loop is validated without a real OS.
+- `src/index.ts` — barrel exports for all the above.
+- Tests: `src/training/movement-model.test.ts` (13 cases) — tokenization, exact
+  repetition, backoff generalization, empty-model safety, determinism, snapshot
+  round-trip, registry, reproducible synthetic streams, and an end-to-end eval
+  asserting the Markov model **beats the memorizing baseline on held-out related
+  streams** (higher top-1, lower abstention).
+
+**Test results:** `typecheck:src` ✅ (source stays fully green). Build ✅ (tsdown,
+5 files). New suite ✅ **13/13**. Full suite: **184/187** — the 3 failures
+(`app.test.ts`, `server.test.ts`, `operator-runtime.test.ts`) are **pre-existing
+and flaky**, confirmed by stashing my changes and re-running the untouched HEAD
+(**3 failed / 171 passed** with zero of my code present); the count even varies
+3↔4 run-to-run. Root cause is a JSON-parse race in
+`FileBackgroundTaskStore.reconcileTask` reading a state file mid-write
+(`readJsonFile` throws on a partially-written file) — orthogonal to this run.
+My change is isolated and introduces **no regression**.
+
+**New idea (logged to ROADMAP):** Harden `readJsonFile` against the reconcile
+race — retry-on-parse-error or read-through the atomic temp path — to make the
+background-task suite deterministic and unblock a true green full-suite gate. And:
+feed a trained `MovementModel` into the `replay-service` so bee-agent can *propose*
+the next movement during a live session (predict → confirm → act), turning the
+learned model from an offline artifact into an online assist.
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
