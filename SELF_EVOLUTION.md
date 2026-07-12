@@ -6,6 +6,58 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-12 (run 9) — 🐛 Fix background-task state corruption + reconnect event-loss; suite 100% deterministic
+
+**Audited:** The test suite health. Contrary to run 8's "174/174", `npm test`
+was **failing/flaky** on a clean tree — 3 tests failed per run, with a
+non-deterministic `SyntaxError: … JSON at position 311` surfacing from
+`readJsonFile` during background-task reconciliation. Root-caused two genuine
+**production** bugs (not test artifacts):
+
+1. **Background-task state writer corrupted JSON for any command containing
+   quotes, and never substituted the pid** (`src/harness/background-tasks.ts`).
+   The launch script wrote the initial `running` state via a
+   `printf '%s' <payload> | sed 's/"$$"/$$/g' > state.json` pipeline. Captured
+   the actual on-disk file: `…"command":"printf "'line-1\nline-2\n"'"…` — the
+   `'"'"'` shell-quoting of a single-quoted command was mangled by the pipeline,
+   producing invalid JSON, and sed's `s/"$$"/…/` never matched (`$` is a sed
+   anchor), leaving `"pid":"$$"`. **Fix:** write the initial state via `python3`
+   (already required by the completion writer) from a shell-safe argv payload,
+   and make **both** the initial and completion writers **atomic**
+   (`tmp.write_text(...); tmp.replace(state_path)`), so a concurrent
+   `sync`/`getExecutionState` reader can never observe a torn document.
+
+2. **Reconnect cursor silently dropped events sharing a millisecond**
+   (`src/kernel/event-bus.ts`). Publishers stamp `ts: Date.now()`; the
+   replay/reconnect cursor filters `event.ts > afterTs`. Two events in the same
+   ms collide on the boundary, so a reconnecting gateway client lost the event
+   whose `ts` equalled its cursor (the `gateway-transport` "replays only missed
+   events" test flaked ~1/12). **Fix:** the event bus now enforces a **strictly
+   monotonic** `ts` (bump any non-increasing timestamp to `lastTs + 1`), turning
+   `ts` into a per-bus logical clock so `ts >` cursoring is exact. No API/wire
+   changes.
+
+**Also (DX seam):** `OperatorCliApp` now forwards `backgroundTaskSpawnProcess` /
+`backgroundTaskIsProcessRunning` to its runtime, so the CLI's background-task
+execution is injectable for deterministic testing (previously only the runtime
+constructor exposed this). Used it, plus spawn stubs in `server.test.ts` and
+`operator-runtime.test.ts`, to remove the artificial race where a test both
+spawned a **real** process and hand-wrote execution state (the real launch
+script wrote its own state concurrently, flaking failure-count / control-state
+assertions).
+
+**Test results:** build ✅, `typecheck:src` ✅ (clean). Full suite **176/176**
+(added 2 event-bus tests). Stability: previously-flaky files **0 failures / 30
+runs**; full suite **0 / 6 runs** (was ~4/20 before the fixes, 3 hard failures
+before any fix).
+
+**New idea:** add a **flake-detection gate** to the engine's pre-push
+self-check — run the suite N× (or `vitest --repeat`) and treat any nonzero
+variance as a blocker. Today's failures were invisible to a single-shot
+`npm test` on a lucky seed; a repeat-run gate would have caught the regression
+at authoring time. Cheap insurance given how much of this codebase relies on
+real subprocesses + filesystem state.
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

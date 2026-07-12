@@ -22,6 +22,17 @@ afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })));
 });
 
+// Deterministic background-task spawn stub: returns a fake detached child
+// without launching a real OS process. Tests that hand-write execution state
+// must not also spawn a real process — the real launch script writes its own
+// state concurrently and races the manual writeState calls, which makes
+// failure-count / status assertions flaky.
+let stubBackgroundPid = 40000;
+function stubBackgroundSpawn(): { pid: number; unref(): void } {
+  stubBackgroundPid += 1;
+  return { pid: stubBackgroundPid, unref() {} };
+}
+
 const exportManifest: ReviewedExportManifest = {
   version: 1,
   createdAt: "2026-01-01T00:00:00.000Z",
@@ -84,6 +95,7 @@ describe("OperatorControlPlaneServer", () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir,
       backgroundTaskIsProcessRunning: () => false,
+      backgroundTaskSpawnProcess: () => stubBackgroundSpawn(),
       delivery: new OperatorDeliveryService(rootDir, {
         sendBrowserPush: async () => {},
       }),
@@ -953,6 +965,7 @@ describe("OperatorControlPlaneServer", () => {
     const driftingRuntime = new StandaloneOperatorRuntime({
       rootDir: driftingRootDir,
       backgroundTaskIsProcessRunning: () => false,
+      backgroundTaskSpawnProcess: () => stubBackgroundSpawn(),
     });
     const driftingServer = new OperatorControlPlaneServer({ runtime: driftingRuntime });
     const driftingBootstrap = await driftingServer.handle({
@@ -1019,6 +1032,7 @@ describe("OperatorControlPlaneServer", () => {
     const breakerRuntime = new StandaloneOperatorRuntime({
       rootDir: breakerRootDir,
       backgroundTaskIsProcessRunning: () => false,
+      backgroundTaskSpawnProcess: () => stubBackgroundSpawn(),
     });
     const breakerServer = new OperatorControlPlaneServer({ runtime: breakerRuntime });
     const breakerOne = await breakerServer.handle({

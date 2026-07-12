@@ -70,6 +70,24 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Generalization eval harness: measure replay fidelity on held-out but
       related synthetic trajectories.
 
+## Reliability / correctness (found in the field)
+- [x] **Background-task state writer corruption** (2026-07-12, run 9). The
+      launch script's `printf|sed` initial-state writer produced invalid JSON for
+      any command containing single quotes and never substituted the pid; both
+      the initial and completion writers were also non-atomic. Rewrote the
+      initial write via python from a shell-safe argv payload and made both
+      writers atomic (temp file + `os.replace`).
+- [x] **Reconnect cursor dropped same-millisecond events** (2026-07-12, run 9).
+      The event bus now enforces a strictly monotonic `ts`, so the `ts > afterTs`
+      replay cursor is exact.
+- [ ] **Flake-detection pre-push gate** for the engine: run the suite N× (or
+      `vitest --repeat=N`) and block push on any variance. Run 9's failures were
+      invisible to a single-shot `npm test`; a repeat-run gate catches
+      subprocess/filesystem races at authoring time.
+- [ ] Consider a `seq`/monotonic counter field on `OperatorEvent` as the
+      canonical cursor (alongside `ts` for display), so ordering no longer piggybacks
+      on a logical-clock hack in `ts`. Lower priority now that `ts` is monotonic.
+
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in

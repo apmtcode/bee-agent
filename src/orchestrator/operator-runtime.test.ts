@@ -15,6 +15,15 @@ async function makeTempDir(): Promise<string> {
   return dir;
 }
 
+// Deterministic background-task launch stub: returns a fake detached child
+// without spawning a real OS process, so tests that hand-write execution state
+// are not raced by the real launch script writing its own state concurrently.
+let stubBackgroundPid = 60000;
+function stubBackgroundSpawn(): { pid: number; unref(): void } {
+  stubBackgroundPid += 1;
+  return { pid: stubBackgroundPid, unref() {} };
+}
+
 function buildHookCaptureCommand(outputFile: string): string {
   const script = [
     "import fs from 'node:fs';",
@@ -531,6 +540,7 @@ describe("StandaloneOperatorRuntime", () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
       backgroundTaskIsProcessRunning: () => false,
+      backgroundTaskSpawnProcess: () => stubBackgroundSpawn(),
     });
     const session = await runtime.startSession({ title: "Tasks", agentId: "main" });
 

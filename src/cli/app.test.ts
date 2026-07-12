@@ -20,6 +20,30 @@ afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })));
 });
 
+// Deterministic background-task launch stub: returns a fake detached child
+// without spawning a real OS process, paired with a liveness probe that reports
+// only the pids this stub actually handed out as alive. Tests that start
+// background tasks but never write their own execution state would otherwise
+// race the real launch script (which writes state and may exit before
+// reconciliation), producing flaky control-state assertions. Sentinel pids the
+// tests invent to represent a dead process (e.g. 999999) are correctly reported
+// as not-running because the stub never issued them.
+function makeDeterministicBackgroundTasks(): {
+  backgroundTaskSpawnProcess: () => { pid: number; unref(): void };
+  backgroundTaskIsProcessRunning: (pid: number) => boolean;
+} {
+  const livePids = new Set<number>();
+  let nextPid = 50000;
+  return {
+    backgroundTaskSpawnProcess: () => {
+      nextPid += 1;
+      livePids.add(nextPid);
+      return { pid: nextPid, unref() {} };
+    },
+    backgroundTaskIsProcessRunning: (pid: number) => livePids.has(pid),
+  };
+}
+
 describe("parseSlashCommand", () => {
   it("parses supported slash commands", () => {
     expect(parseSlashCommand("/status")).toEqual({ kind: "status" });
@@ -801,7 +825,7 @@ describe("OperatorCliApp", () => {
 
   it("supports session lifecycle, transcript, approvals, pairing, config, and prompt commands", async () => {
     const rootDir = await makeTempDir();
-    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25", ...makeDeterministicBackgroundTasks() });
     const firstSession = await app.runtime.startSession({ title: "first", cwd: rootDir, agentId: "operator-cli" });
     const secondSession = await app.runtime.startSession({ title: "second", cwd: rootDir, agentId: "operator-cli" });
 
