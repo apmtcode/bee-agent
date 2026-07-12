@@ -20,6 +20,35 @@ afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
 });
 
+/**
+ * Poll a state file until `predicate` holds on its parsed contents (or the file
+ * is absent). A parse error is treated as "not ready yet" — but note the
+ * launch script writes state atomically (temp + rename), so a reader should
+ * never actually observe a torn file. Throws on timeout so a stuck launch
+ * script fails loudly instead of hanging the suite.
+ */
+async function pollState(
+  statePath: string,
+  predicate: (state: BackgroundTaskExecutionState | undefined) => boolean,
+  { timeoutMs = 5000, intervalMs = 20 }: { timeoutMs?: number; intervalMs?: number } = {},
+): Promise<BackgroundTaskExecutionState> {
+  const deadline = Date.now() + timeoutMs;
+  let last: BackgroundTaskExecutionState | undefined;
+  while (Date.now() < deadline) {
+    try {
+      const raw = await fs.readFile(statePath, "utf8");
+      last = JSON.parse(raw) as BackgroundTaskExecutionState;
+    } catch {
+      last = undefined;
+    }
+    if (predicate(last)) {
+      return last as BackgroundTaskExecutionState;
+    }
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+  throw new Error(`pollState timed out; last state: ${JSON.stringify(last)}`);
+}
+
 describe("FileBackgroundTaskStore", () => {
   it("starts tasks, persists output, syncs terminal state, and reloads", async () => {
     const rootDir = await makeTempDir();
@@ -369,5 +398,38 @@ describe("BackgroundTaskExecutionService", () => {
     await expect(fs.readFile(path.join(rootDir, task.execution.launchScript), "utf8")).resolves.toContain("bash -lc");
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
+  });
+
+  it("executes the real launch script end-to-end with a single-quoted command", async () => {
+    // Regression coverage for two shell-quoting bugs in the launch script:
+    //   1. shellQuote scrambled single quotes, corrupting the state JSON of any
+    //      command containing `'` (the state file failed to parse at all).
+    //   2. the pid placeholder substitution left `"pid":"$$"` (a string), so a
+    //      live process was misreported as no-longer-running.
+    // This is the only test that spawns the real launch script, so it is what
+    // guards the code path both bugs lived in.
+    const rootDir = await makeTempDir();
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"));
+    // Single quotes exercise shellQuote; the trailing sleep keeps the process
+    // alive long enough to observe the transient "running" state deterministically.
+    const command = "printf 'quoted-line-1\\nquoted-line-2\\n'; sleep 0.5";
+    const task = await store.start({ title: "quoted", command, cwd: rootDir, kind: "task" });
+    const statePath = path.join(rootDir, task.execution.stateFile);
+
+    // The running state must carry a numeric pid (regression #2) and the command
+    // must round-trip through shell quoting exactly (regression #1).
+    const running = await pollState(statePath, (state) => state?.status === "running");
+    expect(typeof running.pid).toBe("number");
+    expect(Number.isFinite(running.pid)).toBe(true);
+    expect(running.command).toBe(command);
+
+    // The process then completes cleanly, leaving a parseable terminal state.
+    const completed = await pollState(statePath, (state) => state?.status === "completed");
+    expect(completed.status).toBe("completed");
+    expect(completed.exitCode).toBe(0);
+    expect(typeof completed.pid).toBe("number");
+    expect(completed.command).toBe(command);
+
+    await expect(store.getOutput(task.id, 2)).resolves.toBe("quoted-line-1\nquoted-line-2");
   });
 });

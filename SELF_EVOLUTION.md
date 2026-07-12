@@ -6,6 +6,66 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-12 (run 9) — Fix two shell-quoting bugs in the background-task launch script; de-flake the suite
+
+**Audited:** Project health at the start of the run. `npm test` was **flaky** —
+3–4 tests failed nondeterministically (counts varied run-to-run across
+`operator-runtime.test.ts`, `server.test.ts`, `app.test.ts`). Since the engine's
+push-to-`main` gate depends on green tests, this silently blocks every future
+run, so it was the highest-value target. Root-caused it to the background-task
+**launch script**, not the tests.
+
+**Two real production bugs found (both in `src/harness/background-tasks.ts`'s
+`renderLaunchScript`):**
+1. **`shellQuote` was scrambled.** It replaced `'` with `` "'"'"' `` instead of
+   the correct POSIX idiom `` '"'"' `` (the version already used in
+   `src/training/runner.ts`). Any command containing a single quote (e.g. the
+   tests' `printf 'line-1\nline-2\n'`) produced an **invalid-JSON** state file
+   (`"command":"printf "'line...`). Readers then crashed in `readJsonFile`
+   (`SyntaxError`), and the Python completion-writer's `json.loads` threw, so the
+   task never transitioned off `running` → later reconciled as `missing-process`.
+2. **The pid placeholder never substituted.** The `sed "…s/"$$"/$$/g"` line's
+   quotes were consumed by bash (the backslashes were eaten by the JS template
+   literal, not passed to the script), so state files kept `"pid":"$$"` — a
+   **string**. `isProcessRunning("$$")` is always false, so a *live* process was
+   misreported as gone. This is what degraded the platform-control health in
+   `app.test.ts` (`control=degraded:… background task missing-process`).
+
+**Changed (additive):**
+- Fixed `shellQuote` to the correct `'"'"'` escaping.
+- Fixed the pid `sed` substitution (doubled backslashes so sed receives a literal
+  `"$$"` pattern; replacement `$$` → numeric shell pid). Verified end-to-end.
+- **Made state writes atomic** (temp file + `mv` / `Path.replace`) in both the
+  running-state write and the Python completion/failure writer, so a concurrent
+  reader can never observe a torn write. Mirrored the identical pid + atomicity
+  fixes into `src/training/runner.ts` (same defect, same pattern).
+- **De-flaked** `operator-runtime.test.ts` and `server.test.ts` by injecting a
+  deterministic `backgroundTaskSpawnProcess` mock (matching the established
+  pattern in `background-tasks.test.ts`) — those tests hand-write execution state
+  to simulate scenarios, so a real detached process racing its own state writes
+  was pure nondeterminism. `app.test.ts` needed no test change: the pid fix alone
+  made its real-process assertions deterministic.
+- **New regression test** (`background-tasks.test.ts`, +1 → 175 total): the only
+  test that runs the *real* launch script end-to-end, with a single-quoted
+  command, asserting a numeric running-pid, exact command round-trip, and a clean
+  `completed` terminal state. Confirmed it **fails** on the reverted `shellQuote`
+  and passes on the fix (it has teeth). This closes the coverage hole that let
+  both bugs land — every prior background-task test used a mock spawn and never
+  executed the script.
+
+**Test results:** `npm test` **175/175, stable across 8 consecutive runs**
+(was 170–171/174 flaky). `typecheck:src` ✅ clean. Build ✅.
+
+**New idea:** the launch script still shells out to `sed`/`python3` with
+hand-rolled quoting — a fragile seam that just cost us two bugs. Worth a
+follow-up that renders the state entirely via a single Python heredoc (payload
+passed on argv, no `sed`), removing the placeholder-substitution dance
+altogether; and a tiny "launch-script lint" test that spawns each render with a
+pathological command (single quotes, `$`, spaces, newlines) and asserts the
+state round-trips — turning this class of quoting bug into a caught regression.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

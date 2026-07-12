@@ -45,6 +45,24 @@ unchecked items are queued. Keep this richer than you found it each run.
       have the engine run it as a per-run pre-push self-check.
 - [ ] Add a minimal CI workflow mirroring `verify` for human-opened PRs.
 
+## Reliability / correctness
+- [x] **Fix background-task launch-script shell-quoting** (2026-07-12, run 9).
+      Two bugs: `shellQuote` used `"'"'"'` instead of `'"'"'` (corrupted state
+      JSON for any single-quoted command), and the pid `sed` substitution left
+      `"pid":"$$"` as a string (live processes read as `missing-process`). Fixed
+      both, made state writes atomic (temp + rename), mirrored into
+      `src/training/runner.ts`, and added the first real end-to-end launch-script
+      regression test. De-flaked the suite (175/175 stable, was flaky).
+- [ ] **Render launch-script state via a single Python heredoc** (payload on
+      argv, no `sed` placeholder dance) — removes the last hand-rolled shell
+      quoting seam in `renderLaunchScript` (both harness + training).
+- [ ] **Launch-script quoting lint test**: render+spawn each launch script with a
+      pathological command (single/double quotes, `$`, spaces, newlines) and
+      assert the execution state round-trips — catches this class of bug.
+- [ ] **`verify` npm script + engine pre-push self-check** (also under DX below):
+      run `typecheck:src && build && test` each cycle so a flaky/broken suite is
+      caught before it silently blocks the push gate, as it did before run 9.
+
 ## Capability parity (audit reference agents → port gaps)
 - [ ] Build a "capability inventory" generator: enumerate bee-agent's exported
       RPC/tool surface (`src/index.ts`) and diff it against `openclaw`,
