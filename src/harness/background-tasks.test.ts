@@ -370,4 +370,59 @@ describe("BackgroundTaskExecutionService", () => {
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
   });
+
+  // Regression: the launch script writes its "running" state via a shell here-payload
+  // that (a) single-quote-escapes the JSON and (b) sed-substitutes the literal "$$"
+  // placeholder with the real PID. A malformed POSIX single-quote escape once injected
+  // stray double-quotes into commands containing apostrophes (corrupting the state JSON),
+  // and a mis-escaped sed argument left the pid as the literal string "$$". This test
+  // executes the *real* generated script (mocked-spawn tests never did) and asserts the
+  // persisted running state is valid JSON with a numeric pid and an intact command.
+  it("executes the real launch script: valid running-state JSON with a numeric pid for single-quoted commands", async () => {
+    const rootDir = await makeTempDir();
+    // Default (real) spawn — command contains apostrophes and sleeps so we catch "running".
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"));
+    const task = await store.start({
+      title: "Emit and wait",
+      command: "printf 'line-1\\nline-2\\n'; sleep 2",
+      cwd: rootDir,
+      kind: "task",
+    });
+
+    const statePath = path.join(rootDir, task.execution.stateFile);
+    let raw: string | undefined;
+    let parsed: BackgroundTaskExecutionState | undefined;
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      try {
+        raw = await fs.readFile(statePath, "utf8");
+        parsed = JSON.parse(raw) as BackgroundTaskExecutionState;
+        if (parsed.status === "running") {
+          break;
+        }
+      } catch {
+        // state file not written yet, or a torn/partial read — retry
+      }
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+
+    try {
+      expect(parsed, `state file was never a parseable running JSON; raw=${raw ?? "<none>"}`).toBeDefined();
+      expect(parsed?.status).toBe("running");
+      // The sed substitution must have replaced the literal "$$" placeholder with a real PID.
+      expect(typeof parsed?.pid).toBe("number");
+      expect(Number.isFinite(parsed?.pid)).toBe(true);
+      expect(parsed?.pid).toBeGreaterThan(0);
+      // shellQuote must preserve the apostrophes in the command verbatim.
+      expect(parsed?.command).toBe("printf 'line-1\\nline-2\\n'; sleep 2");
+    } finally {
+      const pid = task.execution.processId ?? parsed?.pid;
+      if (typeof pid === "number" && Number.isFinite(pid)) {
+        try {
+          process.kill(-pid, "SIGKILL");
+        } catch {
+          // process already gone
+        }
+      }
+    }
+  });
 });

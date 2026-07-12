@@ -6,6 +6,67 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-12 (run 9) — Fix two real shell-quoting bugs in background-task/training state persistence (suite 170→173 passing)
+
+**Audited:** The test suite health on this cloud runner. Prior runs logged
+174/174, but a fresh `npm test` here showed **4 deterministic failures**
+(operator-runtime, control-plane/server, and two in cli/app). Rather than
+dismiss them as environmental, I traced the root cause — and it was a pair of
+genuine correctness bugs in the shell launcher that writes background-task /
+training-job execution state.
+
+**Root causes found (both in the generated launch shell script):**
+1. **Malformed POSIX single-quote escape** in `src/harness/background-tasks.ts`
+   `shellQuote`: it replaced `'` with `"'"'"'` (an extra leading `"`) instead of
+   the correct `'"'"'`. Any task `command` containing an apostrophe (e.g.
+   `printf 'line-1\nline-2\n'`) got stray `"` injected, corrupting the state
+   JSON → `readState` threw `SyntaxError: Expected ',' or '}'` at parse. The
+   training runner's `shellQuote` already used the correct form; this one had
+   drifted.
+2. **Mis-escaped `sed` argument** for the pid placeholder (present in BOTH
+   `background-tasks.ts` and `training/runner.ts`). The TS template
+   `s/\"\$\$\"/$$/g` evaluates to file text `s/"$$"/$$/g` — the bare `"` close
+   bash's own double-quote, so `$$` expands in the *pattern* too and the literal
+   `"$$"` placeholder is never substituted. Result: every task's running-state
+   recorded `"pid":"$$"` (a string) instead of the real PID, so liveness checks
+   (`process.kill(-pid,0)`) saw a bogus pid and reported `missing-process`.
+   Corrected the TS to `s/\\"\\$\\$\\"/$$/g` (emits `s/\"\$\$\"/$$/g`, so bash
+   passes the literal `"$$"` to sed and only the replacement `$$` expands).
+
+**Why the tests never caught it:** every existing background-task test used a
+**mocked** `spawnProcess` and hand-written state via `writeState` — the real
+generated shell script was never executed. Added a regression test
+(`background-tasks.test.ts` → "executes the real launch script …") that runs the
+actual script for an apostrophe-containing, briefly-sleeping command and asserts
+the persisted **running** state is valid JSON with a **numeric** pid and an
+intact command. Verified it fails on the buggy code (`expected 'string' to be
+'number'`) and passes on the fix.
+
+**Test results:** full suite **170→173 passing** (4→2 failing); `build` ✅,
+`typecheck:src` ✅. The two **remaining** failures are pre-existing and NOT
+introduced here (confirmed by stashing my diff and re-running pristine HEAD):
+- `cli/app.test.ts` "supports session lifecycle …" — **passes 22/22 in
+  isolation**, fails only under the full parallel suite ⇒ cross-file test
+  pollution (real detached processes / shared breaker state leaking between
+  parallel test files).
+- `control-plane/server.test.ts` "handles session … orchestration methods" —
+  deterministic here: an automatic platform breaker degrades from a
+  `background task missing-process` observation during the big multi-phase test.
+  Notably `isProcessRunning` is never called in this test (0 hits), so the
+  degradation flows through a no-processId reconcile / recovered-event path, not
+  the liveness check. Needs a dedicated isolation pass (see ROADMAP).
+
+**New idea:** the real-shell-execution gap is systemic — the *training* runner's
+`renderLaunchScript` (and its `run-<mode>.sh`) is likewise only ever asserted as
+a string, never executed, so its identical sed pid-substitution bug shipped
+untested until this run touched it. Add a shared "execute-the-generated-script"
+test helper and point both subsystems at it, so any future shell-quoting/escaping
+regression in state persistence is caught end-to-end instead of by a downstream
+consumer. Bigger: make the shell writes atomic (`> tmp && mv`) so concurrent
+reconcile readers can never observe a torn file even under correct quoting.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

@@ -70,6 +70,37 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Generalization eval harness: measure replay fidelity on held-out but
       related synthetic trajectories.
 
+## Reliability / correctness
+- [x] **Fix shell-quoting bugs in execution-state persistence** (2026-07-12,
+      run 9). `background-tasks.ts` `shellQuote` used a malformed single-quote
+      escape (`"'"'"'` vs correct `'"'"'`) corrupting apostrophe-bearing task
+      commands; and the `sed` pid substitution (`background-tasks.ts` +
+      `training/runner.ts`) was mis-escaped so running-state pids persisted as the
+      literal string `"$$"`. Both fixed; added a real-shell-execution regression
+      test. Suite 170→173 passing.
+- [ ] **Shared "execute-the-generated-script" test helper.** Both the
+      background-task and training-job launch scripts are only ever asserted as
+      strings, never run — which is how the sed bug shipped untested. Add one
+      helper that executes a rendered script in a temp dir and validates the
+      persisted state; use it for both subsystems.
+- [ ] **Make shell state writes atomic** (`> file.tmp && mv file.tmp file`, and
+      the python writer via `os.replace`). Even with correct quoting, the
+      non-atomic `printf > stateFile` lets a concurrent `reconcileTask` reader
+      observe a torn file. (Prototyped this run, reverted to keep the diff
+      surgical — the quoting bug was the actual failure.)
+- [ ] **Fix the 2 remaining suite failures** (pre-existing, surfaced clean once
+      the quoting bugs were fixed):
+  - `cli/app.test.ts` "supports session lifecycle …" — passes in isolation,
+    fails under the full parallel suite ⇒ test pollution. Likely a leaked
+    detached process or shared platform-breaker file across parallel test files;
+    isolate per-test temp roots / disable real spawns or run this file serially.
+  - `control-plane/server.test.ts` "handles session … orchestration methods" —
+    an automatic breaker degrades from a `background task missing-process`
+    observation without `isProcessRunning` ever being called (no-processId
+    reconcile / recovered-event path). Trace `getRemoteStatusDiagnostics` +
+    `refreshAutomaticPlatformBreakers` for the sleep-5 task and assert the
+    intended `active` control state.
+
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in
