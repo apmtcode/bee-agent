@@ -6,6 +6,71 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-13 (run 9) — 🧠 Movement subsystem: synthetic event-stream generator + pipeline round-trip
+
+**Audited:** `src/capture/` (recorder, device/os adapters, trajectory schema,
+replay) and `src/training/runner.ts` against standing objective #2 (the
+local-movement learning subsystem) and its ROADMAP increments. Runs 2–8 were all
+typecheck-debt work; source is now 100% type-clean, so this run pivots back to a
+**real capability** per the mandate ("each run must leave bee-agent measurably
+more capable"). The objective explicitly says: *use synthetic/simulated event
+streams to validate your code* — but no such generator existed. The capture
+adapters could only be exercised by hand-written one-off fixtures.
+
+**Changed (additive, new module):** `src/capture/synthetic-stream.ts` —
+- `createSyntheticRng(seed)` — deterministic mulberry32 PRNG (intentionally not
+  `Math.random()`), so `(scenario, seed)` always yields an identical stream.
+- `SyntheticMovementScenario` — a declarative template of a coherent local task
+  as ordered `MovementStepTemplate` steps (OS events + device gestures), reusing
+  the existing `OsObservationInput` / `DeviceCaptureInput` schemas.
+- `generateMovementStream(scenario, options)` — pure generator that assigns
+  strictly monotonic timestamps within configurable gap bounds, threads
+  `sessionId`/`captureTier`/`visibleIndicator`, and attaches the outcome to the
+  final event. Output is directly consumable by `DeviceCaptureAdapter` /
+  `OsCaptureObserver`.
+- `deriveRelatedScenario(base, variantSeed)` — the seed of the future
+  generalization eval harness: preserves task **structure** (step kinds + order)
+  while perturbing concrete targets/titles/paths/directions, producing genuinely
+  held-out but related trajectories.
+- `SYNTHETIC_SCENARIO_LIBRARY` — 3 ready-made fixtures (search-and-open,
+  compose-message, navigate-settings) across macOS/iOS/Android.
+- Barrel exports added to `src/index.ts`.
+
+**Tests:** `src/capture/synthetic-stream.test.ts` (10 tests) — RNG determinism,
+one-event-per-step, seed reproducibility, monotonic timestamps within gap
+bounds, outcome-on-final-only, tier threading, generalization
+(structure-preserved + targets-perturbed + deterministic), and a full
+**capture→trajectory-store→replay-manifest round-trip** that feeds a generated
+stream through the real recorder and asserts the replay timeline is time-ordered
+and the final outcome survives.
+
+**Test results:** capture module **27/27 ✅**; new file **10/10 ✅**.
+`typecheck:src` **0 errors ✅** (new module fully type-clean); full `tsc`
+unchanged at **125** (all test-only, no regression). Build ✅.
+
+**Pre-existing failures (NOT caused by this run):** the full suite shows
+**3 failing** tests — verified identical at HEAD (`3 failed | 171 passed` on a
+clean tree before my changes). They are environment-specific: `app.test.ts` /
+`server.test.ts` platform-control expects `control=active` but this cloud
+container reports `degraded:…background task missing-process` (a spawned pid
+isn't alive here), and `operator-runtime.test.ts` reads a launch-script-generated
+JSON state file that the container's shell writes malformed. These exercise real
+subprocess execution and are unrelated to the capture subsystem. Logged to
+ROADMAP as a dedicated hardening item. Pushed to the designated feature branch
+`claude/peaceful-dirac-46c50v` (per the branch mandate); no regression
+introduced.
+
+**New idea:** now that streams are generated deterministically, build the
+**generalization eval harness** on top: train (mock backend) on N base
+scenarios, then measure replay fidelity on `deriveRelatedScenario` variants held
+out from training — a real, cloud-runnable metric for whether the subsystem
+"generalizes to new but related movements" (objective #2d). Also: make the
+background-task/training state readers tolerant of partially-written JSON
+(retry-on-parse-error) so the subprocess harness stops being flaky under
+different shells — turning the pre-existing failures above green.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

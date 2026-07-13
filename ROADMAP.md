@@ -65,10 +65,28 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
       for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
+- [x] Synthetic event-stream generator to validate capture→dataset→replay
+      round-trips without real OS input — DONE run 9
+      (`src/capture/synthetic-stream.ts`): deterministic mulberry32 RNG,
+      declarative `SyntheticMovementScenario` templates, `generateMovementStream`
+      (monotonic timestamps, adapter-ready output), a 3-scenario library, and a
+      full recorder→trajectory→replay round-trip test.
 - [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      related synthetic trajectories. Foundation landed run 9
+      (`deriveRelatedScenario` produces structure-preserving, target-perturbed
+      variants); next: train the mock backend on base scenarios and score replay
+      fidelity on derived variants held out from training (objective #2d metric).
+
+## Reliability / hardening
+- [ ] **Make subprocess state readers tolerant of partial JSON.** The
+      background-task + training launch scripts write their `state.json` via a
+      spawned bash/python process; on some shells/containers `readJsonFile` reads
+      a half-written file and throws `SyntaxError`. Surfaced as 3 pre-existing
+      env-specific test failures on the cloud runner (`app.test.ts`,
+      `server.test.ts` control=degraded via `missing-process`;
+      `operator-runtime.test.ts` malformed-JSON sync). Add a bounded
+      retry-on-parse-error read (and/or write-then-rename atomicity check on the
+      script side) so the harness is deterministic across environments.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
