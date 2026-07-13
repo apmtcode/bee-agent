@@ -6,6 +6,65 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-13 (run 9) — 🧠 Movement-policy learning: pluggable backend + in-process Markov model + generalization eval
+
+**Audited:** The local-movement learning subsystem (standing objective #2),
+specifically the train/infer leg. `src/training/runner.ts` only *emits launch
+scripts* handing a reviewed dataset to a real on-device trainer (MLX/axolotl on
+Apple Silicon). That path can't run in this cloud CI, so objective 2(d)
+("generalize to perform new but related movements") was completely unvalidated —
+there was no in-process model that could actually learn and predict movements.
+
+**Changed (additive, new module `src/training/movement-policy.ts`):**
+- **Pluggable backend seam** — `MovementPolicyBackend` interface
+  (`id`, `train(samples) -> model`, `predict(model, context) -> prediction`) plus
+  `createMovementPolicyBackend(id)` registry. This is the exact contract a real
+  small local model (`mlx-lora`, …) implements; unknown ids throw with the known
+  list.
+- **Deterministic in-process backend** — `MarkovMovementPolicyBackend`: learns
+  next-movement distributions at three context specificities and predicts with
+  **backoff** — exact `(app, screen, previousAction)` → `(app, previousAction)` →
+  `(previousAction)`/unconditional. The backoff is what makes it *generalize*: an
+  unseen screen in a known app still resolves via the app-level table. Ties break
+  lexicographically → fully reproducible (no `Date`/random in the model).
+- **Dataset builders** consuming the *existing* schema —
+  `buildMovementSamplesFromReplay(ReplayManifest)` and
+  `buildMovementSamplesFromTrajectories(TrajectorySpan[])` (the latter prefers
+  redacted review data so only export-approved movements are learned).
+- **Inference/rollout** — `rolloutMovementPolicy(...)` autonomously extends a
+  learned chain from a start context, feeding each prediction back as the next
+  `previousAction` (the "repeat + generalize movements" capability).
+- **Generalization eval harness** — `evaluateMovementPolicy(...)` scores accuracy
+  on held-out samples and reports the backoff breakdown, so generalization is
+  measurable rather than anecdotal.
+- Exported all of the above from `src/index.ts`.
+- Test (`movement-policy.test.ts`, 11 cases) includes a **deterministic seeded
+  synthetic movement-stream generator** (LCG, no real OS input) and asserts the
+  key property: a model trained on `inbox`/`compose` predicts correctly on an
+  unseen `settings`/`archive` screen via `app`-level backoff (exact usage = 0).
+
+**Test results:** `typecheck:src` ✅ (exit 0). Build ✅ (tsdown, 5 files,
+545 kB). New suite ✅ **11/11**. Full suite **182/185** — the **3 failures are
+pre-existing and environment-specific**, confirmed by stashing this run's diff
+and reproducing them on the clean tree (4 failures there). Root cause:
+`readJsonFile` hits a `SyntaxError` parsing a background-task state fixture that a
+shell/heredoc writer leaves with unsubstituted placeholders in this sandbox
+(`operator-runtime`/`app`/`server` background-task+cron tests). None touch the
+capture/training code changed here.
+
+**New idea:** add a `MovementPolicyStore` that persists a trained
+`MovementPolicyModel` as JSON next to the reviewed export and wires
+`evaluateMovementPolicy` into the runner as a *pre-launch smoke gate* — refuse to
+hand a dataset to the expensive on-device trainer unless the cheap in-process
+Markov baseline already clears a minimum held-out accuracy. That turns the mock
+backend into a real guardrail (catches empty/degenerate datasets before GPU time)
+and gives every training job a baseline number to beat.
+
+**Blocker for next run:** the 3 pre-existing failures above. Likely a test-fixture
+writer using a `$$`/date heredoc placeholder that isn't expanded in this cloud
+shell, yielding invalid JSON. Worth a focused run: make the fixture writer emit
+valid JSON directly (or have `readJsonFile` surface the offending file path).
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

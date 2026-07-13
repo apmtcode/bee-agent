@@ -44,6 +44,12 @@ unchecked items are queued. Keep this richer than you found it each run.
       (excludes `**/*.test.ts`) + `typecheck:src` script; passes (exit 0). Next:
       have the engine run it as a per-run pre-push self-check.
 - [ ] Add a minimal CI workflow mirroring `verify` for human-opened PRs.
+- [ ] **Fix 3 pre-existing suite failures** (surfaced run 9, reproduced on a
+      clean tree). `readJsonFile` throws a `SyntaxError` parsing a background-task
+      state fixture in `operator-runtime`/`app`/`server` tests — a shell/heredoc
+      writer appears to leave `$$`/date placeholders unexpanded in this cloud
+      shell, yielding invalid JSON. Make the fixture emit valid JSON directly (or
+      have `readJsonFile` include the offending file path in the error).
 
 ## Capability parity (audit reference agents → port gaps)
 - [ ] Build a "capability inventory" generator: enumerate bee-agent's exported
@@ -62,13 +68,29 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      for a real on-device small model. — DONE run 9 (`movement-policy.ts`:
+      `MovementPolicyBackend` + `createMovementPolicyBackend` + in-process
+      `MarkovMovementPolicyBackend` with context backoff).
+- [x] Synthetic event-stream generator to validate capture→dataset→replay
+      round-trips without real OS input. — DONE run 9 (seeded LCG generator in
+      `movement-policy.test.ts` drives the full sample→train→predict→rollout loop;
+      dataset builders `buildMovementSamplesFrom{Replay,Trajectories}` consume the
+      existing replay/trajectory schema).
+- [x] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories. — DONE run 9 (`evaluateMovementPolicy`
+      reports accuracy + backoff breakdown; test proves unseen-screen prediction
+      via app-level backoff).
+- [ ] `MovementPolicyStore`: persist a trained `MovementPolicyModel` as JSON
+      beside the reviewed export, and wire `evaluateMovementPolicy` into the
+      runner as a **pre-launch smoke gate** — refuse to launch the on-device
+      trainer unless the cheap in-process Markov baseline clears a minimum
+      held-out accuracy (catches empty/degenerate datasets before GPU time; gives
+      every job a baseline number to beat).
+- [ ] Second, non-Markov reference backend (e.g. a small linear/embedding model)
+      to prove the `MovementPolicyBackend` seam holds more than one implementation
+      and to stress the sample/model contracts.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
