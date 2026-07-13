@@ -6,6 +6,63 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-13 (run 9) — 🧠 Movement-policy INFERENCE (objective 2d) + fixed 3 pre-existing shell-launch failures
+
+**Audited:** The local-movement learning subsystem end-to-end (`src/capture/*`,
+`src/training/*`). Found the pipeline covers **capture → schema → dataset →
+replay → training-*plan*** but had **zero code on the inference side** — objective
+2(d), "generalize to perform new but related movements," was entirely unbuilt.
+The runner only emits an on-device training *command*; nothing consumes a
+dataset/model to *predict* movements for a new goal.
+
+**Changed (additive) — new `src/training/movement-policy.ts` (+ tests):**
+- **Pluggable `MovementPolicyBackend` interface** (`id`, `predict(context)`) with
+  a `MovementPolicyRegistry` + `defaultMovementPolicyRegistry()` so a real
+  on-device small-model backend (e.g. mlx-served policy) can be registered under
+  the same seam later. `predict` is deterministic given dataset+context.
+- **`RetrievalMovementPolicyBackend` (deterministic, cloud-testable):** builds a
+  token index over each demonstration's goal text, scores context (goal + live
+  cues) by weighted Jaccard, boosts successful demos, and **generalizes** by
+  substituting the single differing noun between the new goal and the retrieved
+  demo throughout its action summaries (plus explicit `overrides`). E.g. learned
+  "open the *reports* folder" → predicts "open the *invoices* folder" with the
+  action summaries rewritten. Confidence-thresholded via `minConfidence`.
+- **`buildMovementDataset(manifest)`** extracts time-normalized (`relativeTs`)
+  `MovementDemonstration`s from a `ReviewedExportManifest`'s replays, wiring the
+  reviewed-export dataset format straight into inference.
+- **`MovementInferenceService`** (`fromExport` / `fromDataset`) — the high-level
+  entry point; backend selection pluggable via the registry. Exported from the
+  barrel (`src/index.ts`).
+
+**Also fixed — 3 pre-existing test failures (one root cause).** The full suite
+was **red on `main`** (`operator-runtime`, `control-plane/server`, `cli/app`):
+the background-task **shell launch script** wrote its initial `state.json` via
+`printf '%s' <json> | sed …` string-munging. When a task command/cwd contained
+quotes, the emitted JSON was **invalid**, so `json.loads` in the completion
+writer crashed and reconciliation read the task as `missing-process`/failed.
+Surfaced now because bash actually executes the launch script in this cloud env
+(it apparently didn't on the run-8 machine). **Fix:** write the initial "running"
+state with `python3 json.dumps` (identical to the existing completion/failure
+writers) instead of `printf`+`sed`, removing the fragile munging. Same latent
+pattern still lives in `src/training/runner.ts` (not exercised live by any test)
+— logged to ROADMAP.
+
+**Test results:** `typecheck:src` ✅ (all source clean). Build ✅. Tests ✅
+**186/186** (was 182/186 with 3 pre-existing failures; +12 new movement-policy
+tests, +the 3 recovered). Full `tsc` unchanged at **125** (new files add zero
+debt). Movement subsystem is now capture → … → train **→ infer/generalize**.
+
+**New idea:** a **generalization eval harness** — hold out one demonstration,
+predict its goal from the rest, and score action-sequence fidelity
+(tool-order + slot-substitution accuracy) so backend swaps (retrieval → real
+model) are measured, not assumed. Pairs naturally with a **synthetic
+trajectory generator** that emits families of "same-structure, different-noun"
+movements to stress the generalization path. Also: register a second
+deterministic backend (e.g. a Markov next-tool predictor) to prove the registry
+seam handles genuinely different policy shapes, not just retrieval.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

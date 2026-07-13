@@ -62,13 +62,34 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
-      deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+- [x] **Pluggable movement-policy INFERENCE backend** (objective 2d) — DONE
+      run 9. `src/training/movement-policy.ts`: `MovementPolicyBackend` interface
+      + `MovementPolicyRegistry` + deterministic `RetrievalMovementPolicyBackend`
+      (weighted-Jaccard retrieval, success boost, single-noun generalization &
+      explicit overrides) + `buildMovementDataset` + `MovementInferenceService`.
+      Closes the loop: capture → … → train → **infer/generalize**. Real
+      on-device model backend plugs into the same registry seam.
+- [ ] Real on-device small-model backend behind `MovementPolicyBackend` (e.g. an
+      mlx-served policy loaded from the trained artifact) registered under kind
+      `"mlx"`; the retrieval backend stays as the deterministic fallback/mock.
+- [ ] Synthetic event-stream/trajectory generator to validate
+      capture→dataset→replay→**infer** round-trips without real OS input; emit
+      families of "same-structure, different-noun" movements to stress
+      generalization.
+- [ ] Generalization eval harness: hold out a demonstration, predict its goal
+      from the rest, score action-sequence fidelity (tool-order + slot-substitution
+      accuracy) so backend swaps (retrieval → real model) are measured, not assumed.
+- [ ] Second deterministic backend (e.g. Markov next-tool predictor) to prove the
+      registry seam handles genuinely different policy shapes, not just retrieval.
+
+## Reliability
+- [x] Background-task launch script wrote invalid initial `state.json` via
+      `printf`+`sed`, breaking reconciliation for commands containing quotes —
+      FIXED run 9 (write initial state via `python3 json.dumps`). Cleared 3
+      pre-existing suite failures.
+- [ ] `src/training/runner.ts` `renderLaunchScript` still builds its initial
+      state payload with the same `printf`+`sed` munging (not exercised live by
+      any test). Port the `python3 json.dumps` approach for parity/robustness.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
