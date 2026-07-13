@@ -371,3 +371,65 @@ describe("BackgroundTaskExecutionService", () => {
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
   });
 });
+
+// These exercise the REAL bash launch script (no spawn mock), so they cover the
+// shell-quoting + placeholder-substitution seam that unit tests with a fake
+// spawn cannot reach. They regression-guard two fixed bugs:
+//   1. shellQuote corrupted commands containing single quotes, writing invalid
+//      JSON to the state file (unreadable execution state).
+//   2. the launch script left `pid` as the literal string "$$" instead of the
+//      real numeric PID, so every still-running task looked like a dead process.
+describe("FileBackgroundTaskStore real launch script", () => {
+  async function waitForState(
+    service: BackgroundTaskExecutionService,
+    task: Awaited<ReturnType<FileBackgroundTaskStore["start"]>>,
+    predicate: (state: BackgroundTaskExecutionState) => boolean,
+    timeoutMs = 5000,
+  ): Promise<BackgroundTaskExecutionState> {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      const state = await service.readState(task);
+      if (state && predicate(state)) {
+        return state;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    throw new Error("timed out waiting for background task state");
+  }
+
+  it("round-trips a single-quoted command and records a numeric pid", async () => {
+    const rootDir = await makeTempDir();
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"));
+    const command = "printf 'line-1\\nline-2\\n'";
+    const task = await store.start({ title: "Quoted", command, cwd: rootDir, kind: "task" });
+
+    // A concurrent reader must always parse valid JSON — the state file is
+    // written atomically and the single quotes must survive intact.
+    const completed = await waitForState(
+      store.executionService,
+      task,
+      (state) => state.status === "completed",
+    );
+    expect(completed.command).toBe(command);
+    expect(completed.exitCode).toBe(0);
+    expect(typeof completed.pid).toBe("number");
+    await expect(store.executionService.readOutput(task)).resolves.toContain("line-2");
+  });
+
+  it("writes a real numeric pid for a still-running task", async () => {
+    const rootDir = await makeTempDir();
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"));
+    const task = await store.start({ title: "Sleeper", command: "sleep 2", cwd: rootDir, kind: "monitor" });
+
+    const running = await waitForState(
+      store.executionService,
+      task,
+      (state) => state.status === "running",
+    );
+    // The tracked launch pid must equal the numeric pid persisted by the script
+    // (not the literal string "$$"), so liveness checks resolve correctly.
+    expect(typeof running.pid).toBe("number");
+    expect(running.pid).toBe(task.execution.processId);
+    expect(store.executionService.isProcessRunning(running.pid)).toBe(true);
+  });
+});

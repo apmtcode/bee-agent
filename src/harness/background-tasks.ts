@@ -740,7 +740,7 @@ function renderLaunchScript(task: BackgroundTaskRecord): string {
       taskId: task.id,
       kind: task.kind,
       status: "running",
-      pid: "$$",
+      pid: "__OPENCLAW_PID__",
       startedAt: "__OPENCLAW_STARTED_AT__",
       updatedAt: "__OPENCLAW_STARTED_AT__",
       outputFile: task.execution.outputFile,
@@ -754,7 +754,21 @@ function renderLaunchScript(task: BackgroundTaskRecord): string {
     "set -euo pipefail",
     `mkdir -p $(dirname ${quotedStatePath}) $(dirname ${quotedOutputFile})`,
     "started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-    `printf '%s' ${quotedStatePayload} | sed "s/__OPENCLAW_STARTED_AT__/$started_at/g; s/\"\$\$\"/$$/g" > ${quotedStatePath}`,
+    // Write the initial "running" state atomically: render to a private temp
+    // file, then rename over the target. A concurrent reader (recovery/health
+    // check) therefore never observes a truncated or partially-written state
+    // file — it sees either the prior contents or the complete new document.
+    // Substitute the placeholders with the launch shell's real PID and start
+    // timestamp. The sed script is single-quoted so the literal double-quotes
+    // around `"__OPENCLAW_PID__"` survive intact; shell values are spliced in
+    // via `'"$var"'`. Replacing the *quoted* placeholder with the bare numeric
+    // PID turns the JSON string into a number, so `state.pid` reads back as a
+    // real number (a previous double-quote-nesting bug left it as the literal
+    // string "$$", which made every still-running task look like a dead process
+    // and spuriously degraded remote health with "missing-process").
+    `state_tmp=${quotedStatePath}.$$.tmp`,
+    `printf '%s' ${quotedStatePayload} | sed 's/__OPENCLAW_STARTED_AT__/'"$started_at"'/g; s/"__OPENCLAW_PID__"/'"$$"'/g' > "$state_tmp"`,
+    `mv "$state_tmp" ${quotedStatePath}`,
     `printf '%s\n' "starting ${task.kind} ${task.id}" >> ${quotedOutputFile}`,
     `if cd ${quotedCwd} && bash -lc ${quotedCommand} >> ${quotedOutputFile} 2>&1; then`,
     "  completed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
@@ -776,6 +790,7 @@ function renderLaunchScript(task: BackgroundTaskRecord): string {
 function renderStateWriterPython(status: BackgroundTaskExecutionState["status"]): string[] {
   return [
     "import json",
+    "import os",
     "import pathlib",
     "import sys",
     "state_path = pathlib.Path(sys.argv[1])",
@@ -789,10 +804,20 @@ function renderStateWriterPython(status: BackgroundTaskExecutionState["status"])
     "state['completedAt'] = timestamp",
     "state['exitCode'] = exit_code",
     `state['error'] = None if '${status}' == 'completed' else f'background task exited non-zero ({exit_code})'`,
-    "state_path.write_text(json.dumps(state, indent=2) + '\\n')",
+    // Atomic terminal-state write: serialize to a sibling temp file and rename
+    // over the target so a concurrent reader never sees a torn document.
+    "tmp_path = state_path.with_name(state_path.name + f'.{pid}.tmp')",
+    "tmp_path.write_text(json.dumps(state, indent=2) + '\\n')",
+    "os.replace(tmp_path, state_path)",
   ];
 }
 
 function shellQuote(value: string): string {
-  return `'${value.replaceAll(`'`, `"'"'"'`)}'`;
+  // Wrap in single quotes and escape any embedded single quote using the
+  // canonical POSIX idiom `'\''` (close quote, escaped quote, reopen quote).
+  // The previous escape sequence had a spurious leading double quote, so any
+  // command or path containing a single quote (e.g. `printf 'hi'`) was
+  // reconstructed with stray `"` characters — corrupting the launch script's
+  // state-file JSON and making the task's execution state unreadable.
+  return `'${value.replaceAll(`'`, `'\\''`)}'`;
 }

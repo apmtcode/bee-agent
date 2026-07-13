@@ -6,6 +6,64 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-13 (run 9) — 🐛 Three real background-task bugs fixed; suite 3–4 red → 176 green
+
+**Audited:** Overall suite health. Found **3–4 tests failing** that runs 1–8
+recorded as "174/174 green". These were not test-only debt — they surfaced
+**three genuine product bugs** in `src/harness/background-tasks.ts` (the launch
+script that runs background tasks / monitors), masked on prior machines purely by
+process-timing luck. Root-caused each empirically with isolated repros:
+
+1. **`shellQuote` corrupted single-quoted commands.** It escaped `'` with the
+   sequence `"'"'"'` (a spurious *leading* double quote) instead of the canonical
+   POSIX idiom `'\''`. Any command containing a single quote — e.g.
+   `printf 'hi'` — was reconstructed by the shell as `printf "'hi"'`, so the
+   launch script wrote **invalid JSON** into the state file and the task's
+   execution state became unreadable (`SyntaxError` in `readState`). Verified:
+   single-quote commands `parseOK=false`; after fix `parseOK=true`.
+2. **`pid` never substituted → every running task looked dead.** The initial
+   "running" state kept `pid: "$$"` as a *literal string*: the sed substitution
+   `s/"$$"/$$/g` lived inside a double-quoted `sed "…"` argument, so the embedded
+   `"$$"` closed the shell quote early and `$$` expanded in the wrong place — the
+   quoted `"$$"` in the JSON was never replaced. `isProcessRunning("$$")` →
+   `Number.isFinite` false → **false**, so every still-running task (a `sleep`,
+   a monitor, a server) was flagged `missing-process` and spuriously **degraded
+   remote health**. Fixed with a `__OPENCLAW_PID__` placeholder + a single-quoted
+   sed script that splices the shell PID via `'"$$"'`. Verified: `pid` now a real
+   number matching the tracked launch PID.
+3. **Non-atomic state writes → torn reads.** Both the shell (`… > statePath`) and
+   the Python completion writer (`state_path.write_text(…)`) truncated-then-wrote
+   in place, so a concurrent recovery/health read could observe a partial file.
+   Made both atomic (render to a private temp file, then `mv` / `os.replace`).
+
+**Test hermeticity (precedent: run 1's `configHome` fix):** three tests
+(`operator-runtime` "starts, syncs, recovers…" + `server` "handles session…")
+drove execution state manually via `writeState`/`writeOutput` but used the **real**
+spawn, racing the launch script's own async writes. Injected deterministic
+`backgroundTaskSpawnProcess: () => ({ pid, unref(){} })` mocks (the exact pattern
+`background-tasks.test.ts` already uses) so they no longer depend on process
+timing — behaviour under test unchanged.
+
+**New tests:** 2 real-launch regression tests in `background-tasks.test.ts` that
+exercise the *actual* bash script end-to-end (no spawn mock): a single-quoted
+command must round-trip to valid JSON with a numeric `pid` and correct output; a
+still-running `sleep` must persist a numeric `pid` equal to the tracked launch PID
+that `isProcessRunning` accepts. These cover the shell-quoting/substitution seam a
+mocked spawn can't reach.
+
+**Test results:** **3–4 failing → 176/176 passing**, stable across 8+ full suite
+runs (was consistently red at start of run). `typecheck:src` ✅. Build ✅. Full
+`tsc` **125** (unchanged — the mock casts use `as never`, no new debt).
+
+**New idea:** a **launch-script contract fuzz test** — generate task
+command/cwd/title strings packed with shell metacharacters (single & double
+quotes, `$`, backticks, newlines, `;`, `&&`, `|`) and assert each round-trips
+`renderLaunchScript → bash → state file` as valid JSON with the command preserved
+byte-for-byte. It would have caught bugs #1 and #2 mechanically and guards the
+entire quoting class going forward.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

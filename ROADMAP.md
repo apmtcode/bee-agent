@@ -3,6 +3,25 @@
 Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
+## Reliability (background-task subsystem)
+- [x] **Fix `shellQuote` single-quote escaping** (2026-07-13, run 9) — was
+      `"'"'"'` (spurious leading `"`), corrupted any command with single quotes
+      into invalid state-file JSON. Now canonical POSIX `'\''`.
+- [x] **Substitute a real numeric `pid`** into the launch script's "running"
+      state (2026-07-13, run 9) — the double-quote-nested sed left `pid: "$$"` as
+      a string, so every still-running task falsely read as `missing-process`.
+- [x] **Atomic state-file writes** in the shell launch script + Python completion
+      writer (2026-07-13, run 9) — temp file + `mv`/`os.replace`, no more torn
+      reads.
+- [x] **Deterministic spawn in state-driven tests** (2026-07-13, run 9) — the
+      operator-runtime + server "handles session…" tests used real spawn and
+      raced their manual state writes; now inject a `backgroundTaskSpawnProcess`
+      mock (matches `background-tasks.test.ts`).
+- [ ] **Launch-script contract fuzz test**: feed `renderLaunchScript` commands /
+      cwd / titles full of shell metacharacters (`'` `"` `$` `` ` `` newlines `;`
+      `&&` `|`) and assert each round-trips through real bash to valid state JSON
+      with the command preserved exactly. Guards the whole quoting class.
+
 ## Foundations / DX
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
