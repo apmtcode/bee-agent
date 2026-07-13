@@ -6,6 +6,65 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-13 (run 9) — 🎯 In-process movement-model backend: train + infer + generalize (objective #2c/#2d)
+
+**Audited:** The local-movement learning subsystem (`src/capture` + `src/training`)
+against objective #2's five pieces. Found the gap: capture→schema→dataset→replay
+exist, but the *train + infer* piece was **launch-script-only** — the
+`LocalAppleSiliconTrainingRunner` just emits `mlx_lm.lora` / `axolotl` shell
+commands that can only run on the operator's Apple-silicon box. **Nothing in the
+cloud could actually post-train a model on recorded movements or measure
+generalization**, so objective #2(c)/(d) had zero executable coverage.
+
+**Changed (additive, new module `src/training/movement-model.ts`):**
+- **Pluggable backend seam** — `MovementModelBackend` interface (`train` /
+  `load`) + `MovementModelBackendRegistry` (register / get / list). Real
+  on-device backends (mlx bridge, onnx) implement the same interface; the runner
+  can select one by name.
+- **Deterministic reference backend** `MarkovMovementBackend` — a variable-order
+  Markov policy with **suffix backoff**. It learns transition counts from
+  recorded movement sequences and predicts the next movement; backoff to shorter
+  contexts is what lets it **generalize to new-but-related sequences** it never
+  saw whole. No native deps, no randomness → identical dataset yields a
+  byte-identical, JSON-serializable artifact (round-trips via `serialize`/`load`).
+  Prepends a `start` sentinel so the empty context predicts the learned
+  first-move distribution rather than the raw unigram.
+- **Dataset builders** `buildMovementDatasetFromTrajectories` /
+  `buildMovementDatasetFromReplays` — turn `TrajectorySpan[]` or exported replay
+  manifests into `MovementSequence[]` (actions in ts order; `tool`/`summary`
+  field selectable; min-length filter).
+- **Generalization eval harness** `evaluateMovementModel` — walks held-out
+  sequences predicting each next movement from the growing prefix; reports
+  **top-1 accuracy, top-k accuracy, and perplexity** (with an unseen-token floor
+  so perplexity stays finite). This is the replay-fidelity metric the roadmap
+  asked for.
+- Exported the whole surface from `src/index.ts`.
+
+**Test results:** new `src/training/movement-model.test.ts` — **14/14 ✅**
+(learns recorded next-move; deterministic; generalizes via backoff; serialize
+round-trip; termination prediction; eval accuracy + finite perplexity;
+higher-order beats order-0 on structured data; both dataset builders; registry
+register/select/unknown). `npm run typecheck:src` ✅. `npm run build` ✅. Full
+`npm test` **184 passed / 4 failed (188)** — the **4 failures are pre-existing**
+(confirmed by stashing this diff and re-running clean HEAD: same 4 fail). They
+are unrelated to this change (session lifecycle / background-task recovery /
+control-plane orchestration) and trace to a shell-rendered `state.json` whose
+`$$`/`date` substitution produces malformed JSON at read time
+(`SyntaxError: Expected ',' or '}' … position 311`, via
+`BackgroundTaskExecutionService.readState`) — a runtime-value-dependent defect in
+`renderStateWriterPython`/launch-script rendering, logged below as a new backlog
+item. My additions are fully green; pushed to the designated feature branch.
+
+**New idea:** the movement model is currently token-only (action `tool`). Next,
+enrich the token with a coarse *context bucket* (e.g. active app / observation
+source) so the policy is `P(action | prior actions, current app)` — a
+lightweight conditional Markov that better generalizes across apps without
+needing a neural backend. And: add a `MovementReplayDriver` that consumes model
+predictions to *drive* the existing replay engine end-to-end (predict → emit
+simulated event → feed back), closing the record→train→replay loop in one test.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

@@ -59,16 +59,43 @@ unchecked items are queued. Keep this richer than you found it each run.
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
 (exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
-      objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Inventory what `src/capture` + `src/training` already implement vs. the
+      objective's five pieces — DONE run 9. Gap found: train+infer was
+      launch-script-only (mlx/axolotl, Apple-silicon-only); no in-process
+      train/infer/generalize.
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
+      for a real on-device small model — DONE run 9. `src/training/movement-model.ts`:
+      `MovementModelBackend` + `MovementModelBackendRegistry`, deterministic
+      `MarkovMovementBackend` (variable-order + suffix backoff, JSON-serializable).
 - [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      round-trips without real OS input. (Partly served by run 9's dataset
+      builders; still want a generator that emits raw device/os/browser events
+      through the recorder.)
+- [x] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories — DONE run 9. `evaluateMovementModel`
+      (top-1 / top-k accuracy + perplexity with unseen-token floor).
+- [ ] Context-conditional movement model: enrich the token with a coarse context
+      bucket (active app / observation source) so the policy is
+      `P(action | prior actions, current app)` — better cross-app generalization
+      without a neural backend.
+- [ ] `MovementReplayDriver`: feed model predictions into the existing replay
+      engine (predict → emit simulated event → feed back) to close the
+      record→train→replay loop end-to-end in one test.
+- [ ] Wire `MovementModelBackendRegistry` into `LocalAppleSiliconTrainingRunner`
+      so the runner can select/emit for a registered on-device backend, and add a
+      real (guarded) mlx/onnx backend implementing `MovementModelBackend`.
+
+## Known pre-existing failures (investigate, do not regress)
+- [ ] **Shell-rendered `state.json` can be malformed JSON at read time** (found
+      run 9). 4 suite tests fail on clean HEAD — `operator-runtime.test.ts`
+      (background-task recover), `server.test.ts` (orchestration), `app.test.ts`
+      (session lifecycle). Root cause: `readState` throws
+      `SyntaxError: Expected ',' or '}' … position 311` from a launch-script /
+      `renderStateWriterPython`-rendered state file whose `$$`/`date`
+      substitution yields invalid JSON in some environments. Fix the shell state
+      writer to emit guaranteed-valid JSON (write via `python3 -c` json.dump, not
+      `printf`+`sed`), then re-enable/confirm the 4 tests.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
