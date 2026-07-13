@@ -1,7 +1,11 @@
+import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
+
+const execFileAsync = promisify(execFile);
 import {
   BackgroundTaskExecutionService,
   FileBackgroundTaskStore,
@@ -369,5 +373,31 @@ describe("BackgroundTaskExecutionService", () => {
     await expect(fs.readFile(path.join(rootDir, task.execution.launchScript), "utf8")).resolves.toContain("bash -lc");
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
+  });
+
+  // Regression: the launcher shell-quotes the command and an inlined JSON state
+  // payload. A broken single-quote escape (`"'"'"'` instead of `'"'"'`) leaked a
+  // spurious double quote into the payload, so a command containing a single
+  // quote produced an unparseable state.json and every readState() threw. Execute
+  // the real rendered launch script end-to-end and assert the state file is valid.
+  it("renders a launch script that writes valid JSON state for quoted commands", async () => {
+    const rootDir = await makeTempDir();
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"), () => ({ pid: 4242, unref() {} }));
+    const command = "printf 'line-1\nline-2\n'";
+    const task = await store.start({ title: "Quoted command", command, cwd: rootDir });
+
+    const launchScriptPath = path.join(rootDir, task.execution.launchScript);
+    await execFileAsync("bash", [launchScriptPath], { cwd: rootDir });
+
+    const raw = await fs.readFile(path.join(rootDir, task.execution.stateFile), "utf8");
+    const state = JSON.parse(raw) as BackgroundTaskExecutionState;
+    expect(state.command).toBe(command);
+    expect(typeof state.pid).toBe("number");
+    expect(state.status).toBe("completed");
+    expect(state.exitCode).toBe(0);
+
+    // The store must be able to read the state back without throwing.
+    const service = new BackgroundTaskExecutionService(rootDir, () => ({ pid: 4242, unref() {} }));
+    await expect(service.readState(task)).resolves.toMatchObject({ status: "completed", command });
   });
 });

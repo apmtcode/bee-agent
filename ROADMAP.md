@@ -4,6 +4,16 @@ Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
 ## Foundations / DX
+- [x] **Deterministically green test suite** (2026-07-13, run 9). Fixed a real
+      background-task launcher bug (broken `shellQuote` single-quote escape wrote
+      unparseable `state.json` for any quoted command → `readState()` threw),
+      made launcher state writes atomic, made the running-state `pid` numeric,
+      and injected the no-op `backgroundTaskSpawnProcess` mock so tests stop
+      racing real OS processes. Suite: 174 flaky → **175 stable (×8)**.
+- [ ] Shared `noopSpawner()` / `fakeChild` test-utils helper so every
+      background-task test opts out of real spawning by default (prevents
+      reintroducing the run-9 race). Optionally gate real spawning behind an
+      explicit `allowRealSpawn` flag so a forgotten mock fails loudly, not flakily.
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`

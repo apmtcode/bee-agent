@@ -6,6 +6,64 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-13 (run 9) — 🐛 Fix corrupt background-task state files (broken shell quoting)
+
+**Audited:** Project health. The full suite was **flaky/red** (3 failing tests on
+a clean checkout — `operator-runtime`, `server`, `app` — despite run 8 logging
+174/174). Root-caused instead of shrugging it off as an environment flake, since
+the JSON parse error surfaced at a *fixed* byte offset (deterministic corruption,
+not a partial-read race).
+
+**Root cause (genuine production bug in `src/harness/background-tasks.ts`):** the
+background-task launcher inlines a JSON "running" state payload into a bash
+script and single-quotes it with `shellQuote()`. The single-quote escape was
+`"'"'"'` but must be `'"'"'`. Because the value sits inside outer single quotes,
+that **leading `"` is emitted literally**, so every `'` in the command became
+`"'` — corrupting the payload into unparseable JSON. Any task whose command
+contained a single quote (e.g. `printf 'x'`) wrote a broken `state.json`, and
+every subsequent `readState()` (sync / recover / getExecutionState) threw
+`SyntaxError`. Verified end-to-end by rendering + executing the real launcher.
+
+**Changed (additive / corrective):**
+- **`shellQuote()`** — fixed the escape sequence to the correct POSIX form
+  `'"'"'`, with a comment explaining why the leading char must be `'`.
+- **Atomic state writes in the launcher** — the running-state write used a
+  truncating `> stateFile` redirect and the Python terminal-state writer used a
+  plain `write_text`; both are non-atomic, so a concurrent reader could observe a
+  half-written file. Now both write to a unique `.tmp` sibling and `mv -f` /
+  `Path.replace` into place (atomic rename), matching the TS-side
+  `writeJsonAtomic`. Defense-in-depth against real read/write races.
+- **Numeric `pid` in running state** — the old `s/"$$"/$$/g` sed never matched
+  (`$$` expands on both sides inside the bash double-quoted arg), so the
+  transient running state carried `"pid":"$$"`. Replaced with an
+  `__OPENCLAW_PID__` placeholder and an escaped-quote sed (`\"…\"`) so the real
+  pid lands as a **number**, matching `BackgroundTaskExecutionState.pid: number`.
+- **Deterministic tests** — the three failing tests spawned *real* OS processes
+  via the default spawner, whose state writes raced the tests' own manual
+  `writeState`. Injected the already-supported `backgroundTaskSpawnProcess`
+  no-op mock (`() => ({ pid, unref })`) at each construction so execution state
+  is fully test-controlled. (The runtime already exposed this seam; the tests
+  just weren't using it.)
+- **New regression test** (`background-tasks.test.ts`) — renders the *real*
+  launch script for a single-quoted command, executes it via bash, and asserts
+  the resulting `state.json` parses, preserves the command verbatim, has a
+  numeric pid, and is readable by `readState()`. Confirmed it fails against the
+  old `shellQuote` and passes with the fix.
+
+**Test results:** `typecheck:src` ✅ (source stays green). Build ✅. Full suite
+✅ **175/175** (was 174 + 1 new test), **stable across 8 consecutive runs**
+(previously 1–3 failing per run). The suite is now deterministically green.
+
+**New idea:** add a tiny **`spawn-free` test harness helper** — a shared
+`noopSpawner()` (and matching `fakeChild`) exported from a test-utils module — so
+every background-task test opts out of real process spawning by default and new
+tests can't reintroduce this race. Longer term, consider making the runtime
+*refuse* to launch real processes unless an explicit `allowRealSpawn` flag is
+set in test/CI environments, turning "a test forgot to mock spawn" from a flaky
+failure into a loud, immediate one.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

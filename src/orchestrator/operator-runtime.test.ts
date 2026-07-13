@@ -528,9 +528,14 @@ describe("StandaloneOperatorRuntime", () => {
   });
 
   it("starts, syncs, recovers, lists, and cancels background tasks", async () => {
+    // Inject a no-op spawner so no real OS process writes state files. This test
+    // drives execution state entirely through explicit writeState/writeOutput
+    // calls; a real spawned launcher would race those writes non-deterministically.
+    let nextPid = 9000;
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
       backgroundTaskIsProcessRunning: () => false,
+      backgroundTaskSpawnProcess: () => ({ pid: (nextPid += 1), unref: () => {} }),
     });
     const session = await runtime.startSession({ title: "Tasks", agentId: "main" });
 
