@@ -16,6 +16,21 @@ async function makeTempDir(): Promise<string> {
   return dir;
 }
 
+// Deterministic stand-in for the real detached process spawner: returns a unique
+// fake pid and never launches an OS process, so a task's launch script cannot
+// asynchronously rewrite the state file and race the test's assertions. The
+// liveness probe reports true only for pids this fake actually issued, so tasks
+// started through it stay "running" while any fabricated pid a test writes by
+// hand (to force a failure scenario) reconciles as not-running.
+const liveFakeBackgroundPids = new Set<number>();
+let fakeBackgroundPid = 60000;
+const fakeBackgroundSpawn = () => {
+  const pid = (fakeBackgroundPid += 1);
+  liveFakeBackgroundPids.add(pid);
+  return { pid, unref() {} };
+};
+const fakeBackgroundIsProcessRunning = (pid: number) => liveFakeBackgroundPids.has(pid);
+
 afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })));
 });
@@ -801,7 +816,13 @@ describe("OperatorCliApp", () => {
 
   it("supports session lifecycle, transcript, approvals, pairing, config, and prompt commands", async () => {
     const rootDir = await makeTempDir();
-    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    const app = new OperatorCliApp({
+      rootDir,
+      cwd: rootDir,
+      currentDate: "2026-05-25",
+      backgroundTaskSpawnProcess: fakeBackgroundSpawn,
+      backgroundTaskIsProcessRunning: fakeBackgroundIsProcessRunning,
+    });
     const firstSession = await app.runtime.startSession({ title: "first", cwd: rootDir, agentId: "operator-cli" });
     const secondSession = await app.runtime.startSession({ title: "second", cwd: rootDir, agentId: "operator-cli" });
 

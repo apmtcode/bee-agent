@@ -38,6 +38,18 @@ unchecked items are queued. Keep this richer than you found it each run.
     `skills.executable.*`, `push.subscriptions.*`, `trajectories.*`, `replays.*`,
     `cron.runs`/misc — plus a few genuine test-only typings. Map the rest, then
     fix residual test-only typings.
+- [x] **Restore the green `npm test` gate** (run 9, 2026-07-13). 4 tests were
+      red at HEAD in the cloud env: a real `shellQuote` JSON-corruption bug in
+      `background-tasks.ts` (rotated POSIX single-quote escape) + 3
+      test-hermeticity races (real subprocess spawned in tests that only stubbed
+      `isProcessRunning`). Fixed the bug + added `backgroundTaskSpawnProcess`
+      passthrough to `OperatorCliApp` and injected deterministic fake spawners.
+      Now 174/174.
+- [ ] Extract a shared `createDeterministicBackgroundSpawn()` test helper (pid
+      set + liveness probe) so the fake-spawn pattern isn't re-implemented in
+      each test file, and add a meta-test that fails on any `*.test.ts`
+      injecting `backgroundTaskIsProcessRunning` without
+      `backgroundTaskSpawnProcess` (the exact flake class fixed in run 9).
 - [ ] Add a `verify` npm script (`typecheck && build && test`) and have the
       engine run it as a pre-push self-check each cycle.
 - [x] Interim **source-only typecheck gate** — DONE run 7. `tsconfig.src.json`

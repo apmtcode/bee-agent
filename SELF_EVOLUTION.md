@@ -6,6 +6,57 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-13 (run 9) — 🐛 Real bug fix + restored the green test gate (170→174)
+
+**Audited:** Started by running the suite on this cloud machine (the required
+verification gate). Contrary to run 8's "174/174", **4 tests failed at a clean
+`HEAD`** here — so `npm test` was red in this environment and every future
+run's verification gate was compromised. Triaged all four.
+
+**Root cause #1 — a genuine correctness bug (`src/harness/background-tasks.ts`):**
+`shellQuote()` used a *rotated / incorrect* POSIX single-quote escape —
+`value.replaceAll("'", `"'"'"'`)` (6 chars, starts with `"`) instead of the
+correct `'"'"'` (5 chars). The sibling `shellQuote` in `training/runner.ts`
+already had the right escape. Consequence: whenever a background-task **command
+contains a single quote** (e.g. `printf 'line-1\nline-2\n'`), the generated bash
+launch script emitted **malformed JSON** into the task's `state.json`
+(`"command":"printf "'line-1…"'"`), which then crashed `readJsonFile` during
+recovery/reconciliation (`SyntaxError: Expected ',' or '}'…`). Verified the
+exact corruption *and* the fix by rendering the quoting in an isolated bash
+`eval` + `JSON.parse`. One-char-class fix; no behaviour change for
+quote-free commands.
+
+**Root cause #2 — test hermeticity (the other 3 failures).** These tests
+injected `backgroundTaskIsProcessRunning` but **not** a mock spawner, so
+`startBackgroundTask` launched a *real* detached OS subprocess whose launch
+script wrote `state.json` **asynchronously**, racing the tests' own
+`writeState()` and dying at unpredictable times → spurious
+`missing-process` / `control=degraded` diagnostics. Passed in the authoring env
+by timing luck; deterministic-red here. Fixed additively:
+- **Production (`src/cli/app.ts`):** added optional `backgroundTaskSpawnProcess`
+  + `backgroundTaskIsProcessRunning` passthrough to `OperatorCliAppOptions`,
+  forwarded into the runtime (mirrors the runtime's existing options; production
+  default unchanged).
+- **Tests (operator-runtime, server ×3, app):** injected a deterministic fake
+  spawner (unique fake pids, launches no OS process). For the app test, a
+  Set-based liveness probe reports the fake-spawned pids as running while a
+  hand-written fabricated pid (`999999`) reconciles as dead — exactly matching
+  that test's intended degradation scenario.
+
+**Test results:** full suite **170 → 174 / 174** ✅ (was 4 red at HEAD in this
+env). Build ✅. `typecheck:src` ✅ (0). Full `typecheck` **125** (unchanged — my
+changes add no test-file debt). The green gate is restored.
+
+**New idea:** the failing pattern was "runtime/app constructed with
+`backgroundTaskIsProcessRunning` injected but `backgroundTaskSpawnProcess`
+omitted" — a spawn-real-process-in-a-hermetic-test footgun. Next run: extract a
+shared `createDeterministicBackgroundSpawn()` test helper (pid set + probe) so
+the pattern isn't re-implemented per file, and/or a tiny meta-test that scans
+`*.test.ts` for that exact asymmetric injection and fails, so the flake class
+can't silently return.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

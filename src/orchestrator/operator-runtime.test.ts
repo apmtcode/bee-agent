@@ -15,6 +15,13 @@ async function makeTempDir(): Promise<string> {
   return dir;
 }
 
+// Deterministic stand-in for the real detached process spawner. Returns a
+// unique fake pid and never launches an OS process, so the task's launch script
+// cannot asynchronously rewrite the state file and race the test's own
+// writeState() assertions.
+let fakeBackgroundPid = 40000;
+const fakeBackgroundSpawn = () => ({ pid: (fakeBackgroundPid += 1), unref() {} });
+
 function buildHookCaptureCommand(outputFile: string): string {
   const script = [
     "import fs from 'node:fs';",
@@ -530,6 +537,7 @@ describe("StandaloneOperatorRuntime", () => {
   it("starts, syncs, recovers, lists, and cancels background tasks", async () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
+      backgroundTaskSpawnProcess: fakeBackgroundSpawn,
       backgroundTaskIsProcessRunning: () => false,
     });
     const session = await runtime.startSession({ title: "Tasks", agentId: "main" });
