@@ -370,4 +370,45 @@ describe("BackgroundTaskExecutionService", () => {
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
   });
+
+  it("emits a valid JSON state file when the command contains single quotes (regression)", async () => {
+    // Regression for a shell-quoting bug: the launch-script quoter injected a
+    // spurious `"` for every single quote in the command/payload, corrupting the
+    // JSON state file whenever a command like `printf 'x'` was run. The mocked
+    // spawn used elsewhere never executed the script, so it went unnoticed.
+    const rootDir = await makeTempDir();
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"));
+    const command = "printf 'line-1\nline-2\n'";
+    const task = await store.start({ title: "Quoted command", command, cwd: rootDir, kind: "task" });
+
+    const statePath = path.join(rootDir, task.execution.stateFile);
+    const state = await waitForTerminalState(statePath);
+
+    expect(state.status).toBe("completed");
+    expect(state.exitCode).toBe(0);
+    // The command survives the shell round-trip through the generated JSON intact.
+    expect(state.command).toBe(command);
+  });
 });
+
+async function waitForTerminalState(
+  statePath: string,
+  timeoutMs = 8000,
+): Promise<BackgroundTaskExecutionState> {
+  const deadline = Date.now() + timeoutMs;
+  let last: unknown;
+  while (Date.now() < deadline) {
+    try {
+      const raw = await fs.readFile(statePath, "utf8");
+      last = JSON.parse(raw);
+      const state = last as BackgroundTaskExecutionState;
+      if (state.status === "completed" || state.status === "failed") {
+        return state;
+      }
+    } catch {
+      // File not yet written, mid-write, or (pre-fix) corrupt JSON — retry.
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  throw new Error(`state never reached a terminal status; last read: ${JSON.stringify(last)}`);
+}

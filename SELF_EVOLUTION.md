@@ -6,6 +6,65 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-13 (run 9) — Fix latent shell-quoting bug that corrupts background-task state; make bg-task tests hermetic
+
+**Audited:** The build/test health at run start. Found the suite was **not**
+green in this cloud environment: **3 tests failed** (`operator-runtime`,
+`server`, `app`) — a regression versus run 8's 174/174. Root-caused both the
+failure *and* an underlying latent bug behind it.
+
+**Genuine correctness bug fixed (`src/harness/background-tasks.ts`):**
+`shellQuote` used the **transposed** escape sequence `"'"'"'` (a *leading* `"`)
+instead of the POSIX-correct `'"'"'`. For every single quote in the quoted value
+it injected a **spurious `"`**, corrupting the JSON state payload the
+background-task launch script writes via `printf '%s' … > state.json`. So any
+task whose command or cwd contained a single quote — e.g. `printf 'ok'` — wrote
+**invalid JSON**, and the subsequent `readState` threw
+`SyntaxError: Expected ',' or '}'`. The sibling `shellQuote` in
+`src/training/runner.ts` already used the correct `'"'"'` form — this was a
+silent divergence between two copies of the same helper. Verified the fix with a
+standalone shell reproduction (`a'b` → buggy `a"'b` vs. fixed `a'b`).
+
+**Why it was dormant:** the mocked-spawn unit tests never execute the launch
+script, and the earlier cloud environment apparently lacked a runnable
+`bash`/`python3`, so the script never wrote a state file. This environment *does*
+run it, exposing both the corruption and a second issue:
+
+**Test hermeticity fixed (reliability, mirrors the run-1 `configHome` fix):**
+three tests constructed the runtime/app with only `isProcessRunning` overridden
+but **not** the spawn, so they hit the *real* `spawn`. Once a real shell runs,
+the launch script writes a `running` state file whose pid `isProcessRunning:()=>
+false` then flags as `missing-process` → control `degraded`, and short-lived
+commands race the tests' own `writeState`. Added a `backgroundTaskSpawnProcess` /
+`backgroundTaskIsProcessRunning` **test seam** to `OperatorCliApp` (threaded into
+its `StandaloneOperatorRuntime`) and injected a deterministic **no-op spawn**
+into every background-task-starting test (`app.test.ts`, `server.test.ts`,
+`operator-runtime.test.ts`). The health check at `server.ts:2175` only degrades
+when a `running` state file exists, so an inert spawn keeps control `active` —
+exactly the inert-spawn semantics the tests were written against.
+
+**New regression test** (`src/harness/background-tasks.test.ts`): drives the
+**real** launch script end-to-end with a single-quote command
+(`printf 'line-1\nline-2\n'`), polls the state file to a terminal status, and
+asserts it parses as valid JSON with `status:"completed"`, `exitCode:0`, and the
+command round-tripping byte-for-byte. This fails pre-fix (corrupt JSON → python's
+`json.loads` also chokes → never terminal) and passes post-fix.
+
+**Test results:** **175/175 passing**, deterministic across 3 consecutive full
+runs (was 3 failing + flaky at run start; +1 new regression test).
+`npm run build` ✅. `npm run typecheck:src` ✅ (exit 0). Full `tsc` unchanged at
+**125** (all test-file, pre-existing) — no regression.
+
+**New idea:** the two divergent `shellQuote` copies are the real hazard — extract
+a single `shellQuote` (and the shared state-writer/launch-script scaffolding) into
+`src/shared/shell.ts` with its own property test (`round-trip(v)===v` over strings
+containing `'`, `"`, `$`, spaces, newlines), so the two runners can never drift
+again. Broader: promote a `verify` script (`typecheck:src && build && test`) and
+have the engine gate every push on a *clean, deterministic* suite — this run only
+caught the breakage because it re-ran the baseline first.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

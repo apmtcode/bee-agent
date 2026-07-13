@@ -794,5 +794,9 @@ function renderStateWriterPython(status: BackgroundTaskExecutionState["status"])
 }
 
 function shellQuote(value: string): string {
-  return `'${value.replaceAll(`'`, `"'"'"'`)}'`;
+  // POSIX-safe single-quote escaping: close the quote, emit an escaped quote
+  // via a double-quoted section, then reopen. Using `'"'"'` (NOT `"'"'"'`,
+  // which injects a spurious leading `"`) so payloads containing single quotes
+  // — e.g. a command like `printf 'x'` — survive the shell round-trip intact.
+  return `'${value.replaceAll(`'`, `'"'"'`)}'`;
 }

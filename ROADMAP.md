@@ -8,6 +8,16 @@ unchecked items are queued. Keep this richer than you found it each run.
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`
       (2026-06-22).
+- [x] Fix `shellQuote` corruption + make background-task tests hermetic
+      (2026-07-13, run 9). `background-tasks.ts` used `"'"'"'` (transposed)
+      instead of the POSIX `'"'"'`, corrupting the JSON state file for any
+      command containing a single quote; added an inert-spawn test seam to
+      `OperatorCliApp` so bg-task tests no longer depend on a real shell.
+- [ ] **Extract a single `shellQuote` into `src/shared/shell.ts`** with a
+      property test (`round-trip(v) === v` over `'`/`"`/`$`/space/newline) and
+      route both `background-tasks.ts` and `training/runner.ts` through it, so the
+      two copies can never diverge again (run 9 fixed one copy; the divergence
+      remains the hazard).
 - [ ] **Pay down typecheck debt** (surfaced by the `typecheck` script). Full
       `tsc --noEmit` count was **397** on 2026-06-22; now **125**. 🎯 ALL source
       (`src/**` non-test) files typecheck clean since run 7; remaining 125 errors
@@ -38,8 +48,11 @@ unchecked items are queued. Keep this richer than you found it each run.
     `skills.executable.*`, `push.subscriptions.*`, `trajectories.*`, `replays.*`,
     `cron.runs`/misc — plus a few genuine test-only typings. Map the rest, then
     fix residual test-only typings.
-- [ ] Add a `verify` npm script (`typecheck && build && test`) and have the
-      engine run it as a pre-push self-check each cycle.
+- [ ] Add a `verify` npm script (`typecheck:src && build && test`) and have the
+      engine run it as a pre-push self-check each cycle. Run 9 underscored this:
+      the baseline was silently red (3 failing) on entry — only re-running tests
+      first caught it. The gate must also assert the suite is **deterministic**
+      (e.g. run twice) since the run-9 breakage was environment-flaky.
 - [x] Interim **source-only typecheck gate** — DONE run 7. `tsconfig.src.json`
       (excludes `**/*.test.ts`) + `typecheck:src` script; passes (exit 0). Next:
       have the engine run it as a per-run pre-push self-check.
