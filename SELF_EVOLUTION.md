@@ -6,6 +6,72 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-13 (run 9) — 🧠 Movement-model inference: pluggable backend + deterministic n-gram (objective #2c/#2d)
+
+**Audited:** The local-movement learning subsystem (`src/capture/` + `src/training/`)
+against objective #2's five pieces. Found capture → schema → dataset → replay →
+training-*plan* generation all present, but **objective #2(c) "post-train a model
+to *repeat* recorded movements" and #2(d) "*generalize* to new-but-related
+movements" had NO runnable code**: `src/training/runner.ts` only emits Apple-Silicon
+`mlx`/`axolotl` shell plans, and there was zero in-process training or inference.
+So the model could never actually be exercised — or tested — in the cloud.
+
+**Changed (all additive, new files only — no edits to working code except the
+`src/index.ts` barrel):**
+- `src/training/movement-model.ts` — the pluggable **`MovementModelBackend`**
+  interface (`train` / `load`) + **`TrainedMovementModel`** (`predictNext` /
+  `generate` / `serialize`), and a deterministic, dependency-free
+  **`NGramMovementModelBackend`** (Markov n-gram with stupid-backoff, default
+  order 3). Back-off is what delivers *generalization*: an unseen k-gram context
+  degrades to a seen (k-1)-gram instead of failing. All tie-breaks are
+  deterministic (count desc, token asc) so training + inference are reproducible
+  in CI. Ships `evaluateNextTokenAccuracy()` as the generalization eval harness.
+  This backend is simultaneously the cloud/CI mock AND a usable on-device
+  baseline; a heavier real model (small local transformer, mlx policy) drops in
+  behind the same interface.
+- `src/training/movement-dataset.ts` — tokenizes replay timelines / trajectory
+  spans into the compact `MovementSequence` format (`act:<tool>:<slug>` /
+  `obs:<source>:<slug>`), coarse on purpose so related movements share tokens.
+  Builders for replays, trajectories, and reviewed-export manifests, plus
+  `trainMovementModelFromExport()` (end-to-end export → dataset → trained model,
+  n-gram by default, backend swappable).
+- `src/training/synthetic-movements.ts` — seedable (mulberry32) synthetic
+  replay-stream generator over a library of related UI flows (login /
+  compose-email / save-file), so the whole pipeline validates without real OS
+  input (we run in the cloud with no machine access).
+- Exported all of the above from `src/index.ts`.
+- Tests: `movement-model.test.ts` (8) + `movement-dataset.test.ts` (6) —
+  exact-repeat of a recorded sequence, **generalization via back-off** (novel
+  prefix, correct continuation, `matchedOrder < order`), serialize→load
+  identity, terminal-token stop, deterministic candidate ranking, and a
+  **held-out generalization eval** (train seed 7 / eval seed 999, disjoint
+  instances of the same flows → >0.9 next-token accuracy).
+
+**Test results:** new movement suite ✅ **14/14**. `npm run build` ✅ (tsdown,
+552 kB). `npm run typecheck:src` ✅ (exit 0 — source stays green). Full `npm test`
+= **185 passed / 3 failed (188)**.
+
+**⚠️ The 3 failures are PRE-EXISTING and NOT caused by this change.** Verified by
+`git stash -u` → running the 3 suspect files on the clean base → same 3 fail
+(`app.test.ts`, `server.test.ts`, `operator-runtime.test.ts`). Root cause is a
+`SyntaxError: Expected ',' or '}'` in `readJsonFile` while reconciling a
+background-task **state file** written by the bash launch script
+(`renderLaunchScript` in `runner.ts` / the background-task equivalent): the
+`sed`-based `$$`/`__STARTED_AT__` substitution produces malformed JSON in *this*
+container's shell/sed/PID environment (run 8 recorded 174/174 green, so it's
+environment-sensitive, not a repo regression). Logged as a new ROADMAP item;
+out of scope for a focused movement-model diff and would require rewriting the
+shell state-writer (guardrail: no large rewrites of working code).
+
+**New idea:** add a **replay-fidelity reward** that closes the capture→train→replay
+loop: score a generated movement sequence against the recorded one (token
+edit-distance / longest-common-subsequence) and surface it as the RL reward the
+`axolotl` plan already references as `--reward-model replay-manifest`. The
+n-gram model + `evaluateNextTokenAccuracy` are the in-process oracle for it, so
+we can unit-test the reward deterministically before wiring the real trainer.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

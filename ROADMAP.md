@@ -59,16 +59,43 @@ unchecked items are queued. Keep this richer than you found it each run.
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
 (exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
-      objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Inventory what `src/capture` + `src/training` already implement vs. the
+      objective's five pieces (run 9): capture→schema→dataset→replay→training-*plan*
+      all present; the gap was in-process **train + infer** (#2c/#2d) — no model
+      could actually repeat/generalize movements. Filled below.
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      for a real on-device small model — DONE run 9 (`src/training/movement-model.ts`:
+      `MovementModelBackend` + `NGramMovementModelBackend` with back-off).
+- [x] Synthetic event-stream generator to validate capture→dataset→replay
+      round-trips without real OS input — DONE run 9
+      (`src/training/synthetic-movements.ts`, seedable, flow library).
+- [x] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories — DONE run 9 (`evaluateNextTokenAccuracy`;
+      test trains seed 7 / evals disjoint seed 999 → >0.9 next-token accuracy).
+- [ ] Wire the movement-model backend into `LocalAppleSiliconTrainingRunner`:
+      emit a `model.json` (n-gram) artifact alongside the mlx/axolotl plan so the
+      cloud/CI path produces a *real, loadable* model, and the on-device path can
+      warm-start or fall back to it.
+- [ ] Replay-fidelity reward (run 9 idea): score a generated sequence vs. the
+      recorded one (LCS / token edit-distance) to serve as the RL `replay-manifest`
+      reward the axolotl plan already references; unit-test it against the n-gram
+      oracle deterministically.
+- [ ] Richer tokenization: fold gesture direction/target + observation metadata
+      (currently dropped in replay events) into movement tokens for higher replay
+      fidelity, with a fidelity/generalization knob.
+
+## Known failures / flakes
+- [ ] **Pre-existing (run 9):** 3 tests fail in *this* cloud container —
+      `operator-runtime.test.ts` (background-task recover), `app.test.ts`,
+      `server.test.ts`. Root cause: `readJsonFile` hits `SyntaxError: Expected ','
+      or '}'` reading a background-task **state file** written by the bash launch
+      script; the `sed`-based `$$`/`__STARTED_AT__` substitution
+      (`renderLaunchScript`) yields malformed JSON under this container's
+      shell/sed/PID. Run 8 recorded 174/174, so it's environment-sensitive.
+      Fix: replace the sed substitution with a small Python/Node writer that
+      emits guaranteed-valid JSON (the completion path already shells out to
+      `python3` to write state — reuse that for the initial state too).
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
