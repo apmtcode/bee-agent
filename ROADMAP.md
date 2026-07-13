@@ -3,6 +3,23 @@
 Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
+## Reliability / correctness
+- [x] **Fix shell-quoting corruption in background-task launch scripts**
+      (2026-07-13, run 9). `shellQuote` escaped `'` as `"'"'"'` instead of the
+      POSIX `'\''`, so any command with a single quote round-tripped to invalid
+      JSON and killed the detached task; the initial state write was also
+      non-atomic and left `pid` as the string `"$$"`. Fixed `shellQuote`, moved
+      all state writes to atomic `python3` (temp-file + rename), made the racing
+      tests hermetic via a no-op spawn, and added an end-to-end launch-script
+      regression test. Suite 174→175, stable across repeated runs.
+- [ ] **python3 dependency probe / fallback.** The launch script now requires
+      `python3` for every state write. Add a startup capability check that fails
+      loudly (health-check) instead of a cryptic detached failure, and a
+      Node/pure-bash state-writer fallback for machines without python3.
+- [ ] **`shellQuote` property test.** Assert `bash -c "printf '%s' <quoted>"`
+      round-trips arbitrary strings (quotes, newlines, `$`, backticks, `!`) — the
+      exact bug class from run 9.
+
 ## Foundations / DX
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.

@@ -84,6 +84,9 @@ describe("OperatorControlPlaneServer", () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir,
       backgroundTaskIsProcessRunning: () => false,
+      // No-op spawn: these tests drive background-task state by writing state
+      // files directly, so the real launch script must not run and race them.
+      backgroundTaskSpawnProcess: () => ({ pid: 4321, unref() {} }),
       delivery: new OperatorDeliveryService(rootDir, {
         sendBrowserPush: async () => {},
       }),
@@ -953,6 +956,9 @@ describe("OperatorControlPlaneServer", () => {
     const driftingRuntime = new StandaloneOperatorRuntime({
       rootDir: driftingRootDir,
       backgroundTaskIsProcessRunning: () => false,
+      // No-op spawn: these tests drive background-task state by writing state
+      // files directly, so the real launch script must not run and race them.
+      backgroundTaskSpawnProcess: () => ({ pid: 4321, unref() {} }),
     });
     const driftingServer = new OperatorControlPlaneServer({ runtime: driftingRuntime });
     const driftingBootstrap = await driftingServer.handle({
@@ -1019,6 +1025,9 @@ describe("OperatorControlPlaneServer", () => {
     const breakerRuntime = new StandaloneOperatorRuntime({
       rootDir: breakerRootDir,
       backgroundTaskIsProcessRunning: () => false,
+      // No-op spawn: these tests drive background-task state by writing state
+      // files directly, so the real launch script must not run and race them.
+      backgroundTaskSpawnProcess: () => ({ pid: 4321, unref() {} }),
     });
     const breakerServer = new OperatorControlPlaneServer({ runtime: breakerRuntime });
     const breakerOne = await breakerServer.handle({

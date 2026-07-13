@@ -370,4 +370,35 @@ describe("BackgroundTaskExecutionService", () => {
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
   });
+
+  it("writes a valid state file for commands containing quotes and newlines", async () => {
+    const rootDir = await makeTempDir();
+    // A command with single quotes and an embedded newline — the exact shape
+    // that the previous printf|sed launch script mangled into invalid JSON.
+    const trickyCommand = "printf 'line-1\nline-2\n'";
+    const store = new FileBackgroundTaskStore(
+      path.join(rootDir, "background-tasks.json"),
+      () => ({ pid: 4242, unref() {} }),
+    );
+    const task = await store.start({ title: "Tricky", command: trickyCommand, cwd: rootDir });
+    const service = new BackgroundTaskExecutionService(rootDir);
+
+    // Execute the launch script to completion (not detached) and wait for it.
+    const { execFile } = await import("node:child_process");
+    const { promisify } = await import("node:util");
+    const scriptPath = path.join(rootDir, task.execution.launchScript);
+    await promisify(execFile)("bash", [scriptPath], { cwd: rootDir });
+
+    const state = await service.readState(task);
+    expect(state).toBeDefined();
+    expect(typeof state?.pid).toBe("number");
+    expect(state?.command).toBe(trickyCommand);
+    expect(state?.taskId).toBe(task.id);
+    expect(state?.status).toBe("completed");
+    expect(state?.exitCode).toBe(0);
+    // No stray temp state files should remain after the atomic rename.
+    const stateDir = path.dirname(scriptPath);
+    const leftovers = (await fs.readdir(stateDir)).filter((name) => name.endsWith(".tmp"));
+    expect(leftovers).toEqual([]);
+  });
 });

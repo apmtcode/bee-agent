@@ -6,6 +6,73 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-13 (run 9) — 🐛 Fixed shell-quoting corruption in background-task launch scripts (real bug)
+
+**Audited:** Project health first (per the pre-push self-check idea from run 7).
+Found the suite **red on arrival**: 3 tests failing (`operator-runtime`,
+`server`, `app`) — a regression since run 8's claimed 174/174. The failures were
+`SyntaxError: Expected ',' or '}' … in JSON` thrown from `readJsonFile` while
+reading a background-task **state file**.
+
+**Root cause (two real production bugs in `src/harness/background-tasks.ts`):**
+1. **`shellQuote` was malformed.** It escaped an embedded single quote as
+   `"'"'"'` (6 chars, leading `"`) instead of the canonical POSIX `'\''` (or
+   `'"'"'`). So any command containing a single quote round-tripped **wrong**:
+   `printf 'line-1\nline-2\n'` became `printf "'line-1\nline-2\n"'` — an
+   unbalanced double quote. The detached launch script's `bash -lc <command>`
+   then died with `unexpected EOF while looking for matching '`, and the state it
+   wrote was corrupt. Proven with a shell round-trip harness before fixing.
+2. **The initial state write was non-atomic and used fragile `printf|sed` JSON
+   embedding.** The launch script serialized the running-state JSON into the
+   shell via `printf '%s' <payload> | sed … > statefile`. The `sed` pid
+   substitution `s/"$$"/…/` never fired (the double-quotes closed the sed arg),
+   leaving `pid` as the literal string `"$$"` (schema says `number`), and the
+   bare `> statefile` truncates in place so a concurrent reader/recovery could
+   observe a half-written file.
+
+**Changed (additive, `src/harness/background-tasks.ts`):**
+- Fixed `shellQuote` to emit `'\''`. This is the actual root cause of the JSON
+  corruption — commands with quotes now round-trip exactly.
+- Replaced the `printf|sed` initial-state write with a `python3` heredoc
+  (`renderInitialStateWriterPython`) that receives every field as a shell-quoted
+  argv element (no JSON-in-shell escaping), sets `pid` to the real numeric bash
+  `$$`, and writes to a temp file then `Path.replace()` (atomic rename). The
+  completion writer (`renderStateWriterPython`) was likewise made atomic
+  (temp-file + `replace`). `python3` was already required by the completion path,
+  so no new dependency.
+
+**Test hermeticity (the failing tests relied on the *broken* launch script):**
+because the script previously always failed/corrupted, tests that write state
+manually and assert on it never had the real detached process overwrite their
+writes. Once the script *worked*, real `printf` tasks completed and race-wrote
+`completed` state. Fixed by injecting a **no-op `backgroundTaskSpawnProcess`**
+(returns a fake pid, never runs the script) into the three
+`StandaloneOperatorRuntime`s in `server.test.ts` and the one in
+`operator-runtime.test.ts` that drive state directly — the existing constructor
+seam, so production is untouched. `app.test.ts` was already stable (it syncs to a
+terminal state that agrees).
+
+**New regression test** (`background-tasks.test.ts`): renders a launch script for
+a command containing single quotes *and* an embedded newline, executes it to
+completion (not detached), and asserts the state file is valid JSON with a
+**numeric** pid, the **exact** command preserved, `status: completed`,
+`exitCode: 0`, and no leftover `.tmp` files. This is the first test that actually
+exercises the launch script end-to-end — the layer where both bugs hid.
+
+**Test results:** suite **175/175** (was 3 failing on arrival; +1 new test),
+**stable across 5+ repeated runs** of the previously-flaky files. `npm run build`
+✅. `npm run typecheck:src` ✅ (exit 0). Diff: 4 files, +92/−17.
+
+**New idea:** the launch script now hard-depends on `python3` for *all* state
+writes. Add a tiny startup capability probe (`command -v python3`) surfaced as a
+clear error/health-check rather than a cryptic detached failure — and, longer
+term, a pure-bash or Node-side state writer fallback so background tasks work on
+machines without python3. Also worth: a property-test for `shellQuote` asserting
+`bash -c "printf '%s' <quoted>"` round-trips arbitrary strings (quotes,
+newlines, `$`, backticks) — the class of bug that just bit us.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
