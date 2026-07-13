@@ -6,6 +6,73 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-13 (run 9) — 🧠 Movement-model backend (train→infer→eval) + fixed 2 real background-task bugs
+
+**Audited:** The movement-learning subsystem (`src/capture` + `src/training`).
+Found the pipeline had capture → schema → dataset → replay → a training *plan*
+generator (mlx/axolotl shell commands) + execution service, but **no
+in-process learnable model** — nothing that could actually satisfy standing
+objective #2(c) "repeat the recorded movements" or #2(d) "generalize to new but
+related movements" in the cloud/CI. This is the top ROADMAP item ("pluggable
+local-model backend + deterministic mock").
+
+**Changed (additive):**
+- **New `src/training/model-backend.ts`** — the pluggable local-model seam:
+  - `MovementModelBackend` interface (`train` / `restore`) + `TrainedMovementModel`
+    (`predictNext` / `generate` / `serialize`), so a real on-device small model
+    can slot in behind the same interface the mlx runner will use.
+  - `NgramMovementBackend`: a fully **deterministic** order-k Markov model with
+    stupid-backoff. Repeats recorded trajectories exactly (longest matching
+    suffix → recorded continuation) and generalizes by backing off to shorter
+    suffixes shared across related trajectories. Ties break by descending count
+    then ascending token, so it's safe to assert on in CI. Serializes to plain
+    JSON and restores round-trip.
+  - Tokenizer helpers (`tokenizeEvent`/`sequenceFromEvents`/`datasetFromReplays`)
+    that turn `ReplayTimelineEvent[]` (the existing replay dataset) into token
+    sequences — no new dataset format, reuses the replay manifest.
+  - `evaluateNextTokenAccuracy` — the **generalization eval harness** (also a
+    queued ROADMAP item): scores next-token accuracy on held-out sequences.
+  - 11 new tests (repeat, generalize/back-off, determinism, serialize, eval).
+  - Exported from the barrel (`src/index.ts`).
+- **Fixed 2 genuine production bugs** found while getting the suite green — both
+  in the detached background-task/training launch scripts:
+  1. `shellQuote` in `background-tasks.ts` mis-escaped single quotes as
+     `"'"'"'` (starts with `"`) instead of the POSIX-correct `'"'"'` (matching
+     `runner.ts`). **Any background-task command containing a single quote
+     corrupted its state-file JSON** → recovery threw `SyntaxError`. Fixed.
+  2. The sed pid substitution `s/"$$"/…/` never matched, because `$` is a regex
+     anchor in sed BRE — so the running-state `pid` was persisted as the literal
+     string `"$$"` (breaking liveness checks for long-running tasks). Escaped it
+     (`s/"\$\$"/…/`) in both `background-tasks.ts` and `runner.ts`.
+  3. Made both launch scripts write state **atomically** (temp file + `mv` /
+     `os.replace`) so a concurrent reader can never see a torn write.
+
+**Test hermeticity:** the background-task tests spawned *real* detached OS
+processes that asynchronously mutate the state file and race the tests'
+explicit `writeState`/`writeOutput` — deterministically red in this cloud env
+(they only passed where `spawn` happened to be inert). Threaded an injectable
+`backgroundTaskSpawnProcess` through `OperatorCliAppOptions` → runtime (defaults
+unchanged) and injected an **inert spawn** into the 4 affected test setups, the
+same hermeticity pattern as run 1's `configHome` fix. No production behaviour
+change.
+
+**Test results:** **4 pre-existing failures → 0.** Full suite **185/185**,
+green & stable **5/5 consecutive runs** (was 174 tests + 4 flaky/red; +11 new).
+`typecheck:src` ✅ (source stays clean). Build ✅. Full `tsc` unchanged at 125
+(all test-file debt; new module is clean).
+
+**New idea:** now that a real movement model exists, add a **closed-loop replay
+generalization metric** to the eval harness — instead of only next-token
+accuracy, roll out `generate()` from a held-out trajectory's opening context and
+score the *edit distance* between the generated movement sequence and the actual
+recorded one. That measures true generalization (whole-trajectory reconstruction)
+rather than per-step prediction, and gives a single dial to track as backends
+improve. Second idea: a tiny "capability smoke" backend-conformance test suite
+that any `MovementModelBackend` (mock or real on-device) must pass, so a future
+mlx/on-device backend is validated against the same contract as the n-gram mock.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

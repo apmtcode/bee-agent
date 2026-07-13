@@ -62,15 +62,38 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
+      for a real on-device small model. **DONE run 9** —
+      `src/training/model-backend.ts`: `MovementModelBackend` interface +
+      deterministic `NgramMovementBackend` (order-k Markov w/ back-off) that
+      repeats recorded movements and generalizes to related ones; serialize/
+      restore; 11 tests. Reuses `ReplayTimelineEvent[]` as the dataset (no new
+      format).
 - [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      round-trips without real OS input. (Partly covered: the model-backend
+      tests build synthetic replay manifests; still want a reusable generator
+      module with tunable trajectory templates for broader coverage.)
+- [x] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories. **DONE run 9** —
+      `evaluateNextTokenAccuracy(model, heldOut)` scores next-token accuracy on
+      held-out sequences. Next: whole-trajectory rollout + edit-distance metric
+      (see Innovation backlog).
+- [ ] Closed-loop replay generalization metric: roll out `generate()` from a
+      held-out opening context and score edit distance vs. the recorded
+      trajectory — measures whole-sequence reconstruction, not per-step.
+- [ ] `MovementModelBackend` conformance suite: a shared contract test every
+      backend (mock + future on-device mlx) must pass.
 
 ## Innovation backlog
+- [ ] Launch-script robustness: the detached background-task / training launch
+      scripts are hand-built shell with easy-to-get-wrong quoting (run 9 fixed a
+      broken single-quote `shellQuote` and a non-matching sed pid substitution,
+      and made state writes atomic). Add a focused unit test that renders the
+      launch script for adversarial commands (single quotes, spaces, newlines,
+      `$`/`&`) and asserts the resulting state file is valid JSON with the
+      command round-tripped — so shell-quoting regressions are caught directly
+      instead of via flaky integration tests.
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in
       project health over time.
