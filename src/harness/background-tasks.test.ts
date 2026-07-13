@@ -1,3 +1,4 @@
+import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -369,5 +370,32 @@ describe("BackgroundTaskExecutionService", () => {
     await expect(fs.readFile(path.join(rootDir, task.execution.launchScript), "utf8")).resolves.toContain("bash -lc");
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
+  });
+
+  it("renders a launch script whose state file stays valid JSON for commands containing single quotes", async () => {
+    // Regression: shellQuote used to emit a malformed 6-char single-quote
+    // escape (`"'"'"'` instead of `'"'"'`), so any command containing a single
+    // quote corrupted the shell-templated state.json and made recovery throw a
+    // JSON parse error. Execute the real rendered script and assert the state
+    // file parses and round-trips the command verbatim.
+    const rootDir = await makeTempDir();
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"), () => ({
+      pid: 2222,
+      unref() {},
+    }));
+    const command = "printf 'line-1\nline-2\n'";
+    const task = await store.start({ title: "Collect logs", command, cwd: rootDir, kind: "task" });
+
+    const scriptPath = path.join(rootDir, task.execution.launchScript);
+    await new Promise<void>((resolve, reject) => {
+      execFile("bash", [scriptPath], { cwd: rootDir }, (error) => (error ? reject(error) : resolve()));
+    });
+
+    const raw = await fs.readFile(path.join(rootDir, task.execution.stateFile), "utf8");
+    const parsed = JSON.parse(raw) as BackgroundTaskExecutionState;
+    expect(parsed.command).toBe(command);
+    expect(parsed.taskId).toBe(task.id);
+    expect(parsed.status).toBe("completed");
+    expect(typeof parsed.pid).toBe("number");
   });
 });

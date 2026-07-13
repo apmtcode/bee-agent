@@ -70,6 +70,24 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Generalization eval harness: measure replay fidelity on held-out but
       related synthetic trajectories.
 
+## Reliability / correctness
+- [x] **Shell-quoting bug in background-task launch scripts** — DONE run 9.
+      `shellQuote` in `harness/background-tasks.ts` used a malformed 6-char
+      single-quote escape, corrupting the generated `state.json` for any command
+      containing a `'` (parse error on recovery + injection hazard). Fixed to the
+      canonical `'"'"'`; added a shell-level regression test. Suite 172→175 green.
+- [ ] **Launch-script lint / golden corpus** (new, run 9): render
+      `renderLaunchScript` (in both `harness/background-tasks.ts` and
+      `training/runner.ts`) for adversarial commands — single/double quotes,
+      `$()`, newlines, backticks, unicode — and assert each script parses its own
+      emitted state JSON and runs without shell errors. Extract a single
+      property-tested `shellQuote` shared by both generators so this class of
+      hand-rolled-shell-templating bug is caught once for all.
+- [ ] **Hermetic-spawn helper for tests**: a shared `fakeSpawn(pid)` factory +
+      lint that flags any test constructing a runtime/app that can start
+      background tasks without injecting a spawn seam, so real OS subprocesses
+      never leak into CI again.
+
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in

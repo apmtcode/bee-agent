@@ -6,6 +6,58 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-13 (run 9) — Fix shell-quoting bug corrupting background-task state; suite back to green
+
+**Audited:** Ran the full suite first (per procedure step 5). Found the tree was
+**not green** — 3 tests failing (`operator-runtime`, `cli/app`,
+`control-plane/server`). Traced all three to one real production bug plus a test
+hermeticity gap.
+
+**Root-cause (real bug):** `shellQuote()` in `src/harness/background-tasks.ts`
+escaped a single quote as the malformed 6-char sequence `` "'"'"' `` instead of
+the canonical POSIX `` '"'"' `` (5 chars — the *correct* form is already used in
+`src/training/runner.ts`). `shellQuote` quotes the command, cwd, output path and
+state path embedded into each background task's generated `run.sh`. Whenever a
+task command contained a single quote (e.g. the test's `printf 'line-1\nline-2\n'`),
+the launch script's `printf '%s' <payload> | sed > state.json` step produced
+**invalid JSON** (`"command":"printf "'line-1…`), so recovery
+(`reconcileTask → readState → JSON.parse`) threw a `SyntaxError`. Beyond the
+test, this is a latent shell-injection/breakage hazard for any real command with
+a `'`. Reproduced the exact corruption in a shell harness, fixed the escape, and
+re-verified round-trip.
+
+**Test hermeticity:** three integration tests started background tasks without
+injecting a fake spawn, so they launched **real detached OS subprocesses**
+(`sleep 5`, `tail -f`, single-quoted `printf`) that raced the launch-script state
+writes and non-deterministically degraded platform-control state in the cloud.
+- Added a `backgroundTaskSpawnProcess` / `backgroundTaskIsProcessRunning` seam to
+  `OperatorCliAppOptions` (plumbed into the runtime), mirroring the existing
+  `configHome` and runtime seams — a small, additive production change that makes
+  the CLI app testable without real processes.
+- Injected the deterministic fake spawn (`() => ({ pid, unref() {} })`) into the
+  four affected runtime/app constructions (operator-runtime, server main +
+  drifting + breaker, app session-lifecycle). Left `printf ok`-style tests that
+  legitimately rely on a fast real subprocess untouched.
+
+**New regression test** (`background-tasks.test.ts`): renders the real launch
+script for a single-quote command, executes it with `bash`, and asserts the
+resulting `state.json` parses as valid JSON and round-trips the command verbatim
+— directly guarding the escape fix at the shell level (not just the TS layer).
+
+**Test results:** `npm run build` ✅. `npm run typecheck:src` ✅ (exit 0, source
+still fully green). `npm test` ✅ **175/175** (was 172/175), stable across 3
+consecutive runs. Net +1 test (the new regression).
+
+**New idea (logged to ROADMAP):** A **launch-script lint / golden-file test** —
+render `renderLaunchScript` for a corpus of adversarial commands (single quotes,
+double quotes, `$()`, newlines, backticks, unicode) and assert every generated
+script both parses its own emitted state JSON and executes without shell errors.
+This class of bug (hand-rolled shell templating) recurs in `training/runner.ts`
+too; a shared, property-tested `shellQuote` + golden corpus would catch it once
+for all launch-script generators.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
