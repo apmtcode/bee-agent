@@ -6,6 +6,64 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-13 (run 9) — Hermetic background-task spawning: killed a whole class of flaky, process-leaking tests
+
+**Audited:** Suite health first (the standing gate). Found the suite was **no
+longer green** on this machine — 2–4 tests failing *non-deterministically*
+(4/170, then 2/172, then 1/171 across back-to-back runs), despite run 8 recording
+174/174. Root-caused it rather than papering over it.
+
+**Root cause (one defect, three symptoms):** every test that exercised a
+background task called `runtime.startBackgroundTask(...)`, which **forks a real
+detached OS child** (`sleep 5`, `printf ok`, …) that then *asynchronously* writes
+its own execution-state file. Tests stubbed `isProcessRunning: () => false` but
+**not** the spawner, creating an inconsistent world whose observability depended
+on wall-clock timing:
+1. `server.test.ts` (consistent here): after `remoteControl resume`, the real
+   child had written `status:"running"` to the state file, but the `() => false`
+   liveness stub made it look dead → `control:"degraded"` instead of `"active"`.
+2. `operator-runtime.test.ts` (intermittent): the child's state-file write
+   **torn-wrote** against the test's manual `writeState` → `SyntaxError: Expected
+   ',' or '}'` mid-JSON in `readState`.
+3. `app.test.ts` monitor test (intermittent): `printf ok` **exits instantly**, so
+   by `task-stop` the process was already gone → `"…is not running"` instead of
+   `"Stopped task"`. Plus real forks leaked detached processes into CI.
+
+**Changed (additive, reversible):**
+- **New capability — `src/harness/simulated-background-spawn.ts`:**
+  `createSimulatedBackgroundSpawn()` builds a `SpawnBackgroundProcess` that never
+  touches the OS — deterministic, monotonically increasing fake pids (default
+  base `100000`, above Linux `pid_max` so `stop()`'s `process.kill(-pid)` always
+  ESRCHes harmlessly) and a no-op child handle, with an optional `onLaunch` sink
+  for assertions. This is the simulated seam mandated by guardrail #3 for
+  anything that would otherwise fork a host process; exported from the barrel.
+- **New testability seam on `OperatorCliApp`:** `backgroundTaskSpawnProcess` +
+  `backgroundTaskIsProcessRunning` options threaded into its internal runtime
+  (mirrors the earlier `configHome` injection pattern), so CLI-level tests can be
+  hermetic without reaching into internals.
+- **Wired the simulated spawner into every `startBackgroundTask` site** across
+  `server.test.ts` (4 runtimes), `app.test.ts` (2 tests), and
+  `operator-runtime.test.ts` (1 test). The monitor test additionally authors its
+  task output by hand and treats tasks as live (`isProcessRunning: () => true`)
+  so sync keeps them running and stop can cancel them. **No test forks a real
+  background process anymore.**
+- Added `simulated-background-spawn.test.ts` (3 cases: deterministic pids,
+  default base + no-op unref, ordered `onLaunch` capture).
+
+**Test results:** **177/177 passing, 0 failures across 26 back-to-back full-suite
+runs** (was 2–4 flaky failures/run). Tests 174 → 177 (+3 for the new helper).
+Build ✅. `typecheck:src` exit 0 (source stays green). Full `tsc` **137,
+unchanged** — the change is typecheck-neutral. No production behaviour changed:
+the real spawner remains the default; only tests inject the simulation.
+
+**New idea (logged to ROADMAP):** a **flake sentinel** — a CI/self-check step
+that runs the suite N× (e.g. 3–5) and fails if pass-counts differ between runs,
+so timing-dependent regressions (like this one) are caught at authoring time
+instead of silently drifting the recorded "174/174" away from reality. Cheap
+insurance now that the suite is deterministic.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

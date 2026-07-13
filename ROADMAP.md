@@ -70,6 +70,20 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Generalization eval harness: measure replay fidelity on held-out but
       related synthetic trajectories.
 
+## Test reliability / hermeticity
+- [x] **Hermetic background-task spawning** (2026-07-13, run 9). Added
+      `createSimulatedBackgroundSpawn()` (`src/harness/simulated-background-spawn.ts`)
+      + `backgroundTaskSpawnProcess`/`backgroundTaskIsProcessRunning` options on
+      `OperatorCliApp`, and wired the simulated spawner into every
+      `startBackgroundTask` test site. No test forks a real OS process anymore;
+      suite went from 2–4 flaky failures/run to 0 across 26 runs.
+- [ ] **Flake sentinel**: a self-check that runs the suite N× (3–5) and fails if
+      pass-counts differ between runs, so timing-dependent regressions are caught
+      at authoring time rather than silently drifting the recorded pass count.
+- [ ] Audit the remaining real-`spawn` surfaces in tests (e.g. any future
+      `startBackgroundTask` callers, subagent spawns) and default them to the
+      simulated seam unless they specifically assert real-process behaviour.
+
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in
