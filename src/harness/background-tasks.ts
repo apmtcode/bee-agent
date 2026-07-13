@@ -4,6 +4,13 @@ import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { ensureParentDir, readJsonFile, writeJsonAtomic } from "../shared/fs.js";
 
+const STATE_READ_RETRIES = 3;
+const STATE_READ_RETRY_DELAY_MS = 15;
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 export type BackgroundTaskKind = "task" | "monitor";
 export type BackgroundTaskStatus = "planned" | "running" | "completed" | "failed" | "cancelled";
 
@@ -231,10 +238,27 @@ export class BackgroundTaskExecutionService {
   }
 
   async readState(task: BackgroundTaskRecord): Promise<BackgroundTaskExecutionState | undefined> {
-    return await readJsonFile<BackgroundTaskExecutionState | undefined>(
-      path.join(this.rootDir, task.execution.stateFile),
-      undefined,
-    );
+    const statePath = path.join(this.rootDir, task.execution.stateFile);
+    // The launch script writes state.json atomically (temp file + rename), so a
+    // reader should never observe a torn write. As defense-in-depth against a
+    // legacy non-atomic writer or on-disk corruption, tolerate a transient parse
+    // failure with a short retry rather than throwing a SyntaxError out of the
+    // reconcile/RPC path. If it still cannot be parsed, treat the state as
+    // unreadable (undefined) so callers fall back to reconciliation.
+    for (let attempt = 0; attempt < STATE_READ_RETRIES; attempt += 1) {
+      try {
+        return await readJsonFile<BackgroundTaskExecutionState | undefined>(statePath, undefined);
+      } catch (error) {
+        if (!(error instanceof SyntaxError) || attempt === STATE_READ_RETRIES - 1) {
+          if (error instanceof SyntaxError) {
+            return undefined;
+          }
+          throw error;
+        }
+        await delay(STATE_READ_RETRY_DELAY_MS);
+      }
+    }
+    return undefined;
   }
 
   async writeOutput(task: BackgroundTaskRecord, content: string): Promise<void> {
@@ -754,7 +778,8 @@ function renderLaunchScript(task: BackgroundTaskRecord): string {
     "set -euo pipefail",
     `mkdir -p $(dirname ${quotedStatePath}) $(dirname ${quotedOutputFile})`,
     "started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-    `printf '%s' ${quotedStatePayload} | sed "s/__OPENCLAW_STARTED_AT__/$started_at/g; s/\"\$\$\"/$$/g" > ${quotedStatePath}`,
+    `printf '%s' ${quotedStatePayload} | sed "s/__OPENCLAW_STARTED_AT__/$started_at/g; s/\"\$\$\"/$$/g" > ${quotedStatePath}.tmp.$$`,
+    `mv -f ${quotedStatePath}.tmp.$$ ${quotedStatePath}`,
     `printf '%s\n' "starting ${task.kind} ${task.id}" >> ${quotedOutputFile}`,
     `if cd ${quotedCwd} && bash -lc ${quotedCommand} >> ${quotedOutputFile} 2>&1; then`,
     "  completed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
@@ -789,7 +814,10 @@ function renderStateWriterPython(status: BackgroundTaskExecutionState["status"])
     "state['completedAt'] = timestamp",
     "state['exitCode'] = exit_code",
     `state['error'] = None if '${status}' == 'completed' else f'background task exited non-zero ({exit_code})'`,
-    "state_path.write_text(json.dumps(state, indent=2) + '\\n')",
+    "import os",
+    "tmp_path = state_path.with_name(state_path.name + f'.tmp.{os.getpid()}')",
+    "tmp_path.write_text(json.dumps(state, indent=2) + '\\n')",
+    "os.replace(tmp_path, state_path)",
   ];
 }
 

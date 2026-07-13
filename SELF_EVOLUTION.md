@@ -6,6 +6,71 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-13 (run 9) — Green the suite: fix torn-read race + de-flake OS-process tests
+
+**Audited:** Test/build health on a fresh checkout of the tip
+(`3c7b7236`). Despite run 8's "174/174" claim, **3 tests failed
+deterministically in this cloud sandbox** — a real regression surfaced by the
+environment, not flakiness I could ignore:
+- `operator-runtime.test.ts` → `SyntaxError: Expected ',' or '}'` from
+  `readJsonFile` while reading `state.json`.
+- `server.test.ts` → `background.tasks.state` returned `ok:false`.
+- `app.test.ts` → platform control read `degraded … background task
+  missing-process` instead of `active`.
+
+**Root cause (two distinct real bugs):**
+1. **Torn-read race in the background-task subsystem (product bug).** The
+   generated launch script wrote `state.json` **non-atomically** — a bare `>`
+   redirect (`sed …`) and Python `write_text` — while the reconcile/RPC read
+   path (`getExecutionState`/`sync`/`recover`) reads the same file. A reader
+   could observe a half-written file and throw a `SyntaxError` straight out of
+   the control-plane RPC. This can hit real deployments, not just tests.
+2. **Tests spawned real detached OS processes (test bug).** Four runtime/app
+   test setups stubbed `isProcessRunning` but **forgot to stub `spawnProcess`**,
+   so a real `bash` launch script raced the tests' own manual `writeState`
+   calls. The tests clearly *intend* to drive state by hand (one even asserts
+   `state → NOT_FOUND` immediately after start), so a live process was never
+   wanted. In this sandbox detached-process timing differs from the authors'
+   machine, so the latent race became a hard failure — exactly the
+   "OS-dependent feature must have a simulated path so cloud tests pass"
+   guardrail.
+
+**Changed (additive, reversible):**
+- `src/harness/background-tasks.ts`:
+  - Launch script now writes `state.json` **atomically**: `sed … >
+    state.json.tmp.$$ && mv -f …`, and the Python completion writer uses a temp
+    file + `os.replace`. Readers can no longer observe a torn write.
+  - `readState` gained defense-in-depth: a transient JSON parse failure is
+    retried briefly (3×/15 ms) and, if still unparseable, treated as *unreadable*
+    (undefined) so reconciliation recovers instead of the RPC throwing.
+- `src/cli/app.ts`: added `backgroundTaskSpawnProcess` /
+  `backgroundTaskIsProcessRunning` options to `OperatorCliApp` (threaded into the
+  runtime), mirroring the existing `configHome` test-isolation seam so the CLI
+  app is testable without real processes.
+- Tests: injected a deterministic **inert spawn** into the four setups that
+  drive state manually (`operator-runtime` bg test, `server` main/drifting/breaker
+  runtimes, `app` lifecycle test — the last with a pid-aware `isProcessRunning`
+  so a manually-injected dead pid still reads as degraded). For the one test that
+  genuinely needs real command output *and* a live task, added
+  `createLiveBackgroundLauncher()` — runs the launch script **synchronously**
+  (real `stdout` captured, no race) then stamps a `running` state with a sentinel
+  live pid.
+
+**Test results:** `typecheck:src` ✅ (clean). `build` ✅. `npm test` ✅
+**174/174** (was 171/174 with 3 hard failures). The 3 de-flaked files pass
+**3×/3× repeated** runs — now deterministic. Full `tsc` unchanged at **125**
+(all test-only; no new type errors introduced).
+
+**New idea (logged to ROADMAP):** A **cloud-determinism lint** — a tiny test
+(or ESLint rule) that flags any `StandaloneOperatorRuntime`/`OperatorCliApp`
+constructed in a `*.test.ts` that overrides `backgroundTaskIsProcessRunning`
+but **not** `backgroundTaskSpawnProcess` (or vice-versa). That asymmetry is the
+exact fingerprint of this bug class — a test that stubs the process *probe* but
+lets a real process *spawn*. Catching it at authoring time stops the whole
+category from recurring as the suite grows.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

@@ -71,6 +71,17 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
       related synthetic trajectories.
 
 ## Innovation backlog
+- [x] **Green the suite in the cloud sandbox (run 9).** Fixed a real torn-read
+      race (non-atomic `state.json` writes in the background-task launch script)
+      and de-flaked 4 tests that spawned real OS processes by stubbing
+      `spawnProcess`. Added a `backgroundTaskSpawnProcess` seam to
+      `OperatorCliApp`. Suite now 174/174 and deterministic across repeated runs.
+- [ ] **Cloud-determinism lint (from run 9):** flag any `*.test.ts` that
+      constructs `StandaloneOperatorRuntime`/`OperatorCliApp` overriding
+      `backgroundTaskIsProcessRunning` but not `backgroundTaskSpawnProcess`
+      (or vice-versa) — the exact fingerprint of "stub the probe, spawn a real
+      process". A small scraping test or ESLint rule prevents the category from
+      recurring as more OS-touching tests are added.
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in
       project health over time.

@@ -1,5 +1,6 @@
-import { execFile } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
+import { writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
@@ -14,6 +15,56 @@ async function makeTempDir(): Promise<string> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "operator-cli-app-"));
   tempDirs.push(dir);
   return dir;
+}
+
+/**
+ * Deterministic background launcher for tests that need real command output but
+ * a stable "still running" lifecycle. It runs the generated launch script
+ * synchronously (so the command's stdout is really captured to output.log, no
+ * detached-process race), then rewrites the state to `running` with a sentinel
+ * pid that only this launcher reports as alive — so watch/active assertions are
+ * deterministic regardless of how fast the command exits.
+ */
+function createLiveBackgroundLauncher() {
+  const live = new Set<number>();
+  let nextPid = 900001;
+  return {
+    isProcessRunning: (pid: number) => live.has(pid),
+    spawnProcess: (scriptPath: string, _args: string[], options: { cwd: string; env: NodeJS.ProcessEnv }) => {
+      const taskId = options.env.OPENCLAW_BACKGROUND_TASK_ID ?? "";
+      const kind = options.env.OPENCLAW_BACKGROUND_TASK_KIND ?? "task";
+      try {
+        execFileSync("bash", [scriptPath], { cwd: options.cwd, env: options.env, stdio: "ignore" });
+      } catch {
+        // The completion writer (python) may be unavailable in the sandbox; the
+        // command's stdout is already flushed to output.log before that step.
+      }
+      const pid = nextPid++;
+      live.add(pid);
+      const now = "2026-05-25T00:00:00.000Z";
+      const statePath = path.join(options.cwd, "background-tasks", taskId, "state.json");
+      writeFileSync(
+        statePath,
+        `${JSON.stringify(
+          {
+            version: 1,
+            taskId,
+            kind,
+            status: "running",
+            pid,
+            startedAt: now,
+            updatedAt: now,
+            outputFile: `background-tasks/${taskId}/output.log`,
+            cwd: options.cwd,
+            command: "",
+          },
+          null,
+          2,
+        )}\n`,
+      );
+      return { pid, unref() {} };
+    },
+  };
 }
 
 afterEach(async () => {
@@ -801,7 +852,16 @@ describe("OperatorCliApp", () => {
 
   it("supports session lifecycle, transcript, approvals, pairing, config, and prompt commands", async () => {
     const rootDir = await makeTempDir();
-    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    // Deterministic background execution: inert spawn returns a sentinel pid the
+    // launched tasks keep, and only that pid reads as "running". The test later
+    // injects a state with pid 999999 to simulate a dead process → degraded.
+    const app = new OperatorCliApp({
+      rootDir,
+      cwd: rootDir,
+      currentDate: "2026-05-25",
+      backgroundTaskSpawnProcess: () => ({ pid: 424242, unref() {} }),
+      backgroundTaskIsProcessRunning: (pid) => pid === 424242,
+    });
     const firstSession = await app.runtime.startSession({ title: "first", cwd: rootDir, agentId: "operator-cli" });
     const secondSession = await app.runtime.startSession({ title: "second", cwd: rootDir, agentId: "operator-cli" });
 
@@ -1063,7 +1123,14 @@ describe("OperatorCliApp", () => {
 
   it("supports background and monitor task commands plus cron commands", async () => {
     const rootDir = await makeTempDir();
-    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    const launcher = createLiveBackgroundLauncher();
+    const app = new OperatorCliApp({
+      rootDir,
+      cwd: rootDir,
+      currentDate: "2026-05-25",
+      backgroundTaskSpawnProcess: launcher.spawnProcess,
+      backgroundTaskIsProcessRunning: launcher.isProcessRunning,
+    });
     const session = await app.runtime.startSession({ title: "CLI ops", cwd: rootDir, agentId: "operator-cli" });
 
     const startOutput = await app.dispatchSlashCommand(
