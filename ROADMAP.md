@@ -62,13 +62,39 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
+      for a real on-device small model. **DONE run 9** — `src/training/backend.ts`:
+      `LocalModelBackend` interface, `NgramMovementBackend` (deterministic
+      backoff n-gram that repeats recorded movements *and* generalizes via
+      backoff), `MovementBackendRegistry`, `tokenizeReplayEvent`,
+      `rolloutMovements`, `evaluateMovementModel`. 15/15 tests.
+- [ ] **Wire the backend into the training path** (run 9 idea): an
+      `LocalMovementModelTrainer` that reads a `ReviewedExportManifest`'s
+      `replays`, trains via `registry.get(job.runtime)`, writes the
+      `TrainedMovementModel` next to job artifacts, and emits a held-out fidelity
+      report — closing capture→dataset→train→infer→eval fully in-process.
 - [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      round-trips without real OS input. (Partial: `buildMovementSequences` +
+      backend tests already exercise synthetic streams end-to-end; still want a
+      first-class generator that emits `TrajectorySpan`/`ReplayManifest`.)
+- [~] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories. **Seeded run 9** by `evaluateMovementModel`
+      (`accuracy` + `generalizedFraction`). Next: a harness that builds
+      train/held-out splits from synthetic trajectories and asserts a fidelity
+      floor.
+
+## Test health
+- [ ] **Stabilize the flaky background-task tests** (surfaced run 9). The
+      process-spawn / PID-liveness tests in `operator-runtime.test.ts`,
+      `app.test.ts`, and `server.test.ts` fail nondeterministically in the cloud
+      sandbox (3–4 failures, *different test names each run*) because they assert
+      on real `$$` PIDs / "process no longer running" semantics. Run 8 saw
+      174/174 on a real machine. Fix: inject a mock process-liveness checker (a
+      `isProcessAlive(pid)` seam) so these tests don't depend on OS process
+      scheduling — mirrors the `SpawnProcess`/`configHome` injection pattern
+      already used elsewhere. Until then, the full `npm test` is not a reliable
+      green gate in-cloud; use `typecheck:src` + `build` + per-module test runs.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

@@ -6,6 +6,68 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-13 (run 9) — Pluggable local-model backend + deterministic mock (movement subsystem)
+
+**Audited:** The local-movement learning subsystem (standing objective #2),
+specifically `src/training/runner.ts`. Finding: the "training" path only emits a
+**shell command plan** for real Apple-Silicon tools (`mlx_lm.lora` / `axolotl`)
+— nothing that can actually train or run inference in the cloud/CI, so pieces
+(c) "post-train a local model to repeat recorded movements" and (d) "generalize
+to new but related movements" had **no runnable, testable implementation**. This
+is the top queued movement item: *"Pluggable local-model backend interface for
+the training runner with a deterministic mock backend."*
+
+**Changed (additive) — new `src/training/backend.ts`:**
+- **`LocalModelBackend` interface** — the pluggable seam: `train(request) →
+  Promise<TrainedMovementModel>` + `predict(model, context) → MovementPrediction`.
+  A real on-device small-model backend implements the same surface; the runner's
+  launch plan remains the training seam for it.
+- **`NgramMovementBackend` ("mock")** — deterministic, dependency-free backoff
+  n-gram over movement tokens. Training counts, for every context length
+  `0..maxOrder`, how often each token follows it; inference tries the longest
+  seen context and **backs off** toward the unconditional distribution. This is
+  what makes it both *repeat* recorded movements exactly (memorized high-order
+  context, confidence 1.0) **and** *generalize* to unseen-but-related contexts
+  (correct answer recovered from a shorter n-gram). Ties broken by token order →
+  fully deterministic, JSON round-trippable model artifact.
+- **`tokenizeReplayEvent` / `buildMovementSequences`** — map the existing
+  `ReplayTimelineEvent` schema to coarse movement tokens (`action:<tool>`,
+  `observation:<source>`, `transcript:<role>`). Coarseness (tool class, not the
+  free-text summary) is exactly the generalization lever — a new event with the
+  same tool maps to the same token.
+- **`rolloutMovements`** — greedy inference-side generation of a full movement
+  sequence from a seed (the inference counterpart to the capture recorder).
+- **`evaluateMovementModel`** — next-token accuracy over held-out sequences +
+  `generalizedFraction` (share of correct predictions that required backoff).
+  Seeds the roadmap's generalization-eval harness.
+- **`MovementBackendRegistry` + `createDefaultMovementBackendRegistry()`** —
+  makes the backend pluggable by name (mock preloaded; a real `device-lora`
+  backend registers without touching call sites). Exported the whole surface via
+  the `src/index.ts` barrel.
+
+**Test results:** new `src/training/backend.test.ts` — **15/15 passing**
+(memorize, rollout regen, backoff generalization, deterministic tie-break, cold
+start, empty model, JSON round-trip, eval accuracy + generalization, registry).
+`npm run typecheck:src` ✅ (exit 0). `npm run build` ✅.
+**Pre-existing flaky failures (NOT introduced here):** the full `npm test` shows
+3–4 failures in the background-task **process-spawn / PID-liveness** tests
+(`operator-runtime`, `app`, `server`). Verified pre-existing by removing the new
+files and running HEAD (4 failed / 170 passed), and flaky by the failing set
+**changing test names run-to-run** — the signature of `$$`-PID / "process no
+longer running" checks behaving differently in this cloud sandbox than on run
+8's machine (which saw 174/174). The new module is deterministic and green and
+touches none of that code. Logged a stabilization item to ROADMAP.
+
+**New idea:** wire the backend into the training path — an
+`LocalMovementModelTrainer` service that reads a `ReviewedExportManifest`'s
+`replays`, calls `registry.get(job.runtime).train(...)`, writes the
+`TrainedMovementModel` next to the job artifacts, and runs
+`evaluateMovementModel` on a held-out split to emit a fidelity report. That
+closes capture→dataset→**train→infer→eval** entirely in-process, so the whole
+movement loop is CI-verifiable end-to-end without any real OS or GPU.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
