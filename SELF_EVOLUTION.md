@@ -6,6 +6,60 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-13 (run 9) — Fix corrupt background-task `state.json` + de-flake its tests
+
+**Audited:** Repo health on a clean tree. `npm test` was **red** — 3 tests
+failing (`operator-runtime`, `server`, `app`) where prior runs recorded green.
+Root-caused rather than assumed date drift.
+
+**Bug found (real reliability defect):** The background-task **launch script**
+(`renderLaunchScript` in `src/harness/background-tasks.ts`) wrote its initial
+`state.json` via `printf '%s' <payload> | sed "…; s/\"\$\$\"/$$/g"`. Two defects:
+1. **`$` is a sed BRE metacharacter** (end-of-line anchor), so the pattern
+   `"$$"` never matched — the PID was **never substituted** and `state.json`
+   kept the literal string `"$$"` for `pid`.
+2. The `printf|sed` pipeline **corrupts the JSON** whenever the task `command`
+   contains quotes or newlines (observed: an unescaped `"` mid-string →
+   `SyntaxError` in `readJsonFile`). In *this* cloud env `bash`+`python3` exist,
+   so the launcher actually runs, writes a broken state file, and every reader
+   throws — cascading into the 3 red tests (incl. the `control=degraded` /
+   `missing-process` assertions). The identical latent bug existed in
+   `src/training/runner.ts`.
+
+**Changed (additive, behaviour-preserving where correct):**
+- Replaced the fragile `printf|sed` initial-state write in **both**
+  `background-tasks.ts` and `training/runner.ts` with a small Python here-doc
+  (`renderInitialStateWriterPython`) that `json.loads` a pid/timestamp-free base
+  payload and injects `pid`/`startedAt`/`updatedAt` — symmetric with the
+  existing completion writer, robust to arbitrary command strings, correct PID.
+- De-flaked the subprocess race the fix surfaced: the runtime-level tests drive
+  execution state manually via `writeState`, but also spawned the **real**
+  launch script, which wrote `state.json` concurrently and non-deterministically
+  (`failureCount` flipping 2↔3, `control=active` ↔ `degraded`). Injected a no-op
+  `backgroundTaskSpawnProcess` (+ pid-scoped `isProcessRunning`) into the four
+  affected `StandaloneOperatorRuntime`/`OperatorCliApp` test setups.
+- **Testability improvement:** threaded `backgroundTaskSpawnProcess` /
+  `backgroundTaskIsProcessRunning` through `OperatorCliAppOptions` into the app's
+  runtime (production defaults unchanged), so CLI-level tests can control
+  background-task process behaviour deterministically.
+- Added a **deterministic regression test**: executes a generated launch script
+  whose command contains quotes + a real newline and asserts the resulting
+  `state.json` parses with a numeric `pid`; also guards against the broken
+  `s/"$$"/…/` line reappearing.
+
+**Test results:** `npm run build` ✅. `typecheck:src` ✅ (exit 0, source stays
+clean). `npm test` ✅ **175/175** — and **deterministic**: ran the full suite 5×
+consecutively, all green (previously 1–3 flaky failures per run).
+
+**New idea (logged to ROADMAP):** A **"launcher fuzz" test** — property-style
+generation of nasty background-task/training commands (embedded quotes, `$`,
+backticks, newlines, unicode) run through the real launch script in a sandbox
+dir, asserting the emitted `state.json` always parses and round-trips the
+command verbatim. Locks down the whole shell-quoting/serialization boundary,
+which is exactly where this class of bug hides.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

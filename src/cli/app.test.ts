@@ -801,7 +801,20 @@ describe("OperatorCliApp", () => {
 
   it("supports session lifecycle, transcript, approvals, pairing, config, and prompt commands", async () => {
     const rootDir = await makeTempDir();
-    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    // Deterministic background-task process control: a no-op spawn (so launch
+    // scripts never run and race the assertions) plus a liveness stub reporting
+    // the tracked tasks as still running, matching this test's `control=active`
+    // expectations regardless of real subprocess timing.
+    const app = new OperatorCliApp({
+      rootDir,
+      cwd: rootDir,
+      currentDate: "2026-05-25",
+      backgroundTaskSpawnProcess: () => ({ pid: 424242, unref() {} }),
+      // Alive only for the no-op spawn's pid: tasks the test starts stay
+      // running (control=active), while the pid 999999 it later injects to
+      // simulate a dead process is correctly reported as failed (degraded).
+      backgroundTaskIsProcessRunning: (pid) => pid === 424242,
+    });
     const firstSession = await app.runtime.startSession({ title: "first", cwd: rootDir, agentId: "operator-cli" });
     const secondSession = await app.runtime.startSession({ title: "second", cwd: rootDir, agentId: "operator-cli" });
 

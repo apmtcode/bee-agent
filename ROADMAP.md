@@ -70,6 +70,21 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Generalization eval harness: measure replay fidelity on held-out but
       related synthetic trajectories.
 
+## Reliability
+- [x] **Fix corrupt background-task `state.json`** (2026-07-13, run 9). The launch
+      script's `printf|sed` initial-state writer never substituted the PID (`$` is
+      a sed anchor) and corrupted the JSON for commands with quotes/newlines.
+      Replaced with a Python here-doc in both `background-tasks.ts` and
+      `training/runner.ts`; de-flaked the runtime tests by injecting a no-op spawn.
+- [ ] **Launcher fuzz test**: property-style generation of nasty commands
+      (quotes, `$`, backticks, newlines, unicode) run through the real launch
+      script in a sandbox dir, asserting the emitted `state.json` always parses
+      and round-trips the command verbatim. Locks down the shell-quoting /
+      serialization boundary where the run-9 bug lived.
+- [ ] Audit all other shell-script generators (grep `shellQuote` / here-docs) for
+      the same class of quoting/serialization fragility now that two instances
+      were found.
+
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in

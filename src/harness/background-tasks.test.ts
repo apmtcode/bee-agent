@@ -1,3 +1,4 @@
+import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -369,5 +370,35 @@ describe("BackgroundTaskExecutionService", () => {
     await expect(fs.readFile(path.join(rootDir, task.execution.launchScript), "utf8")).resolves.toContain("bash -lc");
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
+  });
+
+  it("writes a parseable running state.json even for commands with quotes and newlines", async () => {
+    const rootDir = await makeTempDir();
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"), () => ({ pid: 2222, unref() {} }));
+    // A command with embedded double-quotes and a real newline previously
+    // corrupted the initial state file written by the launch script's printf|sed
+    // pipeline. The command's own exit code is irrelevant to this test.
+    const trickyCommand = `echo "hello \\"world\\""\nexit 0`;
+    const task = await store.start({
+      title: "Tricky command",
+      command: trickyCommand,
+      cwd: rootDir,
+    });
+
+    const scriptPath = path.join(rootDir, task.execution.launchScript);
+    const script = await fs.readFile(scriptPath, "utf8");
+    // Guard against the old, silently-broken sed pid substitution regressing.
+    expect(script).not.toContain(`s/"$$"`);
+
+    await new Promise<void>((resolve) => {
+      execFile("bash", [scriptPath], { cwd: rootDir }, () => resolve());
+    });
+
+    const raw = await fs.readFile(path.join(rootDir, task.execution.stateFile), "utf8");
+    const state = JSON.parse(raw) as BackgroundTaskExecutionState;
+    expect(typeof state.pid).toBe("number");
+    expect(state.pid).toBeGreaterThan(0);
+    expect(state.command).toBe(trickyCommand);
+    expect(state.startedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
   });
 });
