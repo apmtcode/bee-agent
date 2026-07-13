@@ -9,6 +9,15 @@ import type { ReviewedExportManifest } from "../training/export-manifest.js";
 
 const tempDirs: string[] = [];
 
+// Deterministic background-task spawn stub: returns a fake pid but never runs
+// the launch script, so no real child process races with the test's own
+// recorded task state. Tests that use this drive state via writeState directly.
+let stubPid = 100000;
+function stubBackgroundSpawn(): { pid: number; unref(): void } {
+  stubPid += 1;
+  return { pid: stubPid, unref() {} };
+}
+
 async function makeTempDir(): Promise<string> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "operator-runtime-"));
   tempDirs.push(dir);
@@ -531,6 +540,7 @@ describe("StandaloneOperatorRuntime", () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
       backgroundTaskIsProcessRunning: () => false,
+      backgroundTaskSpawnProcess: stubBackgroundSpawn,
     });
     const session = await runtime.startSession({ title: "Tasks", agentId: "main" });
 

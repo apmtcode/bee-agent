@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -106,6 +107,39 @@ describe("FileBackgroundTaskStore", () => {
       id: task.id,
       status: "completed",
       execution: { exitCode: 0 },
+    });
+  });
+
+  it("renders a launch script that writes valid JSON state for single-quoted commands", async () => {
+    // Regression: the shell-quote escape for embedded single quotes must be
+    // '"'"' (close-quote, quoted-quote, reopen-quote). A malformed escape
+    // injected a stray double-quote into the state payload, producing invalid
+    // JSON that crashed readState/reconcile the moment a command contained a
+    // single quote (e.g. `printf 'a b'`).
+    const rootDir = await makeTempDir();
+    const filePath = path.join(rootDir, "background-tasks.json");
+    // Run the launch script synchronously so state is fully written before we
+    // read it — deterministic, no race with a detached child.
+    const store = new FileBackgroundTaskStore(filePath, (command, _args, options) => {
+      execFileSync("bash", [command], { cwd: options.cwd, env: options.env });
+      return { pid: 4242, unref() {} };
+    });
+
+    const command = "printf 'quoted-arg with spaces'";
+    const task = await store.start({ title: "quoted", command, cwd: rootDir, kind: "task" });
+
+    const statePath = path.join(rootDir, task.execution.stateFile);
+    const raw = await fs.readFile(statePath, "utf8");
+    const parsed = JSON.parse(raw) as BackgroundTaskExecutionState;
+    expect(parsed.command).toBe(command);
+    expect(parsed.taskId).toBe(task.id);
+    expect(parsed.status).toBe("completed");
+    expect(parsed.pid).toEqual(expect.any(Number));
+
+    // And the store's own reconcile path parses it without throwing.
+    await expect(store.getExecutionState(task.id)).resolves.toMatchObject({
+      taskId: task.id,
+      command,
     });
   });
 

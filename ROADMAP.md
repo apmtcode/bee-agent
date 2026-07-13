@@ -6,6 +6,13 @@ unchecked items are queued. Keep this richer than you found it each run.
 ## Foundations / DX
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
+- [x] **Green, deterministic test baseline** (2026-07-13, run 9). Fixed a real
+      `shellQuote` bug in `background-tasks.ts` that wrote invalid JSON state for
+      any single-quoted command; made launch-script state writes atomic; made the
+      3 flaky background-task tests hermetic via an injected no-op spawn stub
+      (new `backgroundTaskSpawnProcess`/`backgroundTaskIsProcessRunning` options
+      on `OperatorCliApp`). 175/175 stable; added a synchronous-launch regression
+      test that reproduces the exact `SyntaxError` when the escape is reverted.
 - [x] Make config loading hermetic in tests via an injectable `configHome`
       (2026-06-22).
 - [ ] **Pay down typecheck debt** (surfaced by the `typecheck` script). Full
@@ -71,6 +78,12 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
       related synthetic trajectories.
 
 ## Innovation backlog
+- [ ] **Background-task simulation backend:** a pluggable `SpawnBackgroundProcess`
+      that runs task commands in-process against a virtual clock (no OS spawn), so
+      the full start → output → sync → recover → cancel lifecycle is deterministic
+      in tests/CI and never leaks orphaned `sleep`/`tail -f` children. Reuses the
+      spawn-injection seam added in run 9; mirrors the movement-subsystem's
+      pluggable-backend + simulated-stream pattern.
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in
       project health over time.

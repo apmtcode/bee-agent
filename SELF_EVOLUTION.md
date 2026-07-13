@@ -6,6 +6,54 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-13 (run 9) — 🐛 Real bug: background-task `shellQuote` corrupted state JSON; green baseline restored
+
+**Audited:** The test baseline — which was **NOT green** in this environment (3
+failures: `operator-runtime`, `control-plane/server`, `cli/app`), despite run 8
+logging 174/174. Traced the shared root cause.
+
+**Root cause (genuine production bug), `src/harness/background-tasks.ts`
+`shellQuote`:** the escape for an embedded single quote was `"'"'"'` (6 chars)
+instead of the correct `'"'"'` (5 chars: close-quote, quoted-quote, reopen). The
+malformed escape injects a **stray double-quote** into the launch script's state
+payload, so any task whose *command contained a single quote* (e.g. `printf 'a
+b'`) wrote **invalid JSON** to its state file. `readState`/`reconcile` then
+crashed with `SyntaxError: Expected ',' or '}'…`. This is timing-exposed (the
+test's own `writeState` sometimes won the race in the old env), which is why it
+surfaced only now. The training runner's `shellQuote` was already correct —
+confirming this was a one-file divergence.
+
+**Changes (additive, reversible):**
+- **Fixed `shellQuote`** in `background-tasks.ts` (`"'"'"'` → `'"'"'`).
+- **Atomic state writes** in both `background-tasks.ts` and `training/runner.ts`
+  launch scripts: the shell `printf | sed > state` now writes to `state.$$.tmp`
+  then `mv`s into place, and the Python terminal-state writer writes a temp file
+  then `os.replace`s — so a concurrent reconcile-read can never observe a
+  half-written file. Defense-in-depth beyond the escape fix.
+- **Test hermeticity:** threaded `backgroundTaskSpawnProcess` /
+  `backgroundTaskIsProcessRunning` through `OperatorCliAppOptions` (forwarded to
+  the runtime; production defaults unchanged). The 3 flaky tests now inject a
+  deterministic no-op spawn stub (they already mocked `isProcessRunning`), so no
+  real detached child races with the test's recorded state.
+- **New regression test** (`background-tasks.test.ts`): renders the launch script
+  for a single-quoted command, runs it **synchronously** (blocking `execFileSync`,
+  no race), and asserts the state file is valid JSON with the right command +
+  numeric pid. Verified it *fails* (reproducing the exact `SyntaxError`) when the
+  escape is reverted, and passes with the fix.
+
+**Test results:** **174 → 175** passing (0 failing), stable across repeated full
+runs. Build ✅. `typecheck:src` ✅ (exit 0). The stubbed tests no longer exercise
+the real launch pipeline, so the new synchronous-launch regression test now owns
+that coverage.
+
+**New idea:** Now that `OperatorCliApp` has a spawn-injection seam, add a
+first-class **background-task simulation backend** (a pluggable `SpawnBackgroundProcess`
+that runs commands in-process against a virtual clock) so the whole background/
+monitor lifecycle — start → output → sync → recover → cancel — can be tested and
+demoed deterministically without spawning OS processes, and so CI never leaks
+orphaned `sleep`/`tail -f` children. This dovetails with the movement-subsystem's
+"pluggable backend + simulated event stream" pattern.
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
