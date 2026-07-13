@@ -3,6 +3,22 @@
 Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
+## Reliability
+- [x] **Fix shell-quoting bugs corrupting background-task state files**
+      (2026-07-13, run 9). `shellQuote` used the mis-rotated single-quote escape
+      `"'"'"'` (should be `'"'"'`) → invalid JSON state for any command with a
+      `'`; the `sed` `"$$"`→PID substitution had an unescaped `"` inside the
+      double-quoted arg so `pid` stayed the string `"$$"`. Made state writes
+      atomic (temp + `mv`/`Path.replace`). Added `createInertBackgroundSpawn()`
+      + spawn injection through `OperatorCliAppOptions` to de-flake the tests.
+      Suite went flaky-3–4-fail → stable 174/174.
+- [ ] **Launch-script fuzz test** (new, run 9): generate `renderLaunchScript`
+      for a matrix of adversarial commands (single/double quotes, newlines, `$`,
+      backticks, unicode), run each in a tempdir with a trivial command, and
+      assert `state.json` parses and `command`/`cwd` round-trip byte-for-byte.
+      Guards the whole shell-quoting surface (`shellQuote` also feeds
+      `quotedCommand`/`quotedCwd`), and would have caught both run-9 bugs.
+
 ## Foundations / DX
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.

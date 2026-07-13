@@ -108,6 +108,22 @@ export type SpawnBackgroundProcess = (
 
 export type IsProcessRunning = (pid: number) => boolean;
 
+/**
+ * A {@link SpawnBackgroundProcess} that allocates a monotonically increasing
+ * fake PID without launching anything. Useful for dry-run / simulation modes
+ * (register a task's bookkeeping without starting a real process) and for
+ * deterministic tests that drive execution state explicitly via
+ * {@link BackgroundTaskExecutionService.writeState} instead of depending on the
+ * timing of a real detached subprocess.
+ */
+export function createInertBackgroundSpawn(startPid = 100_000): SpawnBackgroundProcess {
+  let pid = startPid;
+  return () => {
+    pid += 1;
+    return { pid, unref: () => {} };
+  };
+}
+
 export type BackgroundTaskRecoveryReason =
   | "unchanged"
   | "state-running"
@@ -754,7 +770,7 @@ function renderLaunchScript(task: BackgroundTaskRecord): string {
     "set -euo pipefail",
     `mkdir -p $(dirname ${quotedStatePath}) $(dirname ${quotedOutputFile})`,
     "started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-    `printf '%s' ${quotedStatePayload} | sed "s/__OPENCLAW_STARTED_AT__/$started_at/g; s/\"\$\$\"/$$/g" > ${quotedStatePath}`,
+    `printf '%s' ${quotedStatePayload} | sed "s/__OPENCLAW_STARTED_AT__/$started_at/g; s/\\"\\$\\$\\"/$$/g" > ${quotedStatePath}.tmp && mv -f ${quotedStatePath}.tmp ${quotedStatePath}`,
     `printf '%s\n' "starting ${task.kind} ${task.id}" >> ${quotedOutputFile}`,
     `if cd ${quotedCwd} && bash -lc ${quotedCommand} >> ${quotedOutputFile} 2>&1; then`,
     "  completed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
@@ -789,10 +805,17 @@ function renderStateWriterPython(status: BackgroundTaskExecutionState["status"])
     "state['completedAt'] = timestamp",
     "state['exitCode'] = exit_code",
     `state['error'] = None if '${status}' == 'completed' else f'background task exited non-zero ({exit_code})'`,
-    "state_path.write_text(json.dumps(state, indent=2) + '\\n')",
+    "tmp_path = state_path.with_name(state_path.name + '.tmp')",
+    "tmp_path.write_text(json.dumps(state, indent=2) + '\\n')",
+    "tmp_path.replace(state_path)",
   ];
 }
 
 function shellQuote(value: string): string {
-  return `'${value.replaceAll(`'`, `"'"'"'`)}'`;
+  // Wrap in single quotes and escape any embedded single quote with the POSIX
+  // idiom `'\''` written as `'"'"'` — close the quote, emit a double-quoted
+  // single quote, reopen. (A mis-rotated `"'"'"'` injects a stray `"` and
+  // corrupts the value — e.g. it broke the JSON state file for any command
+  // containing single quotes.)
+  return `'${value.replaceAll(`'`, `'"'"'`)}'`;
 }

@@ -6,6 +6,60 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-13 (run 9) — 🐛 Fix real shell-quoting bugs corrupting background-task state files + deterministic spawn
+
+**Audited:** Ran the suite in this cloud env and found it **flaky** — 3–4 of 174
+tests failed nondeterministically with `SyntaxError: Expected ',' or '}' … in
+JSON` while reconciling background-task state. Prior runs recorded 174/174, so
+the failures were latent, timing-exposed. Traced the corruption from
+`readJsonFile` → `readState` down into `renderLaunchScript`.
+
+**Two genuine, deterministic bugs found in `src/harness/background-tasks.ts`**
+(product code, not tests — they'd bite any real background task whose command
+contains single quotes, e.g. `printf '…'`, `sh -c '…'`):
+1. **`shellQuote` escaped single quotes with `"'"'"'` — the POSIX idiom
+   `'"'"'` *mis-rotated*.** The stray leading `"` means `shellQuote("a'b")`
+   reconstructs under bash as `a"'b`, not `a'b`. Since the whole state JSON is
+   built by shell-quoting a `JSON.stringify(...)` payload, every command
+   containing a `'` produced **invalid JSON** in the state file → the parse
+   crash. Fixed to the correct `'"'"'`. Verified round-trip under bash for
+   `printf 'line-1\nline-2\n'`, `a''b`, etc.
+2. **The `sed` `"$$"`→PID substitution was broken.** The TS template `s/\"\$\$\"/…`
+   renders `s/"$$"/…`; the unescaped `"` inside the *double-quoted* `sed "…"`
+   argument closes the string early, so the running-state `pid` was never
+   replaced and stayed the literal string `"$$"` — producing errors like
+   `background task process $$ is no longer running`. Fixed by emitting escaped
+   `s/\"\$\$\"/$$/g` (TS `\\"\\$\\$\\"`). Verified with sed.
+   Also made both state writes **atomic** (temp file + `mv`/`Path.replace`),
+   matching `writeJsonAtomic`, so no reader can ever catch a partial write.
+
+**Test determinism (root of the flakiness):** three test files
+(`operator-runtime`, `server`, `app`) call `startBackgroundTask`, which spawns a
+**real** detached subprocess whose launch script writes state concurrently with
+the tests' explicit `writeState` calls — a race. Added a small, genuinely-useful
+production factory **`createInertBackgroundSpawn()`** (monotonic fake PID, no
+launch — also handy for dry-run/simulation modes), threaded
+`backgroundTaskSpawnProcess`/`backgroundTaskIsProcessRunning` through
+`OperatorCliAppOptions`, and injected the inert spawn at the racing sites so
+those tests drive execution state deterministically. Left the one test that
+genuinely exercises live subprocess output (`printf ok` watch) on the real spawn.
+
+**Test results:** `typecheck:src` ✅ (exit 0, source stays clean). Full `tsc`
+**125 → 125** (no regression). Build ✅. Tests ✅ **174/174, stable across 8
+consecutive runs** (was flaky 3–4 failures before). Focused diff: +68/-22 across
+5 files, 2 of them the real source fixes.
+
+**New idea:** the `renderLaunchScript` bash is assembled by string
+interpolation and was never exercised end-to-end against adversarial commands
+(quotes, newlines, `$`, backticks, unicode). Add a **launch-script fuzz test**:
+generate the script for a matrix of nasty commands, actually run it in a tempdir
+with a trivial command, and assert the resulting `state.json` parses and the
+`command`/`cwd` round-trip byte-for-byte. That would have caught both bugs
+immediately and guards the whole shell-quoting surface (which also feeds
+`quotedCommand`/`quotedCwd`, not just the payload).
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
