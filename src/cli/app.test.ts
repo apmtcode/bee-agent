@@ -801,7 +801,23 @@ describe("OperatorCliApp", () => {
 
   it("supports session lifecycle, transcript, approvals, pairing, config, and prompt commands", async () => {
     const rootDir = await makeTempDir();
-    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    // No-op spawner: hand out synthetic pids and treat exactly those as
+    // "running". A real subprocess would race the assertions; this keeps the
+    // spawned tasks alive (control=active) while a manually-written bogus pid
+    // (999999, below) is correctly seen as dead → degraded.
+    const spawnedPids = new Set<number>();
+    let spawnPid = 40000;
+    const app = new OperatorCliApp({
+      rootDir,
+      cwd: rootDir,
+      currentDate: "2026-05-25",
+      backgroundTaskSpawnProcess: () => {
+        spawnPid += 1;
+        spawnedPids.add(spawnPid);
+        return { pid: spawnPid, unref() {} };
+      },
+      backgroundTaskIsProcessRunning: (pid) => spawnedPids.has(pid),
+    });
     const firstSession = await app.runtime.startSession({ title: "first", cwd: rootDir, agentId: "operator-cli" });
     const secondSession = await app.runtime.startSession({ title: "second", cwd: rootDir, agentId: "operator-cli" });
 
@@ -1063,7 +1079,17 @@ describe("OperatorCliApp", () => {
 
   it("supports background and monitor task commands plus cron commands", async () => {
     const rootDir = await makeTempDir();
-    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    // Inject a no-op spawner: the test drives task state via CLI commands and
+    // manual fixtures, so a real subprocess's async terminal writes must not
+    // race those assertions.
+    let spawnPid = 30000;
+    const app = new OperatorCliApp({
+      rootDir,
+      cwd: rootDir,
+      currentDate: "2026-05-25",
+      backgroundTaskSpawnProcess: () => ({ pid: (spawnPid += 1), unref() {} }),
+      backgroundTaskIsProcessRunning: () => true,
+    });
     const session = await app.runtime.startSession({ title: "CLI ops", cwd: rootDir, agentId: "operator-cli" });
 
     const startOutput = await app.dispatchSlashCommand(
@@ -1078,6 +1104,9 @@ describe("OperatorCliApp", () => {
     if (!task) {
       throw new Error("expected background task");
     }
+    // The no-op spawner doesn't execute `printf ok`, so seed the output the
+    // view/watch assertions below expect (mirrors the monitor fixture later).
+    await app.runtime.backgroundTasks.executionService.writeOutput(task, "ok\n");
 
     const listOutput = await app.dispatchSlashCommand({ kind: "background-list" });
     expect(listOutput).toContain(task.id);

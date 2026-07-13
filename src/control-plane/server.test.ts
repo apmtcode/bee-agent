@@ -18,6 +18,14 @@ async function makeTempDir(): Promise<string> {
   return dir;
 }
 
+// No-op background-task spawner: fake pid, no real subprocess — so the
+// launcher's async terminal-state writes never race manual state fixtures.
+let noopSpawnPid = 20000;
+function noopSpawnProcess() {
+  noopSpawnPid += 1;
+  return { pid: noopSpawnPid, unref() {} };
+}
+
 afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })));
 });
@@ -83,6 +91,7 @@ describe("OperatorControlPlaneServer", () => {
     const rootDir = await makeTempDir();
     const runtime = new StandaloneOperatorRuntime({
       rootDir,
+      backgroundTaskSpawnProcess: noopSpawnProcess,
       backgroundTaskIsProcessRunning: () => false,
       delivery: new OperatorDeliveryService(rootDir, {
         sendBrowserPush: async () => {},
@@ -952,6 +961,7 @@ describe("OperatorControlPlaneServer", () => {
     const driftingRootDir = await makeTempDir();
     const driftingRuntime = new StandaloneOperatorRuntime({
       rootDir: driftingRootDir,
+      backgroundTaskSpawnProcess: noopSpawnProcess,
       backgroundTaskIsProcessRunning: () => false,
     });
     const driftingServer = new OperatorControlPlaneServer({ runtime: driftingRuntime });
@@ -1018,6 +1028,7 @@ describe("OperatorControlPlaneServer", () => {
     const breakerRootDir = await makeTempDir();
     const breakerRuntime = new StandaloneOperatorRuntime({
       rootDir: breakerRootDir,
+      backgroundTaskSpawnProcess: noopSpawnProcess,
       backgroundTaskIsProcessRunning: () => false,
     });
     const breakerServer = new OperatorControlPlaneServer({ runtime: breakerRuntime });

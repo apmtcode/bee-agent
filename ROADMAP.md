@@ -70,6 +70,29 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Generalization eval harness: measure replay fidelity on held-out but
       related synthetic trajectories.
 
+## Reliability / correctness
+- [x] **Fix broken POSIX shell-quoting in the background-task launcher**
+      (2026-07-13, run 9). `shellQuote` used a 6-char `"'"'"'` escape instead of
+      the correct 5-char `'"'"'`, corrupting any command containing a single
+      quote — invalid `state.json` → `readState` threw. Root-caused a 4-test red
+      suite; fixed with a one-char change + real-spawn regression test + no-op
+      spawn injection to de-race the affected tests.
+- [ ] **Harden the launcher's initial-state write** (follow-up to run 9). Replace
+      the fragile `printf | sed "s/\"\$\$\"/$$/g; s/__OPENCLAW_STARTED_AT__/…/"`
+      with: write the raw `JSON.stringify` payload verbatim, then patch
+      `pid`/`startedAt` via a `python3` + `json` step (the completion writer
+      already does this). Removes the last places a command containing `"$$"` or
+      the started-at sentinel could corrupt state. Prototype passed this run.
+- [ ] **Launcher fuzz test.** Round-trip a corpus of adversarial commands
+      (single/double quotes, `$$`, embedded newlines, `';rm -rf /'`, unicode,
+      backticks) through the *real* launcher and assert valid JSON state +
+      faithful execution/output. Quoting/escaping bugs are precisely the class
+      that `spawn`-mocking unit tests cannot catch — every background-task test
+      except one mocked `spawn`, which is how run 9's bug survived.
+- [ ] **Audit for the same `spawn`-mock blind spot elsewhere.** Any subsystem
+      that shells out (hooks, worktrees, execution-policy) deserves at least one
+      real-process integration test so shell-quoting regressions surface.
+
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in

@@ -6,6 +6,68 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-13 (run 9) — 🐞 Fix broken POSIX shell-quoting in background-task launcher (suite was RED)
+
+**Audited:** Repo health first (the standing procedure's verify gate). Found the
+suite **red in this environment**: 4 failing tests
+(`operator-runtime`, `server`, `app` ×2) all crashing in `readJsonFile` with
+`SyntaxError: Expected ',' or '}'` while reconciling background-task state. This
+was a genuine regression surfaced by a *faster* execution environment, not by any
+code change — the working tree was clean.
+
+**Root cause (real product bug):** `shellQuote()` in
+`src/harness/background-tasks.ts` used a **broken 6-char** single-quote escape
+`"'"'"'` instead of the correct POSIX 5-char `'"'"'` (`'\''`). Any value
+containing a single quote — including the `command` field embedded in the launch
+script's `state.json` payload **and the executed command itself** — was
+corrupted. The launcher then wrote invalid JSON, so every later `readState()`
+threw. (Proven in isolation: current escape → `printf "'line-1"'`, fixed escape →
+`printf 'line-1'`.) Older/slower environments dodged it only because the spawned
+subprocess hadn't written the corrupt file yet when assertions ran (ENOENT →
+fallback), so the bug lay dormant.
+
+**Fix (one character of surface area):**
+- `src/harness/background-tasks.ts`: `shellQuote` replacement `"'"'"'` → `'"'"'`.
+  This alone makes the existing `sed`-based launcher produce valid JSON with a
+  correct real pid (verified end-to-end: `status: completed`, `exitCode: 0`,
+  `command` round-trips, output faithful).
+- **Test determinism (latent race exposed by the fix):** several tests spawn a
+  *real* subprocess and then drive state via manual fixtures, silently assuming
+  the subprocess is too slow to interfere. Now that the launcher works, its async
+  terminal-state writes raced the fixtures. Made them deterministic by injecting a
+  **no-op spawner** (fake pid, no real process):
+  - `OperatorCliApp` now forwards optional `backgroundTaskSpawnProcess` /
+    `backgroundTaskIsProcessRunning` to its runtime (additive; production
+    defaults unchanged) — `src/cli/app.ts`.
+  - Injected no-op spawners in `operator-runtime.test.ts` (1),
+    `server.test.ts` (3 sub-runtimes in the giant orchestration test), and
+    `app.test.ts` (2). One app test asserts real `printf` output, so it now seeds
+    that output via a fixture (mirroring the monitor half of the same test); the
+    session-lifecycle test uses a **pid-set liveness probe** (`(pid) =>
+    spawnedPids.has(pid)`) so a manually-written bogus pid still reads as dead →
+    `degraded`, while spawned tasks stay `running` → `active`.
+- **New regression test** (`background-tasks.test.ts`): runs the **real** launcher
+  with a single-quote command and asserts valid, faithful state + output. Confirmed
+  it fails against the old escape and passes against the fix — the existing unit
+  tests all mock `spawn`, which is exactly why the bug slipped through.
+
+**Test results:** full `tsc` **125** (unchanged — no regression); `typecheck:src`
+✅ exit 0; build ✅; tests ✅ **175/175** (was 174 + 1 regression), green across two
+consecutive runs (deterministic).
+
+**New idea:** The launcher's `sed "s/\"\$\$\"/$$/g; s/__OPENCLAW_STARTED_AT__/…/"`
+initial-state write is still fragile — it would corrupt a command that literally
+contains `"$$"` or the started-at sentinel. A robust hardening is to write the raw
+`JSON.stringify` payload verbatim and patch `pid`/`startedAt` with a `python3` +
+`json` step (the completion writer already uses exactly this pattern). Prototyped
+and passing this run; deferred to keep the fix a minimal one-line diff. Logged to
+ROADMAP. Deeper idea: a **launcher fuzz test** that round-trips a corpus of nasty
+commands (single/double quotes, `$$`, newlines, `';rm -rf'`, unicode) through the
+real launcher and asserts valid JSON + faithful execution — quoting bugs are
+exactly the class that unit mocks hide.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

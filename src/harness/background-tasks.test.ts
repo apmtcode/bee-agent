@@ -370,4 +370,33 @@ describe("BackgroundTaskExecutionService", () => {
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
   });
+
+  // Regression: the launcher must write valid JSON state and execute the
+  // command faithfully even when the command contains single quotes. A broken
+  // POSIX single-quote escape used to corrupt both the embedded `command`
+  // field (invalid JSON → readState threw) and the executed command itself.
+  it("runs a real single-quoted command and writes valid, faithful state", async () => {
+    const rootDir = await makeTempDir();
+    // Default spawn (real subprocess); default liveness probe.
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"));
+    const command = "printf 'it'\\''s a quoted value\\n'";
+    const task = await store.start({ title: "Quoted", command, cwd: rootDir, kind: "task" });
+
+    // Poll the state file until the launcher reaches a terminal state.
+    let state: BackgroundTaskExecutionState | undefined;
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      state = await store.executionService.readState(task); // must never throw on valid JSON
+      if (state && state.status !== "running") {
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+
+    expect(state).toBeDefined();
+    expect(state?.status).toBe("completed");
+    expect(state?.exitCode).toBe(0);
+    // The command round-trips exactly — no quote corruption.
+    expect(state?.command).toBe(command);
+    await expect(store.executionService.readOutput(task)).resolves.toContain("it's a quoted value");
+  });
 });
