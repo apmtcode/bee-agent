@@ -81,9 +81,14 @@ const exportManifest: ReviewedExportManifest = {
 describe("OperatorControlPlaneServer", () => {
   it("handles session, transcript, approval, trajectory, memory, and orchestration methods", async () => {
     const rootDir = await makeTempDir();
+    // No-op spawn keeps this large test fully deterministic: task state is driven
+    // explicitly via writeState, so no real detached process should launch and
+    // asynchronously write a competing "running" state.
+    let mainSpawnPid = 20000;
     const runtime = new StandaloneOperatorRuntime({
       rootDir,
       backgroundTaskIsProcessRunning: () => false,
+      backgroundTaskSpawnProcess: () => ({ pid: (mainSpawnPid += 1), unref: () => {} }),
       delivery: new OperatorDeliveryService(rootDir, {
         sendBrowserPush: async () => {},
       }),
@@ -950,9 +955,14 @@ describe("OperatorControlPlaneServer", () => {
     });
 
     const driftingRootDir = await makeTempDir();
+    // No-op spawn: the test drives task state via writeState, so a real detached
+    // launch would asynchronously overwrite the manual state and race the
+    // recover/repair assertions below.
+    let driftingSpawnPid = 30000;
     const driftingRuntime = new StandaloneOperatorRuntime({
       rootDir: driftingRootDir,
       backgroundTaskIsProcessRunning: () => false,
+      backgroundTaskSpawnProcess: () => ({ pid: (driftingSpawnPid += 1), unref: () => {} }),
     });
     const driftingServer = new OperatorControlPlaneServer({ runtime: driftingRuntime });
     const driftingBootstrap = await driftingServer.handle({
@@ -1016,9 +1026,15 @@ describe("OperatorControlPlaneServer", () => {
     });
 
     const breakerRootDir = await makeTempDir();
+    // Inject a no-op spawn so background tasks never launch real detached
+    // processes. The test drives task state explicitly via writeState; a real
+    // launch would write its own "running" state asynchronously and race the
+    // manual writes, making the breaker failure counts non-deterministic.
+    let breakerSpawnPid = 40000;
     const breakerRuntime = new StandaloneOperatorRuntime({
       rootDir: breakerRootDir,
       backgroundTaskIsProcessRunning: () => false,
+      backgroundTaskSpawnProcess: () => ({ pid: (breakerSpawnPid += 1), unref: () => {} }),
     });
     const breakerServer = new OperatorControlPlaneServer({ runtime: breakerRuntime });
     const breakerOne = await breakerServer.handle({

@@ -6,6 +6,62 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-13 (run 9) — 🟢 Full suite green: fix background-task JSON corruption + deterministic launch tests
+
+**Audited:** The actual `npm test` result on this branch. Discovered the suite
+was **not green** — 3–4 tests failed *deterministically* (not flaky) in this
+cloud environment: `operator-runtime` "starts, syncs…", both `app.ts`
+task/monitor tests, and `server.ts` "handles session…". Root cause traced to the
+background-task **launch-script state writer**.
+
+**Bug found (real, high value):** `renderLaunchScript` emitted the initial
+`running` state via `printf '%s' <json> | sed "s/…; s/\"$$\"/$$/g"`. This shell
+munging is fundamentally broken:
+- Any `command`/`cwd`/`outputFile` field containing quotes or `$` corrupts the
+  JSON — reproduced: a task with command `printf 'line-1\nline-2\n'` produced
+  `"command":"printf "'line-1…"'"` → `json.loads` fails (`Expecting ','
+  delimiter`), so `readState`/`recoverBySession` threw and the recovery tests
+  failed.
+- The `"$$"` pid placeholder was never reliably substituted (in a non-interactive
+  spawned shell the `sed` pattern didn't match), leaving `"pid":"$$"`.
+
+**Changed (additive):**
+- `src/harness/background-tasks.ts` + `src/training/runner.ts`: replaced the
+  `printf|sed` initial-state writer with a **Python writer fed a base64-encoded
+  payload** (`renderInitialStateWriterPython`) — the payload can't be corrupted
+  by shell quoting, and pid/startedAt come in safely as argv. Emits the same
+  indented JSON as the completion writer. Verified by executing the rendered
+  script: valid JSON, `command` preserved verbatim, real numeric pid.
+- `src/cli/app.ts`: added optional `backgroundTaskSpawnProcess` /
+  `backgroundTaskIsProcessRunning` to `OperatorCliAppOptions`, threaded into the
+  runtime (production defaults unchanged → real spawn). Lets tests drive task
+  state without a racing real launch.
+- **Test hermeticity** (the residual failures were real detached processes —
+  `sleep 5`, `printf …` — racing the tests' manual `writeState`): injected a
+  no-op spawn into the `server.test.ts` main/drifting/breaker runtimes, the
+  `operator-runtime.test.ts` background-task test, and both `app.test.ts`
+  task tests; seeded output/state explicitly where a test asserts real
+  execution output (task-1064).
+- **New regression test** (`background-tasks.test.ts`): starts a task via the
+  *real* launch path with a command containing quotes and `$`, polls for
+  terminal state, and asserts the state file is valid JSON with `command`
+  preserved and a numeric pid — guards the exact bug fixed.
+
+**Test results:** 🟢 **175/175 passing, 8/8 consecutive full-suite runs** (was
+171–174/175 with 1–4 deterministic/load-dependent failures). `typecheck:src`
+CLEAN. Build ✅. +1 test.
+
+**New idea:** the `printf|sed` anti-pattern was duplicated across two launch-script
+renderers and both were latently broken — a good candidate for a shared
+`renderStateBootstrap(payload)` helper in `src/shared/` so there's exactly one
+audited way to emit process state from a shell script. Bigger: the suite hides
+real-process integration tests among unit tests; tag them (e.g. a
+`describe.concurrent`-free `integration` suffix or an env gate) so a fast unit
+lane stays deterministic and a separate lane exercises real spawning with
+generous timeouts.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

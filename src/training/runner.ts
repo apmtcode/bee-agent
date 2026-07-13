@@ -166,18 +166,24 @@ function renderLaunchScript(execution: LocalTrainingExecution, plan: TrainingJob
   const quotedLogFile = shellQuote(execution.logFile);
   const quotedWorkingDirectory = shellQuote(execution.workingDirectory);
   const quotedCommand = `${shellQuote(plan.command[0] ?? "")}${plan.command.slice(1).map((arg) => ` ${shellQuote(arg)}`).join("")}`;
-  const quotedStatePayload = shellQuote(
-    JSON.stringify({
-      version: 1,
-      jobId: plan.jobId,
-      status: "running",
-      pid: "$$",
-      startedAt: "__OPENCLAW_STARTED_AT__",
-      updatedAt: "__OPENCLAW_STARTED_AT__",
-      logFile: execution.logFile,
-      workingDirectory: execution.workingDirectory,
-      command: plan.command,
-    }),
+  // Emit the initial "running" state via Python from a base64-encoded payload
+  // rather than fragile `printf | sed` munging (which corrupts command/path
+  // fields containing quotes or `$` and never reliably substitutes the pid).
+  const quotedStatePayloadB64 = shellQuote(
+    Buffer.from(
+      JSON.stringify({
+        version: 1,
+        jobId: plan.jobId,
+        status: "running",
+        pid: 0,
+        startedAt: "",
+        updatedAt: "",
+        logFile: execution.logFile,
+        workingDirectory: execution.workingDirectory,
+        command: plan.command,
+      }),
+      "utf8",
+    ).toString("base64"),
   );
 
   return [
@@ -185,7 +191,9 @@ function renderLaunchScript(execution: LocalTrainingExecution, plan: TrainingJob
     "set -euo pipefail",
     `mkdir -p ${shellQuote(execution.artifactDir)} $(dirname ${quotedLogFile}) $(dirname ${quotedStatePath})`,
     "started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-    `printf '%s' ${quotedStatePayload} | sed "s/__OPENCLAW_STARTED_AT__/$started_at/g; s/\"\$\$\"/$$/g" > ${quotedStatePath}`,
+    `python3 - ${quotedStatePath} $$ "$started_at" ${quotedStatePayloadB64} <<'PY'`,
+    ...renderInitialStateWriterPython(),
+    "PY",
     `printf '%s\n' "starting ${plan.mode} training for ${plan.jobId}" >> ${quotedLogFile}`,
     `if ${quotedCommand} >> ${quotedLogFile} 2>&1; then`,
     "  completed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
@@ -202,6 +210,23 @@ function renderLaunchScript(execution: LocalTrainingExecution, plan: TrainingJob
     "fi",
     "",
   ].join("\n");
+}
+
+function renderInitialStateWriterPython(): string[] {
+  return [
+    "import base64",
+    "import json",
+    "import pathlib",
+    "import sys",
+    "state_path = pathlib.Path(sys.argv[1])",
+    "pid = int(sys.argv[2])",
+    "started_at = sys.argv[3]",
+    "state = json.loads(base64.b64decode(sys.argv[4]).decode('utf-8'))",
+    "state['pid'] = pid",
+    "state['startedAt'] = started_at",
+    "state['updatedAt'] = started_at",
+    "state_path.write_text(json.dumps(state, indent=2) + '\\n')",
+  ];
 }
 
 function renderStateWriterPython(status: TrainingExecutionState["status"]): string[] {

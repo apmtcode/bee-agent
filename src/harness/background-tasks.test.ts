@@ -370,4 +370,40 @@ describe("BackgroundTaskExecutionService", () => {
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
   });
+
+  it("emits a valid JSON state file even when the command contains quotes and $", async () => {
+    const rootDir = await makeTempDir();
+    // A real (non-mocked) launch: the rendered launch script must run and write
+    // a parseable state file. Commands with embedded quotes / `$` previously
+    // corrupted the initial state JSON via `printf | sed` munging.
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"));
+    const command = `printf '%s' "a'b\\"c $HOME"`;
+    const task = await store.start({
+      title: "Quote stress",
+      command,
+      cwd: rootDir,
+      kind: "task",
+    });
+
+    const statePath = path.join(rootDir, task.execution.stateFile);
+    let state: BackgroundTaskExecutionState | undefined;
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      try {
+        const raw = await fs.readFile(statePath, "utf8");
+        const parsed = JSON.parse(raw) as BackgroundTaskExecutionState;
+        if (parsed.status === "completed" || parsed.status === "failed") {
+          state = parsed;
+          break;
+        }
+      } catch {
+        // state file not yet written or mid-write; retry
+      }
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+
+    expect(state).toBeDefined();
+    expect(state?.taskId).toBe(task.id);
+    expect(state?.command).toBe(command);
+    expect(typeof state?.pid).toBe("number");
+  });
 });

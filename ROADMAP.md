@@ -4,6 +4,17 @@ Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
 ## Foundations / DX
+- [x] **Green the actual `npm test` suite** (2026-07-13, run 9) — fixed the
+      background-task launch-script state writer (`printf|sed` → base64+Python)
+      that corrupted state JSON for any command/path with quotes or `$`, and made
+      the real-spawn tests deterministic via an injected no-op spawn. 175/175,
+      8/8 consecutive runs.
+- [ ] Extract a shared `renderStateBootstrap(payload)` helper (used by both
+      `background-tasks.ts` and `training/runner.ts`) so process-state emission
+      has one audited implementation instead of two copies.
+- [ ] Separate real-process **integration** tests from unit tests (env gate or
+      naming lane) so the fast lane is fully deterministic and spawning tests get
+      generous timeouts.
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`
