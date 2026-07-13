@@ -70,6 +70,26 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Generalization eval harness: measure replay fidelity on held-out but
       related synthetic trajectories.
 
+## Reliability / correctness
+- [x] Fix `shellQuote` single-quote escaping in `src/harness/background-tasks.ts`
+      (2026-07-13, run 9) — it produced `"'"'"'` instead of POSIX `'"'"'`,
+      corrupting any single-quoted background-task command and writing invalid
+      JSON state. Added `createSimulatedBackgroundSpawn` simulated OS seam +
+      `OperatorCliApp` spawn passthrough so background-task tests are hermetic.
+- [ ] **Shell-escaping property/fuzz test** for the launch-script pipeline:
+      generate commands with quotes, `$`, backticks, newlines, unicode; render +
+      execute the launch script; assert the state file round-trips. Catches the
+      next quoting bug before it ships.
+- [ ] Investigate the launch script's PID substitution
+      `sed "…s/\"\$\$\"/$$/g"` — the run-9 repro showed `"pid":"$$"` left
+      **unreplaced** in the sed-written "running" state (a string, not the real
+      pid). Harmless for parsing but wrong data on recovery of a still-running
+      task. Fix the sed or move pid capture into the python writer.
+- [ ] Consolidate the state-writer path: today "running" is written by
+      sed/printf and "completed"/"failed" by an embedded `python3` — two JSON
+      serializers in one pipeline. Replace the sed bootstrap with a single
+      `python3 -c` writer so there is exactly one serializer to get right.
+
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in

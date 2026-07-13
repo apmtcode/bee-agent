@@ -6,6 +6,61 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-13 (run 9) — 🐛 Real bug: `shellQuote` corrupted single-quoted commands + hermetic background-task tests
+
+**Audited:** Baseline health. `npm test` was **4 failing / 170 passing** — a
+regression from the logged 174/174. The 4 failures (server.test, app.test ×2,
+operator-runtime.test) all traced to background-task recovery reading a state
+file and throwing `SyntaxError: … JSON at position 311 (line 1 column 312)`.
+
+**Root cause (genuine product bug, `src/harness/background-tasks.ts`):** the
+launch-script generator's `shellQuote` escaped an embedded single quote as
+`"'"'"'` (6 chars) instead of the correct POSIX `'"'"'` (5 chars — the sibling
+`src/training/runner.ts` had it right). The buggy sequence starts with `"`,
+which — inside the outer single-quoted wrapper — breaks quoting rather than
+escaping. Verified by round-trip: `printf 'line-1'` → buggy `printf "'line-1"'`
+vs. correct `printf 'line-1'`. At runtime the launch script's `sed` step wrote
+**invalid single-line JSON** for any command containing a `'`, so every later
+`readState`/recovery on that task threw. It surfaced now because this
+environment actually executes the bash+python launch script (earlier
+"174/174" environments evidently didn't spawn it), which then raced the tests'
+manual `writeState`.
+
+**Changed (additive, reversible):**
+- **Fix:** `shellQuote` now uses `'"'"'`, matching `runner.ts`. Single-quoted
+  commands round-trip correctly.
+- **New simulated OS seam** (guardrail #3): exported
+  `createSimulatedBackgroundSpawn(startPid = 900_000)` — a `SpawnBackgroundProcess`
+  that returns a detached-looking child with a synthetic monotonic pid and
+  launches nothing, so callers that manage state explicitly never race a real
+  launch script. Surfaced via the barrel (`src/index.ts`).
+- **Test-seam passthrough:** `OperatorCliApp` now accepts
+  `backgroundTaskSpawnProcess` / `backgroundTaskIsProcessRunning` (threaded to
+  the runtime), mirroring the existing `configHome` injectable-seam pattern.
+- **Hermetic tests:** the 3 failing test files now inject
+  `createSimulatedBackgroundSpawn()` (operator-runtime, server ×3 constructions,
+  app ×2) so they no longer depend on the host's bash/python or race real
+  processes.
+- **Regression test** (`background-tasks.test.ts`): starts a task whose command
+  contains single quotes, executes the **real** launch script via bash, and
+  asserts the resulting state file is valid JSON with the exact command and a
+  numeric pid. Confirmed it fails with the bug reintroduced and passes with the
+  fix.
+
+**Test results:** `npm test` **170→175 passing / 0 failing** (41 files; +1 new
+regression test). `npm run typecheck:src` ✅ (source stays green). Build ✅
+(tsdown, 5 files).
+
+**New idea:** the launch-script/state-writer pipeline is only exercised
+end-to-end by this one new bash test. Add a **shell-escaping property/fuzz
+test** — generate commands with quotes, `$`, backticks, newlines, and unicode,
+render+execute the launch script, and assert the state round-trips — to catch
+the *next* quoting bug (e.g. the still-suspicious `sed "…s/\"\$\$\"/$$/g"` PID
+substitution, which left `"pid":"$$"` unreplaced in the captured repro) before
+it ships. Longer term: replace the sed/printf state bootstrap with a single
+`python3 -c` writer so there is exactly one JSON serializer in the path, not
+two (sed for "running", python for "completed"/"failed").
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

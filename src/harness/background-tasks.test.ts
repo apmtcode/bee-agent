@@ -1,7 +1,11 @@
+import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
+
+const execFileAsync = promisify(execFile);
 import {
   BackgroundTaskExecutionService,
   FileBackgroundTaskStore,
@@ -369,5 +373,31 @@ describe("BackgroundTaskExecutionService", () => {
     await expect(fs.readFile(path.join(rootDir, task.execution.launchScript), "utf8")).resolves.toContain("bash -lc");
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
+  });
+
+  it("launch script writes valid JSON state for commands containing single quotes", async () => {
+    // Regression: shellQuote previously escaped `'` as `"'"'"'` (6 chars) instead
+    // of the POSIX `'"'"'` (5 chars). That corrupted any single-quoted command
+    // when the launch script ran — the state file the sed step wrote was invalid
+    // JSON, so every recovery/read of that task threw a SyntaxError.
+    const rootDir = await makeTempDir();
+    const store = new FileBackgroundTaskStore(
+      path.join(rootDir, "background-tasks.json"),
+      () => ({ pid: 4242, unref() {} }),
+      () => true,
+    );
+    const command = "printf '%s' 'quoted value'";
+    const task = await store.start({ title: "quoted", command, cwd: rootDir, kind: "task" });
+
+    // start() only writes the launch artifacts (spawn is mocked). Execute the
+    // real script with bash so the sed/python state writers run for real.
+    const scriptPath = path.join(rootDir, task.execution.launchScript);
+    await execFileAsync("bash", [scriptPath], { cwd: rootDir });
+
+    const raw = await fs.readFile(path.join(rootDir, task.execution.stateFile), "utf8");
+    const state = JSON.parse(raw) as BackgroundTaskExecutionState; // must not throw
+    expect(state.command).toBe(command);
+    expect(state.status).toBe("completed");
+    expect(typeof state.pid).toBe("number");
   });
 });

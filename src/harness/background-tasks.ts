@@ -108,6 +108,23 @@ export type SpawnBackgroundProcess = (
 
 export type IsProcessRunning = (pid: number) => boolean;
 
+/**
+ * A simulated {@link SpawnBackgroundProcess} for environments that cannot (or
+ * must not) launch real OS processes — cloud/CI test runs, dry-runs, and any
+ * caller that manages task state explicitly. It returns a detached-looking
+ * child with a synthetic, monotonically increasing pid and performs no work, so
+ * it never races a real launch script writing to the state file. Pair it with a
+ * fixed `isProcessRunning` (e.g. `() => false`) for deterministic recovery.
+ */
+export function createSimulatedBackgroundSpawn(startPid = 900_000): SpawnBackgroundProcess {
+  let nextPid = startPid;
+  return () => {
+    const pid = nextPid;
+    nextPid += 1;
+    return { pid, unref() {} };
+  };
+}
+
 export type BackgroundTaskRecoveryReason =
   | "unchanged"
   | "state-running"
@@ -794,5 +811,5 @@ function renderStateWriterPython(status: BackgroundTaskExecutionState["status"])
 }
 
 function shellQuote(value: string): string {
-  return `'${value.replaceAll(`'`, `"'"'"'`)}'`;
+  return `'${value.replaceAll(`'`, `'"'"'`)}'`;
 }
