@@ -6,6 +6,62 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-13 (run 9) — Movement subsystem: pluggable local-model backend + deterministic n-gram mock (train / replay / generalize)
+
+**Audited:** Standing objective #2 (local-movement learning subsystem). Inventoried
+`src/capture/` (recorder, adapters, trajectory schema, replay manifest) and
+`src/training/` (exporter, runner, job store). Found the pipeline covered
+capture → schema → dataset → replay-manifest → *training-plan/launch-script*, but
+had **no in-process model layer at all** — `runner.ts` only emits an mlx/axolotl
+bash launch script. Pieces 2c (post-train a model to repeat recorded movements)
+and 2d (generalize to new-but-related movements) had zero executable, testable
+code. That was the biggest capability gap for the objective.
+
+**Changed (additive):** new `src/training/movement-model.ts`:
+- **Dataset layer:** `tokenizeReplayEvent` (actions/observations → canonical
+  tokens; dialogue ignored), `movementSequenceFromReplay`, `buildMovementDataset`
+  (`ReplayManifest[]` → `MovementDataset`, dropping empty/transcript-only spans).
+- **Pluggable backend seam:** `MovementModelBackend` interface (`train` +
+  `restore`) and `MovementModel` (`predictNext` / `generate` / `serialize`) — the
+  documented seam for a real on-device small model (MLX/axolotl fine-tune) to drop
+  in behind the same API when bee-agent runs locally.
+- **Deterministic cloud-safe backend:** `NGramMovementBackend` — a variable-order
+  n-gram policy with stupid-backoff. Reproduces recorded movements **exactly**
+  (each seen context → next recorded token), and **generalizes** to novel-but-
+  related contexts by backing off to shorter learned suffixes, then a unigram
+  prior. No randomness, no OS/GPU deps → trains and runs in CI. Predictions carry
+  `source: exact|backoff|prior` + `matchedOrder` so the eval harness can see *how*
+  a movement was produced. JSON-serializable snapshots round-trip via `restore`.
+- **Eval metric:** `replayFidelity(expected, actual)` (in-order longest-common-
+  prefix ratio) — the primary signal for a future generalization eval harness.
+- Exported the surface from `src/index.ts`.
+
+**Test results:** new `movement-model.test.ts` — **12/12 passing** (tokenize,
+dataset build, exact replay, EOS termination, determinism, backoff generalization,
+unigram-prior fallback, serialize/restore round-trip, fidelity metric). Build ✅.
+`typecheck:src` ✅ (exit 0). No regressions from this change — it is purely
+additive and touches no existing module besides the barrel.
+
+**⚠️ Pre-existing failures (NOT caused by this run, present on clean HEAD
+`3c7b7236`):** 3 tests fail identically with or without my diff —
+`operator-runtime.test.ts` (recover background tasks), `server.test.ts`,
+`app.test.ts`. Root cause is shared: a test/launch-script fixture writes a run-state
+file via a shell `sed`/`printf` template whose PID placeholder substitution
+(`s/"$$"/…/`) emits **invalid JSON on this platform's sed/bash**, so
+`readJsonFile` throws `SyntaxError: Expected ',' or '}'`. Run 8 recorded 174/174
+green, so this is an environment (sed/bash) portability regression in the fixture,
+not a product logic change. Logged to ROADMAP as a portability fix; left untouched
+this run to keep the diff focused and reviewable.
+
+**New idea:** build the **generalization eval harness** on top of `replayFidelity`
+— split a synthetic trajectory corpus into train/held-out-related sets, train the
+n-gram backend, and report mean fidelity + a breakdown of prediction `source`
+(exact vs backoff vs prior). That turns "does it generalize?" into a tracked
+number the engine can watch across runs, and gives the real on-device backend a
+ready-made benchmark to beat.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

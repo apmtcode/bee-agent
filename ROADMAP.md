@@ -62,13 +62,36 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
+      for a real on-device small model — DONE run 9 (`src/training/movement-model.ts`:
+      `MovementModelBackend`/`MovementModel` interfaces + `NGramMovementBackend`
+      n-gram-with-backoff mock; trains, replays exactly, generalizes via backoff,
+      JSON-serializable snapshots). 12 tests.
 - [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      round-trips without real OS input. (Partial: run 9's tests hand-build replay
+      manifests; a reusable generator that emits varied device/OS/browser event
+      streams — with controllable shared sub-patterns for generalization testing —
+      is still open.)
+- [ ] Generalization eval harness on top of `replayFidelity` (run 9): split a
+      synthetic corpus into train / held-out-related sets, train the n-gram
+      backend, report mean fidelity + a prediction-`source` breakdown
+      (exact/backoff/prior). Gives a tracked generalization number across runs and
+      a benchmark for a real on-device backend.
+- [ ] Wire a trained `MovementModel` into the replay/execution path so a promoted
+      movement skill can be *predicted+executed* (guarded, simulated in cloud),
+      not just described — closes the loop from recording to autonomous repeat.
+
+## Reliability / portability
+- [ ] **Fix cross-platform state-file JSON generation** (surfaced run 9). 3 tests
+      fail on clean HEAD — `operator-runtime.test.ts` (recover background tasks),
+      `server.test.ts`, `app.test.ts` — all from one root cause: a shell
+      `sed`/`printf` template (runner/background-task launch scripts) whose PID
+      placeholder substitution `s/"$$"/…/` emits **invalid JSON** on some
+      sed/bash builds, so `readJsonFile` throws. Run 8 was 174/174 green, so this
+      is env-dependent. Fix: have the state writer emit JSON via a small
+      Node/`python3 -c` helper (or `jq`) instead of `sed` string-munging, and add
+      a round-trip test that parses the produced file.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
