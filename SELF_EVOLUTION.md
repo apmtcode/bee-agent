@@ -6,6 +6,56 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-14 (run 9) — 🐛 Real shell-quoting bug fixed + de-flaked background-task suite
+
+**Audited:** Project health first (the required build/test gate). The baseline
+was **not green** — `npm test` showed **3 failing tests** (`operator-runtime`,
+`server`, `app`), all in the background-task path, despite run 8 reporting
+174/174. Root-caused two distinct defects.
+
+**Defect 1 — genuine latent bug in `shellQuote` (`src/harness/background-tasks.ts`).**
+The single-quote escape sequence was `"'"'"'` (6 chars, leading `"`) instead of
+the POSIX-safe `'\''`. Verified against a real shell: quoting `printf 'hi there'`
+produced `printf "'hi there"'` — an injected stray `"`. This corrupted **two**
+things at runtime: (a) any user background-task **command** containing a single
+quote was executed wrong via `bash -lc <quoted>`, and (b) the persisted
+`state.json` payload became **invalid JSON** (the launch script embeds a
+JSON-stringified state and sed-substitutes into it), so `readState` →
+`JSON.parse` threw `SyntaxError` during recovery. Fixed to `'\''` and exported
+`shellQuote` with a focused regression test that round-trips single/double
+quotes, JSON, backslashes, and `$VAR`/backticks through real `bash`.
+
+**Defect 2 — non-hermetic tests racing real detached processes.** The three
+failing tests construct a `StandaloneOperatorRuntime` with real `spawn`, so the
+launch script's detached bash wrote `state.json` **concurrently** with the test's
+own `writeState()` calls — a timing- and date-dependent race that flipped
+recovery/stop outcomes (and, before the fix above, left corrupt JSON on disk).
+Made them hermetic by injecting a no-op spawner:
+- Threaded `backgroundTaskSpawnProcess` / `backgroundTaskIsProcessRunning`
+  through `OperatorCliAppOptions` → `StandaloneOperatorRuntime` (additive;
+  production default unchanged = real spawner).
+- Injected `() => ({ pid, unref() {} })` in the operator-runtime, server (main +
+  drifting + breaker runtimes), and app tests; the "background and monitor" app
+  test now drives output/state via `writeOutput`/`writeState` (mirroring its
+  monitor half) instead of relying on a real `printf ok` that exits before
+  `task-stop`.
+
+**Test results:** `npm test` ✅ **176/176** (was 3 failing; +2 new shellQuote
+tests) — verified **stable across 3 full runs + 10 targeted runs** of the
+previously-flaky test. `npm run build` ✅. `npm run typecheck:src` ✅ (exit 0).
+Full `tsc` total **125 → 125** (no regression; all remaining errors are in test
+files).
+
+**New idea (logged to ROADMAP):** A `test:stress` script (`vitest run --retry=0`
+run N times, or a small wrapper) plus a rule that the engine runs the suite ≥2×
+each cycle before pushing — this run's baseline flake would have been silently
+carried forward otherwise. Deeper: an integration test that actually **executes**
+a rendered launch script end-to-end (write artifacts → run bash → assert valid
+JSON state + correct output) for a command containing quotes, so shell-quoting
+regressions are caught by behavior, not just the unit round-trip.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

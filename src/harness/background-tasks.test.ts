@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -5,6 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   BackgroundTaskExecutionService,
   FileBackgroundTaskStore,
+  shellQuote,
   type BackgroundTaskExecutionState,
 } from "./background-tasks.js";
 
@@ -18,6 +20,36 @@ async function makeTempDir(): Promise<string> {
 
 afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
+});
+
+describe("shellQuote", () => {
+  // Ask bash to echo back the decoded token so we assert the quoting round-trips
+  // through a real shell — this is the exact path the launch script relies on.
+  function bashDecode(value: string): string {
+    const out = execFileSync("bash", ["-c", `printf '%s' ${shellQuote(value)}`], {
+      encoding: "utf8",
+    });
+    return out;
+  }
+
+  it("round-trips values containing single quotes, double quotes, and JSON", () => {
+    const cases = [
+      "printf 'line-1\nline-2\n'",
+      `mixed "double" and 'single' quotes`,
+      JSON.stringify({ command: "printf 'hi'", note: 'say "hello"' }),
+      "plain",
+      "back\\slash and $VAR and `cmd`",
+    ];
+    for (const value of cases) {
+      expect(bashDecode(value)).toBe(value);
+    }
+  });
+
+  it("does not inject stray characters when escaping a single quote", () => {
+    // Regression: the previous escape (`"'"'"'`) produced an extra double quote,
+    // corrupting commands and the persisted JSON state payload.
+    expect(bashDecode("a'b")).toBe("a'b");
+  });
 });
 
 describe("FileBackgroundTaskStore", () => {

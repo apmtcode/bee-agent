@@ -84,3 +84,16 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
       count to a baseline file and fail if a module regresses above it. Lets the
       engine pay debt down module-by-module without one green-gate blocking
       progress, and prevents backsliding while the total is still > 0.
+- [ ] **Anti-flake gate** (run 9): the engine must run the suite ≥2× before
+      pushing — run 9's baseline had a 3-test flake that run 8 reported as green.
+      Add a `test:stress` wrapper (repeat `vitest run` N times) and consider
+      failing on any non-deterministic result.
+- [ ] **End-to-end launch-script test** (run 9): execute a *rendered* background
+      launch script through real `bash` (write artifacts → run → assert valid
+      `state.json` + correct output) for a command containing quotes/newlines, so
+      shell-quoting regressions are caught behaviorally, not only by the
+      `shellQuote` unit round-trip added this run.
+- [ ] **Hermetic-spawn audit**: sweep remaining tests that build a real
+      `StandaloneOperatorRuntime` and start background tasks without injecting a
+      spawner (e.g. server.test.ts monitor cases ~2136); inject the no-op spawner
+      so no test depends on real OS process timing.

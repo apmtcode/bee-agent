@@ -793,6 +793,10 @@ function renderStateWriterPython(status: BackgroundTaskExecutionState["status"])
   ];
 }
 
-function shellQuote(value: string): string {
-  return `'${value.replaceAll(`'`, `"'"'"'`)}'`;
+export function shellQuote(value: string): string {
+  // Escape embedded single quotes with the POSIX-safe idiom: close the quote,
+  // emit an escaped quote, then reopen. `'` -> `'\''`. The previous sequence
+  // (`"'"'"'`) injected a stray double quote, corrupting any command or JSON
+  // payload that contained a single quote.
+  return `'${value.replaceAll(`'`, `'\\''`)}'`;
 }
