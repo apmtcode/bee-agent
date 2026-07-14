@@ -6,6 +6,7 @@ import process from "node:process";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 import { OperatorCliApp, parseSlashCommand } from "./app.js";
+import { noopSpawnBackgroundProcess } from "../harness/background-tasks.js";
 
 const tempDirs: string[] = [];
 const execFileAsync = promisify(execFile);
@@ -322,7 +323,7 @@ describe("parseSlashCommand", () => {
 describe("OperatorCliApp", () => {
   it("dispatches status and runtime-backed commands", async () => {
     const rootDir = await makeTempDir();
-    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25", backgroundTaskSpawnProcess: noopSpawnBackgroundProcess, backgroundTaskIsProcessRunning: () => false });
     const session = await app.runtime.startSession({ title: "CLI test", cwd: rootDir, agentId: "operator-cli" });
 
     await app.runtime.recordTurn({
@@ -342,7 +343,7 @@ describe("OperatorCliApp", () => {
 
   it("creates, lists, and updates operator tasks", async () => {
     const rootDir = await makeTempDir();
-    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25", backgroundTaskSpawnProcess: noopSpawnBackgroundProcess, backgroundTaskIsProcessRunning: () => false });
     const session = await app.runtime.startSession({ title: "task cli", cwd: rootDir, agentId: "operator-cli" });
 
     const createdOutput = await app.dispatchSlashCommand({ kind: "task-create", subject: "Inspect logs" }, session.id);
@@ -368,7 +369,7 @@ describe("OperatorCliApp", () => {
 
   it("sends and lists operator messages", async () => {
     const rootDir = await makeTempDir();
-    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25", backgroundTaskSpawnProcess: noopSpawnBackgroundProcess, backgroundTaskIsProcessRunning: () => false });
     const sender = await app.runtime.startSession({ title: "sender cli", cwd: rootDir, agentId: "operator-cli" });
     const recipient = await app.runtime.startSession({ title: "recipient cli", cwd: rootDir, agentId: "worker" });
 
@@ -396,7 +397,7 @@ describe("OperatorCliApp", () => {
 
   it("sends operator notifications", async () => {
     const rootDir = await makeTempDir();
-    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25", backgroundTaskSpawnProcess: noopSpawnBackgroundProcess, backgroundTaskIsProcessRunning: () => false });
     const session = await app.runtime.startSession({ title: "notify cli", cwd: rootDir, agentId: "operator-cli" });
 
     const output = await app.dispatchSlashCommand({ kind: "notify", status: "success", message: "Deploy finished." }, session.id);
@@ -412,7 +413,7 @@ describe("OperatorCliApp", () => {
 
   it("shows, updates, requests approval for, responds to, and verifies plans", async () => {
     const rootDir = await makeTempDir();
-    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25", backgroundTaskSpawnProcess: noopSpawnBackgroundProcess, backgroundTaskIsProcessRunning: () => false });
     const author = await app.runtime.startSession({ title: "plan author", cwd: rootDir, agentId: "operator-cli" });
     const reviewer = await app.runtime.startSession({ title: "plan reviewer", cwd: rootDir, agentId: "reviewer" });
 
@@ -475,7 +476,7 @@ describe("OperatorCliApp", () => {
     const rootDir = await makeTempDir();
     await fs.mkdir(path.join(rootDir, ".claude"), { recursive: true });
     await fs.writeFile(path.join(rootDir, ".claude", "settings.local.json"), '{"permissionMode":"acceptEdits"}');
-    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25", backgroundTaskSpawnProcess: noopSpawnBackgroundProcess, backgroundTaskIsProcessRunning: () => false });
     const session = await app.runtime.startSession({ title: "plan cli", cwd: rootDir, agentId: "operator-cli" });
 
     const enabled = await app.dispatchSlashCommand({ kind: "plan" }, session.id);
@@ -503,7 +504,7 @@ describe("OperatorCliApp", () => {
 
   it("overrides plan-exit restore mode and reports when plan mode is inactive", async () => {
     const rootDir = await makeTempDir();
-    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25", backgroundTaskSpawnProcess: noopSpawnBackgroundProcess, backgroundTaskIsProcessRunning: () => false });
     const session = await app.runtime.startSession({ title: "plan exit cli", cwd: rootDir, agentId: "operator-cli" });
 
     await expect(app.dispatchSlashCommand({ kind: "plan-exit" }, session.id)).resolves.toBe("Plan mode is not enabled. permissionMode=default");
@@ -568,7 +569,7 @@ describe("OperatorCliApp", () => {
     await execFileAsync("git", ["add", "tracked.txt"], { cwd: rootDir });
     await execFileAsync("git", ["-c", "user.name=Operator Test", "-c", "user.email=operator@example.test", "commit", "-m", "init"], { cwd: rootDir });
 
-    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25", backgroundTaskSpawnProcess: noopSpawnBackgroundProcess, backgroundTaskIsProcessRunning: () => false });
     const session = await app.runtime.startSession({ title: "worktree cli", cwd: rootDir, agentId: "operator-cli" });
 
     const nonRepoRoot = await makeTempDir();
@@ -597,7 +598,7 @@ describe("OperatorCliApp", () => {
 
   it("creates team task sessions and coordinates team-scoped tasks", async () => {
     const rootDir = await makeTempDir();
-    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25", backgroundTaskSpawnProcess: noopSpawnBackgroundProcess, backgroundTaskIsProcessRunning: () => false });
     const session = await app.runtime.startSession({ title: "team task cli", cwd: rootDir, agentId: "operator-cli" });
 
     await expect(app.dispatchSlashCommand({ kind: "teams" })).resolves.toBe("No teams.");
@@ -630,7 +631,7 @@ describe("OperatorCliApp", () => {
 
   it("starts lists messages and updates teammates", async () => {
     const rootDir = await makeTempDir();
-    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25", backgroundTaskSpawnProcess: noopSpawnBackgroundProcess, backgroundTaskIsProcessRunning: () => false });
     const session = await app.runtime.startSession({ title: "teammate cli", cwd: rootDir, agentId: "operator-cli" });
 
     await expect(app.dispatchSlashCommand({ kind: "team-create", name: "reviewers", description: "Review team" }, session.id)).resolves.toContain("Created team reviewers");
@@ -696,7 +697,7 @@ describe("OperatorCliApp", () => {
 
   it("streams in-flight freeform run updates and reuses transcript context across resume", async () => {
     const rootDir = await makeTempDir();
-    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25", backgroundTaskSpawnProcess: noopSpawnBackgroundProcess, backgroundTaskIsProcessRunning: () => false });
     const session = await app.runtime.startSession({ title: "freeform", cwd: rootDir, agentId: "operator-cli" });
 
     const firstTurn = await app.handleInput("hello", session.id);
@@ -733,7 +734,7 @@ describe("OperatorCliApp", () => {
     const rootDir = await makeTempDir();
     await fs.mkdir(path.join(rootDir, ".claude"), { recursive: true });
     await fs.writeFile(path.join(rootDir, ".claude", "settings.local.json"), '{"permissionMode":"default"}');
-    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25", backgroundTaskSpawnProcess: noopSpawnBackgroundProcess, backgroundTaskIsProcessRunning: () => false });
     const session = await app.runtime.startSession({ title: "freeform policy", cwd: rootDir, agentId: "operator-cli" });
 
     const firstAttempt = await app.handleInput("start background wipe -- rm -rf build", session.id);
@@ -759,7 +760,7 @@ describe("OperatorCliApp", () => {
 
   it("runs executable skills from slash commands and can watch runs", async () => {
     const rootDir = await makeTempDir();
-    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25", backgroundTaskSpawnProcess: noopSpawnBackgroundProcess, backgroundTaskIsProcessRunning: () => false });
     const session = await app.runtime.startSession({ title: "CLI skill", cwd: rootDir, agentId: "operator-cli" });
     const recorded = await app.runtime.recordTurn({
       sessionId: session.id,
@@ -801,7 +802,7 @@ describe("OperatorCliApp", () => {
 
   it("supports session lifecycle, transcript, approvals, pairing, config, and prompt commands", async () => {
     const rootDir = await makeTempDir();
-    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25", backgroundTaskSpawnProcess: noopSpawnBackgroundProcess, backgroundTaskIsProcessRunning: () => false });
     const firstSession = await app.runtime.startSession({ title: "first", cwd: rootDir, agentId: "operator-cli" });
     const secondSession = await app.runtime.startSession({ title: "second", cwd: rootDir, agentId: "operator-cli" });
 
@@ -1063,6 +1064,9 @@ describe("OperatorCliApp", () => {
 
   it("supports background and monitor task commands plus cron commands", async () => {
     const rootDir = await makeTempDir();
+    // This test intentionally exercises the real launch pipeline (it asserts on
+    // the subprocess's own "ok" output and on live-process detection), so it
+    // uses the default spawner rather than the deterministic noop one.
     const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
     const session = await app.runtime.startSession({ title: "CLI ops", cwd: rootDir, agentId: "operator-cli" });
 
@@ -1184,7 +1188,7 @@ describe("OperatorCliApp", () => {
     const rootDir = await makeTempDir();
     await fs.mkdir(path.join(rootDir, ".claude"), { recursive: true });
     await fs.writeFile(path.join(rootDir, ".claude", "settings.local.json"), '{"permissionMode":"default"}');
-    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25", backgroundTaskSpawnProcess: noopSpawnBackgroundProcess, backgroundTaskIsProcessRunning: () => false });
     const session = await app.runtime.startSession({ title: "policy", cwd: rootDir, agentId: "operator-cli" });
 
     const firstAttempt = await app.dispatchSlashCommand(
@@ -1227,7 +1231,7 @@ describe("OperatorCliApp", () => {
         },
       }),
     );
-    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25", backgroundTaskSpawnProcess: noopSpawnBackgroundProcess, backgroundTaskIsProcessRunning: () => false });
     const session = await app.runtime.startSession({ title: "hooks", cwd: rootDir, agentId: "operator-cli" });
 
     const output = await app.dispatchSlashCommand(
@@ -1253,7 +1257,7 @@ describe("OperatorCliApp", () => {
     const rootDir = await makeTempDir();
     await fs.mkdir(path.join(rootDir, ".claude"), { recursive: true });
     await fs.writeFile(path.join(rootDir, ".claude", "settings.local.json"), '{"permissionMode":"default"}');
-    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25", backgroundTaskSpawnProcess: noopSpawnBackgroundProcess, backgroundTaskIsProcessRunning: () => false });
     const session = await app.runtime.startSession({ title: "skill policy", cwd: rootDir, agentId: "operator-cli" });
     const recorded = await app.runtime.recordTurn({
       sessionId: session.id,

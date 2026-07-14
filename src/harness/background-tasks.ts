@@ -108,6 +108,21 @@ export type SpawnBackgroundProcess = (
 
 export type IsProcessRunning = (pid: number) => boolean;
 
+/**
+ * A spawner that launches nothing. It returns a synthetic pid and never writes
+ * a state or output file, so callers retain full control over background-task
+ * state via {@link BackgroundTaskExecutionService.writeState}. Intended for
+ * tests and dry-run modes running in environments (like CI/cloud sandboxes)
+ * where launching real detached OS processes would be non-deterministic — the
+ * real subprocess writes its state file asynchronously and would race with any
+ * explicitly-written state. Pair with `isProcessRunning: () => false` to fully
+ * control liveness detection.
+ */
+export const noopSpawnBackgroundProcess: SpawnBackgroundProcess = () => ({
+  pid: 2_000_000_000,
+  unref() {},
+});
+
 export type BackgroundTaskRecoveryReason =
   | "unchanged"
   | "state-running"
@@ -734,27 +749,33 @@ function renderLaunchScript(task: BackgroundTaskRecord): string {
   const quotedOutputFile = shellQuote(task.execution.outputFile);
   const quotedCwd = shellQuote(task.cwd);
   const quotedCommand = shellQuote(task.command);
-  const quotedStatePayload = shellQuote(
+  // Encode the running-state payload as base64 so it survives shell/heredoc
+  // transport without any quoting hazards. A previous `printf | sed` pipeline
+  // corrupted this file (sed treats `$$` as a regex anchor, so the pid was
+  // never substituted, and nested command quotes were mangled) — producing
+  // invalid JSON that later crashed every readState (recover/sync). We now
+  // hand the payload to the same python writer used for completion/failure.
+  const initialStatePayloadB64 = Buffer.from(
     JSON.stringify({
       version: 1,
       taskId: task.id,
       kind: task.kind,
       status: "running",
-      pid: "$$",
-      startedAt: "__OPENCLAW_STARTED_AT__",
-      updatedAt: "__OPENCLAW_STARTED_AT__",
       outputFile: task.execution.outputFile,
       cwd: task.cwd,
       command: task.command,
     }),
-  );
+    "utf8",
+  ).toString("base64");
 
   return [
     "#!/usr/bin/env bash",
     "set -euo pipefail",
     `mkdir -p $(dirname ${quotedStatePath}) $(dirname ${quotedOutputFile})`,
     "started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-    `printf '%s' ${quotedStatePayload} | sed "s/__OPENCLAW_STARTED_AT__/$started_at/g; s/\"\$\$\"/$$/g" > ${quotedStatePath}`,
+    `python3 - ${quotedStatePath} $$ "$started_at" '${initialStatePayloadB64}' <<'PY'`,
+    ...renderInitialStateWriterPython(),
+    "PY",
     `printf '%s\n' "starting ${task.kind} ${task.id}" >> ${quotedOutputFile}`,
     `if cd ${quotedCwd} && bash -lc ${quotedCommand} >> ${quotedOutputFile} 2>&1; then`,
     "  completed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
@@ -771,6 +792,23 @@ function renderLaunchScript(task: BackgroundTaskRecord): string {
     "fi",
     "",
   ].join("\n");
+}
+
+function renderInitialStateWriterPython(): string[] {
+  return [
+    "import base64",
+    "import json",
+    "import pathlib",
+    "import sys",
+    "state_path = pathlib.Path(sys.argv[1])",
+    "pid = int(sys.argv[2])",
+    "started_at = sys.argv[3]",
+    "state = json.loads(base64.b64decode(sys.argv[4]).decode('utf-8'))",
+    "state['pid'] = pid",
+    "state['startedAt'] = started_at",
+    "state['updatedAt'] = started_at",
+    "state_path.write_text(json.dumps(state, indent=2) + '\\n')",
+  ];
 }
 
 function renderStateWriterPython(status: BackgroundTaskExecutionState["status"]): string[] {

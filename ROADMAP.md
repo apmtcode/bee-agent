@@ -70,6 +70,24 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Generalization eval harness: measure replay fidelity on held-out but
       related synthetic trajectories.
 
+## Reliability
+- [x] **Deterministic test suite** (2026-07-14, run 9). Fixed a real
+      correctness bug — `renderLaunchScript` wrote the initial background-task
+      state via `printf | sed` where `$$` is a regex anchor (pid never
+      substituted) and nested command quotes were mangled → invalid JSON that
+      crashed every later `readState`. Now writes via base64 payload + the
+      python writer. Also exported `noopSpawnBackgroundProcess` and forwarded a
+      spawn/liveness override through `OperatorCliApp`, so health/recovery tests
+      stop racing real detached subprocesses. Suite went from flaky 173↔174 to
+      174/174 stable.
+- [ ] **Generated-script safety lint:** forbid interpolating structured data
+      (JSON/objects) directly into generated shell scripts; require base64 +
+      in-script decode. Prevents the quoting-corruption class fixed in run 9
+      from reappearing.
+- [ ] **First-class dry-run runtime mode:** promote `noopSpawnBackgroundProcess`
+      into a documented runtime/app option (no real detached processes,
+      deterministic pids) for CI, previews, and the movement-replay harness.
+
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in

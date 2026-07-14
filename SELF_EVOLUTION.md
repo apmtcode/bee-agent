@@ -6,6 +6,60 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-14 (run 9) — 🐛 Fix corrupt background-task launch state (invalid JSON) + kill subprocess-race flakiness
+
+**Audited:** Project health. The build was green but `npm test` was **flaky**,
+oscillating 173↔174/174 across runs, with three tests failing under concurrent
+load: `operator-runtime` (JSON crash in `recoverBackgroundTasks`),
+`server.test` and `app.test` (control health reported `degraded` instead of
+`mixed`/`active`). All three isolated-passed but failed in the full suite —
+the signature of a timing race, not a logic bug in the assertions.
+
+**Root cause (a real correctness bug, not just a test bug).** `renderLaunchScript`
+in `src/harness/background-tasks.ts` wrote the initial `running` state file via a
+fragile `printf '%s' <json> | sed "s/…/…/; s/\"$$\"/$$/"` pipeline:
+- `sed` treats `$$` as a regex end-of-line anchor, so the `pid` placeholder was
+  **never substituted** — it stayed the literal string `"$$"`.
+- Commands containing quotes/newlines (e.g. `printf 'line-1\nline-2\n'`) had
+  their nested quotes mangled by the printf→sed transport, producing
+  **invalid JSON**.
+Any later `readState` (recover / sync / platform-health aggregation) then threw
+`SyntaxError`, or — timing-dependent — real detached subprocesses (`sleep 5`,
+`tail -f`) wrote their own running-state files that raced with the tests'
+explicitly-written state, skewing the health rollup.
+
+**Changed (additive):**
+- **Correctness fix** — `renderLaunchScript` now encodes the running-state
+  payload as **base64** (computed in TS, zero shell-quoting hazards) and hands it
+  to a new `renderInitialStateWriterPython()` helper — the same robust `python3`
+  writer already used for the completion/failure transitions. Result: valid JSON,
+  numeric `pid`, correctly-escaped `command`. Verified by dumping the written
+  state file: parses cleanly, `pid` is an int.
+- **Determinism / DX** — exported `noopSpawnBackgroundProcess` (a spawner that
+  launches nothing and returns a synthetic pid) from `background-tasks.ts`;
+  forwarded new optional `backgroundTaskSpawnProcess` / `backgroundTaskIsProcessRunning`
+  through `OperatorCliAppOptions` → the runtime. Injected the noop spawner into
+  the health/recovery tests (`operator-runtime`, `server`, `session-stream`,
+  `gateway-transport`, `app`) so they stop racing real OS processes. The one
+  `app.test` case that *intentionally* exercises the real launch pipeline (asserts
+  on the subprocess's own `ok` output + live-process detection) was kept on the
+  default spawner, with a comment explaining why.
+
+**Test results:** was flaky 173↔174; now **174/174 stable across 6 consecutive
+full runs**. `typecheck:src` exit 0 ✅. Build ✅. Full `tsc` (incl. tests)
+unchanged at **125** (all in test files). This is the first run where the whole
+suite is deterministically green.
+
+**New idea:** two follow-ups fall out of this. (1) A tiny build-time guard/lint
+that forbids interpolating structured data into generated shell scripts — any
+JSON destined for a script should go through base64+decoder — so this class of
+quoting corruption can't reappear. (2) Promote `noopSpawnBackgroundProcess` into
+a first-class **"dry-run runtime mode"** on the runtime/app (no real detached
+processes, deterministic pids) — useful for CI, previews, and the movement-replay
+harness where we want to simulate task execution without touching the host.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
