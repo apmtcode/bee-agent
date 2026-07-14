@@ -62,13 +62,33 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
+      for a real on-device small model. — DONE run 9
+      (`src/training/movement-model.ts`: `MovementModelBackend` +
+      `NGramMovementBackend`, train/infer/generate/serialize/restore).
+- [x] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories. — DONE run 9 (`evaluateReplayFidelity`:
+      tokenAccuracy + sequenceExactMatch).
+- [ ] `trainWithSplit(dataset, {holdoutRatio})`: deterministic train/holdout
+      split that auto-reports a single generalization "capability score" the
+      engine can track run-over-run.
+- [ ] Real on-device backend behind `MovementModelBackend` (small local
+      transformer / ONNX policy) wired to the MLX/axolotl runner artifacts.
 - [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      round-trips without real OS input (partially covered by the movement-model
+      tests; still want a first-class generator producing full trajectory spans
+      + transcripts, not just token sequences).
+
+## Reliability
+- [ ] **Fix torn-JSON read in background-tasks reconcile** (flaky on clean tree
+      since ≤ run 8; NOT a regression from run 9). `BackgroundTaskExecutionService
+      .readState` → `readJsonFile` throws `SyntaxError: Expected ',' or '}' ...`
+      when a state file is read mid-write. Repro: full `npm test` → 3 flaky fails
+      (`operator-runtime.test.ts` recover/sync, `server.test.ts`, `app.test.ts`).
+      Fix: atomic write already used for writes — make `readState` tolerant of a
+      partial read (retry once / validate + skip) or fsync-ordering. Non-
+      deterministic (app.test.ts fails 1–2 depending on scheduling).
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

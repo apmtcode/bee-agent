@@ -6,6 +6,63 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-14 (run 9) — 🧠 Movement-model backend: in-process train + infer + generalize + eval
+
+**Audited:** The local-movement learning subsystem (objective #2). Inventory of
+what exists vs. the five required pieces:
+- (a) capture — `src/capture/` (recorder, os/device/browser adapters) ✅
+- (b) record to structured dataset — `trajectory.ts` schema + `exporter.ts`
+  (`ReviewedExportManifest` with replays) ✅
+- (c) **post-train a local model to repeat movements** — ❌ MISSING. `runner.ts`
+  only *emits an MLX/axolotl launch plan*; nothing trains or infers in-process,
+  so there was no cloud/CI-testable model at all.
+- (d) **generalize to new-but-related movements** — ❌ MISSING (no model).
+- replay engine — `replay.ts` / `replay-service.ts` ✅
+
+**Changed (additive):** new `src/training/movement-model.ts` — the pluggable
+**backend seam** that closes (c) and (d) with a deterministic, in-process
+reference model that runs anywhere (no OS access needed):
+- `MovementModelBackend` interface (`train` / `restore`) — a real on-device
+  small model implements the *same* interface and drops in unchanged.
+- `NGramMovementBackend`: a deterministic n-gram sequence model with
+  stupid-backoff. **Repeats** recorded movements (high-order n-grams reproduce
+  trained sequences via greedy argmax) and **generalizes** (an unseen context
+  backs off to shorter contexts down to the unigram prior, so a novel-but-related
+  prefix still yields a plausible next movement). Argmax + lexicographic
+  tie-break ⇒ fully reproducible. `serialize()`/`restore()` round-trip.
+- Tokenizers `datasetFromTrajectories` / `datasetFromReplayManifests`
+  (tool or tool+summary granularity) turn the existing capture/replay data into
+  `MovementDataset` — no new capture format, reuses the reviewed export.
+- `evaluateReplayFidelity(model, heldOut)` — the generalization eval harness
+  (roadmap item): `tokenAccuracy` (next-move prediction on a growing prefix) +
+  `sequenceExactMatch` (cold-start rollout reproduces the whole sequence).
+- Exported the surface from `src/index.ts`.
+
+**Test results:** new `src/training/movement-model.test.ts` — **13/13 pass**
+(repeat-exactly, determinism, backoff generalization, no-sentinel-leak vocab,
+serialize/restore parity, empty-model, maxTokens bound, fidelity on train set =
+1.0, partial fidelity on held-out variant, empty held-out). `typecheck:src` ✅
+(exit 0). Build ✅. Movement subsystem validated end-to-end on synthetic streams.
+
+**Pre-existing blocker (NOT caused by this run):** the full suite has **3 flaky
+failures on the clean tree** (verified via `git stash` — they fail at HEAD
+`3c7b7236` without my diff): `operator-runtime.test.ts` (background-task
+recover/sync), `server.test.ts`, `app.test.ts`. Root cause is a **torn/partial
+JSON read** in the background-tasks reconcile path (`readState` →
+`readJsonFile` throws `SyntaxError: Expected ',' or '}' ... at position 311`),
+i.e. a state file read mid-write — a concurrency race, non-deterministic
+(app.test.ts fails 1–2 depending on scheduling). Logged to ROADMAP as a
+reliability item. My change is additive and green on its own axes; pushing to
+the designated feature branch.
+
+**New idea:** upgrade the eval harness into a **held-out-split trainer**:
+`trainWithSplit(dataset, {holdoutRatio})` that trains on a deterministic subset
+and auto-reports generalization fidelity on the remainder — turning objective
+#2(d) into a single measurable number the engine can track run-over-run (a
+movement-model "capability score" alongside the health metrics idea).
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
