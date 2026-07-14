@@ -6,6 +6,59 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-14 (run 9) — Restore green baseline: kill background-task spawn races + add `verify`
+
+**Audited:** The build/test gate itself. A fresh `npm test` on `HEAD`
+(`3c7b7236`) showed **3 failing tests** (171/174) — the previous run had pushed a
+broken baseline, so the procedure's verification gate was untrustworthy. Failures
+were in `operator-runtime.test.ts`, `server.test.ts`, and `app.test.ts` (twice:
+one deterministic, one full-suite-only flake).
+
+**Root cause (single, shared):** these tests exercise the background-task
+subsystem by calling `runtime.startBackgroundTask(...)`, which **spawns a real
+bash launch script** (`renderLaunchScript`) that asynchronously writes the task's
+`state.json` (single-line JSON via `printf | sed`, then a python multi-line
+rewrite). The tests then *also* write that same state file directly via
+`executionService.writeState(...)`. The real process and the direct writes race
+on one file:
+- Reading mid-write → truncated single-line JSON → `SyntaxError: Expected ',' or
+  '}' … position 311` (operator-runtime, server `background.tasks.state`).
+- A spawned task completing/failing tripped the **platform breaker** to
+  `degraded`/`mixed`, so `sessions.platformInventory` / `platform-status` no
+  longer reported `control=active` (app.test, server breaker section).
+- A short-lived `printf ok` finishing before `watch-active` ran dropped the task
+  from the active set under full-suite load (app.test, flaky).
+
+The runtime already had injection seams (`backgroundTaskSpawnProcess`,
+`backgroundTaskIsProcessRunning` on `StandaloneOperatorOptions`) — the tests just
+weren't using them, and `OperatorCliApp` didn't expose them.
+
+**Changed (additive, reversible):**
+- `src/cli/app.ts`: added `backgroundTaskSpawnProcess` and
+  `backgroundTaskIsProcessRunning` to `OperatorCliAppOptions` and threaded them
+  into the runtime (spread-guarded so production behaviour is unchanged when
+  unset). Mirrors the existing `configHome` test-seam pattern.
+- Tests: injected a no-op spawn (`() => ({ pid: 4242, unref(){} })`) into every
+  runtime/app that manipulates task state directly — `operator-runtime.test.ts`,
+  `server.test.ts` (main + drifting + breaker runtimes), and `app.test.ts`. For
+  the `printf ok` test, made execution fully deterministic: no-op spawn +
+  `isProcessRunning: () => true` + materialize the output/running state directly
+  (the same pattern the test's monitor section already used).
+- `package.json`: added a **`verify`** script (`typecheck:src && build && test`)
+  — the roadmap's queued pre-push self-check, using the green source-only gate so
+  it's actually runnable while test-file typecheck debt remains.
+
+**Test results:** `npm test` **174/174**, stable across **3 consecutive full
+runs** (was 171/174, non-deterministic). `npm run build` ✅. `npm run
+typecheck:src` exit 0. Full `tsc` debt **unchanged at 125** (all test-file; no
+regression). `npm run verify` ✅ end-to-end.
+
+**New idea (logged to ROADMAP):** A **flaky-test guard** for the engine's
+pre-push self-check — run the suite N times (e.g. 3×) in the `verify` step and
+fail if results differ, so real-process/timing races like this are caught the
+run they're introduced instead of silently pushed. Cheap (~6s/run) and would have
+prevented run 8's broken baseline.
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

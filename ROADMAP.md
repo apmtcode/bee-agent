@@ -38,8 +38,10 @@ unchecked items are queued. Keep this richer than you found it each run.
     `skills.executable.*`, `push.subscriptions.*`, `trajectories.*`, `replays.*`,
     `cron.runs`/misc — plus a few genuine test-only typings. Map the rest, then
     fix residual test-only typings.
-- [ ] Add a `verify` npm script (`typecheck && build && test`) and have the
-      engine run it as a pre-push self-check each cycle.
+- [x] Add a `verify` npm script — DONE run 9. Uses the green source-only gate
+      (`typecheck:src && build && test`) so it's runnable while test-file
+      typecheck debt remains. Next: have the engine actually run it pre-push each
+      cycle (and consider the flaky-test guard below).
 - [x] Interim **source-only typecheck gate** — DONE run 7. `tsconfig.src.json`
       (excludes `**/*.test.ts`) + `typecheck:src` script; passes (exit 0). Next:
       have the engine run it as a per-run pre-push self-check.
@@ -71,6 +73,14 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
       related synthetic trajectories.
 
 ## Innovation backlog
+- [ ] **Flaky-test guard in `verify`** (run 9 idea): run the suite N× (e.g. 3×)
+      and fail if the pass set differs across runs, so real-process/timing races
+      (like the run-9 background-task spawn races that shipped a broken baseline
+      in run 8) are caught the run they're introduced. ~6s/run, cheap insurance.
+- [ ] **Hermetic-spawn lint** (run 9 idea): flag any test that calls
+      `startBackgroundTask`/constructs a runtime without injecting
+      `backgroundTaskSpawnProcess`, so no future test silently spawns a real OS
+      process that races its own state writes.
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in
       project health over time.
