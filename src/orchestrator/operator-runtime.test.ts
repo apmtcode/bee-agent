@@ -31,7 +31,7 @@ function buildHookCaptureCommand(outputFile: string): string {
 }
 
 afterEach(async () => {
-  await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
+  await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })));
 });
 
 const exportManifest: ReviewedExportManifest = {
@@ -531,6 +531,9 @@ describe("StandaloneOperatorRuntime", () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
       backgroundTaskIsProcessRunning: () => false,
+      // Deterministic launch: the test drives all execution state via writeState,
+      // so a no-op spawn avoids a real detached process racing to write state.
+      backgroundTaskSpawnProcess: () => ({ pid: 987654, unref() {} }),
     });
     const session = await runtime.startSession({ title: "Tasks", agentId: "main" });
 

@@ -3,6 +3,26 @@
 Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
+## Reliability / correctness
+- [x] **Fix flaky background-task test suite + two real launch-script bugs**
+      (2026-07-14, run 9). `shellQuote` used an invalid POSIX single-quote escape
+      (corrupted state JSON for any command with a `'`); the running-state `pid`
+      was never substituted (JS ate the `sed` backslashes → `"pid":"$$"`).
+      Replaced the `printf|sed|placeholder` running-state write with an atomic
+      python writer; made all state writes atomic; added a spawn/liveness
+      injection seam to `OperatorCliApp`; made the racy tests hermetic. Suite
+      174/174, green across repeated runs.
+- [ ] **Launch-script golden/execution test.** Render `renderLaunchScript` for an
+      adversarial command matrix (single/double quotes, newlines, `$`, backticks,
+      `%`, unicode), execute each in a sandbox, and assert the produced
+      `state.json` parses and preserves the command verbatim + numeric pid. Would
+      have caught both run-9 bugs at authoring time.
+- [ ] **Port the run-9 launch-script fix to `src/training/runner.ts`.** Its
+      `renderLaunchScript` still has bug #2 (the `sed`-based `"$$"`→pid
+      substitution that JS de-escapes) latent — its tests assert script *content*
+      but never execute it. Apply the same atomic python running-state writer and
+      update `runner.test.ts`.
+
 ## Foundations / DX
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.

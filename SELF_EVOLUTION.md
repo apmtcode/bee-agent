@@ -6,6 +6,70 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-14 (run 9) — 🐛 Fixed two real launch-script bugs; killed the flaky test suite
+
+**Audited:** Suite health as the pre-push gate. On checkout, `npm test` failed
+**3–4 of 174** tests, *non-deterministically* (the count varied 3↔4 across
+runs) — all four in the background-task subsystem (`operator-runtime`,
+`server`, `app`, and by extension `background-tasks`). Run 8 logged 174/174, so
+this was latent flakiness the current environment's timing exposed. A flaky
+suite makes the "don't push on red" gate meaningless, so this was the
+highest-value target.
+
+**Root-caused two genuine production bugs in `renderLaunchScript`**
+(`src/harness/background-tasks.ts`) by capturing the corrupt state files:
+1. **`shellQuote` produced an invalid POSIX single-quote escape.** It replaced
+   `'` with `` "'"'"' `` (6 chars) instead of the correct `` '"'"' `` (5). Any
+   background-task command containing a single quote — `printf 'x'`, `sh -c
+   '…'`, extremely common — corrupted the state JSON, so the recovery reader
+   (`readJsonFile`) threw `SyntaxError` and crashed the RPC. (`training/runner.ts`
+   already used the correct form — this file had drifted.)
+2. **The running-state `pid` was never substituted.** The writer was
+   `printf '%s' … | sed "…s/\"\$\$\"/$$/g"`, but a JS template literal collapses
+   `\"`→`"` and `\$`→`$` *before* bash sees it, so the emitted script was
+   `sed "…s/"$$"/$$/g"` — the mid-string `"` closed bash's quote and the pattern
+   degenerated to `s/<pid>/<pid>/g`. Every running state carried the literal
+   string `"pid":"$$"`, breaking live-process recovery (`isProcessRunning("$$")`).
+
+**Changed (all additive / behaviour-preserving for correct inputs):**
+- Fixed the `shellQuote` escape (one string).
+- Replaced the fragile `printf|sed|placeholder` running-state write with a
+  small python writer (`renderRunningStateWriterPython`) that takes the base
+  JSON as an argv, injects the real `$$`/timestamp, and writes **atomically**
+  (temp + `os.replace`) — mirroring the existing completed/failed writers. Kills
+  the entire sed-escaping failure class.
+- Made the completed/failed python writers atomic too (temp + `os.replace`).
+- `src/cli/app.ts`: added optional `backgroundTaskSpawnProcess` /
+  `backgroundTaskIsProcessRunning` passthrough on `OperatorCliAppOptions`,
+  forwarded to the runtime — the app's internal runtime had no injection seam,
+  so its background-task tests could only use the real OS backend.
+- Tests made hermetic against detached-process races: injected a deterministic
+  no-op spawn (fixed pid, no competing state writes) into every runtime whose
+  test manages execution state by hand — `operator-runtime` "starts,syncs", all
+  three runtimes in the big `server` test (main + drifting + breaker), and the
+  `app` lifecycle test (which also stubs liveness so a started task stays
+  "running" until the test rewrites it dead). `process.kill` was already stubbed
+  around the cancel/stop assertions, so the fixed pid is safe. Added the established
+  `maxRetries/retryDelay` to the `operator-runtime` + `background-tasks` temp-dir
+  cleanups (many other suites already had it) to absorb teardown-vs-detached-write
+  `ENOTEMPTY`.
+
+**Test results:** full `npm test` **174/174**, now green **5/5** consecutive
+full runs and **15/15** on the affected subset (was 3–4 failing, varying).
+`typecheck:src` exit 0. Build ✅.
+
+**New idea (also queued in ROADMAP):** a **launch-script golden/execution test**
+— render `renderLaunchScript` for a matrix of adversarial commands (single
+quotes, double quotes, newlines, `$`, backticks, `%`) and actually *execute*
+each in a sandbox, asserting the resulting `state.json` parses and preserves the
+command verbatim. Both bugs fixed today would have been caught at authoring time
+by such a test; the current unit tests only spawn benign commands so the escape
+bug hid until a real `'`-bearing command hit it. Bonus: `training/runner.ts`
+still has bug #2 (the `sed`-pid escape) latent because its tests never *run* the
+script — the golden-exec test should cover it too, and it should be fixed there.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
