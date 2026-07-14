@@ -6,6 +6,56 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-14 (run 9) — Movement-policy model: trainable local backend + generalization eval
+
+**Audited:** Standing objective #2 (local-movement learning). The last several
+runs were all typecheck-debt paydown; the *learning* subsystem itself had
+stalled. Inventoried `src/capture` + `src/training`: capture→schema→dataset→
+replay exist, but the "post-train a local model that repeats **and generalizes**
+movements" pieces (c)+(d) were **entirely missing** — `src/training` only emits
+external `mlx`/`axolotl` launch scripts (`runner.ts`), with no in-process
+trainable/inferable model and no pluggable backend seam.
+
+**Changed (additive):** new `src/training/movement-policy.ts` +
+`movement-policy.test.ts`, exported from the barrel.
+- **Schema/derivation:** `MovementToken` (tool/gesture/target/direction),
+  `deriveMovementToken()` from a `TrajectoryAction`, and `buildMovementDataset()`
+  / `buildMovementDatasetFromReplays()` to turn captured trajectories or reviewed
+  replay manifests into ordered movement sequences.
+- **Pluggable backend seam:** `MovementPolicyBackend` interface +
+  `createMovementPolicyBackend(id)` / `registerMovementPolicyBackend()` registry,
+  so a real on-device neural backend drops in without touching call sites.
+- **Default backend:** `NgramMovementPolicyBackend` — a deterministic backoff
+  n-gram policy (no native deps, no randomness → identical in cloud CI and
+  on-device). `train()` records next-token counts for every context suffix
+  (order N…0); `predictNext()` backs off from the longest seen context to the
+  order-0 marginal; `generate()` rolls out greedily. `serialize()`/`restore()`
+  round-trip the model as portable JSON. **(c)** repeats recorded sequences
+  exactly; **(d)** generalizes to unseen-but-related contexts via backoff.
+- **Eval harness:** `evaluateMovementGeneralization()` scores held-out cases and
+  separately counts `backoffMatched` (correct predictions that required backoff,
+  i.e. genuine generalization vs. memorization).
+
+**Test results:** new suite ✅ **13/13** (`vitest run
+src/training/movement-policy.test.ts`). `npm run build` ✅. `npm run
+typecheck:src` ✅ (source stays clean). Full `npm test`: **184/187** — the **3
+failures are pre-existing and unrelated** (verified by stashing this run's diff:
+baseline is also 3-red). They live in the background-task subsystem
+(`operator-runtime`/`app`/`server` tests): `startBackgroundTask` spawns a **real
+detached shell launch-script** that writes its state file via `printf | sed`
+asynchronously, racing the test's own `writeState`/read → a mid-write
+`JSON.parse` `SyntaxError`. Not touched by this change; logged as a ROADMAP item.
+
+**New idea:** an **online/continual movement backend** — the n-gram model is
+purely additive in its counts, so a `model.observe(sequence)` method could fold
+new captured trajectories into an existing snapshot incrementally (no full
+retrain), giving bee-agent on-device continual learning from each session.
+Second idea: a **movement tokenizer normalization** pass (lowercase/target
+canonicalization, coordinate bucketing) so semantically-equal gestures collapse
+to one token before training, improving both fidelity and generalization.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

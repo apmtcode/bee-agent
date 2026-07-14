@@ -62,13 +62,29 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
+      for a real on-device small model. **(2026-07-14, run 9)** —
+      `src/training/movement-policy.ts`: `MovementPolicyBackend` interface +
+      `createMovementPolicyBackend`/`registerMovementPolicyBackend` registry +
+      default deterministic `NgramMovementPolicyBackend`.
 - [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      round-trips without real OS input. (Partial: `buildMovementDataset` /
+      `buildMovementDatasetFromReplays` convert trajectories/replays into
+      sequences; still want a *generator* that emits synthetic capture events.)
+- [x] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories. **(2026-07-14, run 9)** —
+      `evaluateMovementGeneralization()` scores held-out cases and counts
+      backoff-driven (genuine) generalizations.
+- [ ] Continual/online movement backend: `observe(sequence)` folds new captured
+      trajectories into an existing model snapshot incrementally (the n-gram
+      counts are additive), enabling on-device continual learning per session.
+- [ ] Movement tokenizer normalization (lowercase, target canonicalization,
+      coordinate bucketing) so semantically-equal gestures collapse to one token
+      before training.
+- [ ] Wire the movement-policy model into the training runner/execution service
+      so a reviewed export can train the in-process n-gram model (not just emit
+      mlx/axolotl launch scripts) and persist a `MovementModelSnapshot`.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
@@ -80,6 +96,13 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Barrel-collision lint: scan `src/index.ts` re-exports for names exported
       from more than one module and flag them, so duplicate-identifier debt is
       caught at authoring time instead of accumulating silently.
+- [ ] **Fix pre-existing background-task test race** (surfaced run 9, 3 red
+      tests). `startBackgroundTask` spawns a real detached shell launch-script
+      that writes its state file via `printf | sed` asynchronously, racing the
+      test's explicit `writeState`/read → mid-write `JSON.parse` `SyntaxError`
+      in `reconcileTask`→`readState`. Options: inject a mock spawn in the tests,
+      or make `readState` tolerate/retry partial reads (atomic write already
+      exists for the TS path; the shell path is the racy writer).
 - [ ] Per-module typecheck ratchet: record each module's current `tsc` error
       count to a baseline file and fail if a module regresses above it. Lets the
       engine pay debt down module-by-module without one green-gate blocking

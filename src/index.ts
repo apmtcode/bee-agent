@@ -423,6 +423,30 @@ export type {
   SftTrainingConfig,
 } from "./training/job-manifest.js";
 export {
+  buildMovementDataset,
+  buildMovementDatasetFromReplays,
+  createMovementPolicyBackend,
+  DEFAULT_MOVEMENT_ORDER,
+  deriveMovementToken,
+  evaluateMovementGeneralization,
+  movementTokenKey,
+  NgramMovementPolicyBackend,
+  registerMovementPolicyBackend,
+} from "./training/movement-policy.js";
+export type {
+  MovementCandidate,
+  MovementDataset,
+  MovementGeneralizationCase,
+  MovementGeneralizationReport,
+  MovementModelSnapshot,
+  MovementPolicyBackend,
+  MovementPolicyModel,
+  MovementPrediction,
+  MovementSequence,
+  MovementToken,
+  MovementTrainingOptions,
+} from "./training/movement-policy.js";
+export {
   FileTrainingJobStore,
 } from "./training/job-store.js";
 export type {
