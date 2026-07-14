@@ -423,6 +423,31 @@ export type {
   SftTrainingConfig,
 } from "./training/job-manifest.js";
 export {
+  MarkovMovementBackend,
+  buildMovementDataset,
+  decodeMovementToken,
+  encodeMovementToken,
+  evaluateMovementModel,
+  generateSyntheticMovementDataset,
+  movementStepFromAction,
+} from "./training/movement-model.js";
+export type {
+  MovementActionLike,
+  MovementCandidate,
+  MovementDataset,
+  MovementEvalResult,
+  MovementModelBackend,
+  MovementModelSnapshot,
+  MovementPrediction,
+  MovementSequence,
+  MovementStep,
+  MovementToken,
+  MovementTrainOptions,
+  SyntheticMovementSpec,
+  SyntheticMovementWorkflow,
+  TrainedMovementModel,
+} from "./training/movement-model.js";
+export {
   FileTrainingJobStore,
 } from "./training/job-store.js";
 export type {

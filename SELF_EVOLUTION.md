@@ -6,6 +6,66 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-14 (run 9) — 🧠 Movement learning: pluggable local model that repeats & generalizes (obj #2 c+d)
+
+**Audited:** The local-movement learning subsystem (`src/capture` + `src/training`,
+standing objective #2). Found the pipeline covered capture → schema → dataset →
+replay-manifest → *training-plan generation* (`runner.ts` emits mlx/axolotl
+launch scripts), but had **no in-process model** — nothing that could actually
+(c) repeat recorded movements or (d) generalize to new-but-related ones. The
+roadmap explicitly queued a "pluggable local-model backend with a deterministic
+mock" and a "generalization eval harness". This was the highest-value gap:
+entirely synthetic/testable in the cloud, and the core of objective #2.
+
+**Changed (additive):** new `src/training/movement-model.ts` (+ 17 tests):
+- **Event/token schema.** `MovementStep {tool, action, target?, direction?}`,
+  reversible `encode/decodeMovementToken` (4-field `tool|action|target|direction`),
+  and `movementStepFromAction` that derives a normalized step from the existing
+  recorded-action shape (reads `metadata.gesture`/`event`/`target`/`windowTitle`,
+  falls back to the summary's first verb). Bridges capture → model with no schema
+  churn.
+- **Dataset format.** `MovementDataset`/`MovementSequence` + `buildMovementDataset`
+  (sorts a trajectory's actions by `ts`, drops empties) — feeds directly off the
+  reviewed-export/replay-manifest action stream.
+- **Pluggable backend seam.** `MovementModelBackend { train(dataset, opts) →
+  Promise<TrainedMovementModel>; restore(snapshot) }` — the interface a real
+  on-device small model (mlx/axolotl) implements later. `TrainedMovementModel`
+  exposes `predictNext`, `generate`, `snapshot` (persist/replay).
+- **Shipped mock/default backend.** `MarkovMovementBackend` — a deterministic,
+  dependency-free **Katz-style backoff n-gram** (configurable `maxOrder`, default
+  3). (c) Repeats: greedy `generate` reproduces a trained sequence exactly from
+  its first movement, halting on an END sentinel it learns. (d) Generalizes:
+  unseen high-order contexts back off to shorter ones, stitching known
+  sub-transitions into novel-but-related sequences. Fully reproducible (no RNG /
+  wall-clock); snapshots round-trip identically.
+- **Eval harness.** `evaluateMovementModel` reports teacher-forced next-token
+  accuracy, exact-replay rate, mean confidence, and **backoff rate** (the
+  generalization signal). Plus `generateSyntheticMovementDataset` — deterministic
+  workflow-template generator to validate the whole round-trip without real OS
+  input.
+- Barrel-exported all of the above from `src/index.ts`.
+
+**Test results:** `typecheck:src` ✅ (source stays fully green). Build ✅ (tsdown,
+5 files). New module **17/17** ✅. Full suite **187 passed / 191**. The 4
+remaining failures are in `app.test.ts`/`server.test.ts`/`operator-runtime.test.ts`
+and are **pre-existing flakiness, not caused by this change**: baseline (my diff
+stashed) already fails 3/174; `app.test.ts` run alone in this container fails
+1→2→2 across identical repeats; none of the three import the barrel (they import
+`./app.js` etc. directly), so an additive new module + export cannot reach them.
+Root cause is background-subprocess timing races (state-file JSON read mid-write,
+`missing-process`/`degraded` retries) under slow cloud I/O — logged to ROADMAP.
+
+**New idea:** two follow-ons. (1) A **generalization gap metric** — train on a
+family of workflows, hold out a related-but-unseen one, and report
+`nextTokenAccuracy` on it as a first-class number, so future backend swaps
+(Markov → real small net) are compared on the same held-out fidelity yardstick.
+(2) De-flake the three subprocess tests by making the background-task store's
+state writes atomic-and-fsynced and having the reader retry on a partial-JSON
+parse (the same `writeJsonAtomic` pattern already used elsewhere), converting a
+flaky suite into a deterministic green gate.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

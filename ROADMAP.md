@@ -58,19 +58,41 @@ unchecked items are queued. Keep this richer than you found it each run.
 ## Local-movement learning subsystem
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
-(exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
-      objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
-      deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+(exporter, job store/manifest, runner, execution service, **movement-model**).
+- [x] Inventory what `src/capture` + `src/training` implement vs. the
+      objective's five pieces (run 9): capture ✅, schema ✅, dataset ✅, replay
+      manifest ✅, and *external* training-plan generation ✅ — but there was **no
+      in-process model** for infer/repeat/generalize until run 9's movement-model.
+- [x] Pluggable local-model backend interface with a deterministic mock backend
+      (run 9): `MovementModelBackend` seam + `MarkovMovementBackend` (backoff
+      n-gram) in `src/training/movement-model.ts`. Documented seam for a real
+      on-device small model (mlx/axolotl runner already emits the launch plan).
+- [x] Synthetic event-stream generator to validate capture→dataset→train→replay
+      round-trips without real OS input (run 9: `generateSyntheticMovementDataset`
+      + `buildMovementDataset`).
+- [x] Generalization eval harness (run 9: `evaluateMovementModel` — next-token
+      accuracy, exact-replay rate, backoff rate). Next: promote a first-class
+      **generalization-gap** number (accuracy on a held-out related workflow).
+- [ ] **Generalization-gap metric:** train on a workflow family, hold out a
+      related-but-unseen workflow, report `nextTokenAccuracy` on it — a stable
+      yardstick to compare backend swaps (Markov → real small net) on equal terms.
+- [ ] Wire the movement-model into the control-plane RPC surface (`trajectories.*`
+      / a new `movement.train`/`movement.predict`) so a local bee-agent session can
+      train and query the model, not just the library API.
+- [ ] Real on-device backend behind `MovementModelBackend` (small local net;
+      keep `MarkovMovementBackend` as the cloud/CI mock and correctness baseline).
 
 ## Innovation backlog
+- [ ] **De-flake the three subprocess suites** (`app.test.ts`, `server.test.ts`,
+      `operator-runtime.test.ts`). Observed run 9 in the cloud container: they
+      fail non-deterministically (app.test.ts alone: 1→2→2 fails across identical
+      repeats) due to background-task **state-file timing races** — the reader
+      parses a state JSON mid-write (`SyntaxError ... position 311`) and sees
+      `missing-process`/`degraded` before the child settles. Fix: make the
+      background-task store's state writes atomic+fsynced via the existing
+      `writeJsonAtomic`, and have readers retry on a partial-JSON parse. Converts
+      a flaky suite into a deterministic green gate (prerequisite for a real
+      `verify` gate + CI).
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in
       project health over time.
