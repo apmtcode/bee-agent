@@ -801,7 +801,18 @@ describe("OperatorCliApp", () => {
 
   it("supports session lifecycle, transcript, approvals, pairing, config, and prompt commands", async () => {
     const rootDir = await makeTempDir();
-    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    const app = new OperatorCliApp({
+      rootDir,
+      cwd: rootDir,
+      currentDate: "2026-05-25",
+      // Hermetic background tasks: stub the launch (no real detached shell) and
+      // report only the stubbed process (pid 4321) as alive. Tasks the test
+      // starts stay `running` deterministically, while a task the test later
+      // rewrites to a bogus pid (999999) reconciles to `failed` — exactly the
+      // real-process semantics the assertions depend on, without the timing race.
+      backgroundTaskSpawnProcess: () => ({ pid: 4321, unref: () => {} }),
+      backgroundTaskIsProcessRunning: (pid) => pid === 4321,
+    });
     const firstSession = await app.runtime.startSession({ title: "first", cwd: rootDir, agentId: "operator-cli" });
     const secondSession = await app.runtime.startSession({ title: "second", cwd: rootDir, agentId: "operator-cli" });
 
@@ -1063,7 +1074,17 @@ describe("OperatorCliApp", () => {
 
   it("supports background and monitor task commands plus cron commands", async () => {
     const rootDir = await makeTempDir();
-    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    const app = new OperatorCliApp({
+      rootDir,
+      cwd: rootDir,
+      currentDate: "2026-05-25",
+      // Hermetic launch: stub the detached shell and treat its process as alive.
+      // The task output that the assertions read is seeded explicitly below, the
+      // same way this test's monitor half already seeds its output/state — so the
+      // suite never races a real subprocess writing its output file.
+      backgroundTaskSpawnProcess: () => ({ pid: 4321, unref: () => {} }),
+      backgroundTaskIsProcessRunning: () => true,
+    });
     const session = await app.runtime.startSession({ title: "CLI ops", cwd: rootDir, agentId: "operator-cli" });
 
     const startOutput = await app.dispatchSlashCommand(
@@ -1078,6 +1099,8 @@ describe("OperatorCliApp", () => {
     if (!task) {
       throw new Error("expected background task");
     }
+    // Seed the output the stubbed launch would otherwise have produced.
+    await app.runtime.backgroundTasks.executionService.writeOutput(task, "ok\n");
 
     const listOutput = await app.dispatchSlashCommand({ kind: "background-list" });
     expect(listOutput).toContain(task.id);

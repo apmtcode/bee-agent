@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -5,6 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   BackgroundTaskExecutionService,
   FileBackgroundTaskStore,
+  shellQuote,
   type BackgroundTaskExecutionState,
 } from "./background-tasks.js";
 
@@ -369,5 +371,33 @@ describe("BackgroundTaskExecutionService", () => {
     await expect(fs.readFile(path.join(rootDir, task.execution.launchScript), "utf8")).resolves.toContain("bash -lc");
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
+  });
+});
+
+describe("shellQuote", () => {
+  // A wrong POSIX escape here corrupts the JSON state file the launch script
+  // writes for commands that contain single quotes (regression: `"'"'"'` vs the
+  // correct `'"'"'`), which made background-task recovery read invalid JSON.
+  const cases = [
+    "printf ok",
+    "printf 'line-1\nline-2\n'",
+    "echo 'it'\\''s fine'",
+    `{"pid":"$$","command":"printf 'drift'"}`,
+    "no-quotes-here",
+    "a 'b' c 'd'",
+  ];
+
+  it("round-trips arbitrary values (incl. single quotes) through bash unchanged", () => {
+    for (const value of cases) {
+      const out = execFileSync("bash", ["-c", `printf '%s' ${shellQuote(value)}`], { encoding: "utf8" });
+      expect(out).toBe(value);
+    }
+  });
+
+  it("keeps a JSON payload with a single-quoted command parseable after shell round-trip", () => {
+    const payload = JSON.stringify({ pid: "$$", command: "printf 'drift'", cwd: "/tmp/x" });
+    const out = execFileSync("bash", ["-c", `printf '%s' ${shellQuote(payload)}`], { encoding: "utf8" });
+    expect(() => JSON.parse(out)).not.toThrow();
+    expect(JSON.parse(out)).toMatchObject({ command: "printf 'drift'" });
   });
 });

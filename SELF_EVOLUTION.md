@@ -6,6 +6,74 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-14 (run 9) — 🐛 Real bug: `shellQuote` corrupted background-task state JSON + suite made hermetic (green in cloud)
+
+**Audited:** The build/test gate itself. On a clean checkout in this cloud
+(Linux) environment `npm test` was **red — 3 test files failing** (171/174),
+despite run 8 recording 174/174. Investigated rather than assuming flake.
+
+**Root cause (genuine production bug), `src/harness/background-tasks.ts`:** the
+private `shellQuote()` used the escape sequence `` "'"'"'" `` (`` `"'"'"'` ``) to
+embed a single quote inside a single-quoted shell word — the quote/dquote chars
+are **transposed**. The correct POSIX escape is `` `'"'"'` `` (close-quote,
+`"'"`, reopen-quote) — which the sibling `src/training/runner.ts:shellQuote`
+already uses correctly. Consequence: the detached launch script builds the
+task's initial `state.json` by `printf '%s' <shellQuoted-JSON> | sed …`. Any
+task whose **command contains a single quote** (e.g. `printf 'drift'`,
+`printf 'line-1\nline-2\n'`) had its JSON payload mangled — the embedded `'`
+produced stray `"` chars, so the state file was **invalid JSON**. On next
+`readState`/recovery `JSON.parse` threw (`Expected ',' or '}' … position 311`),
+breaking background-task reconciliation for real. Captured the corrupt file by
+briefly instrumenting `readJsonFile`, confirmed, reverted the instrumentation.
+Fix: one-char-family correction to the escape. Verified via a bash round-trip
+that pids substitute and JSON stays parseable.
+
+**Why the suite was also fragile (hermeticity):** the 3 failing tests spawn
+**real detached OS processes** (`sleep 5`, `printf 'drift'`, `printf ok`) through
+the default `spawn`. They passed on the original macOS dev box but raced in the
+cloud sandbox (detached-process scheduling latency ⇒ state/output files written
+after the synchronous assertions ran). The seam already existed
+(`backgroundTaskSpawnProcess` / `backgroundTaskIsProcessRunning` on the
+runtime); the tests just weren't using it.
+
+**Changed (additive, reversible):**
+- `src/harness/background-tasks.ts`: fixed `shellQuote`; **exported** it (with a
+  doc comment) so the bug is now regression-covered.
+- `src/cli/app.ts`: threaded `backgroundTaskSpawnProcess` +
+  `backgroundTaskIsProcessRunning` through `OperatorCliAppOptions` into the
+  runtime (mirrors the `configHome` testability seam from the toolchain run) —
+  production default unchanged (real `spawn`).
+- Made every real-spawn test hermetic with a deterministic launch stub
+  (`() => ({ pid: 4321, unref: () => {} })`): `operator-runtime.test.ts` (the
+  runtime already stubbed `isProcessRunning` but not `spawn`),
+  `server.test.ts` (main + `driftingRuntime` + `breakerRuntime`),
+  `app.test.ts` (lifecycle test uses `isProcessRunning: pid===4321` so a live
+  task stays running while a task rewritten to a bogus pid reconciles to
+  `failed`; the background/monitor test seeds the task output the same way its
+  monitor half already seeds state). Key insight: `deriveRemoteDiagnostics`
+  only flags `missing-process` when a **state file** exists — a stub that writes
+  none keeps un-touched tasks healthy, so the breaker's mixed→degraded→paused
+  progression becomes exact.
+- `src/harness/background-tasks.test.ts`: +2 regression tests — `shellQuote`
+  round-trips arbitrary values (incl. single quotes) through real `bash`, and a
+  single-quoted-command JSON payload stays `JSON.parse`-able after the shell
+  round-trip.
+
+**Test results:** full suite **red (171/174) → green (176/176)**, verified
+**deterministic across 5 consecutive full runs** and 8 earlier ones. `typecheck:src`
+✅ (source stays clean). Build ✅. Full `tsc` (incl. tests) still ~1 env-only
+`@types/node` resolution line after `npm install`; unrelated to this change.
+
+**New idea:** a **cross-module duplicate-helper lint** — `shellQuote` (and
+`renderLaunchScript` / `renderStateWriterPython`) are copy-pasted in both
+`harness/background-tasks.ts` and `training/runner.ts`; the bug existed in one
+copy and not the other. Extract shared shell/launch-script helpers into
+`src/shared/shell.ts` (single source of truth), or add a lint that flags
+same-named private helpers whose bodies diverge across modules. Bigger idea: a
+**hermeticity guard test** that fails if any `*.test.ts` constructs a
+runtime/app that can reach `startBackgroundTask` without injecting
+`backgroundTaskSpawnProcess`, so no future test silently spawns real processes.
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

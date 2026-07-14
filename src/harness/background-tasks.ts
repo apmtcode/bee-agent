@@ -793,6 +793,13 @@ function renderStateWriterPython(status: BackgroundTaskExecutionState["status"])
   ];
 }
 
-function shellQuote(value: string): string {
-  return `'${value.replaceAll(`'`, `"'"'"'`)}'`;
+/**
+ * POSIX single-quote escaping for embedding an arbitrary value inside a
+ * single-quoted shell word: close the quote, emit an escaped `'` (`"'"`), then
+ * reopen. Exported for regression coverage — a wrong escape here silently
+ * corrupts the JSON state file the launch script writes (e.g. for commands that
+ * themselves contain single quotes such as `printf 'ok'`).
+ */
+export function shellQuote(value: string): string {
+  return `'${value.replaceAll(`'`, `'"'"'`)}'`;
 }

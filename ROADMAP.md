@@ -38,6 +38,12 @@ unchecked items are queued. Keep this richer than you found it each run.
     `skills.executable.*`, `push.subscriptions.*`, `trajectories.*`, `replays.*`,
     `cron.runs`/misc — plus a few genuine test-only typings. Map the rest, then
     fix residual test-only typings.
+- [x] **Suite green & deterministic in the cloud** — DONE run 9. Fixed a real
+      `shellQuote` bug in `harness/background-tasks.ts` (transposed POSIX escape
+      corrupted background-task state JSON for single-quote commands) and made
+      the 3 real-spawn tests hermetic via the `backgroundTaskSpawnProcess` seam
+      (also threaded through `OperatorCliApp`). 174→176 tests, red→green,
+      deterministic across 5+ full runs.
 - [ ] Add a `verify` npm script (`typecheck && build && test`) and have the
       engine run it as a pre-push self-check each cycle.
 - [x] Interim **source-only typecheck gate** — DONE run 7. `tsconfig.src.json`
@@ -80,6 +86,15 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Barrel-collision lint: scan `src/index.ts` re-exports for names exported
       from more than one module and flag them, so duplicate-identifier debt is
       caught at authoring time instead of accumulating silently.
+- [ ] **Extract shared shell/launch helpers** into `src/shared/shell.ts`:
+      `shellQuote`, `renderLaunchScript`, `renderStateWriterPython` are
+      copy-pasted in `harness/background-tasks.ts` and `training/runner.ts`; the
+      run-9 escape bug lived in one copy only. Single source of truth (or a lint
+      flagging same-named private helpers whose bodies diverge across modules).
+- [ ] **Hermeticity guard test**: fail CI if any `*.test.ts` builds a
+      runtime/app reaching `startBackgroundTask` without injecting
+      `backgroundTaskSpawnProcess`, so no future test spawns real OS processes
+      (the run-9 flakiness root cause).
 - [ ] Per-module typecheck ratchet: record each module's current `tsc` error
       count to a baseline file and fail if a module regresses above it. Lets the
       engine pay debt down module-by-module without one green-gate blocking
