@@ -62,13 +62,38 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
+      for a real on-device small model. **DONE run 9** —
+      `src/training/movement-model.ts`: `LocalMovementBackend` interface +
+      `MarkovMovementBackend` (n-gram + stupid-backoff, generalizes to unseen
+      prefixes) + `MovementBackendRegistry` + replay→dataset adapters.
 - [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      round-trips without real OS input. (Adapters landed run 9; still need a
+      generator that emits *synthetic OS input* streams through the recorder.)
+- [~] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories. Run 9 added `MarkovMovementBackend.evaluate`
+      (top-1 accuracy + perplexity). Next: whole-trajectory metric (normalized
+      Levenshtein between a `generate()` rollout and ground truth) so we score
+      trajectory *shape*, not just per-step next-token hits.
+- [ ] Register a real on-device small-model backend (e.g. an MLX-backed one)
+      against `MovementBackendRegistry`, wired behind the same interface as the
+      deterministic `markov` backend so cloud/CI keeps using the mock.
+
+## Test health
+- [ ] **Investigate 3 pre-existing suite failures** surfaced run 9 (green build +
+      source typecheck, but full `vitest` shows 3 fails on clean `HEAD`, in
+      isolation and combined):
+  - `operator-runtime.test.ts` — `recoverBackgroundTasks` rejects with a JSON
+    `SyntaxError` reading the background-task **state file** (parse fails
+    ~position 311). Trace it to the shell/`date`/`sed`-generated state JSON in
+    the OS-interacting launch path (`runner.ts` `renderStateWriterPython` /
+    `execution-service`); likely environment-specific quoting.
+  - `server.test.ts` — orchestration RPC result shape mismatch (result has 10
+    props, test expects a 2-prop subset — may be a stale expectation).
+  - `app.test.ts` — `control=active` not present in status string (timing).
+  Run 8 logged "174/174"; that no longer holds in this environment. These are
+  NOT regressions from the movement-model work (additive, separate files).
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

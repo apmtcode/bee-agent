@@ -6,6 +6,61 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-14 (run 9) — Movement subsystem: pluggable in-process local-model backend (train + generalize)
+
+**Audited:** The local-movement learning subsystem (`src/training/`, standing
+objective #2). Found the gap: `runner.ts` only *emits plans/launch-scripts* that
+invoke real on-device trainers (MLX/axolotl) — nothing can actually **train a
+local model and infer/generalize in-process**, so the cloud/CI cannot validate
+objective #2(c)/(d) end-to-end. This was the top queued movement item in ROADMAP
+("Pluggable local-model backend … with a deterministic mock backend").
+
+**Changed (additive) — new `src/training/movement-model.ts`:**
+- `LocalMovementBackend` interface (`train` async, `predictNext`/`generate`/
+  `evaluate` sync) — the pluggable seam a real on-device small model registers
+  against.
+- `MarkovMovementBackend`: a deterministic n-gram model with **stupid-backoff**.
+  It learns `P(next-movement | last-N-movements)` from the recorded dataset and
+  backs off to shorter histories on unseen contexts — i.e. it genuinely
+  *generalizes* to new-but-related movement prefixes (objective #2d), not just
+  memorized replay (#2c). Fully JSON-serializable; ranking is
+  probability-desc/token-asc for determinism.
+- `MovementBackendRegistry` (+ `defaultMovementBackendRegistry`) — the pluggable
+  registry; `markov` preloaded, real backends register by name with no call-site
+  changes.
+- Dataset adapters `buildMovementDatasetFromReplays` /
+  `buildMovementDatasetFromExport` — turn the existing exported replay `action`
+  events into tokenized movement samples (custom tokenizer supported).
+- `evaluate()` — replay-fidelity harness (top-1 accuracy + perplexity) on
+  held-out samples, seeding the "generalization eval" roadmap item.
+- Exported the surface from `src/index.ts`.
+
+**Test results:** new `src/training/movement-model.test.ts` — **14/14 pass**
+(train/predict/generalize-via-backoff/generate/determinism/eval/empty-dataset,
+registry default+custom+error, dataset adapters, deserialize validation).
+`npm run typecheck:src` ✅ (source clean). `npm run build` ✅.
+
+⚠️ **Pre-existing, non-regressed failures (NOT introduced by this run):** the
+full suite shows **3 failing tests** — `operator-runtime.test.ts` (background-task
+`recoverBackgroundTasks`: state JSON is malformed at parse — traced to the
+shell/`date`/`sed`-generated state file in the OS-interacting launch path),
+`server.test.ts` (orchestration result shape), `app.test.ts` (`control=active`
+timing). **Verified these fail identically on clean `HEAD` (git stash) both in
+the full run and each file in isolation** — so run 8's "174/174" no longer holds
+in this environment. My change is additive (new file + barrel exports only) and
+touches none of those files. Full suite: **185 passed / 3 pre-existing failed
+(188 total = 174 baseline + 14 new)**. Pushing the green additive improvement to
+the working branch; logged the 3 failures as a ROADMAP investigation item.
+
+**New idea:** a **sequence-VAE / edit-distance replay-fidelity metric** beyond
+top-1 accuracy — score a *generated* movement rollout against the ground-truth
+sequence with normalized Levenshtein, so we measure whole-trajectory
+generalization (does the model reproduce the *shape* of a related task) rather
+than per-step next-token hits. Pairs naturally with the Markov backend's
+`generate()`.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
