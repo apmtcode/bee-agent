@@ -3,6 +3,20 @@
 Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
+## 🔴 Top-priority bug (found run 9)
+- [ ] **Background-task state file is written non-atomically.**
+      `renderLaunchScript` in `src/harness/background-tasks.ts` does
+      `printf … | sed > state.json` (plain redirect), so a concurrent
+      `readState` can catch a partial write → `SyntaxError: Expected ',' or '}'`.
+      Surfaces as **4 failing tests** (`operator-runtime.test.ts`,
+      `server.test.ts`, `app.test.ts` ×2) on any environment that actually runs
+      the spawned script (bash + python3 present) — these tests use the **real**
+      `spawn`. Fix: write the state file atomically (temp file + `mv`), mirroring
+      `writeJsonAtomic`; apply the same to `training/runner.ts`'s launch script.
+      Then decide whether these tests should inject a mock `spawnProcess` so they
+      don't depend on host tooling/timing. The sed quoting is fine (verified —
+      emits valid JSON); the defect is atomicity + a real-spawn test race.
+
 ## Foundations / DX
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
@@ -62,13 +76,24 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
+      for a real on-device small model. — DONE run 9 (`src/training/movement-model.ts`:
+      `MovementModelBackend`/`TrainedMovementModel` seam,
+      `DeterministicMovementBackend` first-order Markov w/ exact-replay +
+      coarse-generalization back-off, `MovementModelRegistry`, snapshot
+      serialize/restore, `datasetFromReplays`).
 - [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      round-trips without real OS input. (Feeds the run-9 model + the closed-loop
+      policy-runner idea below.)
+- [x] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories. — DONE run 9 (`evaluateMovementModel`:
+      top-1 next-action accuracy + `generalizedHits` on held-out sequences).
+- [ ] **Replay-driven policy runner** (new, run 9): feed an observation stream
+      through `TrainedMovementModel.predictNext()` and emit predicted actions as
+      a `ReplayManifest`, so the learned model drives the existing replay engine
+      end-to-end — closing the capture→train→**act** loop. Pair with the
+      synthetic event-stream generator to score closed-loop fidelity.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

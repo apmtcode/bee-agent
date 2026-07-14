@@ -6,6 +6,77 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-14 (run 9) — Pluggable movement-model backend: train + infer + generalize (objective #2c/#2d)
+
+**Audited:** The movement-learning subsystem (`src/capture/`, `src/training/`).
+Found the pipeline builds *plans* + shell launch scripts for real on-device
+training (mlx/axolotl) but had **no backend that can actually train a model and
+run inference in the cloud** — so objective #2's core promise ("post-train a
+local model to repeat recorded movements" and "generalize to new but related
+movements") was untestable here. This was also the top unchecked movement item
+in ROADMAP.
+
+**Changed (additive) — new `src/training/movement-model.ts`:**
+- `MovementModelBackend` / `TrainedMovementModel` interfaces — the pluggable
+  seam. A real on-device small model implements the same interface without
+  touching any call site (objective: "make the model backend pluggable").
+- `DeterministicMovementBackend` — a dependency-free, fully-deterministic
+  first-order Markov model over movement tokens. Learns `(state → action)`
+  transition frequencies at two resolutions: **exact** (keeps summaries, so it
+  *replays recorded movements faithfully*) and **coarse** (drops the summary,
+  keyed by observation `source` / action `tool`, so it *generalizes to new but
+  related movements* via back-off), plus a global action prior. Ties break by
+  action key for reproducibility. `serialize()`/`restore()` give a
+  train→persist→load→infer round-trip.
+- `MovementModelRegistry` — select/register backends by name; `restore()` picks
+  the backend named in a snapshot.
+- `datasetFromReplays()` — derives training sequences from reviewed
+  `ExportedReplayManifest[]` (per-trajectory, ordered by ts, transcript dropped),
+  wiring the new model to the *existing* reviewed-export pipeline.
+- `evaluateMovementModel()` — generalization eval harness: top-1 next-action
+  accuracy on held-out sequences, plus `generalizedHits` (how much accuracy came
+  from back-off vs exact recall). Roadmap item, delivered.
+- Barrel exports added in `src/index.ts`.
+
+**Test results:** new `movement-model.test.ts` **17/17 ✅** (exact replay, coarse
+generalization, global fallback, frequency/confidence, snapshot round-trip &
+independence, registry, dataset derivation, eval harness incl. a held-out
+related-trajectory generalization case). `typecheck:src` ✅ (exit 0). Build ✅
+(tsdown, 5 files). Full `vitest run`: **187 passed**, my 17 among them.
+
+**⚠️ Pre-existing failure discovered (NOT caused by this change):** the full
+suite shows **4 failing tests** in `operator-runtime.test.ts` (1),
+`server.test.ts` (1), `app.test.ts` (2) — all a `SyntaxError: Expected ',' or
+'}'` when `readState` parses a background-task state file. Verified these fail
+identically on a clean `git stash` baseline (feature reverted), so they predate
+this run. **Root cause (traced this run):** `renderLaunchScript` in
+`src/harness/background-tasks.ts` writes the state file with a plain
+`printf … | sed > state.json` **non-atomic redirect** (unlike `writeJsonAtomic`'s
+temp-file + rename), and the tests construct `StandaloneOperatorRuntime` with the
+**real** `spawn`. On this environment (bash + python3 present) the detached
+launch script actually runs and its partial `> state.json` write is caught
+mid-write by `readState` → truncated/malformed JSON. Prior cloud runs likely
+never executed the script (missing tooling), so the suite read 174/174. The sed
+quoting itself is fine — I reproduced it and it emits valid JSON; the defect is
+**write atomicity + a real-spawn test race**, not encoding. Filed as the
+top-priority ROADMAP item. Left unfixed deliberately this run: a safe fix
+(atomic launch-script writes in both `background-tasks.ts` and `training/runner.ts`,
+plus deciding whether these tests should inject a mock `spawnProcess`) is its own
+focused, reviewable diff and must not be rushed inside an unrelated feature run.
+
+**Decision:** feature is green in isolation; the red is pre-existing + environmental.
+Committed to the designated branch `claude/peaceful-dirac-pxyxib` (a feature branch,
+not `main`) so progress is never lost and `main` is not advanced under a red suite.
+
+**New idea:** now that a `TrainedMovementModel` exists, add a *replay-driven
+policy runner* — feed a live/synthetic observation stream through
+`predictNext()` and emit the predicted actions as a `ReplayManifest`, so the
+learned model can drive the existing replay engine end-to-end (closing objective
+#2's capture→train→**act** loop). Pair it with the still-unbuilt synthetic
+event-stream generator to measure closed-loop fidelity without real OS input.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
