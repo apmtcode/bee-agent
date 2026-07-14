@@ -55,20 +55,47 @@ unchecked items are queued. Keep this richer than you found it each run.
       gaps.
 - [ ] Audit `claude-code` reference for slash-command / hook coverage gaps.
 
+## 🔴 Top priority next run — flaky background-task subprocess tests
+- [ ] **Make the background-task suite deterministic in the cloud.** The
+      real-detached-subprocess tests in `app.test.ts` (background/monitor +
+      platform-list), `operator-runtime.test.ts`, and `server.test.ts` fail
+      **nondeterministically** (count flips 3↔4 across identical runs) because
+      the reconciler observes a `printf`-backed detached process mid-flight
+      (`missing-process`/`degraded`) or after it already completed
+      (`watch-active` finds nothing). Root cause is an *observation race*, not a
+      logic bug (process-group liveness check works; the launch script completes
+      when given time) — see run-9 log. Fix: thread the existing
+      `backgroundTaskSpawnProcess`/`backgroundTaskIsProcessRunning` seam (already
+      on `StandaloneOperatorRuntimeOptions`) through `OperatorCliApp` (mirrors
+      the run-1 `configHome` hermeticity fix) and inject a
+      `SimulatedBackgroundExecutor` (sticky "running" state + scripted output +
+      `completeNow()` hook) so the tests never touch real subprocess timing.
+
 ## Local-movement learning subsystem
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
-(exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
-      objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
-      deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+(exporter, job store/manifest, runner, execution service, **movement-model** as
+of run 9). Next increments:
+- [x] Inventory what `src/capture` + `src/training` already implement vs. the
+      objective's five pieces (run 9: capture/schema/dataset/replay scaffolding
+      present; train/infer model half was missing — now added).
+- [x] Pluggable local-model backend interface (`MovementModelBackend`) with a
+      deterministic reference backend (`MarkovMovementBackend`, order-N smoothed
+      n-gram) and a documented seam for a real on-device small model — DONE run 9.
+- [x] Synthetic event-stream generator (`synthesizeMovementDataset`) to validate
+      capture→dataset→replay round-trips without real OS input — DONE run 9.
+- [x] Generalization eval harness (`evaluateGeneralization` +
+      `splitMovementDataset`): held-out next-token top-1 accuracy + perplexity —
+      DONE run 9.
+- [ ] Wire the movement model into the recorder→trajectory-store→exporter flow:
+      a `MovementReplayService` that loads a trained artifact and emits concrete
+      device/os gestures (bridge tokens back to `DeviceCaptureInput` gestures).
+- [ ] Continuous-feature channel: today tokens are discrete (gesture+target).
+      Add optional per-token numeric features (coords, durations) so the backend
+      can regress movement *magnitudes*, not just the symbolic sequence.
+- [ ] Add a second reference backend behind `MovementModelBackend` (e.g. a small
+      neural/embedding n-gram) to prove the seam is truly pluggable, keeping the
+      Markov one as the deterministic CI default.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

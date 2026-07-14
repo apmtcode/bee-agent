@@ -6,6 +6,74 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-14 (run 9) — Movement subsystem: pluggable local-model backend + deterministic Markov reference (objective #2 c/d)
+
+**Audited:** Standing objective #2 (local-movement learning) end-to-end. Read
+`src/capture/` (recorder, trajectory schema, device adapter) and
+`src/training/runner.ts`. Finding: capture→schema→dataset→replay scaffolding
+exists, but the "train a local model to **repeat** recorded movements and
+**generalize** to new related ones" pieces (2c/2d) were **absent** — the only
+"runner" (`LocalAppleSiliconTrainingRunner`) just renders a bash launch script
+that shells out to external `mlx_lm`/`axolotl`. There was no in-process model
+backend, so nothing could actually learn/infer, and nothing was testable in the
+cloud.
+
+**Changed (additive, self-contained in `src/training/`):** new
+`movement-model.ts` implementing the model half of the subsystem:
+- **Tokenizer** `tokenizeAction`/`tokenizeTrajectory`/`buildMovementDataset` —
+  turns recorded `TrajectoryAction`s into a discrete movement-token stream
+  (prefers structured gesture metadata: `tap:submit`, `swipe:down`, `type:query`).
+- **Pluggable backend seam** `MovementModelBackend` (train → artifact, load →
+  model) so a real on-device small model can be dropped in later without
+  touching call sites.
+- **Deterministic reference backend** `MarkovMovementBackend` — an order-N,
+  add-k-smoothed n-gram. Learns transition stats; `repeatMovements` (greedy
+  arg-max) reproduces a recorded trajectory exactly (**2c**);
+  `generateMovements` (seeded PRNG sampling) produces novel-but-related
+  sequences (**2d**). No `Math.random`/`Date.now` — a seeded mulberry32 PRNG
+  keeps everything reproducible.
+- **Synthetic event-stream generator** `synthesizeMovementDataset` (roadmap
+  item) — deterministic related sequences from task templates, so the whole
+  pipeline is validated without real OS input.
+- **Generalization eval harness** `evaluateGeneralization` + `splitMovementDataset`
+  (roadmap item) — held-out next-token top-1 accuracy + perplexity.
+- Barrel-exported all of the above from `src/index.ts`.
+
+**Test results:** new `movement-model.test.ts` — **13/13 passing**, stable
+across 3 back-to-back runs (repeat-exact, seed-reproducible generation,
+in-vocabulary guarantee, likelihood ranks trained motifs above scrambled,
+smoothing keeps unseen movements reachable, held-out top-1 accuracy > 0.8 @
+perplexity < 3, END/maxLength termination). `npm run typecheck:src` ✅ CLEAN.
+`npm run build` ✅. Full suite: **184 passed** (was 171) with my 13 added.
+
+**⚠️ Pre-existing blocker (NOT caused by this run) — flaky background-task
+subprocess tests.** The suite carries a **nondeterministic** failure set in the
+real-detached-subprocess tests: `app.test.ts` (background/monitor + platform-list),
+`operator-runtime.test.ts` (background tasks), `server.test.ts` (background task).
+The failure **count flips between 3 and 4 across identical runs** (observed both
+this run). Root cause diagnosed: these tests launch real `printf`-backed detached
+processes via `FileBackgroundTaskStore` and then reconcile immediately; the
+reconciler catches the process in its brief "running" window and reports
+`missing-process`/`degraded` (or the task has already completed so `watch-active`
+finds nothing). I confirmed the launch script completes correctly when given time
+and that the detached process-group liveness check (`process.kill(-pid,0)`) works
+in this sandbox — so this is an **observation race**, not a logic bug, and it is
+environment-timing-specific (prior runs happened to win the race). Per the
+guardrails I did **not** rewrite these large multi-concern tests this run (their
+assertions are coupled to real subprocess output, so a naive mock can't satisfy
+them). Queued as the **top roadmap priority**: thread the already-existing
+`backgroundTaskSpawnProcess`/`backgroundTaskIsProcessRunning` seam through
+`OperatorCliApp` and inject a deterministic simulated executor.
+
+**New idea:** a `SimulatedBackgroundExecutor` that satisfies both needs — it
+writes the command's scripted output and a *sticky "running"* state (fake pid,
+`isProcessRunning` → true) so a task stays observably active until explicitly
+stopped, plus a `completeNow()` hook for tests that want terminal state. Wiring
+it via the app seam makes the whole background-task suite deterministic in the
+cloud, mirroring the run-1 `configHome` hermeticity fix.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
