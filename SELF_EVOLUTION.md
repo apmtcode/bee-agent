@@ -6,6 +6,61 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-14 (run 9) — Movement-model backend (objective #2 c+d) + fix a real background-task JSON bug
+
+**Audited:** The local-movement learning subsystem (standing objective #2). The
+capture→schema→dataset→replay pieces exist (`src/capture`), and `src/training`
+can *shell out* to mlx/axolotl (`runner.ts`), but there was **no in-process,
+pluggable model backend** — nothing that actually *learns from* recorded
+movements and *generalizes*, and nothing testable in the cloud (parts c & d were
+unimplemented). Also ran the full suite and found **3 pre-existing failures on
+the clean baseline** (operator-runtime, server, app) — run 8's "174/174" no
+longer held in this environment.
+
+**Changed (additive):**
+- **New `src/training/movement-model.ts`** — the pluggable movement-model seam:
+  - `MovementModelBackend` interface + `MovementModelRegistry` (swappable
+    backends; `defaultMovementModelRegistry()` seeds the in-process one). This is
+    the documented seam a real on-device small model plugs into later.
+  - `MarkovMovementBackend` — a **deterministic** stupid-backoff n-gram over
+    movement tokens (`action:*`/`observation:*`/`transcript:*`). High orders
+    **reproduce recorded movements verbatim** (part c); backoff to shorter
+    contexts is what lets it **generalize to related-but-unseen prefixes** (part
+    d). Argmax with lexicographic tie-break ⇒ reproducible in cloud/CI. Learns an
+    end-of-movement sentinel so `generate()` terminates on its own.
+  - `serialize()`/`deserialize()` (JSON-safe) so a trained model can be persisted.
+  - `evaluateMovementModel()` — a **generalization eval harness** measuring
+    next-token replay fidelity on held-out sequences (overall + per-sequence).
+  - Tokenizer + dataset builders (`datasetFromReplays`) that plug straight into
+    the existing `ReplayManifest`/reviewed-export `replays`.
+  - Exported the full surface from `src/index.ts` (all-new names, no barrel
+    collisions). **11 new tests**, all green.
+- **Fixed a real latent bug in `src/harness/background-tasks.ts`
+  (`renderLaunchScript`).** The spawned launcher wrote the initial `state.json`
+  by assembling JSON in the shell (`printf '%s' <json> | sed …`). When the task
+  command contained quotes/newlines, the fragile escaping **mangled the
+  `command` field** (produced invalid JSON) and the `sed` pid substitution
+  silently failed. Downstream `readState`/recovery then threw `SyntaxError:
+  Expected ',' or '}'` — the exact cause of the 3 baseline failures. Captured the
+  malformed file to confirm, then replaced the printf+sed write with a
+  `python3` + `json.dumps` heredoc (same robust approach the completed/failed
+  writers already use), passing the base payload as a single safely-quoted argv.
+
+**Test results:** source typecheck (`tsconfig.src.json`) ✅ exit 0. Build ✅.
+Full suite **185/185** (was 174 tests + 11 new; the bug fix cleared the 3
+baseline failures). Full `tsc` unchanged at **125** (all in test files).
+
+**New idea / logged to ROADMAP:** `src/training/runner.ts`'s `renderLaunchScript`
+has the **identical printf+sed JSON-assembly pattern** (line ~188) and the same
+class of bug — it's just not covered by an executing test yet. Queue the same
+python-json.dumps fix there. Bigger idea: a tiny lint that flags any
+`printf … | sed … > *.json` shell-JSON assembly in `src/` so this footgun can't
+reappear. Also: the movement-model now enables a **capture→train→replay
+round-trip integration test** using the synthetic event-stream generator
+(already queued) to measure end-to-end generalization, not just next-token acc.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

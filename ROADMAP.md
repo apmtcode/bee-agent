@@ -62,13 +62,23 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
+      for a real on-device small model. **DONE run 9** —
+      `src/training/movement-model.ts`: `MovementModelBackend` +
+      `MovementModelRegistry` + deterministic `MarkovMovementBackend` (backoff
+      n-gram), serialize/deserialize, 11 tests.
 - [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      round-trips without real OS input. (Next: pair it with the new
+      movement-model for a capture→train→replay round-trip integration test.)
+- [x] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories. **DONE run 9** — `evaluateMovementModel()`
+      (overall + per-sequence next-token accuracy). Extend later to full-sequence
+      generation fidelity, not just next-token.
+- [ ] **Fix the twin printf+sed JSON bug in `src/training/runner.ts`**
+      (`renderLaunchScript`, ~L188) — identical pattern to the one fixed in
+      `background-tasks.ts` run 9; replace with the python `json.dumps` heredoc.
+      No executing test covers it yet, so add one.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
@@ -80,6 +90,10 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Barrel-collision lint: scan `src/index.ts` re-exports for names exported
       from more than one module and flag them, so duplicate-identifier debt is
       caught at authoring time instead of accumulating silently.
+- [ ] **Shell-JSON footgun lint:** flag any `printf … | sed … > *.json`
+      JSON-assembly-in-shell in `src/` (two occurrences found so far:
+      background-tasks fixed run 9, runner.ts pending) so this class of
+      escaping bug cannot reappear. Prefer a `python3 json.dumps` heredoc.
 - [ ] Per-module typecheck ratchet: record each module's current `tsc` error
       count to a baseline file and fail if a module regresses above it. Lets the
       engine pay debt down module-by-module without one green-gate blocking
