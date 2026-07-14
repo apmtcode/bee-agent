@@ -45,6 +45,24 @@ unchecked items are queued. Keep this richer than you found it each run.
       have the engine run it as a per-run pre-push self-check.
 - [ ] Add a minimal CI workflow mirroring `verify` for human-opened PRs.
 
+## Correctness / reliability (background-task + training launchers)
+- [x] Fix `shellQuote` single-quote escaping in `src/harness/background-tasks.ts`
+      (`"'"'"'` → `'"'"'`) — DONE run 9. Was corrupting `state.json` for any
+      command containing a single quote.
+- [x] Fix `sed` `$$`→PID substitution in `background-tasks.ts` + `training/runner.ts`
+      (embedded `"` closed the bash quote) — DONE run 9. `"pid"` was left a string
+      `"$$"`, so `isProcessRunning` mis-flagged live tasks as missing-process.
+- [x] Make `operator-runtime` + `server.test` background-task tests hermetic via the
+      `backgroundTaskSpawnProcess` stub — DONE run 9 (no real detached process to race).
+- [ ] **`server.test` mega-test `platformInventory` transient** (BLOCKER, run 9):
+      first platform read after setup returns `degraded`/`remoteCount 3`, settles to
+      `mixed`/`4` on the next platform call; not time-based, not breaker-driven,
+      inventory build is read-only. Give `platform*` reads a read-consistency
+      contract (await setup-triggered handlers / converge in one call) and split the
+      ~2000-line mega-test into focused cases.
+- [ ] Add `makeHermeticRuntime()` test helper that stubs `backgroundTaskSpawnProcess`
+      by default so no test silently depends on real detached-process timing.
+
 ## Capability parity (audit reference agents → port gaps)
 - [ ] Build a "capability inventory" generator: enumerate bee-agent's exported
       RPC/tool surface (`src/index.ts`) and diff it against `openclaw`,

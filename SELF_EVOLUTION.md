@@ -6,6 +6,68 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-14 (run 9) — Fix two real launch-script generation bugs (broken shell escaping)
+
+**Audited:** The actual build/test state on this cloud runner. Despite run 8
+logging "174/174", the suite here failed **3 tests** at baseline
+(`operator-runtime`, `app.test`, `server.test` — all in the background-task
+subsystem). Investigated rather than assuming flakiness — and found two
+**genuine, deterministic product bugs** in the generated launch scripts, not
+test-only issues. They break the background-task launcher (and the training
+runner) for real users on any command containing a single quote.
+
+**Root causes & fixes (source, additive):**
+1. **`shellQuote` mis-escapes single quotes** (`src/harness/background-tasks.ts`).
+   It replaced `'` with `"'"'"'` (6 chars, leading `"`) instead of the correct
+   POSIX sequence `'"'"'` (5 chars) — the form `runner.ts` already used
+   correctly. Any command with a single quote (e.g. `printf 'a\nb\n'`) produced
+   **invalid JSON** in `state.json`; the launcher's `python3` state-writer then
+   crashed on `json.loads`, and readers hit `SyntaxError`. One-char class fix.
+2. **`sed` `$$`→PID substitution never fired** (`background-tasks.ts` +
+   `src/training/runner.ts`). The program `sed "…; s/"$$"/$$/g"` has an embedded
+   `"` that *closes* the bash double-quote, so the pattern degenerated to
+   "replace PID with PID" and `"pid":"$$"` stayed a **string**. Downstream
+   `isProcessRunning("$$")` fails `Number.isFinite` → every *running* task is
+   misreported as **missing-process** → remote control flips to `degraded`.
+   Fixed by switching the placeholder to `"__OPENCLAW_PID__"` and rewriting the
+   sed program in single-quotes with spliced dynamic values
+   (`sed 's/…/'"$started_at"'/g; s/"__OPENCLAW_PID__"/'"$$"'/g'`), so the initial
+   state now has a numeric `pid` and valid JSON. Verified end-to-end: the
+   generated script now yields `"status":"completed","pid":<int>` with the
+   command's quotes preserved.
+
+**Test hermeticity (additive):** `operator-runtime` and `server.test` start
+*real detached subprocesses* and then also hand-write the state/output the
+process would produce — an inherent race that the old environment happened to
+win via process-startup latency. Injected the existing
+`backgroundTaskSpawnProcess` seam with a no-op stub (`{ pid, unref }`) in both,
+so store/RPC-logic assertions no longer race a real launcher.
+
+**Test results:** Build ✅. `typecheck:src` ✅ (source stays clean). Suite
+**171/174 → 173/174** (`app.test` + `operator-runtime` now pass deterministically;
+the two shell-escaping fixes made `app.test` green on their own).
+
+**Known blocker (documented, pre-existing):** `server.test.ts`'s single
+~2000-line mega-test ("handles session, transcript, …") still fails at its
+`sessions.platformInventory` assertion (~L811). After the spawn stub, the mocked
+task reads clean (`readState → undefined`), no breaker failure is ever recorded,
+and inventory-building is read-only — yet the **first** platform call after
+setup transiently returns `degraded`/`remoteCount 3` and *settles* to
+`mixed`/`4` on any subsequent platform call. It is **not** time-based (100 ms /
+`setImmediate` waits don't fix it; only further platform calls do), pointing to a
+subtle read-ordering/eventual-consistency quirk between setup mutations and the
+first inventory read. Left unfixed this run to honor the "focused, reversible
+diff" guardrail — pushed as WIP to the designated branch.
+
+**New idea:** split that mega-test into focused cases and give the control-plane
+a **read-consistency contract** for `platform*` reads (either await all
+setup-triggered event handlers, or make the first inventory read converge in one
+call). Separately, add a `makeHermeticRuntime()` test helper that stubs
+`backgroundTaskSpawnProcess` by default, so no future test silently depends on
+real detached-process timing.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
