@@ -152,6 +152,74 @@ function defaultIsProcessRunning(pid: number): boolean {
   }
 }
 
+/**
+ * A deterministic, OS-free stand-in for the background-process seam. Unlike the
+ * real {@link spawn}, it never touches the operating system or the filesystem:
+ * it hands back monotonically increasing fake pids and tracks their liveness
+ * in memory, so callers stay in full control of the process lifecycle.
+ *
+ * This is the simulated backend the movement/OS-interaction features are meant
+ * to run against in the cloud and in tests — real spawning is detached and
+ * writes the state/output files asynchronously, which races with any code that
+ * drives those files by hand. The controller returned here removes that race
+ * entirely while still exercising the store's start/sync/recover/cancel logic.
+ */
+export type SimulatedBackgroundProcessController = {
+  /** Inert spawn — returns a fake pid, writes nothing to disk. */
+  readonly spawn: SpawnBackgroundProcess;
+  /** Reports whether a simulated pid is still considered alive. */
+  readonly isProcessRunning: IsProcessRunning;
+  /** Fake pids handed out so far, in launch order. */
+  readonly launched: readonly number[];
+  /** Mark a simulated process as exited (so `isProcessRunning` returns false). */
+  exit(pid: number): void;
+  /** Mark every simulated process as exited. */
+  exitAll(): void;
+};
+
+export type SimulatedBackgroundSpawnOptions = {
+  /** First fake pid to hand out (defaults to a high, non-colliding value). */
+  firstPid?: number;
+  /**
+   * Whether launched processes start out alive. Defaults to `true`; set to
+   * `false` to model a process that exits the moment it is spawned.
+   */
+  startAlive?: boolean;
+};
+
+export function createSimulatedBackgroundSpawn(
+  options: SimulatedBackgroundSpawnOptions = {},
+): SimulatedBackgroundProcessController {
+  let nextPid = options.firstPid ?? 900000;
+  const startAlive = options.startAlive ?? true;
+  const alive = new Set<number>();
+  const launched: number[] = [];
+
+  const spawn: SpawnBackgroundProcess = () => {
+    const pid = nextPid;
+    nextPid += 1;
+    launched.push(pid);
+    if (startAlive) {
+      alive.add(pid);
+    }
+    return { pid, unref() {} };
+  };
+
+  const isProcessRunning: IsProcessRunning = (pid) => alive.has(pid);
+
+  return {
+    spawn,
+    isProcessRunning,
+    launched,
+    exit(pid: number) {
+      alive.delete(pid);
+    },
+    exitAll() {
+      alive.clear();
+    },
+  };
+}
+
 export class BackgroundTaskExecutionService {
   constructor(
     private readonly rootDir: string,

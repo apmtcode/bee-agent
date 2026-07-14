@@ -6,6 +6,7 @@ import process from "node:process";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 import { OperatorCliApp, parseSlashCommand } from "./app.js";
+import { createSimulatedBackgroundSpawn } from "../harness/background-tasks.js";
 
 const tempDirs: string[] = [];
 const execFileAsync = promisify(execFile);
@@ -801,7 +802,17 @@ describe("OperatorCliApp", () => {
 
   it("supports session lifecycle, transcript, approvals, pairing, config, and prompt commands", async () => {
     const rootDir = await makeTempDir();
-    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    // Simulated background-process seam: keep launched tasks "alive" and write
+    // nothing to disk, so platform-control status is deterministic instead of
+    // racing a real detached process that may exit before it is polled.
+    const backgroundProcesses = createSimulatedBackgroundSpawn();
+    const app = new OperatorCliApp({
+      rootDir,
+      cwd: rootDir,
+      currentDate: "2026-05-25",
+      backgroundTaskSpawnProcess: backgroundProcesses.spawn,
+      backgroundTaskIsProcessRunning: backgroundProcesses.isProcessRunning,
+    });
     const firstSession = await app.runtime.startSession({ title: "first", cwd: rootDir, agentId: "operator-cli" });
     const secondSession = await app.runtime.startSession({ title: "second", cwd: rootDir, agentId: "operator-cli" });
 
@@ -1063,7 +1074,16 @@ describe("OperatorCliApp", () => {
 
   it("supports background and monitor task commands plus cron commands", async () => {
     const rootDir = await makeTempDir();
-    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    // Simulated background-process seam: no detached process races the manual
+    // output/state writes below, so command output capture is deterministic.
+    const backgroundProcesses = createSimulatedBackgroundSpawn();
+    const app = new OperatorCliApp({
+      rootDir,
+      cwd: rootDir,
+      currentDate: "2026-05-25",
+      backgroundTaskSpawnProcess: backgroundProcesses.spawn,
+      backgroundTaskIsProcessRunning: backgroundProcesses.isProcessRunning,
+    });
     const session = await app.runtime.startSession({ title: "CLI ops", cwd: rootDir, agentId: "operator-cli" });
 
     const startOutput = await app.dispatchSlashCommand(
@@ -1078,6 +1098,9 @@ describe("OperatorCliApp", () => {
     if (!task) {
       throw new Error("expected background task");
     }
+    // The simulated seam runs no real command, so seed the captured output the
+    // way the launch script would have on a live machine.
+    await app.runtime.backgroundTasks.executionService.writeOutput(task, "ok\n");
 
     const listOutput = await app.dispatchSlashCommand({ kind: "background-list" });
     expect(listOutput).toContain(task.id);

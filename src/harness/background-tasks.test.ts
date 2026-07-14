@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   BackgroundTaskExecutionService,
   FileBackgroundTaskStore,
+  createSimulatedBackgroundSpawn,
   type BackgroundTaskExecutionState,
 } from "./background-tasks.js";
 
@@ -18,6 +19,40 @@ async function makeTempDir(): Promise<string> {
 
 afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
+});
+
+describe("createSimulatedBackgroundSpawn", () => {
+  it("hands out deterministic pids, tracks liveness, and never touches disk", async () => {
+    const rootDir = await makeTempDir();
+    const filePath = path.join(rootDir, "background-tasks.json");
+    const sim = createSimulatedBackgroundSpawn({ firstPid: 5000 });
+    const store = new FileBackgroundTaskStore(filePath, sim.spawn, sim.isProcessRunning);
+
+    const first = await store.start({ title: "one", command: "sleep 1", cwd: rootDir });
+    const second = await store.start({ title: "two", command: "sleep 1", cwd: rootDir });
+
+    expect(first.execution.processId).toBe(5000);
+    expect(second.execution.processId).toBe(5001);
+    expect(sim.launched).toEqual([5000, 5001]);
+    // The simulated seam writes no state file, so a missing-state sync of a
+    // still-alive task rebinds it to running rather than failing it.
+    expect(sim.isProcessRunning(5000)).toBe(true);
+    const synced = await store.sync(first.id);
+    expect(synced?.status).toBe("running");
+    await expect(
+      fs.readFile(path.join(rootDir, first.execution.stateFile), "utf8"),
+    ).resolves.toContain("\"status\": \"running\"");
+
+    // Exiting the process makes the next sync observe a missing process.
+    sim.exit(5000);
+    expect(sim.isProcessRunning(5000)).toBe(false);
+    const recovered = await store.recover(first.id);
+    expect(recovered?.reason).toBe("missing-process");
+    expect(recovered?.task.status).toBe("failed");
+
+    sim.exitAll();
+    expect(sim.isProcessRunning(5001)).toBe(false);
+  });
 });
 
 describe("FileBackgroundTaskStore", () => {

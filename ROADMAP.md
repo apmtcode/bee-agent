@@ -40,6 +40,11 @@ unchecked items are queued. Keep this richer than you found it each run.
     fix residual test-only typings.
 - [ ] Add a `verify` npm script (`typecheck && build && test`) and have the
       engine run it as a pre-push self-check each cycle.
+- [x] **Deterministic simulated background-process seam** (2026-07-14, run 9).
+      `createSimulatedBackgroundSpawn()` in `background-tasks.ts` (filesystem-inert
+      fake-pid spawn + liveness control), threaded through `OperatorCliApp`. Fixed
+      4 flaky integration tests that spawned real detached processes racing their
+      own file writes; suite green on 3 consecutive runs.
 - [x] Interim **source-only typecheck gate** — DONE run 7. `tsconfig.src.json`
       (excludes `**/*.test.ts`) + `typecheck:src` script; passes (exit 0). Next:
       have the engine run it as a per-run pre-push self-check.
@@ -80,6 +85,13 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Barrel-collision lint: scan `src/index.ts` re-exports for names exported
       from more than one module and flag them, so duplicate-identifier debt is
       caught at authoring time instead of accumulating silently.
+- [ ] **No-real-spawn test guard**: a `vitest` global-setup that fails any test
+      reaching the real `child_process.spawn`, so a subsystem that forgets to
+      inject a simulated backend becomes a hard failure instead of a timing flake.
+- [ ] **Unified OS-backend seam registry**: resolve every OS-touching backend
+      (input capture, training launcher, cron tick, background spawn) from one
+      place with a single `IS_SIMULATION` switch, so cloud/test runs are
+      deterministic by construction rather than per-call injection.
 - [ ] Per-module typecheck ratchet: record each module's current `tsc` error
       count to a baseline file and fail if a module regresses above it. Lets the
       engine pay debt down module-by-module without one green-gate blocking

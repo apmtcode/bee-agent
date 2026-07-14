@@ -6,6 +6,56 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-14 (run 9) — Deterministic simulated background-process seam (green gate restored)
+
+**Audited:** The build/test baseline at the start of the run. Found the suite was
+**no longer green** — 3 tests failed (`174 → 171`) even though the working tree was
+clean and run 8 logged 174/174. Root cause: three integration-level tests
+(`operator-runtime.test.ts`, `server.test.ts`, `app.test.ts`) construct a real
+`StandaloneOperatorRuntime`/`OperatorCliApp` and override only
+`backgroundTaskIsProcessRunning` — **not** the spawn seam. So
+`startBackgroundTask` launched a *real detached bash process* which writes
+`state.json`/`output.log` asynchronously and **races** the tests' own manual
+writes to those same files. A concurrent partial write makes `readJsonFile` fall
+back to `undefined` (→ `getBackgroundTaskExecutionState` returns undefined) or
+leaves a stale `running` state whose pid the mock reports dead (→
+`missing-process` / `control=degraded`). Reproduced the flakiness directly: the
+`background and monitor task commands` test passed 2× and failed 1× in isolation.
+
+**Changed (additive, reversible):**
+- `src/harness/background-tasks.ts`: added `createSimulatedBackgroundSpawn()` —
+  a deterministic, **filesystem-inert** stand-in for the OS spawn seam. It hands
+  out monotonic fake pids, tracks liveness in memory (`exit`/`exitAll`), records
+  `launched` pids, and touches neither the OS nor disk. This is the simulated
+  backend the guardrails call for ("provide a simulated/mock implementation so
+  tests pass in the cloud") and is reusable for local dry-runs of the
+  background-task/monitor surface without real processes.
+- `src/cli/app.ts`: threaded `backgroundTaskSpawnProcess` /
+  `backgroundTaskIsProcessRunning` through `OperatorCliAppOptions` into the
+  internally-constructed runtime (previously hardcoded, so the app was
+  un-simulatable). Backward-compatible — production still defaults to the real
+  spawn.
+- `src/index.ts`: exported `createSimulatedBackgroundSpawn` +
+  `SimulatedBackgroundProcessController` / `SimulatedBackgroundSpawnOptions`.
+- Tests: injected the simulated seam into the 4 flaky sites
+  (`operator-runtime.test.ts` ×1, `server.test.ts` ×3, `app.test.ts` ×2), seeding
+  the one task that asserted real command output with a manual `writeOutput`.
+  Added a `createSimulatedBackgroundSpawn` unit test covering pid issuance,
+  liveness, sync-rebind, and missing-process recovery.
+
+**Test results:** full suite **175/175** (was 171/174 at baseline; +1 new unit
+test), green on **3 consecutive full runs** — no residual flakiness.
+`typecheck:src` ✅ (source stays clean). Build ✅.
+
+**New idea:** promote this pattern into an `IS_SIMULATION`/`spawnBackend`-style
+seam registry so *every* OS-touching subsystem (input capture, training
+launcher, cron tick) resolves its backend from one place, and add a
+`vitest` global-setup assertion that fails any test which reaches the real
+`child_process.spawn` — turning "a test silently spawned a real process" from a
+timing-dependent flake into a hard, immediate failure.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
