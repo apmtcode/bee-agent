@@ -6,6 +6,65 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-14 (run 9) — 🩹 Hermetic background-task tests: killed 4 time/pid/race-dependent failures
+
+**Audited:** Full-suite health on a fresh cloud checkout. Run 8 reported
+174/174, but a clean container now showed **3 hard failures + 1 intermittent**
+(a fourth surfaced only under repeated runs). Root cause was the same across all
+four: several tests start background tasks with **real commands** (`sleep 5`,
+`printf`, `tail -f`) via the default `spawn` backend, and then assert on remote
+**control state**. That couples the tests to wall-clock timing and live OS state:
+- `renderLaunchScript` writes the task state file from the spawned shell with a
+  plain `> statefile` redirect (non-atomic), so `readState` races the write →
+  `SyntaxError: … in JSON at position 311` (operator-runtime test) and a
+  dangling `tail -f` held the temp dir open → `ENOTEMPTY` on cleanup.
+- `sleep 5` exits ~5 s after start, and its liveness is probed with a real
+  `process.kill(pid, 0)`. On a loaded container the process is already gone by
+  the assertion → `background task missing-process` → `control=degraded`
+  instead of `active` (server.test remoteControl, app.test platform-list). The
+  suite only ever passed because a *faster* machine let `readState` return
+  `undefined` (file not yet flushed) — i.e. it passed by luck, not by design.
+- app.test "background and monitor task commands" stopped a `printf ok` task
+  that had already exited → `Background task … is not running` at `task-stop`.
+  The test is internally contradictory under real exec: the task must both
+  *exit* (to emit "ok" output) and still be *running* (to be stoppable).
+
+**Changed (additive, test-hermeticity + one small DI seam):**
+- `src/cli/app.ts` — `OperatorCliApp` now accepts optional
+  `backgroundTaskSpawnProcess` / `backgroundTaskIsProcessRunning` and forwards
+  them to `StandaloneOperatorRuntime` (the runtime already supported them; the
+  CLI wrapper didn't expose the seam). Production default is unchanged (real
+  `spawn`). This is the same injectable-dependency pattern used earlier for
+  hermetic config.
+- Injected a **deterministic fake launcher** (`() => ({ pid, unref(){} })`,
+  unique incrementing pid, no real process) into the four affected tests in
+  `app.test.ts`, `server.test.ts`, and `operator-runtime.test.ts`. With no real
+  launch script, task state is written *only* by the atomic runtime/`writeState`
+  paths — no racing writer, no orphaned processes, no ENOTEMPTY.
+- For the CLI "background and monitor" test, additionally set
+  `isProcessRunning: () => true` and seeded the task's output+running state
+  deterministically (mirroring how the monitor task in the same test was already
+  driven), and mocked `process.kill` around the two `stop` calls (same guard the
+  operator-runtime test already uses) so no real pid/pgid is ever signalled.
+
+**Test results:** `typecheck:src` ✅ (exit 0). Build ✅. Tests ✅ **174/174**,
+now verified **stable across 8 consecutive full-suite runs** (previously 1–3
+failed nondeterministically per run). No source behavior changed — the fixes are
+confined to test setup plus one optional constructor seam.
+
+**New idea:** the real launch path (`renderLaunchScript` → shell → state file)
+is now *never* exercised deterministically by any test — every task test fakes
+the spawn. Two follow-ups: (1) make `renderLaunchScript` write the state file
+**atomically** (write `.tmp` + `mv`, as `writeJsonAtomic` already does in TS) so
+a concurrent `readState` can never observe a half-written file even in
+production; (2) add **one** hermetic integration test that runs the *real*
+launch script against a trivial, instantly-terminating command in a
+tightly-scoped temp dir and polls to a terminal state before asserting — so the
+launch-script contract has at least one deterministic guardian without
+reintroducing suite-wide flakiness.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

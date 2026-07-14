@@ -9,6 +9,13 @@ import type { ReviewedExportManifest } from "../training/export-manifest.js";
 
 const tempDirs: string[] = [];
 
+// Deterministic background-task launcher (see app.test.ts / server.test.ts):
+// returns a stable pid without spawning a real OS process, so tests can drive
+// task state via `writeState` without racing a real launch script and without
+// leaving `tail -f` orphans that would block temp-dir cleanup (ENOTEMPTY).
+let fakeBackgroundPid = 60_000;
+const fakeBackgroundSpawn = () => ({ pid: (fakeBackgroundPid += 1), unref() {} });
+
 async function makeTempDir(): Promise<string> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "operator-runtime-"));
   tempDirs.push(dir);
@@ -530,6 +537,7 @@ describe("StandaloneOperatorRuntime", () => {
   it("starts, syncs, recovers, lists, and cancels background tasks", async () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
+      backgroundTaskSpawnProcess: fakeBackgroundSpawn,
       backgroundTaskIsProcessRunning: () => false,
     });
     const session = await runtime.startSession({ title: "Tasks", agentId: "main" });

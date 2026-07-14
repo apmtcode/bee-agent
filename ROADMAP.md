@@ -8,6 +8,24 @@ unchecked items are queued. Keep this richer than you found it each run.
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`
       (2026-06-22).
+- [x] **Hermetic background-task tests** (2026-07-14, run 9). Exposed
+      `backgroundTaskSpawnProcess` / `backgroundTaskIsProcessRunning` on
+      `OperatorCliApp` and injected a deterministic fake launcher into the 4
+      tests that were failing/flaking on a fresh container (real `sleep`/`printf`/
+      `tail -f` processes racing `readState` and leaving orphans). Suite now
+      stable 174/174 across 8 consecutive runs.
+- [ ] **Make `renderLaunchScript` write its state file atomically** (`.tmp` +
+      `mv`) so `readState` can never observe a half-written JSON file even in
+      production — the run-9 flakiness (`SyntaxError … position 311`) was a
+      symptom of this non-atomic `> statefile` redirect.
+- [ ] **One hermetic launch-script integration test**: run the *real* launch
+      script against a trivial instantly-terminating command in a scoped temp
+      dir, polling to a terminal state before asserting. Every task test now
+      fakes the spawn, so the real launch path has no deterministic guardian.
+- [ ] Audit remaining real-spawn task tests (`app.test.ts` policy-gate cases at
+      ~519/1237/1254/1280) — they don't currently flake (they block before spawn
+      or don't assert on running state) but should migrate to the fake launcher
+      for consistency and future-proofing.
 - [ ] **Pay down typecheck debt** (surfaced by the `typecheck` script). Full
       `tsc --noEmit` count was **397** on 2026-06-22; now **125**. 🎯 ALL source
       (`src/**` non-test) files typecheck clean since run 7; remaining 125 errors

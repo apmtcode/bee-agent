@@ -10,6 +10,13 @@ import { OperatorCliApp, parseSlashCommand } from "./app.js";
 const tempDirs: string[] = [];
 const execFileAsync = promisify(execFile);
 
+// Deterministic background-task launcher: returns a stable, unique pid without
+// spawning a real OS process. Keeps the suite hermetic — no orphaned `sleep`/
+// `tail -f` processes and no racy launch-script writes to the state file (which
+// otherwise make control-state diagnostics timing-dependent).
+let fakeBackgroundPid = 40_000;
+const fakeBackgroundSpawn = () => ({ pid: (fakeBackgroundPid += 1), unref() {} });
+
 async function makeTempDir(): Promise<string> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "operator-cli-app-"));
   tempDirs.push(dir);
@@ -801,7 +808,7 @@ describe("OperatorCliApp", () => {
 
   it("supports session lifecycle, transcript, approvals, pairing, config, and prompt commands", async () => {
     const rootDir = await makeTempDir();
-    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25", backgroundTaskSpawnProcess: fakeBackgroundSpawn });
     const firstSession = await app.runtime.startSession({ title: "first", cwd: rootDir, agentId: "operator-cli" });
     const secondSession = await app.runtime.startSession({ title: "second", cwd: rootDir, agentId: "operator-cli" });
 
@@ -1063,7 +1070,16 @@ describe("OperatorCliApp", () => {
 
   it("supports background and monitor task commands plus cron commands", async () => {
     const rootDir = await makeTempDir();
-    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    // Deterministic launcher + always-alive liveness so the task stays "running"
+    // through view/watch/stop instead of racing a real `printf` that exits before
+    // the stop assertion (which then reports "is not running").
+    const app = new OperatorCliApp({
+      rootDir,
+      cwd: rootDir,
+      currentDate: "2026-05-25",
+      backgroundTaskSpawnProcess: fakeBackgroundSpawn,
+      backgroundTaskIsProcessRunning: () => true,
+    });
     const session = await app.runtime.startSession({ title: "CLI ops", cwd: rootDir, agentId: "operator-cli" });
 
     const startOutput = await app.dispatchSlashCommand(
@@ -1078,6 +1094,22 @@ describe("OperatorCliApp", () => {
     if (!task) {
       throw new Error("expected background task");
     }
+
+    // Seed output + running state deterministically (the fake launcher runs no
+    // real command), matching how the monitor task below is driven.
+    await app.runtime.backgroundTasks.executionService.writeOutput(task, "ok\n");
+    await app.runtime.backgroundTasks.executionService.writeState(task, {
+      version: 1,
+      taskId: task.id,
+      kind: "task",
+      status: "running",
+      pid: task.execution.processId ?? 1234,
+      startedAt: task.execution.startedAt ?? task.updatedAt,
+      updatedAt: task.updatedAt,
+      outputFile: task.execution.outputFile,
+      cwd: task.cwd,
+      command: task.command,
+    });
 
     const listOutput = await app.dispatchSlashCommand({ kind: "background-list" });
     expect(listOutput).toContain(task.id);
@@ -1097,7 +1129,14 @@ describe("OperatorCliApp", () => {
     const activeWatchOutput = await app.dispatchSlashCommand({ kind: "watch-active" }, session.id);
     expect(activeWatchOutput).toContain(`[task ${task.id}]`);
 
-    const stopOutput = await app.dispatchSlashCommand({ kind: "task-stop", taskId: task.id }, session.id);
+    const originalKillForTask = process.kill;
+    process.kill = (() => true) as typeof process.kill;
+    let stopOutput: string;
+    try {
+      stopOutput = await app.dispatchSlashCommand({ kind: "task-stop", taskId: task.id }, session.id);
+    } finally {
+      process.kill = originalKillForTask;
+    }
     expect(stopOutput).toContain(`Stopped task ${task.id}.`);
 
     const monitorStartOutput = await app.dispatchSlashCommand(
@@ -1139,7 +1178,14 @@ describe("OperatorCliApp", () => {
     expect(monitorViewOutput).toContain(monitor.id);
     expect(monitorViewOutput).toContain("monitor-ok");
 
-    const monitorStopOutput = await app.dispatchSlashCommand({ kind: "monitor-stop", taskId: monitor.id }, session.id);
+    const originalKillForMonitor = process.kill;
+    process.kill = (() => true) as typeof process.kill;
+    let monitorStopOutput: string;
+    try {
+      monitorStopOutput = await app.dispatchSlashCommand({ kind: "monitor-stop", taskId: monitor.id }, session.id);
+    } finally {
+      process.kill = originalKillForMonitor;
+    }
     expect(monitorStopOutput).toContain(`Stopped monitor ${monitor.id}.`);
 
     const cronCreate = await app.dispatchSlashCommand(
