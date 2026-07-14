@@ -754,7 +754,9 @@ function renderLaunchScript(task: BackgroundTaskRecord): string {
     "set -euo pipefail",
     `mkdir -p $(dirname ${quotedStatePath}) $(dirname ${quotedOutputFile})`,
     "started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-    `printf '%s' ${quotedStatePayload} | sed "s/__OPENCLAW_STARTED_AT__/$started_at/g; s/\"\$\$\"/$$/g" > ${quotedStatePath}`,
+    // Write state atomically (temp file + mv) so recovery/reconcile never reads a
+    // half-written state file mid-`>` truncation.
+    `printf '%s' ${quotedStatePayload} | sed "s/__OPENCLAW_STARTED_AT__/$started_at/g; s/\"\$\$\"/$$/g" > ${quotedStatePath}.$$.tmp && mv ${quotedStatePath}.$$.tmp ${quotedStatePath}`,
     `printf '%s\n' "starting ${task.kind} ${task.id}" >> ${quotedOutputFile}`,
     `if cd ${quotedCwd} && bash -lc ${quotedCommand} >> ${quotedOutputFile} 2>&1; then`,
     "  completed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
@@ -789,10 +791,23 @@ function renderStateWriterPython(status: BackgroundTaskExecutionState["status"])
     "state['completedAt'] = timestamp",
     "state['exitCode'] = exit_code",
     `state['error'] = None if '${status}' == 'completed' else f'background task exited non-zero ({exit_code})'`,
-    "state_path.write_text(json.dumps(state, indent=2) + '\\n')",
+    // Atomic write: render to a sibling temp file then os.replace() (atomic rename
+    // on POSIX) so a concurrent reader never observes a truncated JSON document.
+    "import os",
+    "tmp_path = state_path.with_name(state_path.name + f'.{pid}.tmp')",
+    "tmp_path.write_text(json.dumps(state, indent=2) + '\\n')",
+    "os.replace(tmp_path, state_path)",
   ];
 }
 
-function shellQuote(value: string): string {
-  return `'${value.replaceAll(`'`, `"'"'"'`)}'`;
+/**
+ * POSIX-safe single-quoting for embedding an arbitrary string as one shell word.
+ * Closes the quote, emits an escaped quote, then reopens — each embedded `'`
+ * becomes the 4-char sequence `'\''` so the round-trip is exact even for commands
+ * that themselves contain single quotes (e.g. `printf '…'`). Exported for a
+ * regression test that pins this behaviour: an earlier `"'"'"'` variant corrupted
+ * the JSON state payload for any single-quote command, breaking task recovery.
+ */
+export function shellQuote(value: string): string {
+  return `'${value.replaceAll(`'`, `'\\''`)}'`;
 }

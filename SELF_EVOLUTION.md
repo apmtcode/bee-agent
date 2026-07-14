@@ -6,6 +6,62 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-14 (run 9) — Fix shellQuote JSON corruption + hermetic background-task tests
+
+**Audited:** Project health. `npm test` at HEAD (run 8's commit, logged 174/174)
+failed **3 tests** in this environment (operator-runtime, server.test, app.test
+session-lifecycle), all tracing to the background-task subsystem. Root-caused two
+distinct real bugs plus a class of non-hermetic tests.
+
+**Bug 1 — `shellQuote` corrupted JSON state (real correctness bug).**
+`src/harness/background-tasks.ts`'s `shellQuote` used the escape sequence
+`"'"'"'` for embedded single quotes, which is wrong. For *any* background command
+containing a `'` — e.g. `printf 'line-1\nline-2\n'`, `sh -c '…'` — the launch
+script's JSON state payload came out mangled (`"command":"printf "'…"'"`), so
+`readState`'s `JSON.parse` threw and recovery/reconcile crashed. Reproduced the
+exact `SyntaxError` at position 311, then fixed the escape to the correct POSIX
+`'\''` (close-quote, escaped-quote, reopen). Verified round-trip through real
+`bash` for 8 adversarial inputs (quotes, `$`, backticks, `$(…)`, newlines).
+
+**Bug 2 — non-atomic state writes (robustness).** The launch script wrote the
+state file via `sed > file` (truncate+write) and Python `write_text` (also
+truncate+write). A concurrent reader (recovery/reconcile) could observe a
+half-written file → `JSON.parse` throws. Made both writes atomic (render to a
+`.tmp` sibling, then `mv` / `os.replace` — atomic rename on POSIX).
+
+**Bug 3 — non-hermetic tests.** Three suites spawned *real* `sleep 5` / `printf`
+subprocesses and asserted on control-plane state, so results depended on
+wall-clock timing and the sandbox's process-group liveness probe
+(`process.kill(-pid, 0)`) — they passed by luck in run 8's env and fail here.
+Added a test seam: `OperatorCliApp` now forwards optional
+`backgroundTaskSpawnProcess` / `backgroundTaskIsProcessRunning` to its runtime
+(the runtime already exposed these). The four affected constructions (server.test
+`runtime`/`driftingRuntime`/`breakerRuntime`, operator-runtime + app.test) now
+inject a deterministic no-op spawn (fake pid, no state file) and drive task state
+via explicit `writeState`/`writeOutput`, mirroring code paths that were already
+hermetic.
+
+**Changed:** `src/harness/background-tasks.ts` (shellQuote fix + atomic writes;
+`shellQuote` now exported for testing); `src/cli/app.ts` (spawn/liveness test
+seam on `OperatorCliAppOptions`); tests in `background-tasks.test.ts` (new
+`shellQuote` round-trip + JSON-payload regression suite, +10 cases),
+`operator-runtime.test.ts`, `server.test.ts`, `app.test.ts` (hermetic spawn).
+
+**Test results:** `typecheck:src` ✅ (clean). Build ✅. `npm test` ✅ **183/183**
+(was 171–174 with 3 failing); ran the full suite ×2 and the previously-flaky
+subset ×3 — stable every time. Focused diff: +122/−8 across 6 files, additive and
+reversible.
+
+**New idea:** add a **hermeticity lint** — a tiny test/CI check that greps the
+`src/**/*.test.ts` tree for real-OS escape hatches (`spawn(`, `execFile`/`exec`
+without a mock, `child_process`, unmocked `Date.now()` in assertions) and fails
+unless the call site is annotated `// hermetic-exempt: <reason>`. This run showed
+that a single real-subprocess test can silently pass in one environment and fail
+in another; a lint makes new non-hermetic tests a visible, deliberate choice
+instead of a latent flake. Bonus: pair it with a `verify` script
+(`typecheck:src && build && test`) the engine runs pre-push so environment-
+specific breakage is caught before it lands.
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

@@ -70,6 +70,20 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Generalization eval harness: measure replay fidelity on held-out but
       related synthetic trajectories.
 
+## Reliability / test hygiene
+- [x] **Fix `shellQuote` JSON corruption** (run 9) — the `"'"'"'` escape mangled
+      the launch-script state payload for any single-quote command, crashing
+      recovery. Now correct POSIX `'\''` + atomic state writes + regression tests.
+- [x] **Hermetic background-task tests** (run 9) — added a spawn/liveness test
+      seam to `OperatorCliApp` and injected deterministic no-op spawns so
+      control-plane tests no longer race real `sleep 5`/`printf` subprocesses.
+- [ ] **Hermeticity lint** (NEW, run 9): grep `src/**/*.test.ts` for real-OS
+      escape hatches (`spawn(`, `execFile`/`exec`, `child_process`, unmocked
+      `Date.now()`) and fail unless annotated `// hermetic-exempt: <reason>`.
+      Prevents new latent flakes like the three run 9 uncovered.
+- [ ] Add a `verify` script (`typecheck:src && build && test`) and have the
+      engine run it as a pre-push self-check each cycle (also queued under DX).
+
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in

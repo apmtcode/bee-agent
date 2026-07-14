@@ -1,12 +1,17 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   BackgroundTaskExecutionService,
   FileBackgroundTaskStore,
+  shellQuote,
   type BackgroundTaskExecutionState,
 } from "./background-tasks.js";
+
+const execFileAsync = promisify(execFile);
 
 const tempDirs: string[] = [];
 
@@ -369,5 +374,33 @@ describe("BackgroundTaskExecutionService", () => {
     await expect(fs.readFile(path.join(rootDir, task.execution.launchScript), "utf8")).resolves.toContain("bash -lc");
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
+  });
+});
+
+describe("shellQuote", () => {
+  const cases = [
+    "no-special-chars",
+    "printf 'done'",
+    "printf 'line-1\nline-2\n'",
+    "sh -c 'echo hi && echo bye'",
+    "a'b'c",
+    'has "double" quotes',
+    "trailing'",
+    "$HOME `whoami` $(id)",
+  ];
+
+  it.each(cases)("round-trips %j through a real shell without corruption", async (value) => {
+    // Regression for a broken `"'"'"'` escape that mangled single-quote commands
+    // (e.g. printf '…'), corrupting the JSON task-state payload the launch script
+    // emits and breaking recovery. `printf '%s'` must echo the value verbatim.
+    const { stdout } = await execFileAsync("bash", ["-c", `printf '%s' ${shellQuote(value)}`]);
+    expect(stdout).toBe(value);
+  });
+
+  it("keeps a JSON state payload parseable after quoting a single-quote command", async () => {
+    const payload = JSON.stringify({ status: "running", command: "printf 'line-1\nline-2\n'" });
+    const { stdout } = await execFileAsync("bash", ["-c", `printf '%s' ${shellQuote(payload)}`]);
+    expect(() => JSON.parse(stdout)).not.toThrow();
+    expect(JSON.parse(stdout).command).toBe("printf 'line-1\nline-2\n'");
   });
 });
