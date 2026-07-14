@@ -370,4 +370,44 @@ describe("BackgroundTaskExecutionService", () => {
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
   });
+
+  it("writes valid initial-state JSON for commands with quotes, backslashes, and newlines (real launch)", async () => {
+    // Regression: the initial "running" state used to be built by munging a
+    // pre-serialized JSON blob with `printf | sed`, which corrupted the file for
+    // any command containing quotes/backslashes/newlines/`$`. It is now written
+    // by Python's json module with every field passed as argv, so the state is
+    // always valid JSON and the command is preserved verbatim.
+    const rootDir = await makeTempDir();
+    // Real launch pipeline (default spawn = real detached bash).
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"));
+    const nastyCommand = `printf '%s\\n' 'he said "hi" & kept 100% \\ backslash and $HOME'`;
+    const task = await store.start({
+      title: "Nasty command",
+      command: nastyCommand,
+      cwd: rootDir,
+      kind: "task",
+    });
+
+    const statePath = path.join(rootDir, task.execution.stateFile);
+    let raw: string | undefined;
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      try {
+        raw = await fs.readFile(statePath, "utf8");
+        if (raw.trim()) {
+          break;
+        }
+      } catch {
+        // state file not written yet
+      }
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    expect(raw?.trim()).toBeTruthy();
+
+    // Must be valid JSON (the old shell munging produced malformed JSON here).
+    const parsed = JSON.parse(raw as string) as BackgroundTaskExecutionState;
+    expect(parsed.taskId).toBe(task.id);
+    expect(parsed.command).toBe(nastyCommand);
+    expect(typeof parsed.pid).toBe("number");
+    expect(["running", "completed", "failed"]).toContain(parsed.status);
+  });
 });

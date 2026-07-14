@@ -6,6 +6,67 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-14 (run 9) — 🐞 Two real correctness bugs in background-task launch + test hermeticity
+
+**Audited:** Repo health from a clean checkout. `npm test` was **not** the
+174/174 prior runs reported — it flaked **3–4 failures per run** across
+`operator-runtime.test.ts`, `server.test.ts`, and `app.test.ts`, all surfacing as
+`SyntaxError: Expected ',' or '}' … in JSON` from `readJsonFile`. Traced it into
+`src/harness/background-tasks.ts` (the background/monitor task execution engine).
+
+**Two genuine production bugs found & fixed** (not test bugs):
+
+1. **`shellQuote` mis-escaped single quotes** (longstanding). It replaced each
+   `'` with `"'"'"'` (6 chars, **leading `"`**) instead of the correct POSIX
+   `'"'"'` (5 chars). The stray leading `"` injects a spurious `"` before every
+   embedded single quote — so **any** background command containing `'` (e.g.
+   the extremely common `printf 'x\n'`) was silently corrupted in both the launch
+   script and the persisted `command`/state JSON. Fixed the replacement string.
+
+2. **Initial-state JSON built by `printf | sed` string-munging.** The "running"
+   state file was produced by inlining a pre-serialized JSON blob and mutating it
+   with `sed "…; s/\"\$\$\"/$$/g"`. The literal `"` around `$$` **terminated the
+   double-quoted shell string**, so the pid substitution silently collapsed; more
+   fundamentally, building JSON via shell text munging corrupts on any command
+   with quotes/backslashes/newlines/`$`. Replaced it with a Python `json`
+   writer (mirroring the existing completion writer) that takes **every dynamic
+   field as `argv`** and writes atomically (`os.replace`) — JSON can no longer be
+   corrupted by command contents.
+
+**Test hermeticity (the other half of the flake):** `startBackgroundTask`
+spawns a **real detached `bash`** launch script even in unit tests, which races
+non-deterministically against the tests' own `writeState`/reads over the same
+`state.json`. Added a small reusable seam:
+- New `src/harness/inert-spawn.ts` → `createInertBackgroundSpawn()` (returns a
+  synthetic pid + no-op `unref`, launches nothing).
+- Threaded the existing `backgroundTaskSpawnProcess` / `backgroundTaskIsProcessRunning`
+  seams through `OperatorCliApp` (production default unchanged when unset).
+- Injected the inert spawn into the runtime/app constructions in
+  `operator-runtime.test.ts`, `server.test.ts`, and `app.test.ts` so state-driven
+  tests are deterministic.
+
+**New real-launch regression test** (`background-tasks.test.ts`): starts a task
+via the **real** pipeline with a nasty command
+(`printf '%s\n' 'he said "hi" & kept 100% \ backslash and $HOME'`) and asserts the
+on-disk `state.json` is valid JSON with the command preserved **verbatim** — this
+would have caught both bugs above and guards the launch pipeline going forward.
+
+**Test results:** `typecheck:src` ✅ clean. `npm run build` ✅. `npm test` ✅
+**175/175** (added 1 test), now **stable** — 15 consecutive clean full-suite runs
+where before it failed every run. Full `tsc` unchanged at **125** (test-only
+debt; no source regressions). One *pre-existing, unrelated* flake remains:
+`session-stream.test.ts > "replays only missed events after reconnect cursor…"`
+fails ~1/10 **only** under full-suite parallel load (passes 12/12 in isolation) —
+a real-time/pong timing dependency, logged to ROADMAP (I did not touch that file).
+
+**New idea (logged to ROADMAP):** a **launch-script golden/fuzz test** — render
+`renderLaunchScript` for a corpus of adversarial commands (quotes, backslashes,
+newlines, `$VAR`, `;`, `|`, unicode), execute each in a sandbox, and assert the
+resulting `state.json` round-trips the command exactly. Shell-quoting bugs are a
+recurring, high-blast-radius class; a property test pins them permanently. Bonus:
+replace the hand-rolled `shellQuote` with a single audited helper reused by every
+shell-emitting site (there are several) so this class can't reappear per-call-site.
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

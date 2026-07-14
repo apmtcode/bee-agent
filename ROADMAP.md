@@ -70,6 +70,26 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Generalization eval harness: measure replay fidelity on held-out but
       related synthetic trajectories.
 
+## Reliability / correctness
+- [x] **Fix background-task launch corruption** (run 9). `shellQuote` mis-escaped
+      single quotes (`"'"'"'` → correct `'"'"'`) and the initial state was built
+      by fragile `printf|sed` JSON munging; both corrupted state files for any
+      command containing quotes/backslashes/newlines/`$`. Initial state now written
+      by a Python `json` writer (fields via argv, atomic `os.replace`). Added a
+      real-launch regression test.
+- [x] **Background-task test hermeticity** (run 9). Added
+      `createInertBackgroundSpawn()` + threaded the spawn/liveness seams through
+      `OperatorCliApp`; state-driven tests no longer race a real detached `bash`.
+- [ ] **Known flake:** `session-stream.test.ts > "replays only missed events after
+      reconnect cursor and reports healthy status after pong"` fails ~1/10 under
+      full-suite parallel load (passes in isolation). Likely a wall-clock/pong
+      timing dependency — make it use injectable/fake time instead of real timers.
+- [ ] **Launch-script golden/fuzz test** — render `renderLaunchScript` for a
+      corpus of adversarial commands (quotes, backslashes, newlines, `$VAR`, `;`,
+      `|`, unicode), execute each, and assert `state.json` round-trips the command
+      verbatim. Also: consolidate all shell-emitting sites onto one audited
+      `shellQuote` so quoting bugs can't reappear per call-site.
+
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in
