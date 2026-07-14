@@ -9,6 +9,12 @@ import type { ReviewedExportManifest } from "../training/export-manifest.js";
 
 const tempDirs: string[] = [];
 
+// Deterministic background-task spawn: never runs the real detached launch
+// script, so state is governed entirely by explicit `writeState` calls and
+// reconcile assertions don't race the script's async writes.
+let fakeSpawnPid = 4_000_000;
+const noopBackgroundSpawn = () => ({ pid: (fakeSpawnPid += 1) % 4_190_000, unref() {} });
+
 async function makeTempDir(): Promise<string> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "operator-runtime-"));
   tempDirs.push(dir);
@@ -531,6 +537,7 @@ describe("StandaloneOperatorRuntime", () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
       backgroundTaskIsProcessRunning: () => false,
+      backgroundTaskSpawnProcess: noopBackgroundSpawn,
     });
     const session = await runtime.startSession({ title: "Tasks", agentId: "main" });
 

@@ -3,6 +3,26 @@
 Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
+## Reliability / correctness
+- [x] **Fix POSIX shell-quoting bug in `background-tasks` launch script**
+      (2026-07-14, run 9) — `shellQuote` escaped `'` as `"'"'"'` instead of
+      `'"'"'`, corrupting `state.json` into invalid JSON for any command
+      containing a single quote and crashing `readState`. Added an executing
+      regression test.
+- [x] **De-flake background-task tests** (2026-07-14, run 9) — four tests raced
+      real detached launch scripts; added a `backgroundTaskSpawnProcess` DI seam
+      to `OperatorCliApp` and injected deterministic no-op spawns. Suite is now
+      stable across repeated full runs (175/175).
+- [ ] **Extract shared shell rendering** into `src/shared/shell.ts`: the
+      `shellQuote` + state-writer/launch-script rendering is duplicated in
+      `harness/background-tasks.ts` and `training/runner.ts`. The run-9 bug
+      existed only because one copy drifted. Unify + add a shared adversarial
+      argv golden table (single/double quotes, `$`, backticks, newlines,
+      `;`/`&&`, unicode) that executes the rendered script.
+- [ ] **Suite-wide flake audit:** grep for tests that spawn real processes or
+      use real timers/dates and make them injectable/deterministic, so the
+      "green on host A, red on host B" class of failure can't recur.
+
 ## Foundations / DX
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.

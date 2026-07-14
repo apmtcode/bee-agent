@@ -10,6 +10,12 @@ import { OperatorCliApp, parseSlashCommand } from "./app.js";
 const tempDirs: string[] = [];
 const execFileAsync = promisify(execFile);
 
+// Deterministic background-task spawn: never runs the real detached launch
+// script, so control-plane assertions don't race the script's async state
+// writes. State is governed entirely by explicit `writeState` calls in tests.
+let fakeSpawnPid = 4_000_000;
+const noopBackgroundSpawn = () => ({ pid: (fakeSpawnPid += 1) % 4_190_000, unref() {} });
+
 async function makeTempDir(): Promise<string> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "operator-cli-app-"));
   tempDirs.push(dir);
@@ -801,7 +807,13 @@ describe("OperatorCliApp", () => {
 
   it("supports session lifecycle, transcript, approvals, pairing, config, and prompt commands", async () => {
     const rootDir = await makeTempDir();
-    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    const app = new OperatorCliApp({
+      rootDir,
+      cwd: rootDir,
+      currentDate: "2026-05-25",
+      backgroundTaskSpawnProcess: noopBackgroundSpawn,
+      backgroundTaskIsProcessRunning: () => false,
+    });
     const firstSession = await app.runtime.startSession({ title: "first", cwd: rootDir, agentId: "operator-cli" });
     const secondSession = await app.runtime.startSession({ title: "second", cwd: rootDir, agentId: "operator-cli" });
 
@@ -1063,7 +1075,15 @@ describe("OperatorCliApp", () => {
 
   it("supports background and monitor task commands plus cron commands", async () => {
     const rootDir = await makeTempDir();
-    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    const app = new OperatorCliApp({
+      rootDir,
+      cwd: rootDir,
+      currentDate: "2026-05-25",
+      backgroundTaskSpawnProcess: noopBackgroundSpawn,
+      // Treat the stubbed launch process as alive so the watched task stays
+      // "running" across syncs (this test watches a live task, then stops it).
+      backgroundTaskIsProcessRunning: () => true,
+    });
     const session = await app.runtime.startSession({ title: "CLI ops", cwd: rootDir, agentId: "operator-cli" });
 
     const startOutput = await app.dispatchSlashCommand(
@@ -1078,6 +1098,10 @@ describe("OperatorCliApp", () => {
     if (!task) {
       throw new Error("expected background task");
     }
+    // The launch script is stubbed out (noopBackgroundSpawn), so stand in for
+    // the output it would have produced. The task record stays "running", which
+    // keeps watch-active deterministic instead of racing the detached script.
+    await app.runtime.backgroundTasks.executionService.writeOutput(task, "ok\n");
 
     const listOutput = await app.dispatchSlashCommand({ kind: "background-list" });
     expect(listOutput).toContain(task.id);

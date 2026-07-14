@@ -6,6 +6,64 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-14 (run 9) — 🐛 Fix POSIX shell-quoting bug corrupting background-task state; de-flake the suite
+
+**Audited:** Project health on a fresh container. The suite that run 8 left at
+**174/174 green** now showed **3 deterministic failures** on arrival (working
+tree unchanged since run 8 — so an environment/timing shift, not a regression).
+Traced all three with an instrumented `readJsonFile`.
+
+**Root cause #1 — a real correctness bug (`src/harness/background-tasks.ts`).**
+`renderLaunchScript` serializes the initial execution state to JSON and pipes it
+through `sed` inside a single-quoted shell string. Its private `shellQuote`
+escaped `'` as **`"'"'"'`** (6 chars, malformed) instead of the correct POSIX
+**`'"'"'`** (5 chars). For any task command containing a single quote (e.g.
+`printf 'line-1\nline-2\n'`), the mangled escape turned the command's `'` into
+`"'`, emitting **invalid JSON** into `state.json` — so `readState` threw
+`SyntaxError` and background-task recovery crashed. Empirically confirmed:
+buggy escape turns `a'b` → `a"'b`; correct escape preserves `a'b`. The sibling
+`src/training/runner.ts` already had the correct escape — this was a lone typo.
+**Fix:** one-char-conceptual correction to match the working version.
+
+**Root cause #2 — real-spawn races in tests (reliability).** Four control-plane/
+CLI tests started **real detached** background processes (`sleep 5`, `printf`),
+whose launch scripts write `state.json` *asynchronously*, racing the tests' own
+`writeState`/assertions. On run 8's slower host the scripts lost the race
+(green); on this host they win it (a fresh `running` state + injected
+`isProcessRunning:false` ⇒ `background task missing-process` ⇒ `degraded`/`mixed`
+drift, plus a `monitor-stop` "is not running" flake that reproduced 2/5 runs).
+
+**Changed (additive):**
+- `src/harness/background-tasks.ts`: corrected `shellQuote`.
+- `src/cli/app.ts`: added optional `backgroundTaskSpawnProcess` +
+  `backgroundTaskIsProcessRunning` to `OperatorCliAppOptions`, plumbed to the
+  runtime (DI seam for deterministic tests; **no** production behavior change —
+  defaults unchanged).
+- Tests: injected a deterministic no-op spawn into the four racy tests
+  (`operator-runtime`, `server` ×3 runtimes, `app` ×2) so state is governed only
+  by explicit `writeState`; the "watch a live task" CLI test uses
+  `isProcessRunning:() => true` so the task stays `running` across syncs.
+- **New regression test** (`background-tasks.test.ts`) that actually *executes* a
+  rendered launch script for a single-quoted command and asserts `state.json`
+  parses — verified it **fails** under the old escape and **passes** under the
+  fix, locking the bug closed (the no-op-spawn change would otherwise have
+  removed the only coverage that caught it).
+
+**Test results:** **174 → 175** tests, **green and stable across 3 full runs**
+(previously flaky 3/5). `typecheck:src` ✅ (exit 0), full `tsc` unchanged at
+**125** (no new test-file debt), build ✅.
+
+**New idea:** add a tiny **shell-render golden test** helper that round-trips
+representative adversarial argv (single quotes, double quotes, `$`, backticks,
+newlines, `;`/`&&`, unicode) through `shellQuote`/`renderLaunchScript` and
+executes them, so *both* launch-script renderers (`background-tasks` and
+`training/runner`) are guarded against quoting regressions by one shared table —
+and consider extracting the duplicated `shellQuote`/state-writer rendering into a
+single `src/shared/shell.ts` so the two can't drift again (this bug existed only
+because there were two copies).
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

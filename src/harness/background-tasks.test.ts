@@ -1,12 +1,16 @@
+import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   BackgroundTaskExecutionService,
   FileBackgroundTaskStore,
   type BackgroundTaskExecutionState,
 } from "./background-tasks.js";
+
+const execFileAsync = promisify(execFile);
 
 const tempDirs: string[] = [];
 
@@ -369,5 +373,48 @@ describe("BackgroundTaskExecutionService", () => {
     await expect(fs.readFile(path.join(rootDir, task.execution.launchScript), "utf8")).resolves.toContain("bash -lc");
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
+  });
+
+  // Regression: the rendered launch script serializes the initial execution
+  // state as JSON and pipes it through `sed` inside a single-quoted shell
+  // string. A malformed single-quote escape (`"'"'"'` instead of `'"'"'`)
+  // corrupts commands that themselves contain single quotes, producing invalid
+  // JSON in state.json and crashing readState. Execute the real script and
+  // assert the persisted state parses.
+  it("emits valid state JSON when the command contains single quotes", async () => {
+    const rootDir = await makeTempDir();
+    const store = new FileBackgroundTaskStore(
+      path.join(rootDir, "background-tasks.json"),
+      // Run the launch script for real and capture its pid so state.json is
+      // written by the rendered bash, exercising the shell-quoting path.
+      (command, args, options) => {
+        void execFileAsync("bash", [command, ...args], { cwd: options.cwd, env: options.env }).catch(() => {});
+        return { pid: process.pid, unref() {} };
+      },
+    );
+    const task = await store.start({
+      title: "Quoted command",
+      command: "printf 'line-1\nline-2\n'",
+      cwd: rootDir,
+    });
+
+    const statePath = path.join(rootDir, task.execution.stateFile);
+    let parsed: BackgroundTaskExecutionState | undefined;
+    for (let attempt = 0; attempt < 100 && !parsed; attempt += 1) {
+      try {
+        const raw = await fs.readFile(statePath, "utf8");
+        // Before the fix this JSON.parse throws on the corrupted command field.
+        parsed = raw.trim() ? (JSON.parse(raw) as BackgroundTaskExecutionState) : undefined;
+      } catch {
+        // state.json not written yet (or mid-write); retry.
+      }
+      if (!parsed) {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+    }
+
+    expect(parsed, "launch script never wrote parseable state.json").toBeTruthy();
+    expect(parsed?.taskId).toBe(task.id);
+    expect(parsed?.command).toBe("printf 'line-1\nline-2\n'");
   });
 });
