@@ -62,13 +62,38 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
-      deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
+- [x] Pluggable local-model backend interface with a deterministic mock backend
+      (so cloud/CI tests pass) and a documented seam for a real on-device small
+      model — DONE run 9 (`src/training/model-backend.ts`: `ModelBackend`
+      interface, `DeterministicNearestNeighborBackend`, `buildMovementDataset`,
+      `createMovementBackend` registry). Adds the missing *inference* layer:
+      recall (repeat) + generalize (nearest recorded movement) + majority
+      fallback, all deterministic and JSON-serializable.
 - [ ] Synthetic event-stream generator to validate capture→dataset→replay
       round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+- [ ] Generalization eval harness: measure replay/predict fidelity on held-out
+      but related synthetic trajectories (recall vs generalize accuracy over the
+      new `DeterministicNearestNeighborBackend`).
+- [ ] `MovementPolicyService` + `movement.train`/`movement.predict` control-plane
+      RPCs wiring `createMovementBackend` + `buildMovementDataset` into the
+      operator runtime (make the new backend reachable, not just a library).
+
+## Test reliability
+- [x] Launch-script `state.json` JSON-corruption bug — DONE run 9. The
+      background-task launch script wrote its initial state via `printf | sed`,
+      mangling JSON escaping for commands with quotes/backslashes/newlines →
+      invalid `state.json` → broken recovery. Now written via `python3` +
+      `json.dumps`. Eliminated a deterministic `operator-runtime.test.ts` failure
+      and most whole-suite flakiness.
+- [ ] **Kill the last suite flake** (~1/6): `server.test.ts` breaker tests call
+      `startBackgroundTask({command:"sleep 5"})`, spawning a *real* detached
+      subprocess whose launch-script state write races the test's manual
+      `writeState`, over-counting one `missing-process` failure. Inject a mock
+      `spawnProcess` (the execution service already accepts one) into these tests
+      so they stop spawning real processes — deterministic + faster.
+- [ ] Apply the same `printf|sed` → `python3/json.dumps` initial-state fix to
+      `src/training/runner.ts` `renderLaunchScript` (identical latent bug; its
+      test currently asserts the `> statefile` redirect form, so update that too).
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

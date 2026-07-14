@@ -6,6 +6,68 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-14 (run 9) — Pluggable movement model backend (inference: repeat + generalize) + real launch-script JSON bug fix
+
+**Audited:** The local-movement learning subsystem (`src/capture` + `src/training`)
+against standing objective #2. The pipeline already covered capture → schema →
+reviewed dataset (`buildReviewedExport`) → on-device training-plan generation
+(`LocalAppleSiliconTrainingRunner`, MLX/axolotl), **but had no inference layer
+at all** — nothing could take recorded movements and (c) *repeat* them or (d)
+*generalize* to new-but-related movements. That is the top movement-subsystem
+item on the roadmap ("pluggable local-model backend + deterministic mock").
+
+**Changed (additive):**
+- **New `src/training/model-backend.ts`** — the pluggable seam:
+  - `ModelBackend<TModel>` interface (`train(dataset)`, `predict(model, context)`)
+    so a real on-device small model and the cloud mock share one contract; call
+    sites depend only on the interface. `createMovementBackend(name)` is the
+    registry seam a real backend registers into.
+  - `buildMovementDataset(manifest)` turns each reviewed replay's `action`
+    events into supervised *(preceding-context → next-movement)* samples.
+  - `DeterministicNearestNeighborBackend` — a dependency-free reference backend
+    that featurizes context as a token bag and returns the recorded movement
+    whose context is most cosine-similar: exact match ⇒ `recall` (repeat),
+    partial ⇒ `generalized` (new-but-related), zero-overlap ⇒ `fallback` to the
+    majority movement. Chosen over an opaque model *precisely* so cloud/CI can
+    assert repeat-and-generalize end-to-end with no OS access. Model artifact is
+    plain JSON (serializable/persistable like the other stores).
+  - Exported the surface via `src/index.ts`.
+- **Real bug fixed in `src/harness/background-tasks.ts`** (found while getting
+  the suite green): the background-task launch script wrote its initial
+  `state.json` via `printf '%s' <json> | sed …`. The shell/sed pass **mangled
+  the JSON escaping** whenever the task command contained quotes/backslashes/
+  newlines, producing an *invalid* `state.json` that made `readState` throw and
+  broke task recovery. Replaced it with a `python3` + `json.dumps` writer (the
+  same technique already trusted for the completed/failed state writers): the
+  static fields are passed as one already-valid JSON argv element and python
+  fills `pid`/`startedAt`, so no shell escaping touches the JSON.
+
+**Test results:** new `model-backend.test.ts` **10/10** (dataset build + window,
+recall, generalize, majority-fallback, empty model, determinism, JSON
+round-trip, registry). `typecheck:src` ✅, build ✅. Full suite: the launch-script
+fix turned `operator-runtime.test.ts` "background tasks" from a **deterministic
+10/10 failure in isolation** into a pass, and cut the whole-suite flakiness from
+3–4 failures/run down to an occasional single one — clean **184/184** on most
+runs.
+
+**Remaining (documented, pre-existing, NOT introduced here):** one intermittent
+(~1/6) failure in `server.test.ts` "handles session … orchestration methods" — a
+circuit-breaker over-counts one `missing-process` failure (`failureCount 2→3`).
+Root cause isolated: the breaker tests call `startBackgroundTask({command:"sleep
+5"})` which **spawns a real detached subprocess**; its launch-script state write
+races the test's manual `writeState`. This was masked before by the JSON-parse
+crash; the fix exposed it as the next flake to kill.
+
+**New idea:** inject a mock `spawnProcess` into the breaker/recovery tests (the
+`BackgroundTaskExecutionService` already takes one) so unit tests stop spawning
+real `sleep` processes — deterministic, faster, and closes the last flake.
+Bigger: a `MovementPolicyService` that wires `createMovementBackend` +
+`buildMovementDataset` into the control plane as `movement.train`/`movement.predict`
+RPCs, and a generalization-fidelity eval harness over held-out synthetic
+trajectories (roadmap item) measuring recall vs generalize accuracy.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

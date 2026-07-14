@@ -423,6 +423,27 @@ export type {
   SftTrainingConfig,
 } from "./training/job-manifest.js";
 export {
+  DeterministicNearestNeighborBackend,
+  MOVEMENT_BACKEND_NAMES,
+  buildMovementDataset,
+  createMovementBackend,
+  featurizeContext,
+} from "./training/model-backend.js";
+export type {
+  BuildMovementDatasetOptions,
+  ModelBackend,
+  MovementBackendName,
+  MovementContextInput,
+  MovementDataset,
+  MovementPrediction,
+  MovementPredictionSource,
+  MovementQueryContext,
+  MovementSample,
+  MovementTrainingConfig,
+  NearestNeighborMovementModel,
+  TrainedMovementModel,
+} from "./training/model-backend.js";
+export {
   FileTrainingJobStore,
 } from "./training/job-store.js";
 export type {
