@@ -62,13 +62,48 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      for a real on-device small model — DONE run 9. `MovementTrainingBackend`
+      interface + `MockMarkovMovementBackend` (backoff n-gram) in
+      `src/training/{movement-model,mock-movement-backend}.ts`.
+- [x] Synthetic event-stream generator to validate capture→dataset→replay
+      round-trips without real OS input — DONE run 9 (`synthesizeMovementDataset`,
+      deterministic seeded grammar walk).
+- [x] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories — DONE run 9 (`evaluateReplayFidelity` +
+      `generateMovementSequence`; generalization test trains on 40 workflows,
+      evals unseen trajectory via backoff).
+- [ ] Real on-device backend behind `MovementTrainingBackend`: an
+      `OnnxMovementBackend`/`TorchMovementBackend` over the token vocabulary
+      (small GRU/transformer), with the mock as the CI fallback and a `backendId`
+      on the training job manifest so a job selects its backend. Then the runner's
+      shell-script path and the in-process path become two backends behind one
+      interface.
+- [ ] Wire the movement backend into the training runner/job flow: let a
+      `LocalTrainingJobManifest` train in-process via the mock backend (producing
+      a persisted model artifact + replay-fidelity eval) as an alternative to the
+      Apple-Silicon shell-script path — closes the objective-2 loop end to end.
+
+## Known bugs (discovered, not yet fixed)
+- [ ] **Fragile bash JSON state writer** in `src/harness/background-tasks.ts`
+      `renderLaunchScript` (and the identical pattern in `src/training/runner.ts`):
+      the initial "running" state is produced by `sed` surgery on a JSON payload
+      inside a double-quoted shell string (`s/"$$"/$$/g` with `$$`
+      shell-expanded on the LHS; embedded command quotes/newlines corrupt the
+      payload). This writes **invalid JSON** on non-GNU-coreutils environments
+      (repro: this cloud sandbox — 3 suite tests fail with `SyntaxError` in
+      `readJsonFile`; GNU machines mask it, hence earlier "174/174"). **Fix:**
+      write the running state via a `python3` heredoc (json handles all escaping),
+      mirroring the existing completion writer — verified to fix 2 of 3 tests
+      locally in run 9. **Blocked on:** the 3rd test (`server.test.ts` breaker) is
+      *racy* — it launches 3 real detached `sleep 5` tasks with
+      `isProcessRunning:()=>false` and asserts exactly 2 are "running" at
+      recovery; a faster/correct state writer wins the write race for the 3rd
+      task (failureCount 3/threshold 3/"paused" vs expected 2/"degraded"). Do the
+      writer fix **and** de-race that test (e.g. write initial state
+      synchronously in `execution-service.launch()`, or make the test control the
+      3rd task's state deterministically) as one focused unit.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

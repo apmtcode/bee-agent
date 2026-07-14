@@ -6,6 +6,78 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-14 (run 9) — 🧠 Pluggable local-movement model backend + deterministic mock (train→infer loop closes in-cloud)
+
+**Audited:** Standing objective #2 (local-movement learning subsystem). Runs 5–8
+were all typecheck-debt paydown (test files) — valuable hygiene but diminishing
+returns on *capability*. Read the whole movement pipeline: `src/capture/`
+(recorder → trajectory → replay manifest → adapters/consent/ingestion) and
+`src/training/` (exporter → job manifest/store → runner → execution service).
+**Gap found:** the pipeline could record, review, export, and *emit a shell
+script* to train on the user's Apple-Silicon machine (`runner.ts` builds
+mlx/axolotl commands), but there was **no in-process learning backend** — nothing
+could actually train a model and infer from it in the cloud/CI. Objective 2(c)
+"post-train a local model … to repeat the recorded movements" and 2(d)
+"generalize to new but related movements" had no runnable implementation.
+
+**Changed (additive, two new modules + barrel exports):**
+- **`src/training/movement-model.ts`** — the backend-agnostic surface:
+  - `tokenizeMovementEvent` maps each `ReplayTimelineEvent` (transcript/
+    observation/action) to a stable movement token (e.g. `action:mouse-click`).
+  - `buildMovementDataset(replays)` → ts-ordered, tokenized `{vocabulary,
+    sequences}` dataset from recorded replay timelines.
+  - `MovementTrainingBackend` **interface** (`train`/`predictNext`) — the
+    pluggable seam; a real on-device small model implements this later with zero
+    call-site changes.
+  - `generateMovementSequence` (greedy decode → *repeats* a recorded movement
+    from a seed) and `evaluateReplayFidelity` (teacher-forced next-token accuracy
+    on held-out trajectories → the generalization eval harness).
+  - `synthesizeMovementDataset` — deterministic seeded (mulberry32) synthetic
+    event-stream generator over a weighted desktop-workflow grammar, so the whole
+    capture→dataset→train→replay loop validates with **no real OS input**.
+- **`src/training/mock-movement-backend.ts`** — `MockMarkovMovementBackend`, a
+  deterministic, dependency-free backoff n-gram model. Learns transitions at
+  every context length 0..order in one pass; `predictNext` uses the longest seen
+  context and backs off — which is exactly what lets it *repeat* recorded
+  movements (long context matched) and *generalize* (recombine via shared short
+  context). Model is a plain JSON-serializable object (persistable as an
+  artifact). Deterministic tie-breaks so replay/eval are reproducible.
+- Exported all of the above from `src/index.ts`.
+
+**Test results:** 2 new test files, **15 new tests, all passing** — round-trip
+(reproduce a recorded movement from a seed), synthetic determinism, backoff,
+unigram fallback, tie-break determinism, JSON-serializability, and a
+**generalization test** (train on 40 synthetic workflows, eval on an unseen
+seed=777 trajectory → 0 unpredicted, >0.4 accuracy via backoff).
+`typecheck:src` ✅, `build` ✅. Full suite **186/189**; my 15 all green.
+
+**⚠️ Pre-existing failures discovered (NOT introduced this run — proven by
+`git stash` → same 3 fail on HEAD `3c7b7236`):** 3 tests in
+`operator-runtime.test.ts` / `server.test.ts` / `app.test.ts` fail in *this cloud
+sandbox*. **Root cause:** `renderLaunchScript` in `src/harness/background-tasks.ts`
+(and the identical pattern in `src/training/runner.ts`) writes the initial
+"running" state by doing **`sed` surgery on a JSON payload inside a
+double-quoted bash string** — `s/"$$"/$$/g` with `$$` shell-expanded on the LHS,
+plus embedded quotes/newlines in the command — which produces **invalid JSON**
+here (GNU-coreutils machines masked it; earlier runs' 174/174 was on such a
+machine). A `python3`-heredoc writer (json handles all escaping) fixes 2 of the 3
+locally; I built and verified that fix but **reverted it** because the 3rd
+(`server.test.ts` breaker) is a *racy* test — it launches 3 real detached
+`sleep 5` tasks with `isProcessRunning:()=>false` and expects exactly 2 in
+"running" state, but the faster python writer wins the state-write race for the
+3rd task (→ 3 counted, threshold 3, "paused" vs expected 2/"degraded"). Fixing
+that cleanly needs the state-writer refactor **and** de-racing the test together
+— logged to ROADMAP as one focused unit rather than smuggled into this diff.
+
+**New idea:** add an `OnnxMovementBackend` / `TorchMovementBackend` stub that
+implements `MovementTrainingBackend` against a tiny local model (e.g. a
+GRU/transformer over the token vocabulary) with the mock as the CI fallback —
+plus a `backendId` field on the training job manifest so a job selects its
+backend, making the runner's shell-script path and the in-process path two
+interchangeable backends behind one interface.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
