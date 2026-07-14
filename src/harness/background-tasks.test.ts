@@ -1,12 +1,17 @@
+import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   BackgroundTaskExecutionService,
   FileBackgroundTaskStore,
+  shellQuote,
   type BackgroundTaskExecutionState,
 } from "./background-tasks.js";
+
+const execFileAsync = promisify(execFile);
 
 const tempDirs: string[] = [];
 
@@ -369,5 +374,51 @@ describe("BackgroundTaskExecutionService", () => {
     await expect(fs.readFile(path.join(rootDir, task.execution.launchScript), "utf8")).resolves.toContain("bash -lc");
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
+  });
+
+  it("writes valid JSON launch state even when the command contains single quotes", async () => {
+    const rootDir = await makeTempDir();
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"), () => ({ pid: 2222, unref() {} }));
+    const service = new BackgroundTaskExecutionService(rootDir, () => ({ pid: 2222, unref() {} }));
+    // A command laden with single quotes is exactly what corrupted the
+    // sed-templated state.json before shellQuote was fixed.
+    const task = await store.start({ title: "Quoted", command: "printf 'line-1\nline-2\n'", cwd: rootDir });
+    await service.writeArtifacts(task);
+    const scriptPath = path.join(rootDir, task.execution.launchScript);
+    // Run only the state-file-writing prologue of the launch script (up to the
+    // point it would exec the user command) and confirm the persisted state is
+    // valid JSON with the command preserved byte-for-byte.
+    await execFileAsync(
+      "bash",
+      ["-c", `sed '/^if cd /q' ${JSON.stringify(scriptPath)} | sed '$d' | bash`],
+      { cwd: rootDir },
+    );
+    const raw = await fs.readFile(path.join(rootDir, task.execution.stateFile), "utf8");
+    const parsed = JSON.parse(raw) as BackgroundTaskExecutionState;
+    expect(parsed.command).toBe("printf 'line-1\nline-2\n'");
+    expect(parsed.taskId).toBe(task.id);
+    // The pid sentinel must resolve to the launching shell's numeric pid, not a
+    // leftover `"$$"` string.
+    expect(typeof parsed.pid).toBe("number");
+    expect(parsed.pid).toBeGreaterThan(0);
+  });
+});
+
+describe("shellQuote", () => {
+  const cases = [
+    "plain",
+    "printf 'hi'",
+    'has "double" quotes',
+    "mix 'single' and \"double\"",
+    "line-1\nline-2",
+    "trailing backslash \\",
+    "$VAR and `cmd` and $(sub)",
+  ];
+
+  it.each(cases)("round-trips %j through a real shell", async (value) => {
+    // `printf %s <quoted>` must reproduce the original value exactly — the old
+    // escaping injected a spurious `"` for every single quote.
+    const { stdout } = await execFileAsync("bash", ["-c", `printf %s ${shellQuote(value)}`]);
+    expect(stdout).toBe(value);
   });
 });

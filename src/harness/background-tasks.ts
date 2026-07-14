@@ -740,7 +740,7 @@ function renderLaunchScript(task: BackgroundTaskRecord): string {
       taskId: task.id,
       kind: task.kind,
       status: "running",
-      pid: "$$",
+      pid: "__OPENCLAW_PID__",
       startedAt: "__OPENCLAW_STARTED_AT__",
       updatedAt: "__OPENCLAW_STARTED_AT__",
       outputFile: task.execution.outputFile,
@@ -754,7 +754,11 @@ function renderLaunchScript(task: BackgroundTaskRecord): string {
     "set -euo pipefail",
     `mkdir -p $(dirname ${quotedStatePath}) $(dirname ${quotedOutputFile})`,
     "started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-    `printf '%s' ${quotedStatePayload} | sed "s/__OPENCLAW_STARTED_AT__/$started_at/g; s/\"\$\$\"/$$/g" > ${quotedStatePath}`,
+    // Replace the pid sentinel *including* its surrounding quotes so the field
+    // is emitted as a JSON number. The previous pattern (`"$$"`) never matched:
+    // bash expands `$$` on the search side too, so it looked for the running
+    // pid rather than the literal placeholder, leaving `"pid":"$$"` behind.
+    `printf '%s' ${quotedStatePayload} | sed "s/__OPENCLAW_STARTED_AT__/$started_at/g; s/\\"__OPENCLAW_PID__\\"/$$/g" > ${quotedStatePath}`,
     `printf '%s\n' "starting ${task.kind} ${task.id}" >> ${quotedOutputFile}`,
     `if cd ${quotedCwd} && bash -lc ${quotedCommand} >> ${quotedOutputFile} 2>&1; then`,
     "  completed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
@@ -793,6 +797,11 @@ function renderStateWriterPython(status: BackgroundTaskExecutionState["status"])
   ];
 }
 
-function shellQuote(value: string): string {
-  return `'${value.replaceAll(`'`, `"'"'"'`)}'`;
+export function shellQuote(value: string): string {
+  // POSIX single-quote escaping: close the quote, emit an escaped single
+  // quote, then reopen. The previous form (`"'"'"'`) was malformed and injected
+  // a spurious `"` for every single quote, corrupting the generated launch
+  // script (and the JSON state file it writes) whenever a command, cwd, or path
+  // contained a single quote.
+  return `'${value.replaceAll("'", `'\\''`)}'`;
 }

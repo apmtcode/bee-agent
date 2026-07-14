@@ -6,6 +6,63 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-14 (run 9) — Fix `shellQuote` corruption + pid sentinel; restore green suite
+
+**Audited:** Project health. The suite that logged **174/174** at run 8 now had
+**3 hard failures** (`operator-runtime`, `control-plane/server`, `cli/app`) in
+this environment. Root-caused two genuine product bugs in
+`src/harness/background-tasks.ts`, both in the background-task **launch script**
+generator:
+
+1. **`shellQuote` was malformed.** It escaped `'` as `` "'"'"' `` (6 chars),
+   which injects a spurious `"` for every single quote — so `printf 'hi'`
+   became `printf "'hi"'`. Any command / cwd / path containing a single quote
+   corrupted the generated `run.sh` **and** the single-line JSON `state.json` it
+   writes, so `readState` threw `SyntaxError: … JSON at position 311`. This is a
+   correctness **and** shell-injection bug, not just a test issue. Verified the
+   corruption through a real shell, then fixed to the POSIX form `'\''`.
+2. **The pid sentinel never substituted.** The `sed "…; s/"$$"/$$/g"` expands
+   `$$` on *both* sides under bash, so it searched for the running pid instead of
+   the literal placeholder — leaving `"pid":"$$"` (a string) in every launched
+   "running" state. Switched to an explicit `__OPENCLAW_PID__` sentinel replaced
+   *with its quotes* so the field is emitted as a JSON **number**.
+
+**Why the tests only broke now:** they used the real detached spawn, whose async
+`state.json` write raced (and, pre-fix, corrupted) the test-managed state. Run 8
+got lucky with timing; this env didn't.
+
+**Changed:**
+- `src/harness/background-tasks.ts`: fixed `shellQuote` (now exported) + the pid
+  sentinel. Additive, focused.
+- `src/harness/background-tasks.test.ts`: **+8 regression tests** — 7 `shellQuote`
+  round-trips through a real shell (single/double quotes, newlines, backslashes,
+  `$VAR`/backtick/`$(...)`), plus an end-to-end launch-prologue test asserting the
+  persisted `state.json` is valid JSON with the command preserved byte-for-byte
+  and a numeric pid.
+- **Test hermeticity:** plumbed `backgroundTaskSpawnProcess` /
+  `backgroundTaskIsProcessRunning` through `OperatorCliAppOptions`
+  (`src/cli/app.ts`), and injected a deterministic spawn stub into the four
+  tests that manage task state themselves (`operator-runtime`, `server` main +
+  drift + breaker + event-filter, `cli/app` session-lifecycle). Fixed the
+  pre-existing-flaky `cli/app` "background and monitor" test (already ~66% fail
+  at HEAD — depends on a real subprocess that must both emit output *and* still
+  be "running" at assert time) by driving its task artifacts explicitly, the way
+  its monitor half already does.
+
+**Test results:** `npm test` **182/182**, green **5×** consecutively (was flaky
+1–2 failures/run). `typecheck:src` ✅. `build` ✅.
+
+**New idea:** the launch-script generator emits bash + inline python and is only
+now getting direct coverage. Add a **golden-snapshot test** for
+`renderLaunchScript(task)` over a matrix of tricky commands (quotes, newlines,
+unicode, `;`/`&&`, leading `-`) so any future edit to the shell/sed/python
+templating is caught at authoring time rather than as a downstream JSON-parse
+crash. Longer term, consider replacing the sed/printf state-writer with a single
+heredoc'd python block that receives the payload on argv/stdin — eliminating the
+shell-escaping surface entirely.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

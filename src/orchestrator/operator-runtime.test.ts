@@ -15,6 +15,15 @@ async function makeTempDir(): Promise<string> {
   return dir;
 }
 
+/**
+ * Deterministic background-task spawn stub: returns a fake pid without starting
+ * a real detached OS process. The real launcher writes its own `state.json`
+ * asynchronously, which races tests that manage task state themselves.
+ */
+function stubSpawn() {
+  return { pid: 4321, unref() {} };
+}
+
 function buildHookCaptureCommand(outputFile: string): string {
   const script = [
     "import fs from 'node:fs';",
@@ -531,6 +540,7 @@ describe("StandaloneOperatorRuntime", () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
       backgroundTaskIsProcessRunning: () => false,
+      backgroundTaskSpawnProcess: stubSpawn,
     });
     const session = await runtime.startSession({ title: "Tasks", agentId: "main" });
 

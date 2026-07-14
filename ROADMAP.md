@@ -8,6 +8,24 @@ unchecked items are queued. Keep this richer than you found it each run.
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`
       (2026-06-22).
+- [x] **Fix the background-task launch-script `shellQuote` corruption + pid
+      sentinel** (2026-07-14, run 9). Malformed POSIX escaping injected a spurious
+      `"` per single quote, corrupting `run.sh` and the JSON `state.json`
+      (`readState` threw); the pid `sed` never substituted (`"pid":"$$"`). Both
+      fixed with +8 regression tests. Restored the suite to 182/182 (was 3 hard
+      failures in-cloud).
+- [x] **Make background-task tests hermetic** (2026-07-14, run 9). Plumbed
+      `backgroundTaskSpawnProcess`/`backgroundTaskIsProcessRunning` through
+      `OperatorCliAppOptions`; injected deterministic spawn stubs so tests no
+      longer race a real detached OS process. Eliminated pre-existing flakiness.
+- [ ] **Golden-snapshot test for `renderLaunchScript(task)`** over a matrix of
+      tricky commands (quotes, newlines, unicode, `;`/`&&`, leading `-`, `$VAR`)
+      so future edits to the bash/sed/python templating are caught at authoring
+      time, not as a downstream JSON-parse crash. (Surfaced run 9.)
+- [ ] **Harden the launch-script state writer**: replace the `printf | sed`
+      running-state emitter with a single heredoc'd python block fed the payload
+      on argv/stdin, removing the shell-escaping surface entirely. (Surfaced run
+      9 — the sed approach is fragile even after the pid/quote fixes.)
 - [ ] **Pay down typecheck debt** (surfaced by the `typecheck` script). Full
       `tsc --noEmit` count was **397** on 2026-06-22; now **125**. 🎯 ALL source
       (`src/**` non-test) files typecheck clean since run 7; remaining 125 errors
