@@ -531,6 +531,12 @@ describe("StandaloneOperatorRuntime", () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
       backgroundTaskIsProcessRunning: () => false,
+      // Deterministic spawn: return a pid without launching a real detached
+      // process. The launch script writes state.json asynchronously, which would
+      // otherwise race the writeState() calls this test uses to stage recovery
+      // scenarios. Initial running status/pid come from markStarted(), not the
+      // script, so task lifecycle assertions are unaffected.
+      backgroundTaskSpawnProcess: () => ({ pid: 4321, unref() {} }),
     });
     const session = await runtime.startSession({ title: "Tasks", agentId: "main" });
 

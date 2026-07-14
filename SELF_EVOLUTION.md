@@ -6,6 +6,65 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-14 (run 9) — 🐛 Real bug: background-task launch script produced invalid JSON state files (green gate restored)
+
+**Audited:** The build/test gate itself. On a fresh `npm install` the suite was
+**3 tests failing** (174 → 171) — not the 174/174 prior runs recorded. Root-caused
+each failure to genuine issues rather than flakiness (each failed *consistently*
+across repeated isolated runs).
+
+**Two real production bugs found & fixed in `src/harness/background-tasks.ts`:**
+1. **`shellQuote` used the wrong single-quote escape.** It emitted the 6-char
+   `"'"'"'` (leading double quote) instead of the canonical POSIX `'\''`
+   (`'"'"'`, 5 chars: close-quote, escaped-quote, reopen-quote). The stray
+   leading `"` injected a literal double quote before **every** `'` in the value.
+   Any background task whose *command* contained a single quote (e.g.
+   `printf 'line-1\nline-2\n'`) therefore produced an **invalid JSON** `state.json`
+   — which then crashed recovery/sync (`readJsonFile` → `JSON.parse` throw) and
+   left the python state-writer unable to update status. Reproduced end-to-end in
+   a real shell before/after the fix.
+2. **The initial-state `pid` was never substituted.** The launch script used a
+   `"$$"` placeholder replaced via `sed "s/\"\$\$\"/$$/g"`, but the embedded `"`
+   characters broke out of the shell's double-quoting so the pattern never
+   matched — `pid` stayed the literal string `"$$"`. Switched to a plain
+   alphanumeric placeholder `__OPENCLAW_PID__` (de-quoted after `JSON.stringify`
+   so it lands unquoted) with `sed "s/__OPENCLAW_PID__/$$/g"`, yielding a proper
+   **numeric** pid. Same safe-token pattern the script already uses for the
+   timestamp.
+
+**Test determinism (test-only):** three tests staged execution state via
+`writeState()` + `isProcessRunning: () => false` while *also* letting the real
+detached launch process (`sleep 5`, `printf …`, `tail -f …`) write `state.json`
+asynchronously — a race that clobbered the staged state and flipped control-state
+assertions (`active`→`degraded`, `mixed`→`degraded`) and crashed the recovery
+test on the corrupt JSON. Injected the runtime's existing
+`backgroundTaskSpawnProcess` seam with a deterministic no-op spawn (returns a pid,
+launches nothing; initial running status/pid still come from `markStarted()`, so
+task-record assertions are unchanged). Added a shared `deterministicSpawn` helper
+in `server.test.ts` and applied it to the 3 affected runtimes there +
+`operator-runtime.test.ts`.
+
+**New regression test** (`background-tasks.test.ts`): executes the *actual*
+generated launch script through a real shell (synchronous spawn) with a
+single-quoted command and asserts the resulting `state.json` is valid JSON, its
+`command` round-trips exactly, `pid` is a **number**, and status is `completed`
+with exit 0. Verified it **fails** against the pre-fix `shellQuote` and **passes**
+after — a true guard, not a tautology.
+
+**Test results:** **171 → 175 passing** (41 files; +1 regression test), stable
+across 3 consecutive full runs. `typecheck:src` ✅ (exit 0). Build ✅.
+
+**New idea:** the launch script depends on `bash`, `sed`, `date`, and `python3`
+being present and behaving portably — a hidden runtime coupling that silently
+degrades on minimal images (e.g. no `python3`, BusyBox `sed`). Add a one-time
+`renderLaunchScript` self-check (or a capability probe at runtime init) that
+verifies the toolchain and either warns or falls back to a pure-Node state
+writer, so background tasks don't fail opaquely on lean hosts. Bigger: replace the
+shell/python state-writer entirely with a tiny Node helper the launch script
+`exec`s, eliminating cross-tool quoting hazards like the two bugs fixed here.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

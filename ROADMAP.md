@@ -4,6 +4,21 @@ Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
 ## Foundations / DX
+- [x] **Fix background-task launch-script JSON corruption** (2026-07-14, run 9).
+      `shellQuote` used a broken single-quote escape (`"'"'"'` vs canonical
+      `'\''`) that made any command containing `'` produce invalid JSON state
+      files, crashing recovery/sync; the `pid` sed substitution also never
+      matched (literal `"$$"`). Fixed both + added an end-to-end regression test
+      that runs the real launch script. Restored the green gate (171 → 175).
+- [ ] Harden the launch script's hidden toolchain coupling (`bash`/`sed`/`date`/
+      `python3`): probe/verify at init and warn or fall back to a pure-Node state
+      writer on minimal images. Longer term, replace the shell+python state
+      writer with a small Node helper the script `exec`s, removing the
+      cross-tool quoting hazards that caused the run-9 bugs.
+- [ ] Test-hermeticity sweep: audit remaining tests that let real detached
+      background processes (`sleep`, `tail -f`) write `state.json` while asserting
+      on staged state — inject `backgroundTaskSpawnProcess` (see the
+      `deterministicSpawn` helper in server.test.ts) wherever a race is possible.
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`

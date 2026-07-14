@@ -1,3 +1,5 @@
 node_modules/
 dist/
 .DS_Store
+# Stray background-task artifacts if a launch script runs in the repo root
+/background-tasks/
