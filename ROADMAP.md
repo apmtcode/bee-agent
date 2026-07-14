@@ -62,13 +62,37 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
+      for a real on-device small model. (2026-07-14, run 9) —
+      `src/training/movement-model.ts`: `MovementModelBackend` /
+      `TrainedMovementModel` interfaces + `MarkovMovementBackend` (n-gram,
+      stupid-backoff, add-k, deterministic). Trains on a `MovementDataset`,
+      reproduces recorded runs, generalizes via backoff, snapshots for inference.
 - [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      round-trips without real OS input. (Partially unblocked: run 9 added
+      `buildMovementDatasetFrom{Trajectories,Replays}` + a Markov generator that
+      can synthesize related movement sequences.)
+- [~] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories. Run 9 added `evaluateMovementModel`
+      (teacher-forced next-movement accuracy + coverage). Next: a *behavioral*
+      signal by piping `generate()` output through `replay-service`.
+- [ ] **Policy-execution bridge** (run 9 idea): feed `MarkovMovementBackend.generate(seed)`
+      output through `src/capture/replay-service.ts` so a trained model drives the
+      replay engine end-to-end (train → infer → replay), giving generalization a
+      behavioral signal, not just token accuracy.
+
+## Reliability
+- [ ] **Fix flaky test isolation** (found run 9). The full suite has
+      ordering/timing-dependent failures in `src/cli/app.test.ts`,
+      `src/control-plane/server.test.ts`, and
+      `src/orchestrator/operator-runtime.test.ts` (control=active vs
+      deactivating; background-task recovery returning `undefined`). Failure
+      count varies 3–4 between identical runs; reproduces on a clean tree
+      (`git stash -u`) so it predates the movement-model work. Likely shared
+      global/temp-dir state or a wall-clock dependency leaking across tests.
+      This blocks a clean full-suite green gate — fix before wiring `test` into
+      the per-run pre-push self-check.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

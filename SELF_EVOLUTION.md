@@ -6,6 +6,59 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-14 (run 9) — Movement subsystem: pluggable local-model backend + deterministic Markov mock (objective 2c/2d)
+
+**Audited:** The local-movement learning subsystem (`src/capture/` + `src/training/`)
+against objective #2's five pieces. Found capture → schema → dataset → replay →
+*external* training-plan emission all exist, but the two pieces that make the
+subsystem actually *learn* were missing: there was **no in-process model that
+trains on a movement dataset and predicts next movements** (2c "post-train a model
+to repeat movements", 2d "generalize"). The runner only emits mlx/axolotl launch
+scripts for real on-device runs — nothing cloud/CI-testable closes the train→infer
+loop. This is exactly the roadmap item "Pluggable local-model backend interface …
+with a deterministic mock backend".
+
+**Changed (additive) — new `src/training/movement-model.ts`:**
+- **`MovementModelBackend` interface** (`train(dataset)` → `TrainedMovementModel`,
+  `load(snapshot)`) + **`TrainedMovementModel`** (`predictNext` / `rankNext` /
+  `generate` / `toJSON`). Pluggable seam so a real on-device small model drops in
+  later without touching call sites.
+- **`MarkovMovementBackend`** — deterministic n-gram model with stupid-backoff +
+  add-k smoothing. No randomness / wall-clock, so training and inference are fully
+  reproducible in the cloud. *Repeat*: greedy argmax over the highest-order
+  matching context reproduces a recorded run from its prefix. *Generalize*: a
+  novel high-order context backs off to the longest recorded suffix, so
+  related-but-unseen prefixes still yield a plausible continuation. Snapshot
+  round-trips for persistence/inference.
+- **Dataset schema + builders**: `MovementDataset`/`MovementSequence`/`MovementStep`,
+  `movementTokenFor` (canonical `tool.gesture:target` tokens),
+  `buildMovementDatasetFromTrajectories` and `buildMovementDatasetFromReplays`
+  (bridges the existing `TrajectorySpan`/`ReplayManifest` data into the model).
+- **`evaluateMovementModel`** — teacher-forced held-out next-movement accuracy +
+  coverage, seeding the "generalization eval harness" roadmap item.
+- Barrel-exported all of the above from `src/index.ts`.
+
+**Test results:** new `movement-model.test.ts` **16/16** (stable across 3 repeated
+runs). `npm run typecheck:src` ✅ (exit 0). Build ✅ (5 files, 543.85 kB).
+
+**Pre-existing blocker found (NOT caused by this run):** the full suite has
+**flaky, test-isolation-dependent failures** in `app.test.ts`,
+`server.test.ts`, and `operator-runtime.test.ts` (control=active vs deactivating,
+background-task recovery returning `undefined`). Verified by running a **fully
+clean tree with my files removed** (`git stash -u`): those 3 files still show
+**4 failures**, and the count varies (3–4) between identical runs — so it is
+ordering/timing state leakage that predates this change, not a regression. My
+new file passes 16/16 in isolation every time. Logged to ROADMAP as the next
+high-value reliability fix.
+
+**New idea:** give the movement model a *policy-execution bridge* — feed
+`generate(seed)` output back through the existing `replay-service` so a trained
+model can drive the replay engine end-to-end (train → infer → replay), turning
+the n-gram predictions into actual simulated movements and giving the
+generalization eval a behavioral (not just token-accuracy) signal.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
