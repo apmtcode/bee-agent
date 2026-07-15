@@ -265,6 +265,24 @@ export {
   ReplayRuntimeService,
 } from "./capture/replay-service.js";
 export {
+  BUILTIN_SCENARIOS,
+  createSeededRandom,
+  driveSyntheticStream,
+  generateSyntheticStream,
+  streamFingerprint,
+  substituteScenarioTokens,
+  type GenerateStreamOptions,
+  type SyntheticActor,
+  type SyntheticCaptureEvent,
+  type SyntheticDeviceSink,
+  type SyntheticDeviceStep,
+  type SyntheticOsSink,
+  type SyntheticOsStep,
+  type SyntheticScenario,
+  type SyntheticStep,
+  type SyntheticStreamSink,
+} from "./capture/synthetic.js";
+export {
   CAPTURE_TIER_VALUES,
   DEFAULT_SENSITIVE_APP_DENYLIST,
   buildTrajectorySpan,

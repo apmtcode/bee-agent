@@ -65,10 +65,31 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
       for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
+- [x] Synthetic event-stream generator to validate capture→dataset→replay
+      round-trips without real OS input — DONE run 9 (`src/capture/synthetic.ts`):
+      seeded PRNG, scenario templates, `generateSyntheticStream`,
+      `driveSyntheticStream` (feeds real adapters), `substituteScenarioTokens`,
+      `streamFingerprint`, `BUILTIN_SCENARIOS`. 6 tests incl. a full
+      generate→record→replay round-trip.
 - [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      related synthetic trajectories. NEXT: score = `fingerprintMatch ∧
+      subjectSubstitutionApplied ∧ orderPreserved` per scenario; drive base +
+      N `substituteScenarioTokens` variants through a (mock, then real) replay
+      policy and report a 0–1 generalization score. Building blocks landed run 9
+      (`streamFingerprint`, `substituteScenarioTokens`).
+
+## Test health
+- [ ] **Deflake the `sessions.platformInventory` circuit-breaker tests**
+      (`control-plane/server.test.ts`, `cli/app.test.ts`). 4 pre-existing, flaky
+      failures (found run 9, present on pristine tree): breaker state resolves
+      `"paused"` vs the asserted `"mixed"` depending on how many times recovery
+      runs across repeated inventory calls (accumulated `failureCount` vs
+      threshold). Not process-liveness (probe already stubbed `() => false`) —
+      it's call-ordering sensitivity. Fix by making the breaker's failure
+      accounting idempotent per task-state (don't re-count the same
+      already-missing task on every inventory read), or by asserting on a
+      snapshot taken before any repeat call. Do NOT rewrite the breaker logic to
+      chase it — scope to determinism.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

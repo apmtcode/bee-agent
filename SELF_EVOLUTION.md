@@ -6,6 +6,71 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-15 (run 9) — Synthetic movement event-stream generator (objective #2)
+
+**Audited:** The local-movement learning subsystem (`src/capture/`, `src/training/`)
+against standing objective #2 and the ROADMAP increment "Synthetic event-stream
+generator to validate capture→dataset→replay round-trips without real OS input."
+Inventoried the existing schema: `OsObservationInput` (os-observer), `DeviceCaptureInput`
+(device-adapter), `TrajectorySpan`/`ReplayManifest`. The scaffolding had adapters and a
+replay builder but **no reusable generator** to synthesize the OS/device input streams
+the objective mandates ("Use synthetic/simulated event streams to validate your code").
+Every capture test hand-rolled one-off inputs.
+
+**Changed (additive) — new `src/capture/synthetic.ts`:**
+- `createSeededRandom(seed)` — deterministic mulberry32 PRNG (no wall-clock, no
+  `Math.random` global state) so generated streams are byte-for-byte reproducible.
+- `generateSyntheticStream(scenario, options)` — expands a declarative scenario
+  template into a time-ordered `SyntheticCaptureEvent[]` with strictly monotonic
+  timestamps (base interval + deterministic per-step jitter), typed to the real
+  `OsObservationInput` / `DeviceCaptureInput` shapes.
+- `substituteScenarioTokens(scenario, subs)` — derives "related but new" scenarios
+  (same movement structure, different subjects) — the raw material for the
+  generalization objective (#2d).
+- `streamFingerprint(events)` — structural signature (ordered actor+event/gesture
+  kinds, timestamps/subjects ignored). This is the equivalence key a generalization
+  eval harness compares against: a generalized movement is valid iff it preserves the
+  base fingerprint.
+- `driveSyntheticStream(events, sink)` — feeds a stream through the **real** capture
+  adapters (structural `os`/`device` sinks), closing the generate → record → store →
+  replay loop without any OS integration.
+- `BUILTIN_SCENARIOS` — `editor-edit-run` (OS focus→open→build) and `mobile-checkout`
+  (device tap→type→scroll→tap). Exported from the barrel (`src/index.ts`).
+
+**Tests — new `src/capture/synthetic.test.ts` (6, all green):** PRNG determinism +
+seed variation; monotonic/reproducible timestamps; device→gesture ts alignment;
+fingerprint stability under token substitution (generalization invariant); a full
+generate → `driveSyntheticStream` → `FileTrajectoryStore` → `buildReplayManifest`
+round-trip asserting 3 trajectories, 3 observation events, and preserved chronological
+order; and sink-filtering (events without a matching sink are skipped).
+
+**Test results:** Build ✅. `typecheck:src` ✅ (exit 0, source stays clean). New capture
+suite ✅ **23/23** (was 17, +6). Full suite ✅ for everything except **4 pre-existing,
+flaky failures** in `control-plane/server.test.ts` + `cli/app.test.ts` — the
+`sessions.platformInventory` circuit-breaker tests. Confirmed present on the pristine
+tree (`git stash -u` → clean base still fails 4/174) and **flaky** (4 failures one run,
+2 another) → NOT caused by this change. Root cause: the breaker's accumulated
+`failureCount`/threshold is sensitive to how many times recovery runs across repeated
+inventory calls, so state resolves `"paused"` instead of the asserted `"mixed"`
+depending on execution order. The tests already inject
+`backgroundTaskIsProcessRunning: () => false`, so it is ordering, not process-liveness,
+sensitivity. Left untouched (guardrail: don't rewrite working circuit-breaker logic to
+chase a flaky test) and logged to ROADMAP.
+
+**Pushed to** the designated feature branch `claude/peaceful-dirac-rodfrc` (my
+contribution is fully green in isolation; the red tests are pre-existing and unrelated).
+
+**New idea:** with `streamFingerprint` in place, build the **generalization eval
+harness** as a scored comparison: generate a base trajectory, derive N token-substituted
+variants, run each through a (mock, then real) trained replay policy, and score fidelity
+as `fingerprintMatch ∧ subjectSubstitutionApplied ∧ orderPreserved`. Report a single
+0–1 generalization score per scenario so training-backend swaps (objective #2c/#2d) are
+measurable regressions, not vibes. A second idea: a `scenarioReplayEquivalence(base,
+replayed)` metric that tolerates timing jitter but not structural drift — the loss
+signal a local movement model should optimize.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
