@@ -6,6 +6,55 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-15 (run 9) — 🐛 Fix `shellQuote` corruption + de-flake background-task tests (red→green)
+
+**Audited:** Project health. The suite was **RED on arrival** — 3 deterministic
+failures (`operator-runtime.test.ts`, `cli/app.test.ts`, `control-plane/server.test.ts`),
+despite run 8 logging 174/174. Root-caused two independent problems.
+
+**Bug 1 — real POSIX single-quote-escaping bug in `src/harness/background-tasks.ts`.**
+`shellQuote()` escaped an embedded `'` with the sequence `"'"'"'` (leading double
+quote) instead of the correct `'"'"'` (leading single quote). Through bash this
+turned `a'b` into `a"'b` — injecting a stray `"`. The launch script embeds a
+JSON state payload via `shellQuote(JSON.stringify(state))`, so any task whose
+`command` contained a `'` (e.g. `printf 'line-1\nline-2\n'`) wrote **malformed
+JSON** to its state file; recovery then threw `SyntaxError` at `readJsonFile`.
+The sibling copy in `src/training/runner.ts` was already correct — the bug
+existed *because* the helper is duplicated and one copy had a typo. Fixed the
+escaping and added a comment. Exported `shellQuote` and added
+**`src/harness/shell-quote.test.ts`** (14 cases) that round-trips tricky strings
+— quotes, `$(...)`, backslashes, newlines, JSON payloads — through a real bash
+and asserts byte-for-byte equality (+ a JSON-parse survives check).
+
+**Bug 2 — order/timing-dependent tests spawning real subprocesses.** Three tests
+constructed the runtime/app without a mock `spawnProcess`, so real detached
+`sleep`/`printf` processes wrote their own state files, racing the tests' manual
+`writeState` and `isProcessRunning` mocks. Failures shifted with machine timing
+(passed in isolation, failed under full-suite load). Fix mirrors the pattern
+`background-tasks.test.ts` already uses: inject a deterministic mock
+`backgroundTaskSpawnProcess`. To enable this for the CLI path, added additive
+`backgroundTaskSpawnProcess` / `backgroundTaskIsProcessRunning` options to
+`OperatorCliAppOptions` (forwarded to the runtime; undefined ⇒ prior behavior).
+Updated the 4 racy constructions (operator-runtime, 2× app, 3× server runtimes)
+and wrote the one output-dependent task's output explicitly.
+
+**Test results:** 🎯 **188/188 passing** (was 174; +14 shell-quote cases),
+**3 runs in a row clean** (flake eliminated). Build ✅. `typecheck:src` ✅ (exit 0).
+Full `tsc` **125** — unchanged (no new debt; the residual 125 are the known
+test-file `.result`/`unknown` debt).
+
+**New idea:** the bug slipped in *only because `shellQuote` is copy-pasted* in
+`background-tasks.ts` and `runner.ts` and the copies drifted. Extract a single
+`shellQuote` (+ `renderPosixLaunchScript` helpers) into `src/shared/shell.ts`
+with the round-trip test as its contract, and delete both local copies. One
+implementation, one test, no divergence. Queued in ROADMAP under Innovation.
+Second idea: a lightweight lint/test that scans `src/**/*.test.ts` for
+`new StandaloneOperatorRuntime`/`new OperatorCliApp` that start background tasks
+without a `backgroundTaskSpawnProcess` mock, flagging real-subprocess reliance in
+unit tests before it becomes a flake.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

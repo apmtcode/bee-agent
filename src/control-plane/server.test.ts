@@ -81,8 +81,14 @@ const exportManifest: ReviewedExportManifest = {
 describe("OperatorControlPlaneServer", () => {
   it("handles session, transcript, approval, trajectory, memory, and orchestration methods", async () => {
     const rootDir = await makeTempDir();
+    let nextPid = 4300;
     const runtime = new StandaloneOperatorRuntime({
       rootDir,
+      // Mock the spawn so no real detached subprocess races with this test's
+      // assertions; treat the spawned task as alive so its remote reports the
+      // expected `control: active` deterministically (a real `sleep 5` whose
+      // state write lands mid-assertion previously flipped it to degraded).
+      backgroundTaskSpawnProcess: () => ({ pid: (nextPid += 1), unref() {} }),
       backgroundTaskIsProcessRunning: () => false,
       delivery: new OperatorDeliveryService(rootDir, {
         sendBrowserPush: async () => {},
@@ -950,8 +956,12 @@ describe("OperatorControlPlaneServer", () => {
     });
 
     const driftingRootDir = await makeTempDir();
+    let driftingPid = 4400;
     const driftingRuntime = new StandaloneOperatorRuntime({
       rootDir: driftingRootDir,
+      // Mock spawn so the only execution state is what the test writes below;
+      // a real subprocess would write its own state and race the drift checks.
+      backgroundTaskSpawnProcess: () => ({ pid: (driftingPid += 1), unref() {} }),
       backgroundTaskIsProcessRunning: () => false,
     });
     const driftingServer = new OperatorControlPlaneServer({ runtime: driftingRuntime });
@@ -1016,8 +1026,13 @@ describe("OperatorControlPlaneServer", () => {
     });
 
     const breakerRootDir = await makeTempDir();
+    let breakerPid = 4500;
     const breakerRuntime = new StandaloneOperatorRuntime({
       rootDir: breakerRootDir,
+      // Mock spawn: only tasks the test explicitly writes state for count as
+      // degraded (isProcessRunning => false); untouched tasks keep their
+      // running record status, so the breaker trips deterministically.
+      backgroundTaskSpawnProcess: () => ({ pid: (breakerPid += 1), unref() {} }),
       backgroundTaskIsProcessRunning: () => false,
     });
     const breakerServer = new OperatorControlPlaneServer({ runtime: breakerRuntime });

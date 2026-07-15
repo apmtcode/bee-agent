@@ -71,6 +71,20 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
       related synthetic trajectories.
 
 ## Innovation backlog
+- [x] **Fix `shellQuote` POSIX escaping bug** (run 9) — the escape sequence had a
+      leading `"` (`"'"'"'`) instead of `'` (`'"'"'`), injecting a stray `"` and
+      corrupting the JSON state payload for any task whose command contained a
+      `'`. Fixed in `src/harness/background-tasks.ts`; added
+      `src/harness/shell-quote.test.ts` (real-bash round-trip contract).
+- [ ] **De-duplicate `shellQuote` into `src/shared/shell.ts`.** It is copy-pasted
+      in `harness/background-tasks.ts` and `training/runner.ts`; the copies drifted
+      and one had the bug above. Extract one implementation (+ the launch-script
+      renderers that depend on it) behind the round-trip test, delete both copies.
+- [ ] **Unit-test real-subprocess guard.** Lint/test that flags any
+      `*.test.ts` constructing `StandaloneOperatorRuntime`/`OperatorCliApp` and
+      starting background tasks without a `backgroundTaskSpawnProcess` mock — real
+      detached `sleep`/`printf` processes race manual `writeState` and made the
+      suite flaky (run 9 fixed 4 such sites by injecting mock spawns).
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in
       project health over time.
