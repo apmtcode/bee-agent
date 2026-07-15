@@ -6,6 +6,62 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-15 (run 9) — De-flaked the suite: hermetic background-task tests + strictly-monotonic event clock
+
+**Audited:** Project health. `npm test` was **not** 174/174 as run 8 claimed —
+it failed **3–4 tests nondeterministically** every run (and one background-task
+test failed **100% in isolation**). Two independent root causes, both real bugs
+of test-vs-runtime coupling, not framework flakiness:
+
+1. **Real detached subprocesses leaking out of tests.** `startBackgroundTask`
+   spawns a *real* detached `bash` launch script that writes the task's
+   `state.json` itself (first `running`, later `completed`) via a non-atomic
+   `> state.json` truncation. Tests that also simulate state by writing those
+   files directly never injected the runtime's existing
+   `backgroundTaskSpawnProcess` seam, so the live subprocess raced their writes;
+   a read landing during the truncation window hit an empty file and
+   `readJsonFile` returned its `undefined` fallback → `getExecutionState` →
+   `undefined`. Affected `operator-runtime.test.ts`, `server.test.ts`,
+   `app.test.ts`.
+2. **Millisecond-collision in the reconnect/replay cursor.** Gateway reconnect
+   filters replayed events with `event.ts > afterTs`. Event `ts` came straight
+   from `Date.now()`, so two events emitted in the same millisecond shared a
+   timestamp and the cursor silently **dropped** the later one — a
+   load-dependent flake in `gateway-transport.test.ts`.
+
+**Changed (all additive / reversible):**
+- **New `src/harness/simulated-spawn.ts`** — `createSimulatedBackgroundSpawn()`,
+  a deterministic in-process stand-in for the detached-process spawn (synthetic
+  monotonic pid, no-op `unref`, optional `onLaunch` hook). Reusable for hermetic
+  tests today and a future dry-run/simulation mode. Exported from the barrel.
+- **`src/cli/app.ts`** — `OperatorCliApp` now forwards optional
+  `backgroundTaskSpawnProcess` / `backgroundTaskIsProcessRunning` to its runtime
+  (previously hard-wired to the real spawn, so CLI tests couldn't be hermetic).
+- **`src/kernel/event-bus.ts`** — `publish()` now enforces a **strictly
+  monotonic** event clock: a `ts` that would collide with or precede the last is
+  bumped to `lastTs + 1`. Guarantees unique, increasing timestamps so any
+  `ts > cursor` replay can never drop a colliding event. No protocol change.
+- **Tests** — injected the simulated spawn into the three affected runtimes;
+  rewrote the CLI background/monitor test to drive the task lifecycle explicitly
+  (output present + status `running` until the explicit stop) instead of relying
+  on a real subprocess's timing. Added `simulated-spawn.test.ts` (3 cases) and
+  two `event-bus.test.ts` cases (monotonic uniqueness; untimestamped events
+  untouched).
+
+**Test results:** `typecheck:src` CLEAN, `build` ✅, `npm test` **179/179** and
+now **green 10/10 consecutive full-suite runs** (was 3–4 failures per run).
+Net +5 tests, zero flakes.
+
+**New idea (queued in ROADMAP):** add a `test:flake` script that runs the suite
+N times (e.g. `vitest run --repeat` or a loop) and fails on any nondeterminism,
+and have the engine run it as a pre-push gate — this run's flake would have been
+caught automatically instead of shipped as a false "174/174". Deeper: a tiny
+lint/CI check that flags any test constructing a runtime that calls
+`startBackgroundTask` *without* injecting `backgroundTaskSpawnProcess`, so real
+detached processes can never leak into the suite again.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

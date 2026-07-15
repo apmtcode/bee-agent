@@ -38,8 +38,21 @@ unchecked items are queued. Keep this richer than you found it each run.
     `skills.executable.*`, `push.subscriptions.*`, `trajectories.*`, `replays.*`,
     `cron.runs`/misc — plus a few genuine test-only typings. Map the rest, then
     fix residual test-only typings.
+- [x] **De-flake the test suite** (2026-07-15, run 9). `npm test` was silently
+      failing 3–4 tests/run (one 100% in isolation). Two root causes fixed:
+      real detached subprocesses leaking into background-task tests (now inject
+      `createSimulatedBackgroundSpawn()` via the runtime's existing spawn seam;
+      `OperatorCliApp` forwards the seam), and a millisecond-collision in the
+      gateway reconnect cursor (event bus now assigns strictly-monotonic `ts`).
+      Suite is 179/179, green 10/10 consecutive runs.
 - [ ] Add a `verify` npm script (`typecheck && build && test`) and have the
       engine run it as a pre-push self-check each cycle.
+- [ ] Add a `test:flake` script that repeats the suite N times and fails on any
+      nondeterminism; run it as a pre-push gate so a flake like run 9's is
+      caught automatically instead of shipped as a false "all green".
+- [ ] Lint/CI guard: flag any test that constructs a runtime and calls
+      `startBackgroundTask` without injecting `backgroundTaskSpawnProcess`, so
+      real detached processes can never leak into the suite again.
 - [x] Interim **source-only typecheck gate** — DONE run 7. `tsconfig.src.json`
       (excludes `**/*.test.ts`) + `typecheck:src` script; passes (exit 0). Next:
       have the engine run it as a per-run pre-push self-check.
