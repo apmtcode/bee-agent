@@ -3,6 +3,17 @@
 Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
+## Reliability (top priority — diagnosed run 9)
+- [ ] **Fix background-task state-write race** (causes 3–4 flaky suite failures).
+      The spawned launch script writes `state.json` non-atomically
+      (`src/harness/background-tasks.ts:757` `printf … > state.json`; Python
+      state-writer ~L785–792 read-modify-`write_text`), so a concurrent
+      `readState`/`recoverBackgroundTasks` can read a torn file → `SyntaxError`.
+      The TS writer already uses `writeJsonAtomic` (temp+rename); mirror that in
+      the shell (`> tmp && mv tmp state.json`) and python (`os.replace`). Small,
+      localized, and greens the full suite (`operator-runtime`/`server`/`app`
+      background-task + orchestration tests).
+
 ## Foundations / DX
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
@@ -59,16 +70,29 @@ unchecked items are queued. Keep this richer than you found it each run.
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
 (exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
+- [x] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+      — DONE run 9. Gap was train/infer + generalize (only external shell scripts
+      existed); now `movement-model.ts` closes it in-process.
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      for a real on-device small model — DONE run 9. `MovementModelBackend`
+      interface + `MarkovMovementBackend` (order-k with back-off) in
+      `src/training/movement-model.ts`.
+- [x] Synthetic event-stream generator to validate capture→dataset→replay
+      round-trips without real OS input — DONE run 9.
+      `src/training/synthetic-movements.ts` (motif-based, seedable, deterministic).
+- [x] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories — DONE run 9.
+      `evaluateMovementGeneralization` (next-token accuracy, perplexity,
+      full-order coverage).
+- [ ] `MovementReplayAdapter`: map generated movement tokens back into concrete
+      `DeviceCaptureInput` gestures so a trained model can *drive* the replay
+      engine (predict → emit → observe → predict) — closes the autonomous-mover
+      loop in the sim harness.
+- [ ] Wire the movement model into the real training runner as the `mock`
+      runtime option (alongside `mlx`/`axolotl`) so `LocalTrainingRunner` can
+      produce an in-process trained artifact for cloud validation.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
