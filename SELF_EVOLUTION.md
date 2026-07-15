@@ -6,6 +6,63 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-15 (run 9) — Two real background-task bugs fixed + racy tests made hermetic
+
+**Audited:** The full test suite on a fresh cloud checkout. Three tests the last
+log recorded as green (174/174) were **failing deterministically** here —
+`operator-runtime.test.ts` (JSON parse error at position 311),
+`control-plane/server.test.ts` (`control.state` degraded vs active), and
+`cli/app.test.ts` (`control=missing` vs `control=active`). Not flakiness — two
+genuine bugs in the background-task launch subsystem (`src/harness/background-tasks.ts`)
+that the reference env happened to mask by winning a subprocess race.
+
+**Bug 1 — `shellQuote` corrupted any value containing a single quote.** It
+escaped `'` with `"'"'"'` (6 chars, wrong prefix) instead of the POSIX-correct
+`'"'"'` (5 chars). Proven in bash: the buggy form turned `printf 'hello'` into
+`printf "'hello"'`, so the launch script's JSON state payload became invalid
+JSON → `readState` threw. This hit **every** background command with a quote
+(`git commit -m 'msg'`, `printf 'x'`), not just tests.
+
+**Bug 2 — the launch script's pid `sed` substitution was a no-op.** The
+generator wrote `s/\"\$\$\"/$$/g` in a JS template literal, but JS strips the
+backslashes, so the emitted bash was `s/"$$"/$$/g` — bash's own quoting then
+collapsed it to `s/<PID>/<PID>/g` (replace the pid with itself). The
+`"pid":"$$"` placeholder was never substituted, so the running-state file
+carried a **string** pid until the python exit-writer eventually fixed it —
+racing every reader. `defaultIsProcessRunning("$$")` fails `Number.isFinite`
+→ returns false → spurious `missing-process`/`degraded`. Fixed by switching to a
+quote-free `"__OPENCLAW_PID__"` placeholder and a properly double-escaped
+`s/\\"__OPENCLAW_PID__\\"/$$/g` (renders to `s/\"…\"/$$/g` in bash → numeric pid).
+
+**Tests made hermetic (not the source of the bugs, but the reason they were
+intermittent):** three runtimes drove execution state explicitly via
+`writeState` yet still launched a **real** detached `sleep 5`/`tail -f`
+subprocess whose async writes clobbered the test's state. Injected a no-op
+`backgroundTaskSpawnProcess` (fake pid, no state written) at those three
+constructions — deterministic, and matches the tests' clear intent.
+
+**Regression test added:** `src/harness/launch-script.test.ts` (exported
+`renderLaunchScript` + `shellQuote` additively). It round-trips single-quoted
+values through a real bash and runs the rendered launch script *synchronously*
+(`execFileSync`, no race) asserting valid-JSON state, exact command, numeric
+pid. **Verified it fails when either fix is reverted** (shellQuote → 2 fail;
+sed → the pid test fails), then passes with both.
+
+**Test results:** **174 → 177** tests, all green across repeated full runs; the
+formerly-failing `app.test.ts` now passes purely from the sed fix. Build ✅.
+`typecheck:src` ✅. Full `tsc` **125** (unchanged — zero new type errors). Focused
+diff: 1 source file (fixes + 2 exports) + 2 test files (no-op spawn) + 1 new test.
+
+**New idea:** the tests should never depend on a real detached subprocess by
+accident. Add a hermetic-by-default background-task test harness (a
+`createTestRuntime()` helper that wires the no-op spawn) and a lightweight lint
+that flags `new StandaloneOperatorRuntime(` in `*.test.ts` without an explicit
+`backgroundTaskSpawnProcess`, so this whole class of "won-the-race-in-CI" flake
+can't recur. Deeper: `startBackgroundTask` could expose the child's exit promise
+so real-subprocess tests can `await` completion instead of polling/racing.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

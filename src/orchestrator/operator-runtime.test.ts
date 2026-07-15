@@ -15,6 +15,14 @@ async function makeTempDir(): Promise<string> {
   return dir;
 }
 
+// A no-op spawn hook: background-task tests drive execution state explicitly
+// via `writeState`, so launching a real detached subprocess only introduces a
+// race (its async state writes clobber the test's). Returning a fake pid keeps
+// task bookkeeping intact while writing no state of its own.
+function noopBackgroundSpawn(): { pid?: number; unref(): void } {
+  return { pid: 1234, unref() {} };
+}
+
 function buildHookCaptureCommand(outputFile: string): string {
   const script = [
     "import fs from 'node:fs';",
@@ -531,6 +539,7 @@ describe("StandaloneOperatorRuntime", () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
       backgroundTaskIsProcessRunning: () => false,
+      backgroundTaskSpawnProcess: noopBackgroundSpawn,
     });
     const session = await runtime.startSession({ title: "Tasks", agentId: "main" });
 

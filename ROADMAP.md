@@ -70,6 +70,24 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Generalization eval harness: measure replay fidelity on held-out but
       related synthetic trajectories.
 
+## Reliability / correctness (found by running the suite in a clean env)
+- [x] **Fix `shellQuote` single-quote corruption** in `src/harness/background-tasks.ts`
+      (run 9). Used `"'"'"'` instead of POSIX `'"'"'` — corrupted any background
+      command/cwd containing a `'` (e.g. `git commit -m 'msg'`).
+- [x] **Fix the launch-script `sed` pid substitution no-op** (run 9). Backslashes
+      were stripped by the JS template literal, so `"pid":"$$"` was never
+      substituted to a numeric pid → spurious `missing-process`. Switched to a
+      quote-free `__OPENCLAW_PID__` placeholder.
+- [x] **Hermetic background-task tests** (run 9): injected a no-op
+      `backgroundTaskSpawnProcess` at the 3 racy runtimes + added a deterministic
+      `launch-script.test.ts` regression (exported `renderLaunchScript`/`shellQuote`).
+- [ ] **Hermetic-by-default test harness**: a `createTestRuntime()` helper that
+      wires the no-op spawn, plus a lint flagging `new StandaloneOperatorRuntime(`
+      in `*.test.ts` without an explicit `backgroundTaskSpawnProcess`. Prevents the
+      "passes-in-fast-env, fails-in-CI" subprocess-race flake class from recurring.
+- [ ] **Expose the child exit promise** from `startBackgroundTask` so real-
+      subprocess tests can `await` completion instead of polling/racing.
+
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in

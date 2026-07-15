@@ -729,7 +729,7 @@ function applyExecutionState(task: BackgroundTaskRecord, state: BackgroundTaskEx
   };
 }
 
-function renderLaunchScript(task: BackgroundTaskRecord): string {
+export function renderLaunchScript(task: BackgroundTaskRecord): string {
   const quotedStatePath = shellQuote(task.execution.stateFile);
   const quotedOutputFile = shellQuote(task.execution.outputFile);
   const quotedCwd = shellQuote(task.cwd);
@@ -740,7 +740,7 @@ function renderLaunchScript(task: BackgroundTaskRecord): string {
       taskId: task.id,
       kind: task.kind,
       status: "running",
-      pid: "$$",
+      pid: "__OPENCLAW_PID__",
       startedAt: "__OPENCLAW_STARTED_AT__",
       updatedAt: "__OPENCLAW_STARTED_AT__",
       outputFile: task.execution.outputFile,
@@ -754,7 +754,12 @@ function renderLaunchScript(task: BackgroundTaskRecord): string {
     "set -euo pipefail",
     `mkdir -p $(dirname ${quotedStatePath}) $(dirname ${quotedOutputFile})`,
     "started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-    `printf '%s' ${quotedStatePayload} | sed "s/__OPENCLAW_STARTED_AT__/$started_at/g; s/\"\$\$\"/$$/g" > ${quotedStatePath}`,
+    // Substitute the timestamp and the quoted pid placeholder. The pid pattern
+    // keeps its surrounding quotes escaped (`\"…\"`) so the JSON string
+    // `"__OPENCLAW_PID__"` is replaced by the bare numeric `$$`, yielding a
+    // numeric `pid` field. (Double-backslashes here render as single
+    // backslashes in the generated bash, which bash then unescapes to `"`.)
+    `printf '%s' ${quotedStatePayload} | sed "s/__OPENCLAW_STARTED_AT__/$started_at/g; s/\\"__OPENCLAW_PID__\\"/$$/g" > ${quotedStatePath}`,
     `printf '%s\n' "starting ${task.kind} ${task.id}" >> ${quotedOutputFile}`,
     `if cd ${quotedCwd} && bash -lc ${quotedCommand} >> ${quotedOutputFile} 2>&1; then`,
     "  completed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
@@ -793,6 +798,10 @@ function renderStateWriterPython(status: BackgroundTaskExecutionState["status"])
   ];
 }
 
-function shellQuote(value: string): string {
-  return `'${value.replaceAll(`'`, `"'"'"'`)}'`;
+export function shellQuote(value: string): string {
+  // POSIX-safe single-quote escaping: to embed a `'` inside a single-quoted
+  // string, close the quote, emit a double-quoted apostrophe, then reopen:
+  // `'` -> `'"'"'`. (The previous `"'"'"'` prefix corrupted any value that
+  // contained a single quote, e.g. `git commit -m 'msg'` or `printf 'x'`.)
+  return `'${value.replaceAll(`'`, `'"'"'`)}'`;
 }
