@@ -400,6 +400,23 @@ export type {
   LocalTrainingRuntime,
   TrainingJobPlan,
 } from "./training/runner.js";
+export {
+  MarkovMovementBackend,
+  buildMovementDataset,
+  defaultActionTokenizer,
+  describeBackendSeam,
+} from "./training/model-backend.js";
+export type {
+  MovementDataset,
+  MovementModelBackend,
+  MovementModelSnapshot,
+  MovementPrediction,
+  MovementPredictionAlternative,
+  MovementSequence,
+  MovementToken,
+  MovementTrainOptions,
+  TrainedMovementModel,
+} from "./training/model-backend.js";
 export type {
   ExportedMemoryReference,
   ExportedPromotedSkill,

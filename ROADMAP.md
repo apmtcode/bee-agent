@@ -62,13 +62,39 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
+      for a real on-device small model. **DONE run 9** —
+      `src/training/model-backend.ts`: `MovementModelBackend` /
+      `TrainedMovementModel` interfaces + `MarkovMovementBackend` (n-gram +
+      stupid-backoff; learns to repeat recorded movements and generalizes),
+      `buildMovementDataset`, snapshot round-trip, `describeBackendSeam`. 13 tests.
 - [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      round-trips without real OS input. (Partially unblocked: `buildMovementDataset`
+      + `MarkovMovementBackend` now give the dataset→train→generate half; still
+      need a generator that emits synthetic `TrajectorySpan`/OS-event streams.)
+- [ ] Generalization eval harness: train the Markov backend on synthetic
+      trajectories, hold out related-but-unseen ones, and score replay fidelity
+      (`predictNext`/`generate` reproducing the held-out continuation) as a single
+      regression metric — so future backends (incl. a real on-device model) are
+      comparable on one yardstick. **Next increment now that the backend exists.**
+- [ ] **Real on-device backend behind `MovementModelBackend`.** Implement a
+      second backend that fine-tunes/queries a small local model (mlx/gguf),
+      selected via config, with the Markov backend as the CI mock/fallback.
+
+## Known correctness bugs (found while self-evolving)
+- [ ] **background-task state recovery JSON parse failure.** `recoverBySession →
+      reconcileTask → readState` throws `SyntaxError: Expected ',' or '}' after
+      property value in JSON`. `writeJsonAtomic` always emits valid JSON, so the
+      corrupt state file traces to the **shell/sed launch script** that stamps the
+      initial `running` state (the `renderStateWriterPython` + `sed "…/$$/"`
+      pattern shared with the training runner) producing invalid JSON on
+      substitution. Consistently fails `operator-runtime.test.ts >
+      "starts, syncs, recovers, lists, and cancels background tasks"`. Pre-existing
+      (confirmed on clean tree). Fix in a focused run: harden the shell state
+      writer (or write initial state via `writeJsonAtomic` from Node instead of
+      sed) and add a regression test round-tripping the stamped state through
+      `readState`.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

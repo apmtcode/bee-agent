@@ -6,6 +6,62 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-15 (run 9) — Movement subsystem: pluggable model backend + Markov mock
+
+**Audited:** `src/training/` (standing objective #2 — local-movement learning).
+The runner (`runner.ts`) only builds command *plans* that shell out to
+Apple-Silicon toolchains (mlx / axolotl) — nothing that runs in the cloud/CI, so
+**no code path actually learned to repeat a recorded movement or generalize to a
+related one** (objective #2d). The exporter produces reviewed datasets and replay
+manifests; the loop stopped at "hand the dataset to an external trainer."
+
+**Changed (additive, new files only):**
+- `src/training/model-backend.ts` — the pluggable seam objective #2 called for:
+  - `MovementModelBackend` interface (`train(dataset) → TrainedMovementModel`)
+    and `TrainedMovementModel` (`predictNext`, `generate`, `serialize`).
+  - `MarkovMovementBackend`: a deterministic n-gram model with **stupid-backoff**.
+    It *learns to repeat* recorded movements (generate from an empty seed
+    reproduces a training sequence verbatim) and *generalizes* — an unseen
+    full-order context falls back to the longest suffix it has seen, so a new
+    opener paired with a familiar `click` still predicts the learned
+    `click → type → submit` continuation. No native deps, no clock, no
+    randomness → doubles as the CI mock backend.
+  - `buildMovementDataset(trajectories, …)` — tokenizes reviewed `TrajectorySpan`
+    actions (ts-ordered) into `MovementSequence`s; can interleave observations.
+  - `serialize()/restore()` snapshot round-trip (the save/load seam for a real
+    on-device model) and `describeBackendSeam()` documenting the contract a real
+    small model must satisfy to replace the mock.
+- `src/training/model-backend.test.ts` — 13 tests: verbatim recall, partial-seed
+  continuation, backoff generalization, determinism, calibrated probabilities,
+  unknown-context → undefined, no-sentinel-leak, snapshot round-trip, order
+  sensitivity, and dataset-builder ordering + end-to-end round-trip.
+- Exported all of the above from `src/index.ts`.
+
+**Test results:** `typecheck:src` ✅ (exit 0). `npm run build` ✅ (5 files,
+541 kB). New backend suite ✅ **13/13**. Full suite: my files are green;
+**pre-existing** failures remain in `operator-runtime.test.ts` /
+`background-tasks.test.ts` (see blocker) — confirmed present on the clean tree
+via `git stash` baseline (3 failed / 184 passed there too), so not introduced by
+this run.
+
+**Blocker (pre-existing, NOT this run's change):** `background-tasks` state
+recovery throws `SyntaxError: Expected ',' or '}' after property value in JSON`
+during `recoverBySession → reconcileTask → readState`. `writeJsonAtomic` always
+emits valid JSON, so the corrupt state file must come from the **shell/sed launch
+script** that stamps the initial `running` state (same `renderStateWriterPython`
++ `sed "…/$$/"` pattern the training runner uses) — a placeholder substitution is
+producing invalid JSON. Logged to ROADMAP as a real correctness bug to fix in a
+focused run; left untouched here to keep this diff to the movement increment.
+
+**New idea (logged to ROADMAP):** a **generalization eval harness** for the
+movement subsystem — train the Markov backend on a set of synthetic trajectories,
+hold out related-but-unseen ones, and score replay fidelity (how often
+`predictNext`/`generate` reproduces the held-out continuation) as a single
+regression metric, so future backends (including a real on-device model) are
+comparable on the same yardstick.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
