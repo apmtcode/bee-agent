@@ -55,6 +55,24 @@ unchecked items are queued. Keep this richer than you found it each run.
       gaps.
 - [ ] Audit `claude-code` reference for slash-command / hook coverage gaps.
 
+## Reliability / correctness (background-task subsystem)
+- [x] **Fix `shellQuote` single-quote corruption** (2026-07-15, run 9) — malformed
+      POSIX escaping made every quoted task command fail and write invalid
+      `state.json` (the historical "position 311" flakiness). One-char fix +
+      tests.
+- [x] **Atomic + escaping-safe launch-script state writes** (2026-07-15, run 9) —
+      initial state now built in Python from argv; all three state writes use
+      temp + `os.replace`. Concurrent readers never see a torn `state.json`.
+- [x] **Hermetic background-task tests** (2026-07-15, run 9) —
+      `createSimulatedProcessBackend()` (in-memory process table) + injectable
+      backend on `OperatorCliApp`; the 3 process-timing-flaky tests are now
+      deterministic. Suite 3-failing → 176 green.
+- [ ] **Fuzz/property-test `shellQuote`** over adversarial inputs (`'`, `"`, `$`,
+      backticks, newlines, `\`) by round-tripping through `bash -c 'printf %s'`
+      and asserting identity — make correct quoting an enforced invariant.
+- [ ] **Unify the Python state writers** — factor one `renderStateWriterPython`
+      that takes field overrides so the initial/terminal writers can't drift.
+
 ## Local-movement learning subsystem
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`

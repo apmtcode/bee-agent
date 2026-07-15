@@ -6,6 +6,58 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-15 (run 9) — Fix background-task launch corruption (`shellQuote`) + hermetic process backend; suite 3-failing → 176 green
+
+**Audited:** The build/test gate itself. On a clean checkout `npm test` was **3
+failing** (174→171) — not the "174/174" the log claimed — all in the
+background-task subsystem (`operator-runtime`, `server`, `app` tests). Root-caused
+two independent defects, one a **real production bug**.
+
+**Bug 1 — `shellQuote` corrupts every quoted command (production).**
+`src/harness/background-tasks.ts`'s `shellQuote` escaped embedded single quotes as
+`"'"'"'` (a stray *leading* double-quote) instead of the POSIX `'"'"'`. For any
+task whose command contains `'` (i.e. most real shell commands — `printf 'x'`,
+`grep '...'`), the generated launch script reconstructed malformed shell like
+`printf "'x'"`, so the command **exited non-zero** and the initial `state.json`
+was written as **invalid JSON**. That invalid state is exactly the historical
+`SyntaxError: … in JSON at position 311` flakiness. Fixed the escaping (one
+char). This affected all background tasks/monitors with quoted commands, not just
+tests.
+
+**Bug 2 — non-atomic / shell-interpolated state writes (reliability).**
+The initial state was built by interpolating the command/cwd into JSON via `sed`
+(fragile even after Bug 1) and written non-atomically; the terminal write used
+`Path.write_text` (also non-atomic). Rewrote the initial write to build JSON in
+**Python from argv** (no escaping-into-JSON), and made **all three** state writes
+atomic (temp file + `os.replace`, matching `writeJsonAtomic`). Concurrent
+recovery/sync readers can no longer observe a half-written `state.json`.
+
+**Hermetic tests — `createSimulatedProcessBackend()` (new, `src/harness/
+simulated-process.ts`).** Even with correct scripts, tests that expect a task to
+still be "running/active" race real process scheduling (a `printf` exits before
+the assertion). Added an in-memory process-table backend: `spawnProcess` hands out
+synthetic pids and records them live; `isProcessRunning` reports liveness purely
+from that set (so a hand-written `999999` is correctly *dead*). Threaded
+`backgroundTaskSpawnProcess`/`backgroundTaskIsProcessRunning` through
+`OperatorCliApp` (additive option seam, also useful for out-of-band supervisors)
+and switched the 3 flaky tests to it. Added `background-tasks.test.ts` coverage:
+a deterministic script-content assertion **and** an end-to-end run of the real
+launch script (guarded by a bash/python3 probe) asserting a valid `completed`
+state, correct output, and no leftover `.tmp` files.
+
+**Test results:** `npm test` **176/176** (was 3 failing; +2 new tests), stable
+across 3 consecutive full runs and 9/9 in the background-tasks file alone. Build
+✅. `typecheck:src` ✅ (exit 0). Full `tsc` unchanged at **125** (all test-file
+debt — no regression).
+
+**New idea:** the launch script is now the only place that shells out with
+interpolated user input; add a tiny property test that fuzzes `shellQuote` over
+adversarial values (`'`, `"`, `$`, backticks, newlines, `\`) by round-tripping
+through `bash -c 'printf %s'` and asserting the output equals the input — turning
+"quoting is correct" into an enforced invariant rather than a bug we rediscover.
+Longer term, factor a single `renderStateWriterPython` that takes the field
+overrides so the initial/terminal writers can't drift.
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

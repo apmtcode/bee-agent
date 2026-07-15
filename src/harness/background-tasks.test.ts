@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -7,6 +8,12 @@ import {
   FileBackgroundTaskStore,
   type BackgroundTaskExecutionState,
 } from "./background-tasks.js";
+
+/** True when the shell toolchain the launch script needs is available. */
+function hasLaunchToolchain(): boolean {
+  const probe = spawnSync("bash", ["-c", "command -v python3"], { stdio: "ignore" });
+  return probe.status === 0;
+}
 
 const tempDirs: string[] = [];
 
@@ -370,4 +377,49 @@ describe("BackgroundTaskExecutionService", () => {
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
   });
+
+  it("renders launch scripts that write state atomically and without shell-interpolated JSON", async () => {
+    const rootDir = await makeTempDir();
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"), () => ({ pid: 1212, unref() {} }));
+    const task = await store.start({ title: "Atomic", command: "printf 'ok'", cwd: rootDir });
+
+    const script = await fs.readFile(path.join(rootDir, task.execution.launchScript), "utf8");
+    // The initial "running" state is built by Python from argv (no fragile
+    // shell/sed interpolation of the command into JSON) ...
+    expect(script).not.toContain("__OPENCLAW_STARTED_AT__");
+    expect(script).not.toMatch(/sed "s\/__OPENCLAW/);
+    // ... and every state write goes through a temp file + os.replace(), so a
+    // concurrent reader never observes a half-written state.json.
+    expect(script).toContain("os.replace(tmp_path, state_path)");
+    expect(script.match(/os\.replace\(tmp_path, state_path\)/g)?.length).toBe(3);
+  });
+
+  it.skipIf(!hasLaunchToolchain())(
+    "executes the real launch script end-to-end leaving a valid completed state and no temp files",
+    async () => {
+      const rootDir = await makeTempDir();
+      const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"), () => ({ pid: 3131, unref() {} }));
+      const task = await store.start({ title: "Real run", command: "printf 'line-1\\nline-2\\n'", cwd: rootDir });
+
+      const scriptPath = path.join(rootDir, task.execution.launchScript);
+      const result = spawnSync("bash", [scriptPath], {
+        cwd: rootDir,
+        env: { ...process.env, OPENCLAW_BACKGROUND_TASK_ID: task.id, OPENCLAW_BACKGROUND_TASK_KIND: task.kind },
+        encoding: "utf8",
+      });
+      expect(result.status).toBe(0);
+
+      const taskDir = path.join(rootDir, path.dirname(task.execution.stateFile));
+      const leftovers = (await fs.readdir(taskDir)).filter((name) => name.includes(".tmp"));
+      expect(leftovers).toEqual([]);
+
+      const raw = await fs.readFile(path.join(rootDir, task.execution.stateFile), "utf8");
+      const state = JSON.parse(raw) as BackgroundTaskExecutionState;
+      expect(state).toMatchObject({ taskId: task.id, status: "completed", exitCode: 0 });
+
+      const output = await fs.readFile(path.join(rootDir, task.execution.outputFile), "utf8");
+      expect(output).toContain("line-1");
+      expect(output).toContain("line-2");
+    },
+  );
 });
