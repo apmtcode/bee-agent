@@ -1,12 +1,17 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   BackgroundTaskExecutionService,
   FileBackgroundTaskStore,
+  shellQuote,
   type BackgroundTaskExecutionState,
 } from "./background-tasks.js";
+
+const execFileAsync = promisify(execFile);
 
 const tempDirs: string[] = [];
 
@@ -369,5 +374,54 @@ describe("BackgroundTaskExecutionService", () => {
     await expect(fs.readFile(path.join(rootDir, task.execution.launchScript), "utf8")).resolves.toContain("bash -lc");
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
+  });
+
+  it("runs a launch script whose command contains single quotes and writes valid JSON state", async () => {
+    const rootDir = await makeTempDir();
+    const store = new FileBackgroundTaskStore(
+      path.join(rootDir, "background-tasks.json"),
+      () => ({ pid: 4242, unref() {} }),
+    );
+    // Command deliberately contains single quotes — the case that the old
+    // shellQuote escaping corrupted into invalid JSON.
+    const task = await store.start({
+      title: "Emit lines",
+      command: "printf 'line-1\nline-2\n'",
+      cwd: rootDir,
+    });
+
+    const scriptPath = path.join(rootDir, task.execution.launchScript);
+    // The real launcher spawns the script with cwd = rootDir (see launch()).
+    await execFileAsync("bash", [scriptPath], { cwd: rootDir });
+
+    const service = new BackgroundTaskExecutionService(rootDir, () => ({ pid: 4242, unref() {} }));
+    const state = await service.readState(task);
+    expect(state).toBeDefined();
+    expect(state?.status).toBe("completed");
+    expect(state?.command).toBe("printf 'line-1\nline-2\n'");
+    expect(state?.exitCode).toBe(0);
+    // pid must be the real numeric process id, not the literal "$$" placeholder.
+    expect(typeof state?.pid).toBe("number");
+    expect(Number.isInteger(state?.pid)).toBe(true);
+    await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("line-2");
+  });
+});
+
+describe("shellQuote", () => {
+  it("round-trips arbitrary values (including single quotes) through bash", async () => {
+    const values = [
+      "plain",
+      "printf 'line-1\nline-2\n'",
+      "a'b'c",
+      `weird "double" and 'single'`,
+      "/tmp/some path/with spaces",
+    ];
+    for (const value of values) {
+      const { stdout } = await execFileAsync("bash", [
+        "-c",
+        `printf '%s' ${shellQuote(value)}`,
+      ]);
+      expect(stdout).toBe(value);
+    }
   });
 });

@@ -45,6 +45,24 @@ unchecked items are queued. Keep this richer than you found it each run.
       have the engine run it as a per-run pre-push self-check.
 - [ ] Add a minimal CI workflow mirroring `verify` for human-opened PRs.
 
+## Reliability / correctness
+- [x] **Background-task launch script bugs** (2026-07-15, run 9). Fixed
+      `shellQuote` POSIX single-quote escaping (was corrupting `state.json` for
+      any command containing a `'`), the PID placeholder that `sed` never
+      substituted (`$` is a regex anchor → recorded pid stayed literal `"$$"`),
+      and made state writes atomic. Exported `shellQuote` + added an
+      end-to-end launch-script test and a bash round-trip unit test.
+- [x] **Deterministic background-task spawn seam** (run 9). `OperatorCliApp`
+      now accepts `backgroundTaskSpawnProcess` / `backgroundTaskIsProcessRunning`
+      passthrough options (defaults unchanged); de-flaked 3 integration tests
+      that were racing real detached processes.
+- [ ] Single shared atomic state writer for the launch script — the
+      running-state `sed` writer and the two Python terminal writers duplicate
+      the JSON shape; consolidate so they can't drift.
+- [ ] Property/fuzz test for `shellQuote` (random strings → bash round-trip).
+- [ ] Test-lint: flag a real `spawn`/`sleep` in a `*.test.ts` that doesn't
+      inject a deterministic spawn override, so env-timing flakes can't recur.
+
 ## Capability parity (audit reference agents → port gaps)
 - [ ] Build a "capability inventory" generator: enumerate bee-agent's exported
       RPC/tool surface (`src/index.ts`) and diff it against `openclaw`,

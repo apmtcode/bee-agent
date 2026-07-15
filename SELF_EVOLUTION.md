@@ -6,6 +6,57 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-15 (run 9) — Two real launch-script bugs fixed; background-task tests de-flaked
+
+**Audited:** Suite health on a fresh checkout. The recorded "174/174" was from
+a faster machine — in this environment **3 tests failed** (operator-runtime,
+app, server). Root-caused each rather than papering over: the failures exposed
+two genuine **production** bugs in the background-task launch script
+(`src/harness/background-tasks.ts`), not test flakiness alone.
+
+**Bug 1 — `shellQuote` POSIX escaping was wrong (data corruption).** The
+single-quote escape replaced `'` with `"'"'"'` (6 chars, starts with `"`)
+instead of the correct `'"'"'` (5 chars). Any task whose **command contains a
+single quote** — e.g. `printf 'line-1\nline-2\n'`, extremely common — had its
+JSON state payload corrupted (`"command":"printf "'line-1…"'"`), so `readState`
+threw `SyntaxError: Expected ',' or '}'` and the task looked broken. Fixed the
+escape; exported `shellQuote` and added a bash round-trip unit test over values
+with single/double quotes, spaces, and newlines.
+
+**Bug 2 — recorded PID was the literal string `"$$"` (liveness checks broke).**
+The launch script tried `sed "s/\"\$\$\"/$$/g"` to swap the placeholder for the
+real PID, but `$` is an end-of-line anchor in `sed` regex, so the pattern never
+matched and `state.json` carried `"pid":"$$"`. `isProcessRunning` then received
+a string, so recovery misfired (`missing-process`). Replaced the placeholder
+with a non-regex-special `__OPENCLAW_PID__` (same mechanism the working
+`__OPENCLAW_STARTED_AT__` uses) → PID is now the real integer.
+
+**Bug 3 (hardening) — non-atomic state writes.** The running-state write
+(`… > state.json`) and the Python completion writer both truncate-in-place, so a
+concurrent reader could catch a half-written file. Made both atomic (write
+`.tmp` then `mv` / `pathlib.replace`), matching `writeJsonAtomic` on the TS side.
+
+**Testability (additive, production-safe):** `OperatorCliApp` now accepts
+`backgroundTaskSpawnProcess` / `backgroundTaskIsProcessRunning` passthrough
+options (defaults unchanged) so integration tests can inject deterministic spawn
+behaviour instead of racing a real detached `sleep 5`/`printf` whose state file
+appears mid-assertion. Used this to de-flake the three integration tests
+(operator-runtime, app, server) while keeping real end-to-end launch-script
+coverage in a new `background-tasks.test.ts` test that actually executes the
+generated script and asserts valid JSON + a numeric PID.
+
+**Test results:** **176/176** (174 + 2 new). `typecheck:src` ✅ (exit 0). Build
+✅. Full `tsc` **125** (unchanged — all pre-existing test-file debt).
+
+**New idea:** route *every* launch-script state write through one shared atomic
+writer (the running-state and the two Python terminal writers currently
+duplicate the shape), and add a property/fuzz test for `shellQuote`. Bigger:
+a tiny test-lint that flags a real `spawn`/`sleep` inside a `*.test.ts` unless a
+deterministic spawn override is injected — the exact footgun that made these
+three tests environment-dependent.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

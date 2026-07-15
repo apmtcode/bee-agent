@@ -83,6 +83,13 @@ describe("OperatorControlPlaneServer", () => {
     const rootDir = await makeTempDir();
     const runtime = new StandaloneOperatorRuntime({
       rootDir,
+      // Deterministic background-task execution: stub the spawn so the remote
+      // task never writes a real state file. deriveRemoteDiagnostics reads the
+      // state file directly (no reconcile), so absent state = healthy/active,
+      // instead of a real detached `sleep 5` whose state file appears mid-test
+      // and races the control=active assertions. isProcessRunning stays false
+      // so the later explicit background.tasks.state NOT_FOUND flow still holds.
+      backgroundTaskSpawnProcess: () => ({ pid: 4242, unref() {} }),
       backgroundTaskIsProcessRunning: () => false,
       delivery: new OperatorDeliveryService(rootDir, {
         sendBrowserPush: async () => {},
@@ -952,6 +959,9 @@ describe("OperatorControlPlaneServer", () => {
     const driftingRootDir = await makeTempDir();
     const driftingRuntime = new StandaloneOperatorRuntime({
       rootDir: driftingRootDir,
+      // Stub the spawn so the real `sleep 5` task never writes a competing
+      // state file; degraded states are driven deterministically via writeState.
+      backgroundTaskSpawnProcess: () => ({ pid: 4242, unref() {} }),
       backgroundTaskIsProcessRunning: () => false,
     });
     const driftingServer = new OperatorControlPlaneServer({ runtime: driftingRuntime });
@@ -1018,6 +1028,10 @@ describe("OperatorControlPlaneServer", () => {
     const breakerRootDir = await makeTempDir();
     const breakerRuntime = new StandaloneOperatorRuntime({
       rootDir: breakerRootDir,
+      // Stub the spawn so the real `sleep 5` tasks never write competing state
+      // files; the mixed/degraded states are driven deterministically via
+      // writeState below.
+      backgroundTaskSpawnProcess: () => ({ pid: 4242, unref() {} }),
       backgroundTaskIsProcessRunning: () => false,
     });
     const breakerServer = new OperatorControlPlaneServer({ runtime: breakerRuntime });
