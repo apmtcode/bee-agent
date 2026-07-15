@@ -83,6 +83,10 @@ describe("OperatorControlPlaneServer", () => {
     const rootDir = await makeTempDir();
     const runtime = new StandaloneOperatorRuntime({
       rootDir,
+      // Stub the spawn so no real process is launched and no launch-script state
+      // file races the assertions; liveness is reported false so explicit
+      // reconciles resolve to "missing-process" deterministically.
+      backgroundTaskSpawnProcess: () => ({ pid: 4321, unref() {} }),
       backgroundTaskIsProcessRunning: () => false,
       delivery: new OperatorDeliveryService(rootDir, {
         sendBrowserPush: async () => {},
@@ -952,6 +956,10 @@ describe("OperatorControlPlaneServer", () => {
     const driftingRootDir = await makeTempDir();
     const driftingRuntime = new StandaloneOperatorRuntime({
       rootDir: driftingRootDir,
+      // Stub the spawn so no real `sleep 5` process is launched to race the
+      // manually written state; the pid is reported dead (isProcessRunning =>
+      // false) so tasks deterministically reconcile to "missing-process".
+      backgroundTaskSpawnProcess: () => ({ pid: 9999, unref() {} }),
       backgroundTaskIsProcessRunning: () => false,
     });
     const driftingServer = new OperatorControlPlaneServer({ runtime: driftingRuntime });
@@ -1018,6 +1026,10 @@ describe("OperatorControlPlaneServer", () => {
     const breakerRootDir = await makeTempDir();
     const breakerRuntime = new StandaloneOperatorRuntime({
       rootDir: breakerRootDir,
+      // Stub the spawn so no real `sleep 5` process is launched to race the
+      // manually written state; the pid is reported dead (isProcessRunning =>
+      // false) so tasks deterministically reconcile to "missing-process".
+      backgroundTaskSpawnProcess: () => ({ pid: 9999, unref() {} }),
       backgroundTaskIsProcessRunning: () => false,
     });
     const breakerServer = new OperatorControlPlaneServer({ runtime: breakerRuntime });

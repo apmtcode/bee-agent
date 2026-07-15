@@ -1,3 +1,4 @@
+import { spawn as realSpawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -107,6 +108,53 @@ describe("FileBackgroundTaskStore", () => {
       status: "completed",
       execution: { exitCode: 0 },
     });
+  });
+
+  it("escapes single-quoted commands so the real launch script writes valid state JSON", async () => {
+    // Regression test for a shellQuote bug: a command containing single quotes
+    // (e.g. `printf 'quoted %s' 'value'`) used to be mis-escaped, corrupting the
+    // JSON the launch script wrote to state.json so recovery failed to parse it.
+    // This exercises the generated bash launch script end-to-end.
+    const rootDir = await makeTempDir();
+    const filePath = path.join(rootDir, "background-tasks.json");
+    let child: ChildProcess | undefined;
+    const store = new FileBackgroundTaskStore(
+      filePath,
+      (command, args, options) => {
+        child = realSpawn(command, args, options);
+        return child;
+      },
+      () => false,
+    );
+
+    const command = "printf 'quoted %s\\n' 'single-quoted-value'";
+    const task = await store.start({
+      sessionId: "sess-quote",
+      title: "Quoted command",
+      command,
+      cwd: rootDir,
+      kind: "task",
+    });
+
+    // Wait for the real launch script to finish writing its terminal state.
+    await new Promise<void>((resolve, reject) => {
+      if (!child) {
+        reject(new Error("expected the launch script to be spawned"));
+        return;
+      }
+      child.once("exit", () => resolve());
+      child.once("error", reject);
+    });
+
+    const state = await store.executionService.readState(task);
+    expect(state).toBeDefined();
+    expect(state?.status).toBe("completed");
+    expect(state?.exitCode).toBe(0);
+    // The command round-trips intact through the shell-quoting + sed pipeline.
+    expect(state?.command).toBe(command);
+
+    const output = await store.executionService.readOutput(task);
+    expect(output).toContain("quoted single-quoted-value");
   });
 
   it("cancels running tasks and records cancelled state", async () => {

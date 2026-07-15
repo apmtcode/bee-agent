@@ -6,6 +6,56 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-15 (run 9) — 🐞 Fix real `shellQuote` corruption bug + de-flake background-task tests
+
+**Audited:** Project health. The committed suite was **not** actually green in
+this environment — 3 tests failed (`operator-runtime`, `server`, `app`). Root
+cause split into two genuine issues:
+
+1. **Real production bug in `src/harness/background-tasks.ts`.** `shellQuote`
+   used the escape sequence `"'"'"'` (6 chars, starting with a stray `"`) instead
+   of the correct POSIX single-quote escape `'"'"'` (5 chars). For **any** task
+   whose command/cwd contained a single quote (e.g. `printf 'x'`), the generated
+   bash launch script wrote **corrupted JSON** to `state.json` (`printf "'x"'`),
+   so `readState`/recovery threw `SyntaxError: Expected ',' or '}'`. The sibling
+   `src/training/runner.ts:228` already had the *correct* form — confirming this
+   was a transcription typo. Fixed to `'"'"'` with an explanatory comment.
+
+2. **Real-spawn test flakiness.** Three tests launched *real* detached processes
+   (`printf`, `sleep 5`, even `tail -f`) via the default spawn while also writing
+   `state.json` manually — so under full-suite CPU load the real launch-script
+   writes raced the manual writes and the assertions (control `active` vs
+   `degraded`, task still `active`, etc.). Only one failed per run depending on
+   timing; the shellQuote corruption masked the rest. Fixed deterministically by
+   injecting stub spawns (the established `background-tasks.test.ts` convention):
+   - `operator-runtime.test.ts`, `server.test.ts` (first + drifting + breaker
+     runtimes), `app.test.ts` (2 tests) now stub `backgroundTaskSpawnProcess` so
+     no real process/state-file races the manual state. Liveness (`false` for the
+     dead-pid recovery scenarios, `pid === 4321` for the intentionally-alive
+     ones) matches each test's original intent. Also eliminates leaked orphan
+     `sleep`/`tail` processes.
+
+**Changed (additive):**
+- `src/harness/background-tasks.ts`: `shellQuote` escape fix (1 line + comment).
+- `src/cli/app.ts`: exposed `backgroundTaskSpawnProcess` /
+  `backgroundTaskIsProcessRunning` pass-through options on `OperatorCliApp` (the
+  runtime already supported them; the app didn't) — a small testability/DX seam.
+- New regression test in `background-tasks.test.ts` that runs the **real** bash
+  launch script with a single-quoted command and asserts `state.json` parses and
+  the command round-trips. Verified it *fails* against the old bug and *passes*
+  with the fix.
+
+**Test results:** full suite **174→175 passing, 0 failing**, deterministic
+across 5 runs (was 3 failing/flaky). `typecheck:src` CLEAN, `build` ✅, full
+`tsc` total unchanged at **125** (no new test-file type debt).
+
+**New idea:** Add a lightweight `no-real-spawn-in-unit-tests` guard — a shared
+`stubSpawn(pid)` test helper plus a lint/grep check that flags
+`StandaloneOperatorRuntime`/`OperatorCliApp` constructions in `*.test.ts` that
+start background tasks without a `backgroundTaskSpawnProcess` override. This
+prevents the whole class of real-process race from silently returning, and makes
+the deterministic pattern the path of least resistance for future tests.
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

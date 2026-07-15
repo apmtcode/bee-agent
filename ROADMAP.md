@@ -70,6 +70,22 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Generalization eval harness: measure replay fidelity on held-out but
       related synthetic trajectories.
 
+## Reliability / correctness (added run 9)
+- [x] **Fix `shellQuote` corruption** in `src/harness/background-tasks.ts` — the
+      POSIX single-quote escape was `"'"'"'` instead of `'"'"'`, corrupting the
+      launch-script state JSON for any single-quoted command (2026-07-15, run 9).
+- [x] **De-flake background-task tests** — inject stub spawns so unit tests never
+      launch real detached processes that race the manual `state.json` writes
+      (2026-07-15, run 9). Suite is now deterministic (175/175).
+- [ ] **`no-real-spawn-in-unit-tests` guard** — a shared `stubSpawn(pid)` helper
+      plus a grep/lint check that flags any `*.test.ts` starting background tasks
+      without a `backgroundTaskSpawnProcess` override, so real-process races can't
+      silently reappear.
+- [ ] Make the launch-script writes **atomic** (temp-file + rename, matching
+      `writeJsonAtomic`) so a concurrent reader can never observe a partially
+      written `state.json` even in production — the sed redirect and the python
+      `write_text` are currently non-atomic.
+
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in

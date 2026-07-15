@@ -794,5 +794,10 @@ function renderStateWriterPython(status: BackgroundTaskExecutionState["status"])
 }
 
 function shellQuote(value: string): string {
-  return `'${value.replaceAll(`'`, `"'"'"'`)}'`;
+  // POSIX single-quote escaping: close the quote, emit a double-quoted literal
+  // quote, then reopen — i.e. each `'` becomes `'"'"'`. The previous ordering
+  // (`"'"'"'`) started with a stray `"` and corrupted any value containing a
+  // single quote (e.g. `printf 'x'`), which broke the generated launch script's
+  // state JSON and made background-task recovery fail to parse.
+  return `'${value.replaceAll(`'`, `'"'"'`)}'`;
 }
