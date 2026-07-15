@@ -39,7 +39,15 @@ unchecked items are queued. Keep this richer than you found it each run.
     `cron.runs`/misc — plus a few genuine test-only typings. Map the rest, then
     fix residual test-only typings.
 - [ ] Add a `verify` npm script (`typecheck && build && test`) and have the
-      engine run it as a pre-push self-check each cycle.
+      engine run it as a pre-push self-check each cycle. **Priority raised (run
+      9):** the suite arrived red (4 flaky background-task tests) despite run 8
+      reporting green — a pre-push `verify` gate would have caught it. Interim:
+      `typecheck:src && build && test`.
+- [x] **De-flake background-task execution** (run 9). Added a pluggable
+      `BackgroundExecutionDriver` seam + `SyntheticBackgroundExecutor` /
+      `createNoopBackgroundSpawn` so tests drive background execution
+      deterministically instead of spawning real detached shells. Suite
+      179/179, stable across repeated runs.
 - [x] Interim **source-only typecheck gate** — DONE run 7. `tsconfig.src.json`
       (excludes `**/*.test.ts`) + `typecheck:src` script; passes (exit 0). Next:
       have the engine run it as a per-run pre-push self-check.
@@ -66,7 +74,11 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
       for a real on-device small model.
 - [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
+      round-trips without real OS input. **Seed available (run 9):** the
+      `SyntheticBackgroundExecutor` pattern (deterministic in-process stand-in
+      for a real OS boundary, scripted timeline, fake handles) is the template —
+      build a `SyntheticEventSource` for mouse/keyboard/window events the same
+      way and feed it through `src/capture`.
 - [ ] Generalization eval harness: measure replay fidelity on held-out but
       related synthetic trajectories.
 

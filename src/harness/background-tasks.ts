@@ -108,6 +108,34 @@ export type SpawnBackgroundProcess = (
 
 export type IsProcessRunning = (pid: number) => boolean;
 
+/**
+ * Filesystem-scoped helpers handed to a {@link BackgroundExecutionDriver} so a
+ * simulated executor can write state/output for a task without knowing the
+ * on-disk layout. Every path resolution and atomic-write concern stays inside
+ * the execution service; the driver only decides *what* to write.
+ */
+export type BackgroundExecutionContext = {
+  readonly rootDir: string;
+  writeState(state: BackgroundTaskExecutionState): Promise<void>;
+  appendOutput(content: string): Promise<void>;
+};
+
+/**
+ * Pluggable replacement for the real `spawn`-based launch path. When a driver
+ * is supplied, background tasks are executed by the driver instead of a
+ * detached OS process, and `isProcessRunning` is delegated to it as well. This
+ * is the OS-boundary seam that lets tests (and the movement-learning
+ * simulations) drive background execution deterministically in the cloud,
+ * where spawning real detached shells is racy.
+ */
+export type BackgroundExecutionDriver = {
+  launch(
+    task: BackgroundTaskRecord,
+    context: BackgroundExecutionContext,
+  ): Promise<{ pid: number }> | { pid: number };
+  isProcessRunning(pid: number): boolean;
+};
+
 export type BackgroundTaskRecoveryReason =
   | "unchanged"
   | "state-running"
@@ -157,9 +185,23 @@ export class BackgroundTaskExecutionService {
     private readonly rootDir: string,
     private readonly spawnProcess: SpawnBackgroundProcess = (command, args, options) => spawn(command, args, options),
     private readonly isProcessRunningImpl: IsProcessRunning = defaultIsProcessRunning,
+    private readonly driver?: BackgroundExecutionDriver,
   ) {}
 
+  private executionContext(task: BackgroundTaskRecord): BackgroundExecutionContext {
+    return {
+      rootDir: this.rootDir,
+      writeState: (state) => this.writeState(task, state),
+      appendOutput: (content) => this.appendOutput(task, content),
+    };
+  }
+
   async writeArtifacts(task: BackgroundTaskRecord): Promise<void> {
+    // A simulated driver executes in-process, so the launch script is never
+    // spawned and would just be dead weight on disk.
+    if (this.driver) {
+      return;
+    }
     const launchScriptPath = path.join(this.rootDir, task.execution.launchScript);
     await ensureParentDir(launchScriptPath);
     await fs.writeFile(launchScriptPath, renderLaunchScript(task), {
@@ -169,6 +211,9 @@ export class BackgroundTaskExecutionService {
   }
 
   async launch(task: BackgroundTaskRecord): Promise<{ pid: number }> {
+    if (this.driver) {
+      return await this.driver.launch(task, this.executionContext(task));
+    }
     const launchScriptPath = path.join(this.rootDir, task.execution.launchScript);
     const child = this.spawnProcess(launchScriptPath, [], {
       cwd: this.rootDir,
@@ -188,6 +233,9 @@ export class BackgroundTaskExecutionService {
   }
 
   isProcessRunning(pid: number): boolean {
+    if (this.driver) {
+      return this.driver.isProcessRunning(pid);
+    }
     return this.isProcessRunningImpl(pid);
   }
 
@@ -243,6 +291,12 @@ export class BackgroundTaskExecutionService {
     await fs.writeFile(outputPath, content, "utf8");
   }
 
+  async appendOutput(task: BackgroundTaskRecord, content: string): Promise<void> {
+    const outputPath = path.join(this.rootDir, task.execution.outputFile);
+    await ensureParentDir(outputPath);
+    await fs.appendFile(outputPath, content, "utf8");
+  }
+
   async readOutput(
     task: BackgroundTaskRecord,
     options: ReadBackgroundTaskOutputOptions = {},
@@ -271,10 +325,15 @@ export class FileBackgroundTaskStore {
   readonly executionService: BackgroundTaskExecutionService;
   private readonly rootDir: string;
 
-  constructor(filePath: string, spawnProcess?: SpawnBackgroundProcess, isProcessRunning?: IsProcessRunning) {
+  constructor(
+    filePath: string,
+    spawnProcess?: SpawnBackgroundProcess,
+    isProcessRunning?: IsProcessRunning,
+    driver?: BackgroundExecutionDriver,
+  ) {
     this.filePath = filePath;
     this.rootDir = path.dirname(filePath);
-    this.executionService = new BackgroundTaskExecutionService(this.rootDir, spawnProcess, isProcessRunning);
+    this.executionService = new BackgroundTaskExecutionService(this.rootDir, spawnProcess, isProcessRunning, driver);
   }
 
   private readonly filePath: string;

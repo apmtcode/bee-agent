@@ -6,6 +6,60 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-15 (run 9) — Deterministic background-task execution: fixed 4 flaky tests + pluggable execution driver
+
+**Audited:** Project health. `npm test` was **red** on arrival — 4 failures
+(`operator-runtime.test.ts`, `server.test.ts`, `app.test.ts`) despite run 8
+reporting 174/174. Root cause was **not** a code regression but latent
+**flakiness**: those tests exercise `startBackgroundTask`, whose default launch
+path spawns a *real detached shell* (`renderLaunchScript` → `bash -lc` +
+`python3`). Two failure modes:
+- Tests that write execution state *by hand* (`executionService.writeState`)
+  raced the real process, which wrote/clobbered the same `stateFile`/`outputFile`
+  (→ `expected undefined to match object`, output mismatches).
+- Tests that assert a remote is `control=active` saw the real process write a
+  `running` state file that, combined with the tests' `isProcessRunning:()=>false`,
+  was diagnosed as `background task missing-process` → `degraded`
+  (`server.ts` L2170). Whether it fired depended on host timing.
+
+**Changed (additive, reversible):**
+- **New OS-boundary seam** in `src/harness/background-tasks.ts`:
+  `BackgroundExecutionDriver` + `BackgroundExecutionContext`. When a driver is
+  supplied, `launch()` runs it instead of spawning, `isProcessRunning()`
+  delegates to it, `writeArtifacts()` skips the dead launch script, and a new
+  `appendOutput()` helper is exposed. Threaded through
+  `FileBackgroundTaskStore` (4th ctor arg) → `StandaloneOperatorOptions.
+  backgroundExecutionDriver` → `OperatorCliAppOptions` (also forwards
+  spawn/isProcessRunning, which the CLI app previously hard-coded).
+- **New `src/harness/synthetic-background-executor.ts`:**
+  - `SyntheticBackgroundExecutor` — in-process driver: on launch writes a
+    `running` state + simulated output, reports the fake pid alive until
+    `complete()`. No spawn, no shell, fully deterministic.
+  - `simulateTrivialCommandOutput` — safely interprets `printf`/`echo` output
+    *without executing a shell* (so `tail -f` can never block the simulator).
+  - `createNoopBackgroundSpawn` — a `SpawnBackgroundProcess` that spawns nothing
+    and writes no files, for the manual-state tests.
+- **Test wiring:** `operator-runtime`/`server` tests use the no-op spawn (keep
+  their `isProcessRunning:()=>false` missing-process assertions intact);
+  `app.test` uses the synthetic driver (needs the task to stay *active* with
+  real `ok`/`drift` output). Added `synthetic-background-executor.test.ts` (5
+  cases).
+- Exported the new surface from `src/index.ts`.
+
+**Test results:** full suite **179/179** (was 174 with 4 red; +5 new tests).
+Ran the three formerly-flaky files **3×** → 50/50 each time, deterministic.
+`typecheck:src` ✅ (exit 0). Build ✅.
+
+**New idea:** the `SyntheticBackgroundExecutor` is the first concrete
+"simulated OS process" for bee-agent. Generalize this into the movement-learning
+objective: a `SyntheticEventSource` built on the same pattern (deterministic,
+in-process, replaces a real OS boundary) to feed the capture→dataset→replay
+pipeline synthetic mouse/keyboard/window streams — reusing the fake-pid /
+scripted-timeline idea so the whole recording pipeline can be validated in the
+cloud with zero real input. Also: add a `verify` npm script
+(`typecheck:src && build && test`) and run it as the engine's pre-push gate so a
+red suite like this run's is caught *before* a run starts new work.
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

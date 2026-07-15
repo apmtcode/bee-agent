@@ -73,7 +73,16 @@ export {
   type SpawnBackgroundProcess,
   type StartBackgroundTaskParams,
   type StopBackgroundTaskParams,
+  type BackgroundExecutionContext,
+  type BackgroundExecutionDriver,
 } from "./harness/background-tasks.js";
+export {
+  SyntheticBackgroundExecutor,
+  simulateTrivialCommandOutput,
+  createNoopBackgroundSpawn,
+  type CommandOutputSimulator,
+  type SyntheticBackgroundExecutorOptions,
+} from "./harness/synthetic-background-executor.js";
 export {
   FileSessionStore,
   type SessionStoreRecord,
