@@ -62,13 +62,33 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
+      for a real on-device small model. **DONE run 9** —
+      `src/training/movement-model.ts`: `MovementModelBackend` /
+      `TrainedMovementModel` interfaces + `MarkovMovementModelBackend`
+      (order-k back-off, deterministic, dependency-free). Repeats recorded
+      movements and generalizes unseen prefixes via back-off. Serialize/reload
+      supported.
 - [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      round-trips without real OS input. **Partially served run 9** — the
+      movement-model tests build synthetic `TrajectorySpan` workflows in-memory;
+      next: a reusable parameterized generator (templates + noise + branch
+      points) emitting spans, so capture→dataset→replay AND train→infer share one
+      fixture source. See "synthetic movement-trajectory generator" below.
+- [x] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories. **DONE run 9** — `evaluateMovementModel`
+      scores next-movement top-1 accuracy / coverage / mean back-off order over
+      held-out sequences.
+- [ ] **Synthetic movement-trajectory generator** (new, run 9): parameterized
+      templates (e.g. "open→edit→save" with varied targets, injected noise steps,
+      branch points) that emit `TrajectorySpan`s. Feed the held-out split to
+      `evaluateMovementModel` to chart generalization accuracy vs. training size
+      / model order — a measurable curve and a ready benchmark for a real
+      on-device backend.
+- [ ] Real on-device backend behind `MovementModelBackend` (e.g. a small MLX
+      model) — the interface seam exists; wire `LocalAppleSiliconTrainingRunner`
+      output to produce a `TrainedMovementModel` that loads the trained adapter.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

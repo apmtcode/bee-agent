@@ -6,6 +6,63 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-15 (run 9) — Movement model: pluggable local backend + trainable Markov mock; fixed a real state-JSON corruption bug
+
+**Audited:** The local-movement learning subsystem (standing objective #2). The
+capture side is mature — `src/capture/` records device/os/browser events into
+`TrajectorySpan`s (observations + actions), gated by consent/policy, and
+`src/capture/replay.ts` builds replayable timelines. `src/training/` exports
+reviewed datasets and `runner.ts` builds mlx/axolotl *shell command plans*. The
+**gap**: objective #2(c)+(d) — a local model that actually *post-trains on the
+recorded dataset to repeat the movements and generalize to related ones* — had
+no code. The runner only shells out to external runtimes; nothing trainable and
+runnable in the cloud/CI existed.
+
+**Changed (additive):**
+- New `src/training/movement-model.ts`:
+  - `MovementModelBackend` interface (pluggable — a real on-device small model
+    implements it identically, so swapping is a one-line call-site change) and a
+    `TrainedMovementModel` interface (`predictNext` / `generate` / `serialize`).
+  - `MarkovMovementModelBackend` — a deterministic, dependency-free, order-k
+    **back-off Markov** mock backend. Feeding a training prefix reproduces the
+    recorded continuation (highest-order context wins); feeding a *related but
+    unseen* prefix backs off to a shorter shared context and predicts a
+    plausible next movement — i.e. it **generalizes**. Ties broken
+    lexicographically ⇒ fully reproducible (no RNG), safe for CI.
+  - Tokenization: `actionToMovementToken` / `tokenizeTrajectory` /
+    `buildMovementDataset` turn captured actions into low-cardinality
+    `tool:verb:target` tokens so structurally-identical movements collapse.
+  - `evaluateMovementModel` — a **generalization eval harness** scoring
+    next-movement top-1 accuracy / coverage / mean back-off order over held-out
+    synthetic sequences, making the "generalize" claim measurable.
+  - `serialize` / `loadMovementModel` for persistence round-trips.
+  - Wired all exports through the `src/index.ts` barrel.
+- **Bug fix (real, pre-existing, unrelated to the feature) in
+  `src/harness/background-tasks.ts`:** the launch script wrote the initial
+  `running` state via `printf '%s' <json> | sed "…s/\"\$\$\"/$$/g"`. `sed`'s
+  replacement plus the `$$`→PID substitution **corrupts the JSON whenever the
+  task command contains sed-special chars** (quotes, `/`, `&`) or embedded
+  newlines — producing invalid `state.json` that crashed `readState` during
+  recovery. Replaced it with a base64-payload + `python3 json` writer (the same
+  safe path the completed/failed transitions already use). This fixed 3
+  deterministic pre-existing suite failures
+  (`operator-runtime`/`app`/`server` background-task recovery).
+
+**Test results:** new `movement-model.test.ts` **17/17** (repeat-exact,
+prefix-predict, generalization back-off, EOS termination, deterministic
+tie-break, serialize round-trip, eval harness). Full suite **191/191 passing**
+(was 188/191 — the 3 red tests were the state-JSON bug, now green). `npm run
+build` ✅. `typecheck:src` ✅ (source stays clean).
+
+**New idea (logged to ROADMAP):** a *synthetic movement-trajectory generator* —
+parameterized templates (e.g. "open→edit→save" with varied targets, injected
+noise steps, branch points) that emit `TrajectorySpan`s. Feed the held-out split
+to `evaluateMovementModel` to chart generalization accuracy vs. training size /
+model order — turning objective #2 into a measurable curve instead of a single
+pass/fail, and giving a real backend a ready-made benchmark.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
