@@ -62,13 +62,41 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
+      for a real on-device small model. **DONE run 9** —
+      `src/training/movement-model.ts`: `MovementModelBackend` interface +
+      `NGramMovementBackend` (stupid-backoff n-gram learner), tokenizer/dataset
+      builders over the existing replay schema, JSON artifact serialize/load.
+      15/15 tests. Next: an on-device MLX backend implementing the same interface.
 - [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      round-trips without real OS input. (Partly served by run 9's tokenizer +
+      `buildMovementDataset`; still want a randomized trajectory *generator* that
+      emits full `TrajectorySpan`s through the capture recorder for end-to-end
+      round-trip coverage.)
+- [x] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories. **DONE run 9** — `evaluateMovementModel`
+      reports top-1/top-K next-movement accuracy + backoff rate on held-out
+      sequences. Next: wire it into the training runner so a trained job records
+      an eval score alongside its artifact.
+- [ ] **Contextual (state→action) movement backend** implementing
+      `MovementModelBackend`: condition predictions on observation tokens (the
+      tokenizer already supports `include: "all"`) so an unseen UI state maps to
+      the nearest recorded movement — a backend swap, not a schema change.
+
+## Known bugs (discovered, queued)
+- [ ] **Background-task shell state writer corrupts multi-line commands.**
+      `background-tasks.ts` `renderLaunchScript` (~L757) writes the initial state
+      JSON on a *single line* via `printf '%s' … | sed …`; a `command` containing
+      an embedded newline (e.g. `printf 'line-1\nline-2\n'`) produces invalid JSON
+      that `readJsonFile` later throws on. Compounded by the detached `run.sh`
+      write racing the test's own `writeState`. Surfaces as 3 env-sensitive test
+      failures (operator-runtime/server/app `*.test.ts`) present on HEAD since
+      before run 9. Fix: escape/encode the command (or write state as a here-doc
+      via the Python writer already used for the terminal state) so embedded
+      newlines survive; the same `sed` pattern is shared with the training runner
+      (`training/runner.ts`), so fix both. Add a regression test with a
+      newline-containing command.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

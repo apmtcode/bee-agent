@@ -6,6 +6,61 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-15 (run 9) — Movement-learning subsystem: pluggable model backend + n-gram learner + eval harness
+
+**Audited:** Standing objective #2 (local-movement learning). Runs 2–8 were all
+typecheck debt; the movement subsystem itself hadn't advanced. Inventoried
+`src/capture` + `src/training`: capture → schema (`TrajectorySpan`, device
+gestures) → dataset (`ReviewedExportManifest.replays`) → replay
+(`ReplayManifest`) all exist, and the training **runner** emits shell *plans* for
+external `mlx`/`axolotl`. **Gap:** loop pieces (c) *post-train a model* and (d)
+*generalize* had no in-process, testable implementation — only a shell command to
+an external runtime that can't run in the cloud/CI. ROADMAP explicitly queued a
+"pluggable local-model backend interface with a deterministic mock backend".
+
+**Changed (additive) — new `src/training/movement-model.ts`:**
+- **Pluggable `MovementModelBackend` interface** (`train`/`load` → `MovementModel`
+  with `predict`/`serialize`). `kind: "mock" | "local" | "remote"` is the seam
+  for a real on-device small model (e.g. MLX policy) — callers/runner unchanged.
+- **`NGramMovementBackend`** — a real, dependency-free, deterministic n-gram
+  learner with **stupid-backoff**. It fits transition statistics from the dataset
+  (genuine post-training) and *generalizes* to unseen contexts by backing off to
+  the longest matching suffix (down to the unigram distribution). Fully
+  reproducible → validates the pipeline in the cloud with zero real OS input.
+- **Tokenizer + dataset builders:** `tokenizeMovementEvents` (over the existing
+  `ReplayTimelineEvent` schema), `buildMovementSequenceFromTrajectory`,
+  `buildMovementDatasetFromManifest`, `normalizeMovementLabel` (stable,
+  generalization-friendly tokens). JSON-serializable `MovementModelArtifact`.
+- **`evaluateMovementModel`** — generalization eval harness: top-1/top-K
+  next-movement accuracy + backoff rate on held-out sequences.
+- Exported the full surface from `src/index.ts`.
+
+**Test results:** new `movement-model.test.ts` — **15/15 pass** (repeat learning,
+deterministic training, ranked probabilities, backoff generalization,
+serialize/load round-trip, eval harness, manifest→dataset). `typecheck:src` ✅
+CLEAN. `npm run build` ✅.
+
+**⚠️ Pre-existing failures (NOT from this change):** full `npm test` is **186/189**
+— 3 failures in `operator-runtime.test.ts`, `server.test.ts`, `app.test.ts` that
+exist on the untouched HEAD (`3c7b7236`) too (verified by removing my files and
+re-running: base tree is 171/174). **Root cause diagnosed:** the background-task
+test spawns the *real* `run.sh`, whose `sed`-based **single-line** state writer
+(`background-tasks.ts` L757) mangles a `command` containing an embedded newline
+(`printf 'line-1\nline-2\n'`) into invalid JSON, and the detached write races the
+test's `writeState` — so `readJsonFile` throws `SyntaxError` at parse. It's
+timing/environment-sensitive (the log's "174/174" was a machine where the race
+resolved differently). Queued in ROADMAP as a focused fix; not rushed here to
+avoid destabilizing the shared shell state-writer (also used by the training
+runner). My change is green in isolation and adds zero regressions.
+
+**New idea:** condition the movement model on **state (observations) → action**
+rather than a pure action-stream n-gram — a lightweight "contextual bandit"
+backend implementing the same interface, so an unseen UI state still maps to the
+closest recorded movement. The tokenizer already supports `include: "all"`
+(observation tokens), so this is a backend swap, not a schema change.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
