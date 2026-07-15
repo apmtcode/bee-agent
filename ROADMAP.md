@@ -62,15 +62,33 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
+      for a real on-device small model. **DONE run 9** —
+      `src/training/model-backend.ts`: `MovementModelBackend` interface +
+      deterministic order-k `MarkovMovementBackend` (learns/repeats/generalises
+      via back-off, serialize/restore) + replay/trajectory dataset extractors.
+- [ ] Wire `MarkovMovementBackend` into `LocalAppleSiliconTrainingRunner` as the
+      cloud/CI backend seam: dispatch to the in-process backend when
+      `targetPlatform !== "apple-silicon"` (or no real backend), so `train`/infer
+      run everywhere behind one interface.
 - [ ] Synthetic event-stream generator to validate capture→dataset→replay
       round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+- [ ] Generalization eval harness: train on part of a synthetic trajectory set,
+      measure next-movement prediction accuracy on held-out but related sequences
+      (build on `MarkovMovementBackend.predictNext`/`generate`).
 
 ## Innovation backlog
+- [x] **Launch-script JSON reliability fix** (run 9): generated background-task
+      and training launch scripts wrote their initial running-state via a fragile
+      `printf|sed` template that produced invalid JSON for commands with quotes
+      and left `pid` unreplaced. Replaced with a `python3` argv+`json.loads`
+      writer in both `background-tasks.ts` and `training/runner.ts`. Fixed 3 red
+      test files.
+- [ ] Baseline-health guard: at the start of each run, record the suite
+      pass/fail baseline; if `HEAD` is already red (as on 2026-07-15), surface it
+      immediately and treat greening it as fair game rather than mistaking the
+      failures for self-inflicted regressions.
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in
       project health over time.

@@ -6,6 +6,60 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-15 (run 9) — Pluggable movement-model backend + launch-script JSON reliability fix
+
+**Audited:** Standing objective #2 (local-movement learning). The training runner
+(`src/training/runner.ts`) only emits **launch scripts** for real on-device
+training (mlx/axolotl) — nothing that can actually *learn from recorded movements
+and predict/generalise* in the cloud/CI, which is the whole point of parts (c)
+and (d). Also re-ran the full suite as a baseline check and found it had **gone
+red** since run 8 (3 test files failing on pristine `HEAD`, unrelated to any new
+code).
+
+**Changed — new capability (`src/training/model-backend.ts`, +tests):** a
+pluggable in-process movement-model seam:
+- `MovementModelBackend` interface (`train(dataset)` → `TrainedMovementModel`,
+  `restore(snapshot)`) — swap in a real small-model backend locally behind the
+  same shape.
+- `MarkovMovementBackend`: a deterministic order-k next-movement model with
+  stupid-backoff. It genuinely learns transitions from recorded data, **repeats**
+  a trained sequence (`generate`), and **generalises** to a new-but-related
+  context by backing off to a shorter previously-seen context. Ties break by
+  token key so predictions are stable — safe for cloud/CI. `serialize`/`restore`
+  round-trips through JSON.
+- Dataset extraction: `movementSequenceFromReplay` (drops transcript turns),
+  `movementSequenceFromTrajectory` (obs+actions ordered by ts),
+  `buildMovementDataset`, plus `createDefaultMovementBackends` registry. All
+  exported from the barrel. **11 new tests**, all green.
+
+**Changed — reliability bug fix (`src/harness/background-tasks.ts` +
+`src/training/runner.ts`):** the generated launch script wrote its initial
+running-state via `printf '%s' <payload> | sed "…; s/\"\$\$\"/$$/g" > state`.
+The embedded quotes broke shell-quote nesting, so a `command` containing quotes
+was written **unescaped → invalid JSON**, and `pid` was left as the literal
+`"$$"`. `reconcileTask`/`recoverBackgroundTasks` then threw `SyntaxError` reading
+it back — the exact cause of the 3 red test files. Replaced the fragile
+`printf|sed` with a `python3` argv + `json.loads` initial-state writer (mirrors
+the existing completion-state writer in both files), which escapes correctly and
+injects the real pid/timestamp. Updated one runner test assertion to the new,
+correct mechanism.
+
+**Test results:** `typecheck:src` CLEAN. Build ✅. Tests **185/185 passing**
+(was 174 passing + **3 files red** on baseline; +11 new, +3 recovered). Full
+`tsc` debt unchanged at **125** (entirely test files).
+
+**New idea:** wire `MarkovMovementBackend` into the training runner as the
+cloud/CI backend seam — `runner` dispatches to the in-process backend when
+`targetPlatform !== "apple-silicon"` (or a real backend isn't available) — and
+add a **generalization eval harness** that trains on part of a synthetic
+trajectory set and measures next-movement prediction accuracy on held-out but
+related sequences (feeds ROADMAP's "generalization eval" item). Second idea: a
+`verify` npm script (`typecheck:src && build && test`) plus a per-run baseline
+snapshot so a *regressed* baseline (like today's) is flagged immediately rather
+than discovered mid-run.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
