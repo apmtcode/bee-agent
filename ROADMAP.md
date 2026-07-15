@@ -8,6 +8,17 @@ unchecked items are queued. Keep this richer than you found it each run.
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`
       (2026-06-22).
+- [x] **Atomic background-task state writes + hermetic background-task tests**
+      (2026-07-15, run 9). Launch script now stages state to a temp file and
+      renames it into place (no more torn JSON reads under concurrency); the CLI
+      app gained `backgroundTaskSpawnProcess`/`backgroundTaskIsProcessRunning`
+      seams and a shared `fakeSpawnProcess()` testkit so the suite never spawns
+      real OS processes. Suite went RED→GREEN (175/175, deterministic).
+- [ ] **Test-guard against non-hermetic runtimes.** Add
+      `makeHermeticRuntime()`/`makeHermeticApp()` factories in the testkit that
+      always wire the fake spawn, plus a grep test asserting no `*.test.ts`
+      builds `StandaloneOperatorRuntime`/`OperatorCliApp` without a
+      `backgroundTaskSpawnProcess`. Prevents new flaky real-spawn tests.
 - [ ] **Pay down typecheck debt** (surfaced by the `typecheck` script). Full
       `tsc --noEmit` count was **397** on 2026-06-22; now **125**. 🎯 ALL source
       (`src/**` non-test) files typecheck clean since run 7; remaining 125 errors
@@ -80,6 +91,10 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Barrel-collision lint: scan `src/index.ts` re-exports for names exported
       from more than one module and flag them, so duplicate-identifier debt is
       caught at authoring time instead of accumulating silently.
+- [ ] Background-task **executor abstraction**: replace the raw `spawn` callback
+      with a first-class injectable strategy (`real-spawn` | `in-process-fake` |
+      `record-replay`). Makes execution deterministically testable and unlocks
+      record-replay of the movement-learning subsystem's action streams.
 - [ ] Per-module typecheck ratchet: record each module's current `tsc` error
       count to a baseline file and fail if a module regresses above it. Lets the
       engine pay debt down module-by-module without one green-gate blocking

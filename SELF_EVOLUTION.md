@@ -6,6 +6,68 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-15 (run 9) — 🛠️ Reliability: atomic background-task state writes + hermetic tests (RED→GREEN baseline)
+
+**Audited:** Ran the full suite fresh and found the **baseline was RED** — 3
+tests failing deterministically (`operator-runtime.test`, `server.test`,
+`app.test`), despite run 8 recording 174/174. Root cause was **not** a code
+regression but a latent reliability bug that this cloud environment's process
+timing exposed.
+
+**Root cause (real production bug):** the background-task **launch script wrote
+its execution-state file non-atomically** — the initial "running" state via
+`sed … > state.json` (shell truncate-then-write) and the terminal state via
+Python `state_path.write_text(...)` (truncate-then-write). Any concurrent reader
+— recovery (`reconcileTask`), sync, or the remote-status diagnostics
+(`deriveRemoteDiagnostics` reads the state file to decide `active`/`degraded`) —
+could observe a **half-written file** and throw `SyntaxError: … in JSON`. The
+three failing tests spawned **real** detached OS processes (`sleep 5`,
+`printf ok`) and passed in the prior environment only by *racing luck* (the
+detached child hadn't written state yet). Under different timing they read torn
+JSON (corruption) or a fully-written-but-`missing-process` state (`degraded` vs
+expected `mixed`/`active`).
+
+**Changed:**
+- **Production fix — atomic state writes** (`src/harness/background-tasks.ts`,
+  `renderLaunchScript`/`renderStateWriterPython`): both writes now stage to a
+  per-pid temp file and `mv`/`Path.replace` it into place. On POSIX `rename(2)`
+  is atomic, so a reader always sees either the old or the new *complete* file —
+  never a torn one. Verified end-to-end with a real spawn (valid JSON, correct
+  terminal status, no leftover `.tmp`).
+- **Test hermeticity — injectable execution** (`src/cli/app.ts`): added
+  `backgroundTaskSpawnProcess` + `backgroundTaskIsProcessRunning` to
+  `OperatorCliAppOptions`, threaded into the runtime (production default
+  unchanged — `undefined` → the runtime's real `spawn` impl). The runtime and
+  server already had these seams; the CLI app didn't.
+- **New shared test double** (`src/harness/background-tasks.testkit.ts`):
+  `fakeSpawnProcess()` (launches nothing, returns a stable fake pid) +
+  `constantIsProcessRunning()`. Injected into the 3 flaky tests so the launcher
+  never races the tests' own explicit `writeState`/`writeOutput` calls; the
+  tests now deterministically own every state/output transition. (`app.test`
+  also writes the `"ok"` output the real `printf` used to produce.)
+- **New regression test** (`background-tasks.test.ts`): asserts the generated
+  launch script stages state through a temp file + rename for **both** the
+  initial and terminal writes (and never writes the state path directly), so the
+  atomicity can't silently regress.
+
+**Test results:** baseline **171/174 (3 failed)** → **175/175 passing**
+(174 + 1 new), **deterministic across 5 full runs** (was flaky/red). Build ✅.
+`typecheck:src` ✅ (exit 0 — source stays clean). Full `tsc` test-file debt
+unchanged (out of scope this run).
+
+**New idea:** the suite still constructs runtimes that would spawn **real** OS
+processes if a test forgets to inject `fakeSpawnProcess()` — a latent flake
+generator. Add a tiny **test-guard**: a shared `makeHermeticRuntime()` /
+`makeHermeticApp()` factory in the testkit that *always* wires the fake spawn,
+plus an ESLint-style grep test asserting no `*.test.ts` constructs
+`StandaloneOperatorRuntime`/`OperatorCliApp` without a
+`backgroundTaskSpawnProcess`. Longer term, consider a `dryRun`/`executor`
+abstraction so background-task execution is a first-class injectable strategy
+(real-spawn | in-process-fake | record-replay) rather than a spawn callback,
+which would also unlock deterministic replay of the movement-learning subsystem.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

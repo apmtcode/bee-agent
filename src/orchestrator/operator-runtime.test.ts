@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { fakeSpawnProcess } from "../harness/background-tasks.testkit.js";
 import { StandaloneOperatorRuntime } from "./operator-runtime.js";
 import { resolveOperatorCliExecutionConfig } from "../cli/config.js";
 import { runOperatorHooks } from "../cli/execution-policy.js";
@@ -530,6 +531,7 @@ describe("StandaloneOperatorRuntime", () => {
   it("starts, syncs, recovers, lists, and cancels background tasks", async () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
+      backgroundTaskSpawnProcess: fakeSpawnProcess(),
       backgroundTaskIsProcessRunning: () => false,
     });
     const session = await runtime.startSession({ title: "Tasks", agentId: "main" });

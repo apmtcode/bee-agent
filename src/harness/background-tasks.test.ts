@@ -370,4 +370,30 @@ describe("BackgroundTaskExecutionService", () => {
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
   });
+
+  it("writes execution state atomically so concurrent readers never see a torn file", async () => {
+    const rootDir = await makeTempDir();
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"), () => ({ pid: 1313, unref() {} }));
+    const task = await store.start({
+      title: "Atomic state",
+      command: "printf 'ok'",
+      cwd: rootDir,
+    });
+
+    // The launch script must stage every state write to a temp file and rename
+    // it into place (atomic on POSIX). Without this, a reader such as recovery
+    // or the remote-status diagnostics can observe a half-written state file and
+    // fail to parse it. Guarded here so the atomicity can't silently regress.
+    const launchScript = await fs.readFile(path.join(rootDir, task.execution.launchScript), "utf8");
+    const stateFileQuoted = `'${task.execution.stateFile}'`;
+    // Initial "running" state: sed output is redirected to a temp file, then
+    // renamed into place — never redirected straight at the state file.
+    expect(launchScript).toContain(`${stateFileQuoted}.$$.tmp`);
+    expect(launchScript).toContain(`mv ${stateFileQuoted}.$$.tmp ${stateFileQuoted}`);
+    expect(launchScript).not.toContain(`> ${stateFileQuoted}\n`);
+    // Terminal state: python writes a temp file, then atomically replaces.
+    expect(launchScript).toContain("tmp_path.write_text");
+    expect(launchScript).toContain("tmp_path.replace(state_path)");
+    expect(launchScript).not.toContain("state_path.write_text");
+  });
 });
