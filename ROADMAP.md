@@ -38,8 +38,18 @@ unchecked items are queued. Keep this richer than you found it each run.
     `skills.executable.*`, `push.subscriptions.*`, `trajectories.*`, `replays.*`,
     `cron.runs`/misc — plus a few genuine test-only typings. Map the rest, then
     fix residual test-only typings.
+- [x] **Make the suite actually green + non-flaky** (2026-07-15, run 9). Fixed a
+      real launcher shell-quoting bug that corrupted `state.json` and a
+      launcher-vs-test write race; suite now **175/175 stable across 8 runs**
+      (was failing ~1-in-2). See SELF_EVOLUTION run 9.
 - [ ] Add a `verify` npm script (`typecheck && build && test`) and have the
       engine run it as a pre-push self-check each cycle.
+- [ ] Add a `test:stress` script (run the suite N times, e.g. `vitest run
+      --repeat`) + pre-push hook. Load-sensitive races pass a single run and only
+      surface under repetition (exactly how run 9's flake hid).
+- [ ] Give `FileBackgroundTaskStore` an injectable clock + a "launcher transport"
+      seam so the real-process path can be swapped for an in-memory fake in tests,
+      removing the need for per-test `backgroundTaskSpawnProcess` mocks.
 - [x] Interim **source-only typecheck gate** — DONE run 7. `tsconfig.src.json`
       (excludes `**/*.test.ts`) + `typecheck:src` script; passes (exit 0). Next:
       have the engine run it as a per-run pre-push self-check.

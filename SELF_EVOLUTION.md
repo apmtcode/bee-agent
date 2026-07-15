@@ -6,6 +6,61 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-15 (run 9) — Fix background-task launcher: corrupt `state.json` + flaky suite → 175/175 green
+
+**Audited:** The actual test suite health (the standing objective's verify gate).
+After `npm install`, the suite was **not green**: 3 tests failed
+(`operator-runtime`, `server`, `app`), sometimes deterministically, sometimes
+flaky — despite run 8 logging "174/174". Root-caused it end-to-end rather than
+papering over it.
+
+**Two real bugs found in `src/harness/background-tasks.ts` (the detached
+background-task launcher):**
+1. **Buggy POSIX shell-quoting.** `shellQuote` escaped `'` as `"'"'"'` (6 chars)
+   instead of the correct `'"'"'` (5 chars), inserting a stray `"` per single
+   quote. Verified in a real shell: the old code turned `printf 'x'` into
+   `printf "'x'"`. Any task command containing a single quote (very common) was
+   mangled — both when the launcher wrote the initial `state.json` (→ **invalid
+   JSON**, so `readState()` threw `SyntaxError` and recovery/reconcile crashed)
+   **and** when actually executing the command via `bash -lc`.
+2. **Fragile shell-built JSON.** The initial state was assembled by
+   `printf '%s' <json> | sed "s/…/…/; s/\"\$\$\"/$$/"` — string-munging JSON in
+   the shell. Replaced all three state writes (running/completed/failed) with a
+   single self-contained `python3 … json.dumps` writer that rebuilds the full
+   state from argv, so state files are always valid JSON regardless of quotes or
+   newlines in the command, and no write depends on a prior one.
+
+**Flaky-suite root cause (separate from corruption):** several tests start
+*real* background tasks and then manage state via explicit `writeState()`, so the
+detached launcher's async writes raced the tests' writes (surfaced under parallel
+load). Fixed at the seam the codebase already uses for this: inject a
+**mock spawn** (`backgroundTaskSpawnProcess: () => ({ pid, unref })`) so the
+launcher never runs and the tests' own writes are authoritative — applied to the
+`operator-runtime`, `server` (main + drifting + breaker), and `app` tests. To
+make this possible for the CLI test, added optional
+`backgroundTaskSpawnProcess` / `backgroundTaskIsProcessRunning` to
+`OperatorCliAppOptions` (additive; production leaves them unset).
+
+**Regression test added:** `background-tasks.test.ts` now runs a *real*
+launcher with a command containing single quotes **and** a newline
+(`printf 'alpha\nbeta\n'`) and asserts `state.json` parses, reaches `completed`,
+and the command round-trips exactly — directly guarding the corruption bug.
+
+**Test results:** `npm run build` ✅. `typecheck:src` ✅ (exit 0, all source
+clean). Full suite **175/175** (was 174 + 1 new regression test), verified
+**stable across 8 consecutive full runs** (previously failed ~1-in-2). Full
+`tsc` unchanged at 125 (pre-existing test-only debt; no new errors).
+
+**New idea (logged to ROADMAP):** a `test:stress` script that runs the suite N
+times (e.g. `vitest run --repeat` or a loop) and a pre-push hook that runs it
+once — flaky, load-sensitive races like this one pass a single run and only
+surface under repetition, so the engine should stress-test before pushing.
+Bigger: give `FileBackgroundTaskStore` an injectable clock + a "launcher
+transport" interface so the real-process path can be swapped for an in-memory
+fake in tests, removing the need for per-test spawn mocks entirely.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

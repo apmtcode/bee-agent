@@ -353,6 +353,41 @@ describe("FileBackgroundTaskStore", () => {
     ]);
     await expect(reloaded.get(other.id)).resolves.toMatchObject({ id: other.id, status: "running" });
   });
+
+  it("runs a real command containing quotes and newlines without corrupting state.json", async () => {
+    const rootDir = await makeTempDir();
+    const filePath = path.join(rootDir, "background-tasks.json");
+    // Real spawn (no mock) so the actual launcher script executes.
+    const store = new FileBackgroundTaskStore(filePath);
+
+    // The command deliberately contains single quotes and a newline. The previous
+    // printf+sed launcher (and a buggy shell-quote escape) mangled these into
+    // invalid JSON, so reading the resulting state.json threw a SyntaxError.
+    const command = "printf 'alpha\nbeta\n'";
+    const task = await store.start({
+      sessionId: "sess-quote",
+      title: "Quoted command",
+      command,
+      cwd: rootDir,
+      kind: "task",
+    });
+
+    let state: BackgroundTaskExecutionState | undefined;
+    for (let attempt = 0; attempt < 120; attempt += 1) {
+      // readState() must never throw: a valid launcher write is always parseable.
+      state = await store.executionService.readState(task);
+      if (state && state.status !== "running") {
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+
+    expect(state?.status).toBe("completed");
+    expect(state?.exitCode).toBe(0);
+    // The command round-trips exactly through the launcher's json.dumps writer.
+    expect(state?.command).toBe(command);
+    await expect(fs.readFile(path.join(rootDir, task.execution.outputFile), "utf8")).resolves.toContain("alpha");
+  }, 15000);
 });
 
 describe("BackgroundTaskExecutionService", () => {
