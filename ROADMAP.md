@@ -59,16 +59,43 @@ unchecked items are queued. Keep this richer than you found it each run.
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
 (exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
-      objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Inventory what `src/capture` + `src/training` already implement vs. the
+      objective's five pieces (run 9): capture/schema/dataset/replay existed;
+      training could only *prepare external launch scripts* (MLX/Axolotl) — no
+      in-process train/infer. Run 9 filled the train→infer gap.
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      for a real on-device small model — DONE run 9 (`movement-model.ts`
+      interfaces + `MovementModelRegistry`; `markov-backend.ts` deterministic
+      in-process backend). Real on-device model implements `MovementModelBackend`.
+- [x] Synthetic event-stream generator to validate capture→dataset→replay
+      round-trips without real OS input — DONE run 9 (`synthetic-movements.ts`).
+- [x] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories — DONE run 9 (`movement-eval.ts`:
+      `evaluateMovementModel` top-1/coverage/mean-prob + `splitMovementDataset`).
+- [ ] **Behaviour-cloning replay bridge**: feed `MarkovMovementBackend.generate()`
+      output through `src/capture/replay-service` so a trained model can *drive* a
+      simulated replay (capture→train→**act**), plus a per-step surprise metric
+      (negative log-prob) to flag live-stream divergence from the learned policy.
+- [ ] Higher-order / smoothed backends behind the same interface (e.g.
+      Kneser-Ney n-gram, or a tiny embedding+kNN model) and compare on the eval
+      harness to quantify the generalization gain over plain Markov backoff.
+- [ ] Wire an `import { MarkovMovementBackend }` default into the training
+      execution path so a reviewed export can produce an in-process model
+      artifact alongside the external launch script.
+
+## Test hermeticity / project health
+- [ ] **Make background-task control-plane tests hermetic** (surfaced run 9;
+      currently red on `main` in sandboxes that can spawn). `server.test.ts`,
+      `app.test.ts`, and `operator-runtime.test.ts` start a **real `sleep 5`
+      subprocess** (default spawn) while forcing
+      `backgroundTaskIsProcessRunning: () => false`; whether the "missing-process"
+      diagnostic fires then depends on whether the env can spawn and persist a
+      `running` state file, making the remote-control/liveness assertions
+      environment-dependent. Fix: inject a mock `SpawnBackgroundProcess` (as the
+      drift/breaker tests already do) or an explicit state file instead of relying
+      on a live `sleep`, so the diagnostic is deterministic. This is the pre-existing
+      red blocking a fully-green `main`.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

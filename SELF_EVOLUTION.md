@@ -6,6 +6,68 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-15 (run 9) — In-process pluggable movement-model backend (train + infer + generalize, cloud-runnable)
+
+**Audited:** Standing objective #2 (local-movement learning). Inventoried
+`src/training/*`: the subsystem could *prepare* on-device trainer launch scripts
+(`runner.ts` → MLX/Axolotl) and *export* reviewed datasets (`exporter.ts` →
+`ReviewedExportManifest.replays[]`), but had **no in-process model** — nothing
+that actually trains or infers in the cloud/CI. Objective 2(c) "post-train a
+local model to repeat recorded movements" and 2(d) "generalize to new but
+related movements" were entirely unimplemented in a testable form.
+
+**Changed (additive — 5 new files, barrel exports; no existing file logic
+touched):**
+- `src/training/movement-model.ts` — the pluggable layer: `MovementToken` schema
+  + `tokenizeReplayEvents()` (reduces each replay-timeline event to a coarse,
+  target-agnostic `act:<tool>:<verb>` / `obs:<source>:<verb>` token — the
+  normalization that enables generalization), `buildMovementDataset(...)` from
+  exported replays, the `MovementModel` / `MovementModelBackend` interfaces, and
+  a `MovementModelRegistry` (mock now, real on-device model droppable in later
+  behind the same seam). Serialization via `toJSON()` / `registry.load()`.
+- `src/training/markov-backend.ts` — `MarkovMovementBackend`, a deterministic
+  in-process order-N Markov model with **longest-match backoff**. Repeats a
+  single recorded trajectory exactly under greedy argmax (2c) and stitches
+  transitions across trajectories into novel-but-related sequences via backoff
+  (2d). Fully deterministic (argmax + lexicographic tie-break, no RNG) → CI-safe.
+- `src/training/movement-eval.ts` — `evaluateMovementModel()` (top-1 accuracy,
+  distribution coverage, mean true-token probability on held-out sequences) +
+  `splitMovementDataset()` (deterministic round-robin train/held-out folds). The
+  roadmap's "generalization eval harness".
+- `src/training/synthetic-movements.ts` — deterministic synthetic replay-stream
+  generator (capture-pipeline-shaped) so the capture→dataset→train→infer loop is
+  validated without real OS input, per the objective's cloud constraint.
+- `src/training/movement-model.test.ts` — 10 tests: tokenization, exact-repeat,
+  cross-trajectory generalization (`x b` → `x b c`, never seen verbatim),
+  backoff, empty-model, sentinels, registry pluggability + serialization
+  round-trip, and a synthetic held-out eval (top-1 0.4 / coverage 0.8 on a novel
+  "format" workflow — real generalization on shared open/save scaffolding).
+
+**Test results:** build ✅ (tsdown, 5 files, 553 kB). `typecheck:src` ✅ (exit
+0 — source stays clean). New suite ✅ **10/10**. Full suite **181/184**.
+
+**Pre-existing red (NOT this change — proven):** 3 tests fail
+(`operator-runtime`/`server`/`app`, all the background-task-liveness family).
+`git stash` → clean HEAD (== `origin/main`) fails the *identical* 3. Root cause
+diagnosed: `server.test.ts` starts a **real `sleep 5` subprocess** (default
+spawn) that writes a `running` state file, while forcing
+`backgroundTaskIsProcessRunning: () => false`; in a sandbox that *can* spawn
+(this env) the "missing-process" diagnostic fires → `degraded` instead of the
+asserted `active`. In run-8's env spawning was blocked → `readState` undefined →
+passed. It is an environment-dependent test-hermeticity bug (real subprocess in a
+unit test), unrelated to the movement subsystem — queued as a dedicated
+increment rather than bundled here. Pushed to feature branch
+`claude/peaceful-dirac-5700g4` per this session's branch requirements.
+
+**New idea:** now that movements are a token stream with a pluggable model, add
+a **behaviour-cloning replay bridge** — feed `MarkovMovementBackend.generate()`
+output back through the existing `replay-service` so a trained model can *drive*
+a simulated replay (closing capture→train→**act**), plus a "surprise" metric
+(per-step negative log-prob) to flag when a live movement stream diverges from
+the learned policy — the seed of online/continual adaptation.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
