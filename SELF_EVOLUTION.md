@@ -6,6 +6,63 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-15 (run 9) — Movement subsystem: pluggable in-process model backend + eval harness
+
+**Audited:** Standing objective #2 (local-movement learning) against `src/training`
+and `src/capture`. Finding: the training subsystem could only *plan* external
+Apple-Silicon training (`runner.ts` emits MLX/axolotl launch scripts) — there was
+**no in-process model that can actually train on movements, repeat them, or
+generalize**, i.e. objective #2(c)/(d) had zero executable code. Recent runs 5–8
+were all typecheck-debt churn on the same control-plane result map; this run
+pivots back to the core mission with a self-contained, fully-testable capability.
+
+**Changed (additive, new files only — no existing module touched except the
+barrel):**
+- **`src/training/movement-model.ts`** — the pluggable backend contract:
+  `MovementModelBackend` (train → `MovementModelArtifact`; predict →
+  `MovementPrediction`; deterministic `generate`), the `MovementDataset`/
+  `MovementSequence` schema, `buildMovementDatasetFromTrajectories`
+  (ts-ordered, redacted-action-aware, `requireApproved` filter, reward
+  passthrough, custom tokenizer), `buildMovementSequenceFromReplay`, and
+  `evaluateMovementModel` — a **generalization eval harness** measuring
+  next-token accuracy + backoff-order histogram over held-out sequences.
+- **`src/training/markov-backend.ts`** — `MarkovMovementBackend`, a deterministic
+  variable-order Markov model with Katz-style backoff. Two objective-critical
+  properties, both under test: **repeat** (a unique recorded high-order context
+  → its single continuation at probability 1, so recordings replay exactly) and
+  **generalize** (an unseen high-order context backs off to a seen shorter
+  suffix → a related continuation instead of failing). Learns an end-of-sequence
+  sentinel so rollout halts at the recording's end. Artifact is plain JSON, so it
+  persists via the existing atomic-write helpers with no bespoke serializer. Runs
+  fully in-process (no OS/native deps) → validates capture→dataset→train→infer in
+  the cloud, and is the documented seam for a real on-device small model.
+- **`src/index.ts`** — barrel exports for the new surface (no name collisions).
+- Tests: `markov-backend.test.ts` (8) + `movement-model.test.ts` (11) — repeat,
+  backoff generalization, frequency-weighted deterministic distribution, delimiter
+  non-collision, JSON round-trip, dataset builder (ordering/approval/redaction/
+  reward/tokenizer), replay extraction, and eval accuracy on train vs held-out.
+
+**Test results:** `typecheck:src` ✅ (exit 0). Build ✅ (tsdown, 5 files). New
+training suite ✅ **28/28** (19 new). Full suite **188 passed / 4 failed** — the
+4 failures are **pre-existing and environment-specific**: `app.test.ts` (2),
+`server.test.ts` (1, "degraded" vs "active" control state + UUIDs),
+`operator-runtime.test.ts` (1). Verified by `git stash` → same 4 fail on the
+clean baseline (they were green in run 8's environment; they fail deterministically
+on this cloud machine, independent of this diff). This change adds only new files
++ export lines and touches none of those modules. Pushed to the designated feature
+branch `claude/peaceful-dirac-ah6kjb` (per branch instructions), not `main`.
+
+**New idea:** now that a model can *generate* a movement rollout, add a
+**replay-fidelity reward** that scores a generated rollout against the recorded
+trajectory (token-level edit distance / longest-common-subsequence), and feed it
+back as the `reward` on `MovementSequence` — turning the eval harness into a
+self-improving signal the RL (`grpo`) training path can consume. Also: a
+`predict`-time temperature/top-k sampler variant (kept behind a seeded RNG so
+tests stay deterministic) to explore *related* movements rather than always
+argmax, which is closer to true generalization behavior.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

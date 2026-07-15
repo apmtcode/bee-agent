@@ -62,13 +62,25 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
-      deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
+- [x] Pluggable local-model backend interface for the training runner with a
+      deterministic backend (so cloud/CI tests pass) and a documented seam
+      for a real on-device small model. **DONE run 9** — `MovementModelBackend`
+      in `src/training/movement-model.ts` + `MarkovMovementBackend`
+      (variable-order Markov, Katz backoff: exact repeat + generalization).
 - [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      round-trips without real OS input. (Partially served now: dataset builders
+      + backend accept synthetic sequences; still want a generator that emits
+      realistic OS-event streams into the capture adapters.)
+- [x] Generalization eval harness: measure next-token accuracy + backoff-order
+      histogram on held-out but related sequences. **DONE run 9** —
+      `evaluateMovementModel`.
+- [ ] Replay-fidelity reward: score a generated rollout vs the recorded
+      trajectory (LCS / edit distance) and write it back as `MovementSequence.reward`,
+      feeding the RL (`grpo`) path a real signal from the eval harness.
+- [ ] Seeded top-k/temperature sampler variant of `predict` (deterministic under
+      a seeded RNG) to explore related movements instead of always argmax.
+- [ ] Wire the movement-model train/predict into the control-plane RPC surface
+      (`trajectories.*`/`training.*`) so the CLI can train + roll out locally.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
