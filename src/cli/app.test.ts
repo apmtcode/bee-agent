@@ -801,7 +801,19 @@ describe("OperatorCliApp", () => {
 
   it("supports session lifecycle, transcript, approvals, pairing, config, and prompt commands", async () => {
     const rootDir = await makeTempDir();
-    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    // Do not launch real processes: a fast command (e.g. "printf drift") would
+    // complete and let its launch script write execution state asynchronously,
+    // racing the manual writeState below and the control-state assertions. The
+    // stub spawn reports pid 4242; treat only that pid as alive so freshly
+    // started tasks read as running (control=active) while the task later
+    // degraded via an explicit writeState (pid 999999) reads as failed.
+    const app = new OperatorCliApp({
+      rootDir,
+      cwd: rootDir,
+      currentDate: "2026-05-25",
+      backgroundTaskSpawnProcess: () => ({ pid: 4242, unref() {} }),
+      backgroundTaskIsProcessRunning: (pid: number) => pid === 4242,
+    });
     const firstSession = await app.runtime.startSession({ title: "first", cwd: rootDir, agentId: "operator-cli" });
     const secondSession = await app.runtime.startSession({ title: "second", cwd: rootDir, agentId: "operator-cli" });
 

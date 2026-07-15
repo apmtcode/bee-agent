@@ -6,6 +6,57 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-15 (run 9) — 🐞 Real bug: `shellQuote` corrupted background-task state; suite made deterministic
+
+**Audited:** Test health. The suite was intermittently red — baseline
+`server.test.ts` failed **6/6** runs and `operator-runtime.test.ts` failed in
+isolation **5/5**, with a `SyntaxError: Expected ',' or '}' after property value
+in JSON` deep inside background-task recovery (`readJsonFile` →
+`reconcileTask` → `recoverBySession`). Instrumenting the parse failure pointed
+at a launch-script–written `state.json` with **unescaped quotes and an
+un-substituted `"$$"`**.
+
+**Root cause (genuine production bug) in `src/harness/background-tasks.ts`:**
+`shellQuote()` used the replacement `"'"'"'` for embedded single quotes. The
+correct POSIX idiom is `'\''` (close-quote, escaped literal quote, reopen) — the
+buggy version **starts with a double quote**, so it injected a spurious `"` and
+reordered adjacent quotes. Any background-task **command or cwd containing a
+single quote** (e.g. `printf 'line-1\nline-2\n'`) was mis-quoted in the generated
+launch script, so the script wrote invalid JSON into `state.json`, which then
+crashed recovery/reconciliation at runtime. Verified with a round-trip harness
+across `printf 'a'`, `it's a $(rm -rf /) \`x\``, `path/o'brien/f.txt`, mixed
+quotes — all now round-trip exactly (also closes a shell-injection footgun).
+
+**Changes (additive):**
+- **`shellQuote` fixed** to the canonical `'\''` escaping.
+- **Hardened the initial-state write**: replaced the fragile
+  `printf '%s' PAYLOAD | sed "…s/\"\$\$\"/$$/g"` pipeline — whose `"$$"` also
+  broke out of the shell double-quote, degrading the pid substitution to a
+  no-op — with a small Python `json` writer (`renderStateInitPython`), mirroring
+  the existing completion writer. No more sed/quote fragility on the hot path.
+- **`OperatorCliApp` testability seam** (`src/cli/app.ts`): new optional
+  `backgroundTaskSpawnProcess` / `backgroundTaskIsProcessRunning` options,
+  forwarded verbatim to the runtime (production defaults unchanged).
+- **Deterministic tests**: injected stub spawns into the four background-task
+  test runtimes (`server.test.ts` ×3 runtimes, `operator-runtime.test.ts`,
+  `app.test.ts`) so a real fast command's *asynchronous* launch-script state
+  write can no longer race manual `writeState`/reconciliation. This was the
+  hidden cause of the `degraded⇄paused⇄mixed`/`running⇄completed` flakes.
+
+**Test results:** `npm test` **174/174**, now **15/15 full-suite runs green**
+(was flaky/red at baseline). `typecheck:src` ✅ (exit 0). Full `tsc` unchanged at
+**125** (test-file-only debt; no new errors). Build ✅.
+
+**New idea:** add a tiny **property test for `shellQuote`** (fuzz strings over
+`' " $ \` \\ newline space`) asserting `printf '%s' <quoted>` round-trips to the
+input — a 10-line guard that would have caught this class of bug immediately, and
+protects the launch-script generator (a security-sensitive surface) going
+forward. Longer term: route *all* shell interpolation in the launch script
+through a single audited quoting helper and add a lint that flags raw
+`${...}`-in-double-quotes in generated scripts.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

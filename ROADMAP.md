@@ -4,6 +4,22 @@ Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
 ## Foundations / DX
+- [x] **Fix `shellQuote` single-quote escaping bug** (2026-07-15, run 9) — used
+      `"'"'"'` instead of the canonical `'\''`, corrupting background-task launch
+      scripts / `state.json` for any command or cwd containing a single quote
+      (crashed recovery at runtime). Also replaced the fragile `printf | sed`
+      initial-state write with a Python `json` writer.
+- [x] **Make the test suite deterministic** (2026-07-15, run 9) — background-task
+      tests spawned real fast processes whose launch scripts wrote state
+      asynchronously, racing manual `writeState`/reconciliation (baseline
+      `server.test.ts` failed 6/6). Injected stub spawns via a new
+      `OperatorCliApp` testability seam; now 15/15 full-suite runs green.
+- [ ] **Property test for `shellQuote`** — fuzz strings over `' " $ \` \\ newline
+      space` and assert `printf '%s' <quoted>` round-trips. 10-line guard against
+      the run-9 class of bug on a security-sensitive surface (launch-script gen).
+- [ ] Route all launch-script shell interpolation through one audited quoting
+      helper + a lint flagging raw `${...}` inside double quotes in generated
+      scripts.
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`

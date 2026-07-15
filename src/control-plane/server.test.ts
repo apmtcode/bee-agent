@@ -84,6 +84,11 @@ describe("OperatorControlPlaneServer", () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir,
       backgroundTaskIsProcessRunning: () => false,
+      // Background-task execution state is managed explicitly via writeState in
+      // this test. Launching real processes would let their launch scripts
+      // write state asynchronously, racing those manual writes and the state
+      // assertions below.
+      backgroundTaskSpawnProcess: () => ({ pid: 4242, unref() {} }),
       delivery: new OperatorDeliveryService(rootDir, {
         sendBrowserPush: async () => {},
       }),
@@ -953,6 +958,10 @@ describe("OperatorControlPlaneServer", () => {
     const driftingRuntime = new StandaloneOperatorRuntime({
       rootDir: driftingRootDir,
       backgroundTaskIsProcessRunning: () => false,
+      // Do not launch a real process: this task's command completes instantly,
+      // and its launch-script completion write would otherwise race the manual
+      // writeState below, making the reconciled state non-deterministic.
+      backgroundTaskSpawnProcess: () => ({ pid: 4242, unref() {} }),
     });
     const driftingServer = new OperatorControlPlaneServer({ runtime: driftingRuntime });
     const driftingBootstrap = await driftingServer.handle({
@@ -1019,6 +1028,12 @@ describe("OperatorControlPlaneServer", () => {
     const breakerRuntime = new StandaloneOperatorRuntime({
       rootDir: breakerRootDir,
       backgroundTaskIsProcessRunning: () => false,
+      // Do not launch real processes: the launch script writes its own initial
+      // execution state asynchronously, which races the manual writeState calls
+      // below. That race can make the same task observed under two failure
+      // causes (missing-process vs missing-state), inflating the breaker's
+      // failure count and flipping the expected state (degraded ⇄ paused).
+      backgroundTaskSpawnProcess: () => ({ pid: 4242, unref() {} }),
     });
     const breakerServer = new OperatorControlPlaneServer({ runtime: breakerRuntime });
     const breakerOne = await breakerServer.handle({
