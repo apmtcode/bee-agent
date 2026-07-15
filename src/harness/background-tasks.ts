@@ -740,9 +740,9 @@ function renderLaunchScript(task: BackgroundTaskRecord): string {
       taskId: task.id,
       kind: task.kind,
       status: "running",
-      pid: "$$",
-      startedAt: "__OPENCLAW_STARTED_AT__",
-      updatedAt: "__OPENCLAW_STARTED_AT__",
+      pid: 0,
+      startedAt: "",
+      updatedAt: "",
       outputFile: task.execution.outputFile,
       cwd: task.cwd,
       command: task.command,
@@ -754,7 +754,13 @@ function renderLaunchScript(task: BackgroundTaskRecord): string {
     "set -euo pipefail",
     `mkdir -p $(dirname ${quotedStatePath}) $(dirname ${quotedOutputFile})`,
     "started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-    `printf '%s' ${quotedStatePayload} | sed "s/__OPENCLAW_STARTED_AT__/$started_at/g; s/\"\$\$\"/$$/g" > ${quotedStatePath}`,
+    // Write the initial "running" state with the same atomic Python writer used
+    // for completion. Building JSON via `printf | sed` was fragile: `sed` could
+    // not substitute the pid (`$` is a regex anchor, so it stayed the string
+    // "$$") and any value with shell/regex metacharacters was mangled.
+    `python3 - ${quotedStatePath} "$$" "$started_at" ${quotedStatePayload} <<'PY'`,
+    ...renderInitialStateWriterPython(),
+    "PY",
     `printf '%s\n' "starting ${task.kind} ${task.id}" >> ${quotedOutputFile}`,
     `if cd ${quotedCwd} && bash -lc ${quotedCommand} >> ${quotedOutputFile} 2>&1; then`,
     "  completed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
@@ -773,6 +779,25 @@ function renderLaunchScript(task: BackgroundTaskRecord): string {
   ].join("\n");
 }
 
+function renderInitialStateWriterPython(): string[] {
+  return [
+    "import json",
+    "import pathlib",
+    "import sys",
+    "state_path = pathlib.Path(sys.argv[1])",
+    "pid = int(sys.argv[2])",
+    "timestamp = sys.argv[3]",
+    "state = json.loads(sys.argv[4])",
+    "state['pid'] = pid",
+    "state['startedAt'] = timestamp",
+    "state['updatedAt'] = timestamp",
+    "state_path.parent.mkdir(parents=True, exist_ok=True)",
+    "tmp_path = state_path.with_name(state_path.name + f'.{pid}.tmp')",
+    "tmp_path.write_text(json.dumps(state, indent=2) + '\\n')",
+    "tmp_path.replace(state_path)",
+  ];
+}
+
 function renderStateWriterPython(status: BackgroundTaskExecutionState["status"]): string[] {
   return [
     "import json",
@@ -789,10 +814,17 @@ function renderStateWriterPython(status: BackgroundTaskExecutionState["status"])
     "state['completedAt'] = timestamp",
     "state['exitCode'] = exit_code",
     `state['error'] = None if '${status}' == 'completed' else f'background task exited non-zero ({exit_code})'`,
-    "state_path.write_text(json.dumps(state, indent=2) + '\\n')",
+    "tmp_path = state_path.with_name(state_path.name + f'.{pid}.tmp')",
+    "tmp_path.write_text(json.dumps(state, indent=2) + '\\n')",
+    "tmp_path.replace(state_path)",
   ];
 }
 
 function shellQuote(value: string): string {
-  return `'${value.replaceAll(`'`, `"'"'"'`)}'`;
+  // POSIX-safe single-quoting: to embed a literal single quote inside a
+  // single-quoted string you must close the quote, emit an escaped quote, and
+  // reopen it — i.e. replace `'` with `'"'"'`. The previous form (`"'"'"'`)
+  // started with a double quote and corrupted any value containing a single
+  // quote (e.g. `printf 'x'`), producing invalid JSON in the launch state file.
+  return `'${value.replaceAll(`'`, `'"'"'`)}'`;
 }

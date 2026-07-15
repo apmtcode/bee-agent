@@ -16,6 +16,26 @@ async function makeTempDir(): Promise<string> {
   return dir;
 }
 
+// Deterministic background-task process model for tests. `spawn` returns a fake
+// pid without launching a real detached process (so a launch script never races
+// explicit writeState calls), and `isProcessRunning` reports those fake pids as
+// alive while treating any other pid (e.g. a test's simulated dead pid) as gone.
+function fakeBackgroundProcesses(): {
+  spawn: () => { pid: number; unref(): void };
+  isProcessRunning: (pid: number) => boolean;
+} {
+  const live = new Set<number>();
+  let nextPid = 40000;
+  return {
+    spawn: () => {
+      const pid = (nextPid += 1);
+      live.add(pid);
+      return { pid, unref() {} };
+    },
+    isProcessRunning: (pid: number) => live.has(pid),
+  };
+}
+
 afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })));
 });
@@ -801,7 +821,14 @@ describe("OperatorCliApp", () => {
 
   it("supports session lifecycle, transcript, approvals, pairing, config, and prompt commands", async () => {
     const rootDir = await makeTempDir();
-    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    const backgroundProcesses = fakeBackgroundProcesses();
+    const app = new OperatorCliApp({
+      rootDir,
+      cwd: rootDir,
+      currentDate: "2026-05-25",
+      backgroundTaskSpawnProcess: backgroundProcesses.spawn,
+      backgroundTaskIsProcessRunning: backgroundProcesses.isProcessRunning,
+    });
     const firstSession = await app.runtime.startSession({ title: "first", cwd: rootDir, agentId: "operator-cli" });
     const secondSession = await app.runtime.startSession({ title: "second", cwd: rootDir, agentId: "operator-cli" });
 

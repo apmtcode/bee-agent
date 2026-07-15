@@ -18,6 +18,15 @@ async function makeTempDir(): Promise<string> {
   return dir;
 }
 
+// Deterministic background-task spawn for tests that drive execution state
+// explicitly via writeState. It returns a fake pid without launching a real
+// detached process, so the launch script cannot race those writes by emitting
+// its own "running"/terminal state to state.json.
+function fakeBackgroundSpawn(): () => { pid: number; unref(): void } {
+  let pid = 40000;
+  return () => ({ pid: (pid += 1), unref() {} });
+}
+
 afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })));
 });
@@ -83,6 +92,7 @@ describe("OperatorControlPlaneServer", () => {
     const rootDir = await makeTempDir();
     const runtime = new StandaloneOperatorRuntime({
       rootDir,
+      backgroundTaskSpawnProcess: fakeBackgroundSpawn(),
       backgroundTaskIsProcessRunning: () => false,
       delivery: new OperatorDeliveryService(rootDir, {
         sendBrowserPush: async () => {},
@@ -952,6 +962,7 @@ describe("OperatorControlPlaneServer", () => {
     const driftingRootDir = await makeTempDir();
     const driftingRuntime = new StandaloneOperatorRuntime({
       rootDir: driftingRootDir,
+      backgroundTaskSpawnProcess: fakeBackgroundSpawn(),
       backgroundTaskIsProcessRunning: () => false,
     });
     const driftingServer = new OperatorControlPlaneServer({ runtime: driftingRuntime });
@@ -1018,6 +1029,10 @@ describe("OperatorControlPlaneServer", () => {
     const breakerRootDir = await makeTempDir();
     const breakerRuntime = new StandaloneOperatorRuntime({
       rootDir: breakerRootDir,
+      // Hermetic spawn: the test drives each task's execution state explicitly
+      // via writeState, so a real launch script writing its own "running" state
+      // would race and count a not-yet-simulated remote as a failure.
+      backgroundTaskSpawnProcess: fakeBackgroundSpawn(),
       backgroundTaskIsProcessRunning: () => false,
     });
     const breakerServer = new OperatorControlPlaneServer({ runtime: breakerRuntime });
@@ -2098,7 +2113,10 @@ describe("OperatorControlPlaneServer", () => {
   });
 
   it("filters runtime events by session, run, and family", async () => {
-    const runtime = new StandaloneOperatorRuntime({ rootDir: await makeTempDir() });
+    const runtime = new StandaloneOperatorRuntime({
+      rootDir: await makeTempDir(),
+      backgroundTaskSpawnProcess: fakeBackgroundSpawn(),
+    });
     const sessionA = await runtime.startSession({ title: "Session A" });
     const sessionB = await runtime.startSession({ title: "Session B" });
     const runA = await runtime.startRun({ sessionId: sessionA.id, title: "Run A" });

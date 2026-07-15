@@ -70,6 +70,25 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Generalization eval harness: measure replay fidelity on held-out but
       related synthetic trajectories.
 
+## Reliability
+- [x] **Fix background-task launch-script corruption** (2026-07-15, run 9).
+      `shellQuote` used the wrong single-quote escape (`"'"'"'` → `'"'"'`), and
+      the initial state was built via `printf | sed` (pid never substituted; any
+      quoted/newline command mangled → unparseable `state.json`). Now written by
+      the atomic Python writer with a real integer pid; both state writes are
+      temp-file + `os.replace` atomic.
+- [x] **Make background-task tests hermetic** (2026-07-15, run 9). Injected a
+      deterministic fake spawn into the runtimes that drive execution state
+      manually (server/operator-runtime/app tests) so real detached launch
+      scripts can't race `writeState`. Suite went from flaky/3-failing to a
+      deterministic 174/174 across ~35 runs. `OperatorCliApp` gained
+      `backgroundTaskSpawnProcess`/`backgroundTaskIsProcessRunning` options.
+- [ ] **Launch-script golden test:** render `renderLaunchScript` for a matrix of
+      adversarial commands/cwds (single/double quotes, embedded newlines, `$`,
+      backslashes, unicode), execute each, and assert `state.json` parses and
+      round-trips the exact command — locks in the quoting contract against
+      future writer refactors.
+
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in

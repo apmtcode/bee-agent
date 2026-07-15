@@ -6,6 +6,64 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-15 (run 9) — Background-task launch script correctness + hermetic tests (suite 171/174 → 174/174, deterministic)
+
+**Audited:** The whole test suite's actual pass state on this machine — not just
+typecheck. Found **3 failing tests** (server.test.ts, app.test.ts,
+operator-runtime.test.ts) that prior logs had recorded as green; the difference
+was environmental (real detached-process spawning behaves differently here).
+Traced every failure to two real defects in the background-task launch pipeline
+(`src/harness/background-tasks.ts`), plus test non-hermeticity that masked them.
+
+**Root-cause bugs found & fixed (production code, `src/harness/background-tasks.ts`):**
+1. **`shellQuote` was broken.** It escaped `'` as `` "'"'"' `` (leading double
+   quote) instead of the correct POSIX idiom `` '"'"' `` (close-quote, escaped
+   quote, reopen). Any task whose command/cwd contained a single quote — e.g.
+   `printf 'line-1\nline-2\n'` — produced a **corrupt, unparseable `state.json`**
+   (the failing `JSON.parse` at "position 311" in the recovery path). Fixed the
+   one-line escape; verified round-trip for quotes, embedded newlines, double
+   quotes, spaces, and backslashes.
+2. **The initial "running" state was built with `printf … | sed`**, which (a)
+   never substituted the pid — `sed "s/\"$$\"/…/"` treats `$` as a regex anchor,
+   so `pid` stayed the literal string `"$$"` (a real latent bug: recovery/cancel
+   of a live task would `process.kill` a string pid), and (b) mangled any value
+   with shell/regex metacharacters. Replaced it with the **same atomic Python
+   writer already used for completion** (`json.dumps` + temp-file `os.replace`),
+   passing the payload as one safely-quoted argv. Initial state is now valid,
+   atomic, and carries the real integer pid. Also made the completion writer's
+   write atomic (temp + `replace`) to prevent torn reads under concurrency.
+
+**Test hermeticity (no product behaviour changed):** the failing tests injected
+`backgroundTaskIsProcessRunning: () => false` but still used the **real** spawn,
+so each launch script raced the tests' explicit `writeState` calls. Added a
+deterministic **fake spawn** (returns a fake pid, launches nothing) to the
+affected runtimes:
+- `server.test.ts`: shared `fakeBackgroundSpawn()` helper applied to the main,
+  drifting, breaker, and event-filter runtimes.
+- `operator-runtime.test.ts`: fake spawn on the background-task lifecycle test.
+- `app.test.ts`: shared `fakeBackgroundProcesses()` (spawn + matching
+  `isProcessRunning` that tracks issued pids) for the remote/platform-status
+  test, which needs one task "running" (active) and one dead (degraded).
+- To wire the last one, `OperatorCliApp` gained optional
+  `backgroundTaskSpawnProcess` / `backgroundTaskIsProcessRunning` options
+  threaded into its runtime — a small, additive testability seam (production
+  default unchanged).
+
+**Test results:** `npm run build` ✅. `npm run typecheck:src` ✅ (exit 0, source
+still fully clean). Full `tsc` still **125** (unchanged baseline — no new debt).
+`npm test` ✅ **174/174**, and **green across ~35 consecutive full-suite runs**
+(was flaky/failing before). Verified the production launch path still emits valid
+JSON with a real pid using real `sleep`/`printf`/quoted commands.
+
+**New idea (logged to ROADMAP):** A **launch-script golden test** — render
+`renderLaunchScript` for a matrix of adversarial commands/cwds (single quotes,
+double quotes, embedded newlines, `$`, backslashes, unicode), execute each in a
+sandbox tmpdir, and assert the resulting `state.json` parses and round-trips the
+exact command. This locks in the quoting contract so a future refactor of the
+shell/Python writer can't silently reintroduce corruption.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
