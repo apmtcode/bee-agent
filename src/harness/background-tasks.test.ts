@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   BackgroundTaskExecutionService,
   FileBackgroundTaskStore,
+  createSimulatedBackgroundSpawn,
   type BackgroundTaskExecutionState,
 } from "./background-tasks.js";
 
@@ -369,5 +370,32 @@ describe("BackgroundTaskExecutionService", () => {
     await expect(fs.readFile(path.join(rootDir, task.execution.launchScript), "utf8")).resolves.toContain("bash -lc");
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
+  });
+});
+
+describe("createSimulatedBackgroundSpawn", () => {
+  it("allocates monotonically increasing pids from the requested base and never launches a process", () => {
+    const spawn = createSimulatedBackgroundSpawn(4200);
+    const first = spawn("run.sh", [], { cwd: ".", env: {}, stdio: "ignore", detached: true });
+    const second = spawn("run.sh", [], { cwd: ".", env: {}, stdio: "ignore", detached: true });
+    expect(first.pid).toBe(4200);
+    expect(second.pid).toBe(4201);
+    // unref must be a safe no-op (no real child handle exists).
+    expect(() => first.unref()).not.toThrow();
+  });
+
+  it("keeps started tasks running without writing any execution state file", async () => {
+    const rootDir = await makeTempDir();
+    const store = new FileBackgroundTaskStore(
+      path.join(rootDir, "background-tasks.json"),
+      createSimulatedBackgroundSpawn(),
+      () => false,
+    );
+    const task = await store.start({ title: "inert", command: "printf ok", cwd: rootDir });
+    expect(task.status).toBe("running");
+    // The simulated spawner runs nothing, so no state.json is authored — the
+    // caller is left in full control of the execution state, which is exactly
+    // what makes state/status assertions deterministic in the cloud.
+    await expect(store.executionService.readState(task)).resolves.toBeUndefined();
   });
 });

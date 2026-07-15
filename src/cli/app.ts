@@ -10,6 +10,7 @@ import { subscribeRuntimeEvents } from "../control-plane/subscriptions.js";
 import { OperatorControlPlaneServer } from "../control-plane/server.js";
 import type { DeliveryTarget } from "../control-plane/delivery.js";
 import { StandaloneOperatorRuntime } from "../orchestrator/operator-runtime.js";
+import type { SpawnBackgroundProcess, IsProcessRunning } from "../harness/background-tasks.js";
 import type { TranscriptRecord } from "../harness/transcript-store.js";
 import {
   OperatorCliConfigLoader,
@@ -121,6 +122,15 @@ export type OperatorCliAppOptions = {
   stdin?: NodeJS.ReadableStream;
   stdout?: NodeJS.WritableStream;
   stderr?: NodeJS.WritableStream;
+  /**
+   * Background-task process seams forwarded to the runtime. Production leaves
+   * these undefined (real `spawn` / `process.kill(pid, 0)` probing). Tests
+   * should inject a deterministic simulated spawner (see
+   * `createSimulatedBackgroundSpawn`) so no detached OS process races the
+   * assertions by asynchronously writing task state files.
+   */
+  backgroundTaskSpawnProcess?: SpawnBackgroundProcess;
+  backgroundTaskIsProcessRunning?: IsProcessRunning;
 };
 
 type OperatorCliWorktreeSession = {
@@ -147,7 +157,11 @@ export class OperatorCliApp {
   readonly teams: FileOperatorCliTeamStore;
 
   constructor(private readonly options: OperatorCliAppOptions) {
-    this.runtime = new StandaloneOperatorRuntime({ rootDir: options.rootDir });
+    this.runtime = new StandaloneOperatorRuntime({
+      rootDir: options.rootDir,
+      backgroundTaskSpawnProcess: options.backgroundTaskSpawnProcess,
+      backgroundTaskIsProcessRunning: options.backgroundTaskIsProcessRunning,
+    });
     this.server = new OperatorControlPlaneServer({ runtime: this.runtime });
     this.teams = new FileOperatorCliTeamStore(options.rootDir);
     this.cwd = options.cwd ?? process.cwd();

@@ -6,6 +6,64 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-15 (run 9) — Reliability: eliminated background-task test flakiness (deterministic simulated spawn)
+
+**Audited:** Overall project health as the first order of business (a run can't
+trust its own verification gate if the suite is flaky). Found the suite was **no
+longer green** — `npm test` failed **3–4 tests, and the count oscillated run to
+run** (3↔4), the signature of nondeterminism, contradicting run 8's "174/174".
+
+**Root cause (one shared bug across all failures):** several tests construct a
+runtime with `backgroundTaskIsProcessRunning: () => false` **but still use the
+real `spawn`**. `FileBackgroundTaskStore.start` launches a *detached bash
+launch-script* that asynchronously (and non-atomically) writes the task's
+`state.json`/`output.log`. That background write races the tests' own manual
+state writes and their status assertions:
+- `operator-runtime.test.ts` — the real `printf` process rewrote `state.json`
+  mid-read, so `getBackgroundTaskExecutionState` intermittently returned
+  `undefined` (partial-JSON read → `readJsonFile` default).
+- `server.test.ts` + `app.test.ts` — once a real "running" state landed,
+  `deriveRemoteDiagnostics` (server.ts:2170) saw `status:"running" &&
+  !isProcessRunning(pid)` → **`background task missing-process`** → remote flips
+  `active`→`degraded`, and enough of those trip the platform breaker
+  (`failureCount 2/2`) → aggregate `mixed`→`degraded`. Pure timing.
+
+**Changed (additive, reversible):**
+- `src/harness/background-tasks.ts`: new exported `createSimulatedBackgroundSpawn(startPid?)`
+  — a deterministic, inert `SpawnBackgroundProcess` that hands back monotonic
+  fake pids and launches **nothing**, so `markStarted` still records "running"
+  while execution-state files stay entirely under caller control. This is the
+  same "simulated backend so tests pass in the cloud" seam the guardrails call
+  for. Re-exported from `src/index.ts`.
+- `src/cli/app.ts`: added `backgroundTaskSpawnProcess` / `backgroundTaskIsProcessRunning`
+  pass-through options on `OperatorCliAppOptions` → forwarded to the runtime
+  (both default to `undefined`, so **production behaviour is unchanged**: real
+  `spawn` + real `process.kill(pid,0)` probing). A test seam alongside the
+  existing `configHome`/`stdout` ones.
+- Injected the simulated spawn into the flaky constructions:
+  `operator-runtime.test.ts` (bg-task test), `server.test.ts` (main-RPC,
+  drifting, and breaker runtimes), and both failing `app.test.ts` tests. The
+  background/monitor app test additionally now stands in the task's output +
+  running state explicitly (mirroring how it already handled the monitor), since
+  the simulated spawner runs no `printf`.
+- Added `background-tasks.test.ts` coverage for the helper (monotonic pids from a
+  custom base, no-op `unref`, and "started task stays running with **no**
+  state.json written").
+
+**Test results:** `npm test` **176/176** (174 + 2 new), **green on 4
+consecutive full runs** and 3 focused runs of the three previously-flaky files —
+deterministic. `typecheck:src` ✅ (exit 0). Build ✅. Full `tsc` steady at **125**
+(no regression; new test file typechecks clean).
+
+**New idea:** add a **flake sentinel** to the engine's pre-push self-check — run
+the (fast) suite 2–3× and diff pass counts; a mismatch means nondeterminism and
+should block a `main` push (route to `wip/self-evolve`) even when a single run is
+green. Longer term, an ESLint/grep guard that flags any test constructing a
+runtime with `backgroundTaskIsProcessRunning` set but `backgroundTaskSpawnProcess`
+left as the real `spawn` — the exact anti-pattern that caused this regression.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

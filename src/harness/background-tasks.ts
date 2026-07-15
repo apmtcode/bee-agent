@@ -108,6 +108,28 @@ export type SpawnBackgroundProcess = (
 
 export type IsProcessRunning = (pid: number) => boolean;
 
+/**
+ * Build an inert, deterministic {@link SpawnBackgroundProcess} that allocates
+ * monotonically increasing fake pids and never launches a real OS process.
+ *
+ * The real `spawn` launches a detached bash launch-script that asynchronously
+ * writes the task's `state.json`/`output.log`. In tests (and in the cloud
+ * self-evolution environment) that background write races caller-managed state
+ * writes and status assertions, producing non-deterministic failures. Injecting
+ * this simulated spawner keeps launch bookkeeping intact (a pid is returned so
+ * `markStarted` records "running") while leaving all execution-state files fully
+ * under the caller's control — the same "simulated backend so tests pass in the
+ * cloud" seam used elsewhere in the movement-learning subsystem.
+ */
+export function createSimulatedBackgroundSpawn(startPid = 100_000): SpawnBackgroundProcess {
+  let nextPid = startPid;
+  return () => {
+    const pid = nextPid;
+    nextPid += 1;
+    return { pid, unref() {} };
+  };
+}
+
 export type BackgroundTaskRecoveryReason =
   | "unchanged"
   | "state-running"

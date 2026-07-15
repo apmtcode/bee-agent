@@ -70,6 +70,21 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Generalization eval harness: measure replay fidelity on held-out but
       related synthetic trajectories.
 
+## Reliability
+- [x] **Deterministic background-task tests** (2026-07-15, run 9) — the suite was
+      flaky (3↔4 failures oscillating) because tests mocked
+      `backgroundTaskIsProcessRunning` but still let the real `spawn` launch a
+      detached bash script that raced their manual state writes. Added
+      `createSimulatedBackgroundSpawn()` (inert deterministic spawner) + an
+      `OperatorCliApp` spawn seam, and injected it into the flaky constructions.
+      Suite now 176/176 green across repeated runs.
+- [ ] **Flake sentinel in the pre-push self-check:** run the suite 2–3× and diff
+      pass counts; block a `main` push on any mismatch (route to
+      `wip/self-evolve`) even if one run is green.
+- [ ] **Real-spawn anti-pattern lint:** flag any test that sets
+      `backgroundTaskIsProcessRunning` but leaves `backgroundTaskSpawnProcess` as
+      the real `spawn` — the exact shape that caused the run-9 regression.
+
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in
