@@ -70,6 +70,23 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Generalization eval harness: measure replay fidelity on held-out but
       related synthetic trajectories.
 
+## Test reliability
+- [x] **Fix background-task launch-script JSON corruption** (2026-07-15, run 9).
+      `renderLaunchScript` built the running-state JSON in shell (`printf|sed`);
+      any command with quotes/newlines produced invalid `state.json`. Now
+      Node serializes + base64-encodes the seed and python writes all state JSON.
+- [x] **De-flake the background-task test suite** (2026-07-15, run 9). Injected a
+      deterministic no-op `backgroundTaskSpawnProcess` into the four state-driven
+      tests and threaded the override through `OperatorCliApp`; stable across 18+
+      consecutive full runs.
+- [ ] **Flake sentinel in the pre-push self-check:** loop the known real-spawn
+      test files N× and fail the gate on any failure, so timing races (which pass
+      single runs) can't slip through as they did between runs 8→9.
+- [ ] **`SpawnBackgroundProcess` test-double factory** exported from `src/harness`:
+      returns a fake child *and* synchronously seeds a completed `state.json` +
+      output file, so tests get realistic-yet-deterministic background tasks
+      without hand-rolling `{ pid, unref }` stubs.
+
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in

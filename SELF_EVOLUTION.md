@@ -6,6 +6,66 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-15 (run 9) — Fix background-task JSON corruption + de-flake the suite
+
+**Audited:** Project health at the top of the run. `npm test` was **NOT** green —
+3–4 tests failed (the run-8 "174/174" no longer held): `operator-runtime`
+"starts, syncs…", `server` "handles session…orchestration", `app` session +
+background/monitor commands.
+
+**Root cause 1 (real bug, deterministic):** the background-task launch script
+(`renderLaunchScript` in `src/harness/background-tasks.ts`) assembled the initial
+running-state JSON in *shell* with `printf '%s' <payload> | sed …`. For any task
+whose `command` contained quotes/newlines/backslashes (e.g. the test command
+`printf 'line-1\nline-2\n'`), bash single-quote reconstruction + `sed` mangled the
+JSON, so the on-disk `state.json` was invalid and `readState`/reconcile threw
+`SyntaxError: Expected ',' or '}'…`. Captured the corrupt file by temporarily
+instrumenting `readJsonFile`, then reproduced the bash mangling in isolation.
+
+**Fix 1 (additive, in `src/harness/background-tasks.ts`):** removed the fragile
+`printf|sed` line. The static state fields are now serialized by Node
+(`JSON.stringify`), **base64-encoded** (base64 has no shell-special chars, so it
+survives any command string intact), and decoded by a new
+`renderRunningStateWriterPython()` that fills `status/pid/startedAt/updatedAt` and
+writes the file with the same `json.dumps` path already used by the
+completed/failed writers. python now owns *all* state JSON serialization — no
+shell string-assembly of JSON anywhere. The `bash -lc` execution line is
+unchanged (the `toContain("bash -lc")` test still passes).
+
+**Root cause 2 (flake):** several tests `startBackgroundTask` with the **real**
+`spawn`, then `writeState` their own scenario state. The detached process's launch
+script writes its running state *asynchronously*, racing/clobbering the
+test-written state — invisible in isolation, but under full-suite parallel load
+(many files spawning real processes) it surfaced as intermittent
+`failureCount 2 vs 3`, `changed:false vs missing-process`, `completed vs failed`.
+
+**Fix 2 (deterministic spawn injection):** the runtime already exposed
+`backgroundTaskSpawnProcess`; wired it through `OperatorCliApp`
+(`OperatorCliAppOptions.backgroundTaskSpawnProcess/backgroundTaskIsProcessRunning`
+→ forwarded to the runtime) so CLI-level tests can be deterministic too. Injected
+a no-op `() => ({ pid: 4321, unref() {} })` into the runtimes of the four
+state-driven tests (`operator-runtime` starts/syncs, `server` main + drifting +
+breaker, `app` session-lifecycle). Left the `app` background/monitor test on the
+real spawn on purpose — it asserts real `printf ok` output, i.e. genuine
+end-to-end execution coverage, and stopped flaking once the *other* files quit
+spawning real processes (lower contention).
+
+**Test results:** full `npm test` **174/174**, now stable across **18+
+consecutive full runs** (was ~2–4 failures per run at start). `typecheck:src` ✅
+(exit 0). Build ✅. Diff is +64/-11 across 5 files, additive only.
+
+**New idea:** add a tiny **flake sentinel** to the engine's pre-push self-check —
+run the *background/spawn* test files N× (e.g. 5) in a loop and fail the gate if
+any run fails, instead of trusting a single `npm test`. Timing-sensitive races
+like this one pass single runs and only surface under repetition/load; a cheap
+loop over the known real-spawn files would have caught run-8's regression the hour
+it landed. Companion product idea: a `SpawnBackgroundProcess` test-double factory
+exported from `src/harness` (returns a fake child *and* synchronously seeds a
+completed `state.json`/output) so future tests get realistic-yet-deterministic
+background tasks without hand-rolling a `{ pid, unref }` stub each time.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
