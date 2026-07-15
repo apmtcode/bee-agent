@@ -44,6 +44,11 @@ unchecked items are queued. Keep this richer than you found it each run.
       (excludes `**/*.test.ts`) + `typecheck:src` script; passes (exit 0). Next:
       have the engine run it as a per-run pre-push self-check.
 - [ ] Add a minimal CI workflow mirroring `verify` for human-opened PRs.
+- [ ] **Fix 4 pre-existing red tests** (surfaced run 9; predate this run — a
+      post-run-8 change regressed them). `server.test.ts` + `app.test.ts`:
+      remote-control breaker lands in `state: "degraded"` where the test expects
+      `"active"`. Likely a platform-breaker-store default or timing regression.
+      Root-cause in a dedicated run; do not touch blind.
 
 ## Capability parity (audit reference agents → port gaps)
 - [ ] Build a "capability inventory" generator: enumerate bee-agent's exported
@@ -62,13 +67,30 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      for a real on-device small model. **DONE run 9** —
+      `src/training/movement-model.ts`: `MovementModelBackend` /
+      `TrainedMovementModel` interfaces + deterministic `NgramMovementBackend`
+      (variable-order Markov + backoff), serializable.
+- [x] Synthetic event-stream generator to validate capture→dataset→replay
+      round-trips without real OS input. **DONE run 9** —
+      `src/training/synthetic-trajectories.ts` (seeded mulberry32 RNG,
+      `generateSyntheticTrajectories`, `desktopMovementFamily`).
+- [x] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories. **DONE run 9** —
+      `src/training/movement-eval.ts` (`evaluateMovementModel`; splits correct
+      predictions into exact vs backoff/generalized).
+- [ ] **Closed-loop replay executor** driven by `TrainedMovementModel.predict()`:
+      step through a `ReplayManifest` against the device-adapter seam to run a
+      (mock) session end-to-end, yielding a task-completion success rate (not just
+      per-decision accuracy) and a concrete RL reward signal.
+- [ ] **Second movement backend** (e.g. prototype/nearest-neighbor over
+      featurized context) behind the same `MovementModelBackend` interface, so the
+      eval harness can A/B backends on one dataset.
+- [ ] Richer movement schema: carry coarse spatial buckets (dx/dy region) and
+      key modifiers in the tokenization so the model can predict *parameterized*
+      movements, not just tool identity.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

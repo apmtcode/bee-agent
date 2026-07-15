@@ -423,6 +423,41 @@ export type {
   SftTrainingConfig,
 } from "./training/job-manifest.js";
 export {
+  actionToken,
+  extractMovementExamples,
+  NgramMovementBackend,
+  NgramMovementModel,
+  observationToken,
+  trainMovementModel,
+} from "./training/movement-model.js";
+export type {
+  MovementActionLabel,
+  MovementModelBackend,
+  MovementPrediction,
+  MovementToken,
+  MovementTrainingConfig,
+  MovementTrainingExample,
+  TrainedMovementModel,
+} from "./training/movement-model.js";
+export {
+  createSeededRng,
+  desktopMovementFamily,
+  generateSyntheticTrajectories,
+} from "./training/synthetic-trajectories.js";
+export type {
+  GenerateSyntheticTrajectoriesOptions,
+  MovementScenarioFamily,
+  MovementStep,
+  SyntheticMovementScenario,
+} from "./training/synthetic-trajectories.js";
+export {
+  evaluateMovementModel,
+} from "./training/movement-eval.js";
+export type {
+  MovementEvalCase,
+  MovementEvalResult,
+} from "./training/movement-eval.js";
+export {
   FileTrainingJobStore,
 } from "./training/job-store.js";
 export type {

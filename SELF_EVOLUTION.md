@@ -6,6 +6,68 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-15 (run 9) — Movement-learning: in-process pluggable model backend + generalization eval
+
+**Audited:** Standing objective #2 (local-movement learning subsystem) and the
+`src/training/` tree. Finding: `LocalAppleSiliconTrainingRunner` only builds
+*launch scripts/plans* that defer real SFT/RL to Apple-silicon hardware — there
+was **no in-process, cloud-testable path that actually learns from a movement
+dataset and predicts the next movement**. So objective parts (c) train and (d)
+generalize were unvalidatable in CI. This was the highest-value queued increment
+(ROADMAP: "pluggable local-model backend", "synthetic event-stream generator",
+"generalization eval harness").
+
+**Changed (additive, new files only):**
+- `src/training/movement-model.ts` — the pluggable seam:
+  - `MovementModelBackend` interface + `TrainedMovementModel` (predict/serialize),
+    so a real on-device small model drops in behind the same API.
+  - `NgramMovementBackend` / `NgramMovementModel`: a deterministic, dependency-free
+    **variable-order Markov model with Katz-style backoff**. Long-context hits =
+    *repeat* recorded movements (part c); backoff to a shorter shared suffix =
+    *generalize* to new-but-related movements (part d). Serializable to JSON.
+  - `extractMovementExamples()` turns `TrajectorySpan[]` into ordered
+    (context → next action) pairs (merged obs+action timeline, per-span, no
+    cross-span leakage), plus `trainMovementModel()` convenience.
+- `src/training/synthetic-trajectories.ts` — seeded mulberry32 RNG +
+  `generateSyntheticTrajectories()` + `desktopMovementFamily()` (train motifs and
+  a held-out related variant that shares a prefix but diverges at the tail), so
+  the whole pipeline is validated with **simulated** streams (no real OS input).
+- `src/training/movement-eval.ts` — `evaluateMovementModel()` reports top-1
+  accuracy and splits correct predictions into `exactCorrect` (memorized) vs
+  `backoffCorrect` (genuine generalization), the key metric for part (d).
+- Barrel exports added in `src/index.ts`.
+
+**Tests:** 3 new files, **15 tests, all passing** — exact replay, backoff
+generalization, global-prior fallback, deterministic tie-break, empty-dataset,
+serialize round-trip, RNG determinism/reproducibility, perfect-replay on an
+unambiguous scenario, and held-out generalization. `typecheck:src` **CLEAN**
+(exit 0). `npm run build` ✅.
+
+**Honest test-suite status:** full `npm test` is **185/189**. The **4 failures
+are pre-existing** — verified by running the suite against a clean `git stash -u`
+HEAD (170/174, same 4 red before any of my changes). They live in
+`server.test.ts` (remote-control `state: degraded` vs `active`) and
+`app.test.ts`, are environment/timing-sensitive, and are unrelated to this
+increment. The prior run's "174/174" claim was stale. My change adds 15 passing
+tests and introduces **zero** new failures. Pushed to the designated feature
+branch `claude/peaceful-dirac-vclguh`.
+
+**New idea:** now that a real trained model exists in-process, add a
+**closed-loop replay executor** that consumes `TrainedMovementModel.predict()`
+step-by-step against the `ReplayManifest`/device-adapter seam to *drive* a
+(mock) session — turning the eval's per-decision accuracy into an end-to-end
+"did the model complete the task" success rate, and giving the RL reward signal
+(`replay-manifest`) something concrete to score against. Also: a second backend
+(e.g. a tiny logistic/prototype-nearest-neighbor over featurized context) behind
+the same interface, so the eval harness can A/B backends on the same dataset.
+
+**Also queued (separate, real bug):** the 4 pre-existing red tests — the
+remote-control breaker landing in `degraded` where the test expects `active` —
+deserve a dedicated run to root-cause (likely a platform-breaker-store default
+or a real timing regression from a post-run-8 change).
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
