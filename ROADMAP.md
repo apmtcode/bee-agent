@@ -62,13 +62,44 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
-      deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+- [x] Pluggable local-model backend interface for a movement model with a
+      deterministic in-process backend (so cloud/CI tests pass) and a documented
+      seam for a real on-device small model — DONE run 9
+      (`src/training/movement-model.ts`: `MovementModelBackend` interface +
+      `MarkovMovementBackend` reference impl; serializable `MovementModelState`
+      artifact). NOTE: this is the *learned sequence model* seam (objective #2c/d),
+      complementary to the existing `runner.ts` mlx/axolotl launch-plan path.
+- [~] Synthetic event-stream generator — DONE run 9 for the *movement-token*
+      level (`synthesizeMovementSequences` produces deterministic related
+      variants). Still open: a fuller capture→dataset→replay round-trip generator
+      that emits raw device/OS adapter events (mouse/keyboard/window) and threads
+      them through the recorder + consent + ingestion path.
+- [x] Generalization eval harness — DONE run 9 (`evaluateReplayFidelity`:
+      teacher-forced top-1 next-token accuracy over held-out sequences;
+      `MovementModelTrainer` does a deterministic holdout split). Next: per-slot
+      accuracy breakdown and a random-baseline comparison in the report.
+- [ ] Movement-model backend seam follow-ups: (a) persist/load a trained
+      `MovementModelState` via a store (mirror `job-store.ts`), (b) expose
+      train/generate/evaluate as control-plane RPCs so the CLI can drive them,
+      (c) add a higher-order/backoff-weighted backend and compare fidelity.
+
+## Test/infra health (regressions)
+- [ ] **Make background-task tests hermetic** (HIGH — blocks the green gate).
+      As of run 9, 3 suite tests fail on the base branch *independent of any
+      current change* (proven via `git stash`): `operator-runtime.test.ts`
+      "starts, syncs, recovers…", `server.test.ts` "handles session…
+      orchestration methods", `app.test.ts` "supports session lifecycle…" +
+      "supports background and monitor task commands". Root cause: these tests
+      construct runtimes/apps *without* injecting `backgroundTaskSpawnProcess`,
+      so `startBackgroundTask` spawns **real detached OS processes** in the cloud
+      sandbox. The launch script's non-atomic `printf|sed > state` write races
+      the test's own `writeState` (→ malformed-JSON parse error), and real
+      process liveness (`sleep 5` alive vs `printf` exited) makes
+      control/recovery status non-deterministic (`control=degraded … missing
+      -process`). Passed at run 8 (174/174); environment-sensitive since. Fix:
+      a shared test helper that injects a deterministic spawn stub +
+      per-command liveness simulation, and thread `backgroundTaskSpawnProcess`
+      through `OperatorCliAppOptions`. Sizeable, careful, cross-file — its own run.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

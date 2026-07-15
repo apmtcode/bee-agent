@@ -6,6 +6,68 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-15 (run 9) — Local-movement learning model: pluggable backend + train/infer/generalize (objective #2 c+d)
+
+**Audited:** The movement-subsystem code (`src/capture/` + `src/training/`)
+against objective #2's five pieces (capture → schema → dataset → replay →
+train/infer). Found pieces 1–4 scaffolded, but the *learning* pieces (c) "post-
+train a local model to repeat recorded movements" and (d) "generalize to new but
+related movements" had **no in-process implementation**: `training/runner.ts`
+only builds mlx/axolotl launch *plans/scripts* that shell out to tooling absent
+in the cloud, so the train→infer→evaluate loop could never be validated here.
+Break from the last 7 runs of typecheck-debt grinding toward the standing #2
+objective.
+
+**Changed (additive, isolated):** new `src/training/movement-model.ts` +
+`movement-model.test.ts` (15 tests), exported from the barrel:
+- **Pluggable backend seam** — `MovementModelBackend` interface (train /
+  predictNext) + a serializable `MovementModelState` artifact (JSON, backend-
+  discriminated) so a real on-device small model can drop in later.
+- **Deterministic reference backend** — `MarkovMovementBackend`: order-N Markov
+  with stupid-backoff, no RNG (argmax + lexicographic tie-break), so results are
+  reproducible in CI. Learning a sequence once makes its transitions exact →
+  **replay**; an unseen high-order context backs off to shorter contexts →
+  **generalization** to related movements.
+- **Tokenization/dataset** — `tokenizeMovementAction` (canonical
+  `channel:verb:target`), `movementSequenceFromTrajectory`,
+  `movementSequencesFromReplayManifest` turn recorded trajectories/replays into
+  the model's dataset rows.
+- **Generation + eval** — backend-agnostic `generateMovements` (greedy rollout,
+  END-sentinel termination) and `evaluateReplayFidelity` (teacher-forced top-1
+  next-token accuracy) + a `MovementModelTrainer` with a deterministic holdout
+  split (the generalization eval-harness ROADMAP item).
+- **Synthetic generator** — `synthesizeMovementSequences` emits deterministic
+  related variants to validate the loop without real OS input.
+
+**Test results:** new suite ✅ **15/15**. `npm run build` ✅. `typecheck:src`
+✅ (source stays clean). The feature is fully green **in isolation**.
+
+**⚠️ Pre-existing blocker (NOT caused by this change — proven via `git stash`):**
+the full suite is red on the base branch: **3 tests fail** — 186/189 pass.
+`operator-runtime.test.ts` "starts, syncs, recovers…", `server.test.ts`
+"handles session… orchestration methods", and `app.test.ts` two background
+tests. Root cause: those tests build runtimes/apps *without* injecting
+`backgroundTaskSpawnProcess`, so `startBackgroundTask` spawns **real detached OS
+processes** in this sandbox — the launch script's non-atomic `printf|sed > state`
+write races the test's own `writeState` (malformed-JSON read), and real process
+liveness makes control/recovery status non-deterministic. Passed at run 8
+(174/174); environment-sensitive since. Fixing it properly needs a deterministic
+spawn stub with per-command liveness simulation threaded through
+`OperatorCliAppOptions` — a sizeable, careful, cross-file change that deserves
+its own focused run (logged HIGH in ROADMAP → *Test/infra health*). I did **not**
+bundle that risky refactor with this focused feature. Because the failures are
+pre-existing/environmental and this change is additive + green in isolation, I
+pushed to the designated feature branch rather than stranding it on
+`wip/self-evolve`.
+
+**New idea:** the `MovementModelState` is a portable JSON artifact — a future run
+can add a `MovementModelStore` (mirror `training/job-store.ts`) and control-plane
+RPCs (`movement.train` / `movement.generate` / `movement.evaluate`) so the CLI
+can record → train → replay → generalize end-to-end, and A/B different backends
+(Markov vs. a real small model) on the same held-out set via `evaluateReplayFidelity`.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
