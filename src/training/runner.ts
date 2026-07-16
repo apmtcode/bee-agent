@@ -161,6 +161,9 @@ export class LocalAppleSiliconTrainingRunner {
   }
 }
 
+const RUNNING_STARTED_AT_PLACEHOLDER = "__OPENCLAW_STARTED_AT__";
+const RUNNING_PID_PLACEHOLDER = "__OPENCLAW_PID__";
+
 function renderLaunchScript(execution: LocalTrainingExecution, plan: TrainingJobPlan): string {
   const quotedStatePath = shellQuote(execution.stateFile);
   const quotedLogFile = shellQuote(execution.logFile);
@@ -171,9 +174,9 @@ function renderLaunchScript(execution: LocalTrainingExecution, plan: TrainingJob
       version: 1,
       jobId: plan.jobId,
       status: "running",
-      pid: "$$",
-      startedAt: "__OPENCLAW_STARTED_AT__",
-      updatedAt: "__OPENCLAW_STARTED_AT__",
+      pid: RUNNING_PID_PLACEHOLDER,
+      startedAt: RUNNING_STARTED_AT_PLACEHOLDER,
+      updatedAt: RUNNING_STARTED_AT_PLACEHOLDER,
       logFile: execution.logFile,
       workingDirectory: execution.workingDirectory,
       command: plan.command,
@@ -185,7 +188,9 @@ function renderLaunchScript(execution: LocalTrainingExecution, plan: TrainingJob
     "set -euo pipefail",
     `mkdir -p ${shellQuote(execution.artifactDir)} $(dirname ${quotedLogFile}) $(dirname ${quotedStatePath})`,
     "started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-    `printf '%s' ${quotedStatePayload} | sed "s/__OPENCLAW_STARTED_AT__/$started_at/g; s/\"\$\$\"/$$/g" > ${quotedStatePath}`,
+    `python3 - ${quotedStatePath} "$started_at" $$ ${quotedStatePayload} <<'PY'`,
+    ...renderRunningStateWriterPython(),
+    "PY",
     `printf '%s\n' "starting ${plan.mode} training for ${plan.jobId}" >> ${quotedLogFile}`,
     `if ${quotedCommand} >> ${quotedLogFile} 2>&1; then`,
     "  completed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
@@ -204,9 +209,35 @@ function renderLaunchScript(execution: LocalTrainingExecution, plan: TrainingJob
   ].join("\n");
 }
 
+// Writes the initial "running" state by substituting the started-at timestamp
+// and pid into the pre-serialized JSON payload with literal string replacement,
+// then writing atomically. Avoids fragile `sed` regex substitution (whose `$`
+// and quote handling varies across sed implementations and corrupted the JSON).
+function renderRunningStateWriterPython(): string[] {
+  return [
+    "import os",
+    "import pathlib",
+    "import sys",
+    "state_path = pathlib.Path(sys.argv[1])",
+    "started_at = sys.argv[2]",
+    "pid = sys.argv[3]",
+    "payload = sys.argv[4]",
+    `payload = payload.replace(${pythonQuote(RUNNING_STARTED_AT_PLACEHOLDER)}, started_at)`,
+    `payload = payload.replace(${pythonQuote(`"${RUNNING_PID_PLACEHOLDER}"`)}, pid)`,
+    "tmp_path = state_path.with_name(state_path.name + '.tmp')",
+    "tmp_path.write_text(payload)",
+    "os.replace(tmp_path, state_path)",
+  ];
+}
+
+function pythonQuote(value: string): string {
+  return JSON.stringify(value);
+}
+
 function renderStateWriterPython(status: TrainingExecutionState["status"]): string[] {
   return [
     "import json",
+    "import os",
     "import pathlib",
     "import sys",
     "state_path = pathlib.Path(sys.argv[1])",
@@ -220,7 +251,11 @@ function renderStateWriterPython(status: TrainingExecutionState["status"]): stri
     "state['completedAt'] = timestamp",
     "state['exitCode'] = exit_code",
     `state['error'] = None if '${status}' == 'completed' else 'training process exited non-zero'`,
-    "state_path.write_text(json.dumps(state, indent=2) + '\\n')",
+    // Write atomically (temp file + os.replace) so a concurrent reader never
+    // observes a partially written state file.
+    "tmp_path = state_path.with_name(state_path.name + '.tmp')",
+    "tmp_path.write_text(json.dumps(state, indent=2) + '\\n')",
+    "os.replace(tmp_path, state_path)",
   ];
 }
 

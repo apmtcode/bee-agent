@@ -6,6 +6,60 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-16 (run 9) — Pluggable movement-model backend + fixed a real state-file corruption bug
+
+**Audited:** Standing objective #2 (local-movement learning). `src/capture/`
+records trajectories and `src/training/` exports reviewed datasets and emits
+*external* shell plans (mlx/axolotl), but there was **no in-process trainable
+backend** that could learn from movement sequences and predict/generalize new
+movements — the ROADMAP's top movement item. Also audited the flaky background-
+task tests surfaced while running the suite.
+
+**Changed (additive):**
+- **New `src/training/model-backend.ts`** — the pluggable movement-model seam
+  (objective #2d). `MovementModelBackend` interface + a deterministic
+  `NgramMovementBackend` (Markov model, configurable order) that: trains on
+  `MovementDataset`s, `predictNext()` with **backoff** to shorter contexts (so
+  unseen-but-related prefixes still resolve — the generalization requirement),
+  `generate()`s whole movement sequences, and `serialize()`/`load()`s as a
+  persistable artifact. Dataset builders `buildMovementDataset(trajectories)` /
+  `buildMovementDatasetFromReplays(replays)` + `tokenizeAction` bridge the
+  existing capture schema. A backend **registry**
+  (`createMovementModelBackend`/`registerMovementModelBackend`) documents where
+  a real on-device small model plugs in. CPU-only, dependency-free → trains and
+  infers in the cloud/CI. Wired into the `src/index.ts` barrel.
+- **Fixed a real deterministic bug** in `src/harness/background-tasks.ts`:
+  `shellQuote` used `"'"'"'"` (6 chars, starting with `"`) instead of the
+  correct POSIX single-quote escape `'"'"'` — corrupting the persisted state
+  JSON for **any command containing a single quote** (e.g. `printf 'x'`),
+  yielding `SyntaxError: Expected ',' or '}'` on read. This is what made
+  `operator-runtime`/`app`/`server` background-task tests fail.
+- **Hardened the launch scripts** (background-tasks.ts + training/runner.ts):
+  replaced the fragile `sed`-based running-state substitution (whose `$`/quote
+  handling varies across sed implementations) with a Python literal-replace that
+  writes **atomically** (temp file + `os.replace`); made the completed/failed
+  Python writers atomic too. No more partial-read races.
+- **De-flaked the tests deterministically:** the reconciliation/breaker tests
+  paired `backgroundTaskIsProcessRunning: () => false` with a **real** spawned
+  process that raced their explicit `writeState` calls. Injected the existing
+  `backgroundTaskSpawnProcess` seam with a no-op spawner so state is
+  test-authoritative.
+
+**Test results:** new `model-backend.test.ts` **16/16**. Full suite **190/190**,
+**stable across 8 consecutive runs** (was 3–4 *flaky* failures before). Root
+cause was a real product bug + fragile shell IO, not test bugs.
+`npm run typecheck:src` ✅ (source stays clean). Build ✅.
+
+**New idea:** now that a movement model can `predict`/`generate`, add a
+**generalization eval harness** (ROADMAP) that trains on a held-out split of
+synthetic trajectories and scores replay fidelity (edit distance between
+generated and ground-truth movement sequences) — turning "does it generalize?"
+into a tracked metric. Second idea: a `verify` npm script that runs the suite
+**twice** (or with `--sequence.shuffle`) so process-spawn/IO races are caught in
+CI instead of rediscovered by an hourly run.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

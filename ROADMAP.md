@@ -62,13 +62,20 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
+      for a real on-device small model. — DONE run 9. `src/training/model-backend.ts`:
+      `MovementModelBackend` interface + `NgramMovementBackend` (Markov w/ backoff,
+      serialize/load) + registry (`createMovementModelBackend`/`registerMovementModelBackend`).
 - [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      round-trips without real OS input. (Partially seeded: run 9's
+      `buildMovementDataset*` builders + Markov `generate()` already round-trip
+      synthetic sequences in tests; next is a first-class generator producing
+      realistic device/OS/browser event streams.)
+- [ ] Generalization eval harness: train on a held-out split of synthetic
+      trajectories and score replay fidelity (edit distance between generated and
+      ground-truth movement sequences) so "does it generalize?" is a tracked
+      metric. Build on run 9's `predictNext`/`generate`.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
@@ -84,3 +91,14 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
       count to a baseline file and fail if a module regresses above it. Lets the
       engine pay debt down module-by-module without one green-gate blocking
       progress, and prevents backsliding while the total is still > 0.
+- [ ] **Flake-catching verify**: run the suite twice (or with
+      `--sequence.shuffle`) in the pre-push self-check so process-spawn/IO races
+      (like the run-9 `shellQuote`/`sed` state corruption) are caught in CI
+      instead of surfacing as intermittent hourly-run failures. Prefer injecting
+      the `backgroundTaskSpawnProcess` no-op seam in any new reconciliation test
+      that drives execution state explicitly.
+- [ ] **Audit `src/training/runner.ts` and `background-tasks.ts` for remaining
+      shell-fragility**: the launch scripts still shell out to `date`/`python3`;
+      consider a single hardened `renderStateWriter` shared helper (both files now
+      have near-duplicate atomic Python writers) to prevent the two copies from
+      drifting.
