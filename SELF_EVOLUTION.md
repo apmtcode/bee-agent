@@ -6,6 +6,68 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-16 (run 9) — 🐛 Fix `shellQuote` corruption + de-flake background-task tests (suite 170→177 green)
+
+**Audited:** Ran the full suite fresh on this environment (Node 22, bash +
+python3 present) — found **4 tests failing**, though run 8 logged 174/174. Root
+cause was a **real production bug** in the background-task launcher, exposed only
+where a real shell actually runs.
+
+**Bug 1 — `shellQuote` (src/harness/background-tasks.ts).** The POSIX
+single-quote escape was `'` → `` "'"'"' `` (missing the leading close-quote); the
+canonical form is `'\''`. Any background-task command containing a single quote
+(e.g. `printf 'x'`) produced a **corrupt, unparseable `state.json`** — bash wrote
+`printf "'x"'` instead of `printf 'x'`, so `readState`'s `JSON.parse` threw
+`Expected ',' or '}'`. Fixed to the canonical escape. Verified end-to-end:
+reverting the one-liner makes the new real-bash regression test fail with the
+exact original error.
+
+**Bug 2 (latent, documented) — sed `$$` never substitutes.** The launcher's
+initial-state writer does `sed "…; s/\"\$\$\"/$$/g"` to swap the pid placeholder,
+but `$` is an end-of-anchor metacharacter in sed, so `"$$"` never matches and the
+initial state keeps `"pid":"$$"`. Harmless in practice (the python completion
+writer overwrites `pid` with a real int), so left as-is this run and logged to
+ROADMAP rather than widening the diff.
+
+**Flakiness — real detached subprocess races test-managed state.** Four tests
+inject `backgroundTaskIsProcessRunning: () => false` (deterministic intent) but
+*not* a spawn stub, so the real detached bash launcher writes its own state file
+asynchronously and, under parallel suite load, clobbers the state the test set —
+non-deterministically flipping tasks to `missing-process`. Confirmed by injecting
+a no-op spawn → the test passed 17/17.
+
+**Changed:**
+- `src/harness/background-tasks.ts`: canonical `shellQuote`; `export`ed it for
+  testing.
+- `src/cli/app.ts`: threaded `backgroundTaskSpawnProcess` /
+  `backgroundTaskIsProcessRunning` through `OperatorCliAppOptions` into the
+  runtime (additive; production default unchanged) so app-level tests can inject
+  a deterministic spawn.
+- Tests: injected a no-op spawn stub into the 4 background-task tests
+  (operator-runtime, server ×3 runtimes, app ×2). The app "background and
+  monitor" test now writes output/state explicitly (mirroring its own monitor
+  half) instead of relying on real `printf` timing.
+- `src/harness/background-tasks.test.ts`: **3 new regression tests** — a
+  `shellQuote` round-trip (POSIX decoder) + canonical-escape assertion, and a
+  real-bash integration test that runs the generated launch script for a
+  single-quote command and asserts a valid `state.json`. All 3 fail against the
+  old code.
+
+**Test results:** `typecheck:src` ✅ (exit 0). Build ✅. Full `tsc` **125**
+(unchanged — no source regression). Tests **170→177 passing**, and now
+**deterministic**: 4× full-suite runs all green (was 1–2 failing per run before).
+
+**New idea:** Add a lightweight **flaky-test guard** to the engine's per-run
+self-check: run `npm test` **3×** (not once) before pushing, and treat any run
+that isn't all-green as a failure. This run's regression was invisible to a
+single pass on run 8's machine but deterministic here — a repeat-run gate would
+have surfaced the real-subprocess race immediately. Bigger idea: a
+`SpawnBackgroundProcess` **simulator** backend (writes running→completed state +
+output synchronously) as a first-class test/dev double, so integration tests get
+realistic execution semantics without real subprocesses or timing races.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

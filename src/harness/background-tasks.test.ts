@@ -1,12 +1,55 @@
+import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   BackgroundTaskExecutionService,
   FileBackgroundTaskStore,
+  shellQuote,
   type BackgroundTaskExecutionState,
 } from "./background-tasks.js";
+
+const execFileAsync = promisify(execFile);
+
+/** POSIX reference decoder for a single-quoted shell token — the inverse of
+ * shellQuote. Used to assert the quoting round-trips without invoking a shell. */
+function decodePosixSingleQuoted(quoted: string): string {
+  let out = "";
+  let i = 0;
+  let inQuote = false;
+  while (i < quoted.length) {
+    const ch = quoted[i];
+    if (inQuote) {
+      if (ch === "'") {
+        inQuote = false;
+      } else {
+        out += ch;
+      }
+      i += 1;
+    } else if (ch === "'") {
+      inQuote = true;
+      i += 1;
+    } else if (ch === "\\") {
+      out += quoted[i + 1] ?? "";
+      i += 2;
+    } else {
+      out += ch;
+      i += 1;
+    }
+  }
+  return out;
+}
+
+async function hasCommand(command: string): Promise<boolean> {
+  try {
+    await execFileAsync("bash", ["-lc", `command -v ${command}`]);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 const tempDirs: string[] = [];
 
@@ -369,5 +412,59 @@ describe("BackgroundTaskExecutionService", () => {
     await expect(fs.readFile(path.join(rootDir, task.execution.launchScript), "utf8")).resolves.toContain("bash -lc");
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
+  });
+});
+
+describe("shellQuote", () => {
+  it("produces POSIX single-quoted tokens that round-trip, including embedded single quotes", () => {
+    const cases = [
+      "plain",
+      "printf ok",
+      "printf 'line-1\nline-2\n'",
+      "echo \"double\" and 'single'",
+      "a'b'c",
+      "$HOME `whoami` $$ && rm -rf /",
+      "{\"json\":\"with 'quotes'\"}",
+      "",
+    ];
+    for (const value of cases) {
+      const quoted = shellQuote(value);
+      // Must be wrapped as a single-quoted token and decode back to the input.
+      expect(quoted.startsWith("'")).toBe(true);
+      expect(quoted.endsWith("'")).toBe(true);
+      expect(decodePosixSingleQuoted(quoted)).toBe(value);
+    }
+  });
+
+  it("uses the canonical `'\\''` escape (regression: the old `\"'\"'\"'` form corrupted JSON payloads)", () => {
+    expect(shellQuote("a'b")).toBe("'a'\\''b'");
+  });
+});
+
+describe("background task launch script (real shell)", () => {
+  it("writes a valid JSON state file for a command containing single quotes", async () => {
+    if (!(await hasCommand("bash")) || !(await hasCommand("python3"))) {
+      return; // environment lacks the shell/python the launcher needs
+    }
+    const rootDir = await makeTempDir();
+    // A command with single quotes is exactly what the shellQuote bug corrupted.
+    const command = "printf 'line-1\nline-2\n'";
+    const store = new FileBackgroundTaskStore(
+      path.join(rootDir, "background-tasks.json"),
+      () => ({ pid: 2222, unref() {} }),
+    );
+    const task = await store.start({ title: "Quoted command", command, cwd: rootDir });
+
+    const scriptPath = path.join(rootDir, task.execution.launchScript);
+    await execFileAsync("bash", [scriptPath], { cwd: rootDir });
+
+    const statePath = path.join(rootDir, task.execution.stateFile);
+    const raw = await fs.readFile(statePath, "utf8");
+    // The regression: this JSON.parse threw "Expected ',' or '}'" on the
+    // corrupt payload produced by the broken single-quote escaping.
+    const state = JSON.parse(raw) as BackgroundTaskExecutionState;
+    expect(state.command).toBe(command);
+    expect(state.status).toBe("completed");
+    expect(typeof state.pid).toBe("number");
   });
 });

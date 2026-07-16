@@ -4,6 +4,22 @@ Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
 ## Foundations / DX
+- [x] **Fix `shellQuote` corruption + de-flake background-task tests** (run 9,
+      2026-07-16). Canonical POSIX single-quote escape (`'\''`); real bug that
+      corrupted `state.json` for any command containing a single quote. Injected
+      deterministic spawn stubs into the 4 tests that raced the real detached
+      launcher subprocess. Suite 170→177 green and deterministic (4× runs).
+- [ ] **sed `$$` placeholder never substitutes** (found run 9): the launcher's
+      initial-state `sed "…s/\"\$\$\"/$$/g"` can't match because `$` is a sed
+      anchor, so the initial `state.json` keeps `"pid":"$$"` until the python
+      completion writer fixes it. Harmless today; replace the printf|sed initial
+      write with a small python patch (like the completion path) for robustness.
+- [ ] **Flaky-test guard in the engine self-check**: run `npm test` 3× before
+      pushing and fail on any non-green run (run 9's regression was invisible to
+      a single pass but deterministic under repeat/parallel load).
+- [ ] **`SpawnBackgroundProcess` simulator double**: a first-class test/dev
+      backend that writes running→completed state + output synchronously, so
+      integration tests get realistic execution without real subprocesses/timing.
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`

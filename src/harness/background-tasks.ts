@@ -793,6 +793,10 @@ function renderStateWriterPython(status: BackgroundTaskExecutionState["status"])
   ];
 }
 
-function shellQuote(value: string): string {
-  return `'${value.replaceAll(`'`, `"'"'"'`)}'`;
+export function shellQuote(value: string): string {
+  // POSIX-safe single-quoting: close the quote, emit an escaped quote, reopen.
+  // The canonical escape is `'\''`; the previous `"'"'"'` form was missing the
+  // leading close-quote, so any value containing a single quote (e.g. a command
+  // like `printf 'x'`) produced a corrupt, unparseable state file.
+  return `'${value.replaceAll(`'`, `'\\''`)}'`;
 }
