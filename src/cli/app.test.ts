@@ -593,7 +593,9 @@ describe("OperatorCliApp", () => {
     const removed = await app.dispatchSlashCommand({ kind: "worktree-exit", action: "remove" }, session.id);
     expect(removed).toContain("Exited and removed worktree");
     await expect(fs.stat(path.join(rootDir, ".operator", "worktrees", "feature-y"))).rejects.toMatchObject({ code: "ENOENT" });
-  });
+    // Drives ~7 real `git` subprocesses (init/add/commit/worktree add+remove); the
+    // 5s default timeout can be exceeded under parallel-suite CPU contention.
+  }, 20000);
 
   it("creates team task sessions and coordinates team-scoped tasks", async () => {
     const rootDir = await makeTempDir();

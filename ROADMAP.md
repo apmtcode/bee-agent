@@ -4,6 +4,21 @@ Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
 ## Foundations / DX
+- [x] **De-flake the test suite so the engine's verification gate is trustworthy**
+      (2026-07-16, run 9). Suite was non-deterministically red (3–4 fails/run) on
+      cloud. Fixed two real production bugs in the background-task launch script
+      (`shellQuote` POSIX single-quote escape was `"'"'"'` instead of `'"'"'`,
+      corrupting JSON for quoted commands; pid `"$$"` was never sed-substituted so
+      live tasks looked `missing-process`), made all state writes atomic
+      (stage+rename), hardened `readJsonFile` with a bounded parse-retry, and
+      determinized 3 integration tests via a no-op spawn injection + a 20s timeout
+      on the git-worktree test. Now **181/181, 15/15 runs green.**
+- [ ] Add a `test:flake` script (run the suite N× and fail on any red run) and
+      wire it into the engine's pre-push self-check, so non-determinism — not just
+      a single red run — is caught before pushing.
+- [ ] Generated-shell write-safety guard: grep/lint forbidding a raw `> "$file"`
+      redirect for state/JSON writes in rendered scripts, steering every writer to
+      the atomic stage+rename form.
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`

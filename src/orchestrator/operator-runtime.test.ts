@@ -528,8 +528,14 @@ describe("StandaloneOperatorRuntime", () => {
   });
 
   it("starts, syncs, recovers, lists, and cancels background tasks", async () => {
+    let fakePid = 20000;
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
+      // Deterministic execution: a no-op spawn avoids launching a real detached
+      // process whose own state/output writes would race the manual writeState/
+      // writeOutput calls this test relies on. Combined with the false liveness
+      // probe, recovery outcomes are fully determined by the written state.
+      backgroundTaskSpawnProcess: () => ({ pid: (fakePid += 1), unref() {} }),
       backgroundTaskIsProcessRunning: () => false,
     });
     const session = await runtime.startSession({ title: "Tasks", agentId: "main" });

@@ -366,8 +366,74 @@ describe("BackgroundTaskExecutionService", () => {
     });
     const service = new BackgroundTaskExecutionService(rootDir, () => ({ pid: 1111, unref() {} }));
 
-    await expect(fs.readFile(path.join(rootDir, task.execution.launchScript), "utf8")).resolves.toContain("bash -lc");
+    const launchScript = await fs.readFile(path.join(rootDir, task.execution.launchScript), "utf8");
+    expect(launchScript).toContain("bash -lc");
+    // The launch script must stage the running state to a temp file and rename it
+    // atomically, so a concurrent reader never observes a torn file. The pid must
+    // be substituted via a quote-free placeholder (never left as the literal "$$",
+    // which is an invalid pid that makes a running task look like missing-process).
+    expect(launchScript).toContain('mv "$state_tmp" "$state_path"');
+    expect(launchScript).toContain("s/__OPENCLAW_PID__/$$/g");
+    expect(launchScript).not.toContain('"pid":"$$"');
+    expect(launchScript).not.toMatch(/s\/"\$\$"\//);
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
+  });
+
+  it("runs the real launch script without ever exposing a torn state file", async () => {
+    const rootDir = await makeTempDir();
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"));
+    const task = await store.start({
+      title: "Emit drift",
+      command: "printf drift",
+      cwd: rootDir,
+      kind: "task",
+    });
+    // Hammer the state file with reads while the detached process writes it. With
+    // atomic writes every read must be ENOENT or valid JSON — never a torn parse
+    // error. readState() throwing here is the regression this test guards against.
+    const deadline = Date.now() + 5000;
+    let terminal: BackgroundTaskExecutionState | undefined;
+    while (Date.now() < deadline) {
+      const state = await store.executionService.readState(task);
+      if (state) {
+        // Every persisted state — running or terminal — must carry a real numeric
+        // pid, never the unsubstituted literal "$$" that broke liveness checks.
+        expect(typeof state.pid).toBe("number");
+        expect(Number.isFinite(state.pid)).toBe(true);
+      }
+      if (state && state.status !== "running") {
+        terminal = state;
+        break;
+      }
+    }
+
+    expect(terminal).toMatchObject({ taskId: task.id, status: "completed" });
+  });
+
+  it("writes valid state JSON for commands containing single quotes", async () => {
+    const rootDir = await makeTempDir();
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"));
+    // A single-quoted shell command previously corrupted the running-state JSON
+    // via a malformed shellQuote escape, crashing reconciliation with a torn-JSON
+    // SyntaxError. Every observed state read must parse cleanly.
+    const task = await store.start({
+      title: "Quoted command",
+      command: "printf 'alpha beta'",
+      cwd: rootDir,
+      kind: "task",
+    });
+
+    const deadline = Date.now() + 5000;
+    let sawValid = false;
+    while (Date.now() < deadline) {
+      const state = await store.executionService.readState(task);
+      if (state) {
+        expect(state.command).toBe("printf 'alpha beta'");
+        sawValid = true;
+        if (state.status !== "running") break;
+      }
+    }
+    expect(sawValid).toBe(true);
   });
 });

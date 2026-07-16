@@ -6,6 +6,64 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-16 (run 9) — 🟢 De-flaked the suite: fixed two real launch-script bugs + determinized 3 integration tests
+
+**Audited:** The test suite's own reliability — the engine's verification gate.
+On this cloud environment `npm test` was **non-deterministically red** (3–4
+failures per run, varying 3↔4), so "commit only if green" (step 5) was
+untrustworthy. Root-caused every failure instead of masking it.
+
+**Two genuine production bugs found in `src/harness/background-tasks.ts`** (the
+launch script that runs on the user's real machine for every background task):
+
+1. **`shellQuote` used a malformed POSIX single-quote escape** — it replaced `'`
+   with `"'"'"'` (starts with `"`) instead of the correct `'"'"'` (starts with
+   `'`). Every embedded single quote was rewritten as a spurious `"`, corrupting
+   the running-state JSON for any command containing a quote (e.g.
+   `printf 'x'`). Reconciliation then hit `JSON.parse` on the torn document and
+   **crashed** (`SyntaxError … position 311`). Affected *all* single-quoted shell
+   commands, not just tests.
+2. **The pid was never substituted.** The running state templated `"pid":"$$"`
+   and relied on `sed "s/\"\$\$\"/$$/g"`, but the embedded `"` chars close the
+   double-quoted sed program, so the pid stayed the literal string `"$$"` — an
+   invalid pid. `isProcessRunning("$$")` is always `false`, so a *live* task was
+   misjudged `missing-process` for its whole running window → spurious
+   `control=degraded`. Replaced with a quote-free placeholder
+   (`"pid":__OPENCLAW_PID__` + `sed "s/__OPENCLAW_PID__/$$/g"`).
+
+Also made all three state writes **atomic** (stage to `$state_path.$$.tmp` +
+`mv`/`os.replace`) so a concurrent reader never sees a torn file, and hardened
+`src/shared/fs.ts` `readJsonFile` with a bounded parse-retry (defense-in-depth
+against a foreign non-atomic writer; backward-compatible new optional `retries`).
+
+**Latent test-design flake unmasked:** three integration tests
+(`operator-runtime`, `server`, `app`) spawn *real detached processes* and then
+manually `writeState`/assert on liveness. They had been "passing" partly because
+the old crash short-circuited reconciliation. With the crash fixed, the real
+process's own writes race the assertions. Determinized them via the existing
+injection seam — a **no-op `backgroundTaskSpawnProcess`** (no real process, so the
+written/injected state is authoritative). Bumped the git-worktree test's timeout
+to 20s (it drives ~7 real `git` subprocesses and hit the 5s default under
+parallel-suite CPU contention).
+
+**Tests added:** `src/shared/fs.test.ts` (5 cases: fallback cloning, empty file,
+atomic round-trip, torn-read recovery, corrupt-past-retries) and 3 launch-script
+cases in `background-tasks.test.ts` (atomic-rename + quote-free-pid assertions, a
+real-process no-torn-read race, and a single-quote-command valid-JSON check).
+
+**Test results:** full suite **181/181 passing, 15/15 consecutive runs green**
+(was 3–4 failing every run, non-deterministic). `typecheck:src` ✅ exit 0. Full
+`tsc` **125** (unchanged — no new type debt; +5 typed test files). Build ✅.
+
+**New idea:** add a `test:flake` npm script that runs the suite N times (e.g.
+`for i in $(seq 1 10)`) and fails if any run fails — wire it into the engine's
+pre-push self-check so *non-determinism* (not just a single red run) is caught
+before pushing. Longer term: an ESLint/grep guard forbidding a raw `> "$file"`
+redirect for state/JSON writes in generated shell, steering all writers to the
+stage+rename helper.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
