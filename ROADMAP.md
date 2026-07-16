@@ -44,6 +44,14 @@ unchecked items are queued. Keep this richer than you found it each run.
       (excludes `**/*.test.ts`) + `typecheck:src` script; passes (exit 0). Next:
       have the engine run it as a per-run pre-push self-check.
 - [ ] Add a minimal CI workflow mirroring `verify` for human-opened PRs.
+- [ ] **Fix background-task state-file corruption** (surfaced run 9; 3 pre-existing
+      `npm test` failures). The bash launch script stamps `pid`/`startedAt` into a
+      JSON literal via `printf … | sed "s/…/$$/g"`; under this environment's shell
+      it produces invalid JSON → `SyntaxError` in `readState`
+      (`src/harness/background-tasks.ts`), failing 1 test each in
+      `operator-runtime.test.ts`, `app.test.ts`, `server.test.ts`. Fix: write the
+      state file from Node / a heredoc'd `python3 json.dump` instead of
+      `sed`-patching a JSON string. High-value reliability fix.
 
 ## Capability parity (audit reference agents → port gaps)
 - [ ] Build a "capability inventory" generator: enumerate bee-agent's exported
@@ -62,13 +70,25 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      for a real on-device small model. — DONE run 9
+      (`src/training/movement-model.ts`: `MovementModelBackend` +
+      `MovementModelBackendRegistry` + deterministic `NGramMovementModelBackend`).
+- [x] Synthetic event-stream generator to validate capture→dataset→replay
+      round-trips without real OS input. — DONE run 9
+      (`generateSyntheticMovementTrajectories` seeded PRNG + `splitMovementDataset`).
+- [x] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories. — DONE run 9
+      (`evaluateMovementGeneralization` → `replayFidelity` + `nextMovementAccuracy`).
+- [ ] **Movement-model replay executor**: feed a `TrainedMovementModel` into the
+      replay engine to *propose* the next movement for a new-but-related task
+      (trajectory autocomplete), gated by consent + a `predictNext` confidence
+      threshold. Add an online/continual backend that updates counts incrementally
+      as approved trajectories arrive (no full retrain).
+- [ ] Persist trained movement models to the training job artifact dir
+      (`toSnapshot` → JSON) and load them in the execution service, so a cloud-run
+      model can be exported alongside the MLX/Axolotl plan.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

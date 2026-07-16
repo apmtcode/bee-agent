@@ -6,6 +6,70 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-16 (run 9) — Movement subsystem: in-process trainable model that repeats + generalizes movements
+
+**Audited:** The local-movement learning subsystem (standing objective #2).
+`src/capture/` covers capture → schema → dataset → replay, and `src/training/`
+builds *launch plans* for external MLX/Axolotl processes — but there was **no
+in-process model** that could actually train, repeat recorded movements, and
+generalize. That "train + inference + generalize" seam (obj. #2c/#2d) was the
+biggest gap validatable entirely in the cloud, so I built it.
+
+**Changed (additive) — new `src/training/movement-model.ts`:**
+- **Tokenizer** `tokenizeAction` → stable movement tokens (`device:tap:send-button`,
+  `device:scroll:down`), preferring the structured gesture metadata the device/
+  browser adapters emit and falling back to the action summary.
+- **Dataset builders** `buildMovementDataset` / `buildMovementSequence` /
+  `datasetFromTokenSequences` — turn `TrajectorySpan`s (or raw token runs) into a
+  trainable `MovementDataset` (sequences + sorted vocabulary); honours redacted
+  actions.
+- **Pluggable backend interface** `MovementModelBackend` + `TrainedMovementModel`,
+  with a `MovementModelBackendRegistry` seam so a real on-device model (e.g. a
+  small MLX transformer) drops in behind the same contract.
+- **Default deterministic backend** `NGramMovementModelBackend`: an order-k n-gram
+  with start/end padding and **stupid-backoff** `predictNext`, plus autonomous
+  `generate`. Faithfully repeats recorded movements *and* generalizes across
+  trajectories that share sub-movements — no native deps, fully cloud-safe.
+  Serializable via `toSnapshot`/`loadMovementModelSnapshot`.
+- **Generalization eval harness** `evaluateMovementGeneralization` → reports
+  `replayFidelity` (exact autonomous repeat of training movements) and
+  `nextMovementAccuracy` (teacher-forced top-1 on held-out related sequences).
+- **Seeded synthetic generator** `generateSyntheticMovementTrajectories` (mulberry32
+  PRNG, no `Math.random`) emits device-adapter-shaped trajectories from shared task
+  templates, plus `splitMovementDataset` — so the whole capture→dataset→train→replay
+  loop is exercised with zero real OS input.
+- Exported the surface from `src/index.ts`.
+
+**Test results:** new `movement-model.test.ts` **11/11 green** (exact-repeat on
+distinct sequences; backoff on unseen contexts; snapshot round-trip; seed
+reproducibility; **generalization to unseen variants of the same grammar >0.6
+next-movement accuracy**; order-2 ≥ unigram baseline; registry). `typecheck:src`
+✅ CLEAN. Build ✅. Full `npm test` = **182 pass / 3 fail** — the 3 failures are
+**pre-existing at HEAD** (reproduce with my changes stashed) and unrelated to this
+diff: a bash launch-script writes a background-task state file via `sed`/`$$`/`date`
+substitution that parses as **malformed JSON** in this cloud environment
+(`SyntaxError` in `readState`, `src/harness/background-tasks.ts`), failing 1 test
+each in `operator-runtime.test.ts`, `app.test.ts`, `server.test.ts`. `src/training`
++ `src/capture` suites are **38/38 green**. Pushed to the designated feature branch
+`claude/peaceful-dirac-9zqaw4`.
+
+**Known blocker (for next run):** the launch-script state-file corruption above.
+The generated bash in `src/training/runner.ts`/`background-tasks` relies on
+`printf '%s' … | sed "s/…/$$/g"` to stamp `pid`/`startedAt` into a JSON literal;
+under this environment's shell it yields invalid JSON. Fix by writing the state
+file from Node (or a heredoc'd `python3 -c json.dump`) instead of `sed`-patching a
+JSON string — no shell-quoting of JSON. Small, high-value reliability fix.
+
+**New idea:** a **movement-model backed replay executor** — close the loop by
+feeding a trained `TrainedMovementModel` into the replay engine so bee-agent can
+*propose* the next movement for a new-but-related task (autocomplete for
+trajectories), gated behind consent + a confidence threshold from
+`predictNext(...).probability`. Also: an **online/continual** variant of the
+backend that updates counts incrementally as new approved trajectories arrive,
+without a full retrain.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
