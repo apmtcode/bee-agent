@@ -531,6 +531,11 @@ describe("StandaloneOperatorRuntime", () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
       backgroundTaskIsProcessRunning: () => false,
+      // This test drives background-task state entirely via manual writeState to
+      // exercise recovery; a real detached launch subprocess would write the
+      // state file asynchronously and race those manual writes. Use a no-op
+      // spawn so state stays fully test-controlled.
+      backgroundTaskSpawnProcess: () => ({ pid: 424242, unref() {} }),
     });
     const session = await runtime.startSession({ title: "Tasks", agentId: "main" });
 

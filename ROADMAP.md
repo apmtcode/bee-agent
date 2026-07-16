@@ -3,6 +3,26 @@
 Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
+## Reliability / correctness
+- [x] **Fix background-task launch script** (2026-07-16, run 9). Two latent bugs
+      surfaced once the cloud env gained a working `bash`/`python3` toolchain:
+      `shellQuote` used invalid POSIX escaping (`"'"'"'` → `'"'"'`) corrupting
+      `state.json` for any command with a `'`; and the PID sed silently no-op'd,
+      persisting `"pid":"$$"` instead of a numeric PID (also a production bug —
+      healthy tasks misreported as `missing-process`). Suite 171→174.
+- [ ] **Golden/fuzz test for `renderLaunchScript`** (queued, run 9 idea): run the
+      emitted bash through real `bash`/`sed`, assert `state.json` parses with a
+      numeric `pid`, and fuzz `command`/`cwd`/`title` with `'"$\n\`\\` to lock
+      the quoting invariants. Unit tests mock the spawn and can't see this seam.
+- [ ] **Stop hand-rolling shell-embedded JSON** (queued, run 9 idea): write the
+      initial `running` `state.json` from the parent via `writeJsonAtomic`
+      (already correct + atomic); let the launch script only *update* status on
+      exit. Removes the whole shell-quoting bug class.
+- [ ] **Per-run pre-push health gate**: run 9 found `HEAD` was red on a clean
+      checkout despite the prior log claiming green. Make the engine's own
+      pre-push step run `typecheck:src && build && test` and refuse to trust a
+      prior "green" claim — always re-measure.
+
 ## Foundations / DX
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.

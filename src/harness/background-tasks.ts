@@ -740,13 +740,19 @@ function renderLaunchScript(task: BackgroundTaskRecord): string {
       taskId: task.id,
       kind: task.kind,
       status: "running",
-      pid: "$$",
+      pid: 0,
       startedAt: "__OPENCLAW_STARTED_AT__",
       updatedAt: "__OPENCLAW_STARTED_AT__",
       outputFile: task.execution.outputFile,
       cwd: task.cwd,
       command: task.command,
-    }),
+      // The numeric `pid: 0` is a placeholder replaced by the live shell PID in
+      // the launch script. We swap the bare `0` token for `__OPENCLAW_PID__`
+      // (no surrounding quotes) so the sed substitution below can inject the
+      // real PID as a JSON number without needing to embed a `"` in the sed
+      // pattern — embedding `"` there would prematurely close the bash
+      // double-quoted sed argument and silently leave the placeholder in place.
+    }).replace(`"pid":0`, `"pid":__OPENCLAW_PID__`),
   );
 
   return [
@@ -754,7 +760,7 @@ function renderLaunchScript(task: BackgroundTaskRecord): string {
     "set -euo pipefail",
     `mkdir -p $(dirname ${quotedStatePath}) $(dirname ${quotedOutputFile})`,
     "started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-    `printf '%s' ${quotedStatePayload} | sed "s/__OPENCLAW_STARTED_AT__/$started_at/g; s/\"\$\$\"/$$/g" > ${quotedStatePath}`,
+    `printf '%s' ${quotedStatePayload} | sed "s/__OPENCLAW_STARTED_AT__/$started_at/g; s/__OPENCLAW_PID__/$$/g" > ${quotedStatePath}`,
     `printf '%s\n' "starting ${task.kind} ${task.id}" >> ${quotedOutputFile}`,
     `if cd ${quotedCwd} && bash -lc ${quotedCommand} >> ${quotedOutputFile} 2>&1; then`,
     "  completed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
@@ -794,5 +800,5 @@ function renderStateWriterPython(status: BackgroundTaskExecutionState["status"])
 }
 
 function shellQuote(value: string): string {
-  return `'${value.replaceAll(`'`, `"'"'"'`)}'`;
+  return `'${value.replaceAll(`'`, `'"'"'`)}'`;
 }

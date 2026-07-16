@@ -84,6 +84,10 @@ describe("OperatorControlPlaneServer", () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir,
       backgroundTaskIsProcessRunning: () => false,
+      // Keep background-task state deterministic: a real detached launch
+      // subprocess would asynchronously write the state file and race this
+      // test's expectations. A no-op spawn leaves state under test control.
+      backgroundTaskSpawnProcess: () => ({ pid: 424242, unref() {} }),
       delivery: new OperatorDeliveryService(rootDir, {
         sendBrowserPush: async () => {},
       }),
@@ -953,6 +957,8 @@ describe("OperatorControlPlaneServer", () => {
     const driftingRuntime = new StandaloneOperatorRuntime({
       rootDir: driftingRootDir,
       backgroundTaskIsProcessRunning: () => false,
+      // Deterministic state: no real launch subprocess racing manual writeState.
+      backgroundTaskSpawnProcess: () => ({ pid: 424242, unref() {} }),
     });
     const driftingServer = new OperatorControlPlaneServer({ runtime: driftingRuntime });
     const driftingBootstrap = await driftingServer.handle({
@@ -1019,6 +1025,8 @@ describe("OperatorControlPlaneServer", () => {
     const breakerRuntime = new StandaloneOperatorRuntime({
       rootDir: breakerRootDir,
       backgroundTaskIsProcessRunning: () => false,
+      // Deterministic state: no real launch subprocess racing manual writeState.
+      backgroundTaskSpawnProcess: () => ({ pid: 424242, unref() {} }),
     });
     const breakerServer = new OperatorControlPlaneServer({ runtime: breakerRuntime });
     const breakerOne = await breakerServer.handle({

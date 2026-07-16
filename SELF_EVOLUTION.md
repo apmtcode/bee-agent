@@ -6,6 +6,68 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-16 (run 9) — 🐛 Background-task launch script: fix JSON corruption + PID injection; suite green 171→174
+
+**Audited:** Project health first (the mandated pre-push self-check). `npm test`
+on a *clean* `HEAD` was **RED**: 3 failing tests (`operator-runtime.test.ts`,
+`server.test.ts`, `cli/app.test.ts`) — despite run 8's log claiming 174/174. The
+divergence traces to the cloud environment now having a working
+`bash`/`python3`/`date`/`sed` toolchain, which made the background-task **launch
+script actually execute** and exposed two latent bugs plus a test-hermeticity gap
+that the previously-broken script had been masking.
+
+**Two real source bugs fixed in `src/harness/background-tasks.ts`
+(`renderLaunchScript` / `shellQuote`):**
+1. **`shellQuote` produced invalid POSIX escaping.** It replaced each `'` with
+   `"'"'"'` (starts with `"`) instead of the correct `'"'"'` /`'\''`
+   (starts with `'`). Any task `command` containing a single quote (e.g.
+   `printf 'line-1\nline-2\n'`) had its initial `state.json` written as **corrupt
+   JSON**, so `readState` threw `SyntaxError` on the next reconcile. The sibling
+   copy in `src/training/runner.ts` already used the correct form — this one had
+   drifted. Verified by reproducing the exact `printf '%s' … | sed …` pipeline in
+   isolation: BAD → `…"printf "'line-1…"'"` (unparseable); GOOD → round-trips.
+2. **The live PID was never substituted.** The payload used `pid: "$$"` and a
+   `sed "s/\"\$\$\"/$$/g"`, but inside a JS backtick the `\"` collapse to bare
+   `"`, which prematurely close bash's double-quoted sed argument — so the sed
+   silently no-op'd and every fresh task persisted the literal string
+   `"pid":"$$"` (the schema types `pid: number`). Replaced with a quote-free
+   placeholder: payload emits `pid: 0` → post-processed to `"pid":__OPENCLAW_PID__`
+   → `sed "s/__OPENCLAW_PID__/$$/g"` injects the real numeric PID. Probed live:
+   `state.json` now shows `"pid":30258` (a genuinely-running process) instead of
+   `"pid":"$$"`. This also fixes a **production** bug: with a real
+   `isProcessRunning`, a bogus string PID could never match a live process, so
+   healthy long-running tasks were misreported as `missing-process`.
+
+**Test hermeticity (`server.test.ts`, `operator-runtime.test.ts`):** three
+runtimes that inject `backgroundTaskIsProcessRunning: () => false` *and* drive
+task state via manual `writeState` were also spawning the **real** detached
+launch subprocess, whose async state writes raced (and now, post-fix, cleanly
+clobbered) the manual state. Added a deterministic no-op
+`backgroundTaskSpawnProcess: () => ({ pid: 424242, unref() {} })` to those three
+constructions so state stays fully test-controlled — matching the clear intent of
+the already-present `isProcessRunning` stub. Production is unaffected (it has a
+single writer: the launch script). `cli/app.test.ts` needed **no** test change —
+it uses the real `isProcessRunning`, so the PID fix alone made its `sleep 5` task
+correctly report as running (`control=active`).
+
+**Test results:** full suite **171/174 → 174/174** (3 pre-existing failures
+cleared), stable across 3 consecutive runs (the one remaining real-subprocess
+path, `app.test`'s `sleep 5`, is deterministic). `npm run build` ✅.
+`npm run typecheck:src` ✅ (exit 0). Diff: +23/−4 across 3 files.
+
+**New idea:** the root cause was a shell/JSON string-assembly seam that unit tests
+can't see (they mock the spawn). Add a tiny **golden-output test for
+`renderLaunchScript`** that (a) asserts the emitted bash, when run through a real
+`bash`/`sed`, writes a `state.json` that `JSON.parse`s and carries a numeric
+`pid`, and (b) fuzzes `command`/`cwd`/`title` with adversarial shell
+metacharacters (`'`, `"`, `$`, `\n`, `` ` ``, `\\`) to lock the quoting invariants.
+Longer term, stop hand-rolling shell-embedded JSON entirely: have the parent
+process write the initial `running` `state.json` via the existing
+`writeJsonAtomic` (already correct + atomic) and let the launch script only
+*update* status on completion — eliminating this whole class of quoting bugs.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
