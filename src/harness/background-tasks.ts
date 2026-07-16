@@ -734,27 +734,34 @@ function renderLaunchScript(task: BackgroundTaskRecord): string {
   const quotedOutputFile = shellQuote(task.execution.outputFile);
   const quotedCwd = shellQuote(task.cwd);
   const quotedCommand = shellQuote(task.command);
-  const quotedStatePayload = shellQuote(
+  // Base64-encode the base state payload so arbitrary command text (newlines,
+  // quotes, `$`) can never break shell quoting or JSON validity. Python decodes,
+  // fills in the runtime pid/timestamp, and writes atomically. This replaces the
+  // former `printf | sed` construction, which corrupted commands containing
+  // single quotes/newlines and failed to substitute the pid.
+  const basePayloadB64 = Buffer.from(
     JSON.stringify({
       version: 1,
       taskId: task.id,
       kind: task.kind,
       status: "running",
-      pid: "$$",
-      startedAt: "__OPENCLAW_STARTED_AT__",
-      updatedAt: "__OPENCLAW_STARTED_AT__",
       outputFile: task.execution.outputFile,
       cwd: task.cwd,
       command: task.command,
     }),
-  );
+    "utf8",
+  ).toString("base64");
 
   return [
     "#!/usr/bin/env bash",
     "set -euo pipefail",
     `mkdir -p $(dirname ${quotedStatePath}) $(dirname ${quotedOutputFile})`,
     "started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-    `printf '%s' ${quotedStatePayload} | sed "s/__OPENCLAW_STARTED_AT__/$started_at/g; s/\"\$\$\"/$$/g" > ${quotedStatePath}`,
+    // Write the initial "running" state via python (atomic temp file + rename)
+    // so a concurrent reader never observes a half-written, unparseable file.
+    `python3 - ${quotedStatePath} $$ "$started_at" <<'PY'`,
+    ...renderRunningStateWriterPython(basePayloadB64),
+    "PY",
     `printf '%s\n' "starting ${task.kind} ${task.id}" >> ${quotedOutputFile}`,
     `if cd ${quotedCwd} && bash -lc ${quotedCommand} >> ${quotedOutputFile} 2>&1; then`,
     "  completed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
@@ -773,9 +780,30 @@ function renderLaunchScript(task: BackgroundTaskRecord): string {
   ].join("\n");
 }
 
+function renderRunningStateWriterPython(basePayloadB64: string): string[] {
+  return [
+    "import base64",
+    "import json",
+    "import os",
+    "import pathlib",
+    "import sys",
+    "state_path = pathlib.Path(sys.argv[1])",
+    "pid = int(sys.argv[2])",
+    "started_at = sys.argv[3]",
+    `state = json.loads(base64.b64decode('${basePayloadB64}').decode('utf8'))`,
+    "state['pid'] = pid",
+    "state['startedAt'] = started_at",
+    "state['updatedAt'] = started_at",
+    "tmp_path = state_path.with_name(state_path.name + f'.{pid}.tmp')",
+    "tmp_path.write_text(json.dumps(state, indent=2) + '\\n')",
+    "os.replace(tmp_path, state_path)",
+  ];
+}
+
 function renderStateWriterPython(status: BackgroundTaskExecutionState["status"]): string[] {
   return [
     "import json",
+    "import os",
     "import pathlib",
     "import sys",
     "state_path = pathlib.Path(sys.argv[1])",
@@ -789,10 +817,19 @@ function renderStateWriterPython(status: BackgroundTaskExecutionState["status"])
     "state['completedAt'] = timestamp",
     "state['exitCode'] = exit_code",
     `state['error'] = None if '${status}' == 'completed' else f'background task exited non-zero ({exit_code})'`,
-    "state_path.write_text(json.dumps(state, indent=2) + '\\n')",
+    // Atomic write: serialize to a temp file, then os.replace() (atomic rename)
+    // so readers never see a truncated or partially-written state file.
+    "tmp_path = state_path.with_name(state_path.name + f'.{pid}.tmp')",
+    "tmp_path.write_text(json.dumps(state, indent=2) + '\\n')",
+    "os.replace(tmp_path, state_path)",
   ];
 }
 
 function shellQuote(value: string): string {
-  return `'${value.replaceAll(`'`, `"'"'"'`)}'`;
+  // Wrap in single quotes and escape any embedded single quote as the POSIX
+  // sequence '\'' (close quote, escaped quote, reopen quote). The previous
+  // escape ("'"'"') was malformed — it injected a stray double quote — so any
+  // value containing a single quote (e.g. a command like `printf 'x'`) was
+  // corrupted when the launch script ran.
+  return `'${value.replaceAll(`'`, `'\\''`)}'`;
 }

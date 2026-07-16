@@ -4,6 +4,20 @@ Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
 ## Foundations / DX
+- [x] **Restore the green test gate** (2026-07-16, run 9). Fixed two root-cause
+      bugs in the background-task launcher — a malformed `shellQuote` escape
+      (`"'"'"'` → `'\''`) that corrupted any single-quoted command, and a
+      non-atomic `printf | sed` running-state write that left the pid as `"$$"`
+      and could be read half-written. Made the task test suite hermetic via
+      `createInertBackgroundSpawn()` (no real processes spawned; injected at 23
+      sites) and added a launch-script regression test. `npm test` 174→175, red→
+      green, 0/10 flaky.
+- [ ] **Launch-script fuzz self-test**: generate the launch script for a battery
+      of adversarial commands (single/double quotes, `$`, backticks, newlines,
+      unicode) and assert state round-trip fidelity, so shell-escaping/atomicity
+      regressions are caught at authoring time.
+- [ ] **Flakiness guard in CI**: run the suite N× under load (and `retry: 0`) so
+      a race can't masquerade as a passing run.
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`

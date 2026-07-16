@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { OperatorControlPlaneServer } from "./server.js";
 import { OperatorGatewayTransportConnection, type GatewayClientMessage, type GatewayServerMessage } from "./gateway-transport.js";
 import { StandaloneOperatorRuntime } from "../orchestrator/operator-runtime.js";
+import { createInertBackgroundSpawn } from "../harness/background-tasks.testkit.js";
 
 const tempDirs: string[] = [];
 
@@ -31,6 +32,7 @@ describe("OperatorGatewayTransportConnection", () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
       backgroundTaskIsProcessRunning: () => false,
+      backgroundTaskSpawnProcess: createInertBackgroundSpawn(),
     });
     const server = new OperatorControlPlaneServer({ runtime });
     const transport = new InMemoryGatewayTransport();
@@ -146,6 +148,7 @@ describe("OperatorGatewayTransportConnection", () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
       backgroundTaskIsProcessRunning: () => false,
+      backgroundTaskSpawnProcess: createInertBackgroundSpawn(),
     });
     const server = new OperatorControlPlaneServer({ runtime });
     const transport = new InMemoryGatewayTransport();
@@ -206,6 +209,7 @@ describe("OperatorGatewayTransportConnection", () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
       backgroundTaskIsProcessRunning: () => false,
+      backgroundTaskSpawnProcess: createInertBackgroundSpawn(),
     });
     const server = new OperatorControlPlaneServer({ runtime });
     const firstTransport = new InMemoryGatewayTransport();
@@ -244,6 +248,7 @@ describe("OperatorGatewayTransportConnection", () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
       backgroundTaskIsProcessRunning: () => false,
+      backgroundTaskSpawnProcess: createInertBackgroundSpawn(),
     });
     const server = new OperatorControlPlaneServer({ runtime });
     const transport = new InMemoryGatewayTransport();
@@ -294,6 +299,7 @@ describe("OperatorGatewayTransportConnection", () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
       backgroundTaskIsProcessRunning: () => false,
+      backgroundTaskSpawnProcess: createInertBackgroundSpawn(),
     });
     const server = new OperatorControlPlaneServer({ runtime });
     const transport = new InMemoryGatewayTransport();
@@ -323,6 +329,7 @@ describe("OperatorGatewayTransportConnection", () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
       backgroundTaskIsProcessRunning: () => false,
+      backgroundTaskSpawnProcess: createInertBackgroundSpawn(),
     });
     const server = new OperatorControlPlaneServer({ runtime });
     const created = await server.handle({ method: "pairing.create", params: { remoteSource: "gateway" } });
@@ -355,6 +362,7 @@ describe("OperatorGatewayTransportConnection", () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
       backgroundTaskIsProcessRunning: () => false,
+      backgroundTaskSpawnProcess: createInertBackgroundSpawn(),
     });
     const server = new OperatorControlPlaneServer({ runtime });
     const transport = new InMemoryGatewayTransport();
@@ -402,6 +410,7 @@ describe("OperatorGatewayTransportConnection", () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
       backgroundTaskIsProcessRunning: () => false,
+      backgroundTaskSpawnProcess: createInertBackgroundSpawn(),
     });
     const server = new OperatorControlPlaneServer({ runtime });
     const firstTransport = new InMemoryGatewayTransport();

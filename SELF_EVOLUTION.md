@@ -6,6 +6,59 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-16 (run 9) — 🔧 Fix background-task launch corruption + make the task test suite hermetic (green gate restored)
+
+**Audited:** The green gate itself. On a clean tree `npm test` was **red** — 3
+tests failing deterministically (`operator-runtime`, `server`, `app`), with more
+under parallel load (8/8 full-suite runs failed). Two independent root causes in
+the background-task launcher (`src/harness/background-tasks.ts`):
+
+1. **`shellQuote` produced a malformed single-quote escape** — it replaced `'`
+   with `"'"'"'` (a stray leading `"`) instead of the POSIX `'\''`. Every value
+   containing a single quote was corrupted when the generated launch script ran.
+   For a command like `printf 'line-1\nline-2\n'` this both (a) made `bash -lc`
+   receive unbalanced quotes → the command errored (exit 2), and (b) corrupted
+   the state JSON written by the shell (`SyntaxError … at position 311`).
+2. **The initial "running" state was built with `printf | sed`**, which also
+   failed to substitute the pid (left the literal `"$$"`), and was written
+   non-atomically (a `>` redirect) so a concurrent reader could observe a
+   half-written file.
+
+**Changed (`src/harness/background-tasks.ts`, additive/surgical):**
+- Fixed `shellQuote` to escape `'` as `'\''` (the real root-cause fix).
+- Replaced the `printf | sed` running-state write with a **Python writer fed a
+  base64-encoded payload** (`renderRunningStateWriterPython`) — arbitrary command
+  text can never break shell quoting or JSON validity; Python fills in the real
+  pid/timestamp and writes **atomically** (temp file + `os.replace`).
+- Made the completed/failed state writer atomic the same way (temp + `os.replace`)
+  so readers never see a truncated state file.
+
+**Made the test suite hermetic (root of the flakiness):** tests that model dead
+processes via `backgroundTaskIsProcessRunning: () => false` were still spawning
+**real** detached `sleep`/`printf` processes, whose asynchronous state writes
+raced the tests' manually-written state and inflated the circuit-breaker failure
+counts (`degraded` → `paused`, `failureCount 2` → `3`). Added a test-only
+`createInertBackgroundSpawn()` (`src/harness/background-tasks.testkit.ts`, excluded
+from the build) and injected it at all **23** such sites across 4 files, so no
+real OS process is launched and reconcile/breaker assertions are deterministic.
+
+**Added:** a regression test that executes the *real* generated launch script for
+a command containing single quotes + newlines and asserts the state file is valid
+JSON, `command` is preserved verbatim, `pid` is numeric, and status is
+`completed` (`background-tasks.test.ts`).
+
+**Test results:** **red → green.** `npm test` **175/175** (174 + 1 new), **0/10**
+flaky across full-suite reruns (was 8/8 failing). `typecheck:src` ✅. Build ✅.
+
+**New idea:** the two bugs here (a wrong shell-escape, a non-atomic multi-writer
+state file) are exactly what a tiny **launch-script self-test** would catch —
+generate the script for a battery of adversarial commands (single/double quotes,
+`$`, backticks, newlines, unicode) and assert round-trip fidelity. Bigger: a
+`vitest.config` `retry: 0` + a CI job that runs the suite N× under load to make
+flakiness a hard failure, so a race can never again masquerade as "passing."
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

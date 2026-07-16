@@ -6,6 +6,7 @@ import { StandaloneOperatorRuntime } from "./operator-runtime.js";
 import { resolveOperatorCliExecutionConfig } from "../cli/config.js";
 import { runOperatorHooks } from "../cli/execution-policy.js";
 import type { ReviewedExportManifest } from "../training/export-manifest.js";
+import { createInertBackgroundSpawn } from "../harness/background-tasks.testkit.js";
 
 const tempDirs: string[] = [];
 
@@ -531,6 +532,7 @@ describe("StandaloneOperatorRuntime", () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
       backgroundTaskIsProcessRunning: () => false,
+      backgroundTaskSpawnProcess: createInertBackgroundSpawn(),
     });
     const session = await runtime.startSession({ title: "Tasks", agentId: "main" });
 

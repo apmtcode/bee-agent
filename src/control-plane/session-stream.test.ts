@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { OperatorControlPlaneServer } from "./server.js";
 import { OperatorControlPlaneSessionStream } from "./session-stream.js";
 import { StandaloneOperatorRuntime } from "../orchestrator/operator-runtime.js";
+import { createInertBackgroundSpawn } from "../harness/background-tasks.testkit.js";
 
 const tempDirs: string[] = [];
 
@@ -23,6 +24,7 @@ describe("OperatorControlPlaneSessionStream", () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
       backgroundTaskIsProcessRunning: () => false,
+      backgroundTaskSpawnProcess: createInertBackgroundSpawn(),
     });
     const server = new OperatorControlPlaneServer({ runtime });
     const stream = new OperatorControlPlaneSessionStream(server);
@@ -134,6 +136,7 @@ describe("OperatorControlPlaneSessionStream", () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
       backgroundTaskIsProcessRunning: () => false,
+      backgroundTaskSpawnProcess: createInertBackgroundSpawn(),
     });
     const server = new OperatorControlPlaneServer({ runtime });
     const session = await runtime.startSession({ title: "Parent", agentId: "gateway", remoteId: "device-subagent-1", remoteSource: "gateway" });
@@ -189,6 +192,7 @@ describe("OperatorControlPlaneSessionStream", () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
       backgroundTaskIsProcessRunning: () => false,
+      backgroundTaskSpawnProcess: createInertBackgroundSpawn(),
     });
     const server = new OperatorControlPlaneServer({ runtime });
     const stream = new OperatorControlPlaneSessionStream(server);
@@ -279,6 +283,7 @@ describe("OperatorControlPlaneSessionStream", () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
       backgroundTaskIsProcessRunning: () => false,
+      backgroundTaskSpawnProcess: createInertBackgroundSpawn(),
     });
     const server = new OperatorControlPlaneServer({ runtime });
     const stream = new OperatorControlPlaneSessionStream(server);
@@ -366,6 +371,7 @@ describe("OperatorControlPlaneSessionStream", () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
       backgroundTaskIsProcessRunning: () => false,
+      backgroundTaskSpawnProcess: createInertBackgroundSpawn(),
     });
     const server = new OperatorControlPlaneServer({ runtime });
     const reviewer = await runtime.startSession({ title: "Reviewer", agentId: "reviewer" });
@@ -487,6 +493,7 @@ describe("OperatorControlPlaneSessionStream", () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
       backgroundTaskIsProcessRunning: () => false,
+      backgroundTaskSpawnProcess: createInertBackgroundSpawn(),
     });
     const server = new OperatorControlPlaneServer({ runtime });
     const recipient = await runtime.startSession({ title: "Recipient", agentId: "worker" });
@@ -573,6 +580,7 @@ describe("OperatorControlPlaneSessionStream", () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
       backgroundTaskIsProcessRunning: () => false,
+      backgroundTaskSpawnProcess: createInertBackgroundSpawn(),
       delivery,
     });
     const server = new OperatorControlPlaneServer({ runtime });
@@ -646,6 +654,7 @@ describe("OperatorControlPlaneSessionStream", () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
       backgroundTaskIsProcessRunning: () => false,
+      backgroundTaskSpawnProcess: createInertBackgroundSpawn(),
     });
     const server = new OperatorControlPlaneServer({ runtime });
     const stream = new OperatorControlPlaneSessionStream(server);
@@ -721,6 +730,7 @@ describe("OperatorControlPlaneSessionStream", () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
       backgroundTaskIsProcessRunning: () => false,
+      backgroundTaskSpawnProcess: createInertBackgroundSpawn(),
     });
     const server = new OperatorControlPlaneServer({ runtime });
     const targetSession = await runtime.startSession({ title: "Target", agentId: "remote" });
@@ -774,6 +784,7 @@ describe("OperatorControlPlaneSessionStream", () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
       backgroundTaskIsProcessRunning: () => false,
+      backgroundTaskSpawnProcess: createInertBackgroundSpawn(),
     });
     const server = new OperatorControlPlaneServer({ runtime });
     const firstStream = new OperatorControlPlaneSessionStream(server);
@@ -802,6 +813,7 @@ describe("OperatorControlPlaneSessionStream", () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
       backgroundTaskIsProcessRunning: () => false,
+      backgroundTaskSpawnProcess: createInertBackgroundSpawn(),
     });
     const server = new OperatorControlPlaneServer({ runtime });
     const created = await server.handle({ method: "pairing.create", params: { remoteSource: "gateway" } });
