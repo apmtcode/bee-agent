@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { StandaloneOperatorRuntime } from "./operator-runtime.js";
+import { createSimulatedBackgroundExecution } from "../harness/simulated-background.js";
 import { resolveOperatorCliExecutionConfig } from "../cli/config.js";
 import { runOperatorHooks } from "../cli/execution-policy.js";
 import type { ReviewedExportManifest } from "../training/export-manifest.js";
@@ -528,9 +529,15 @@ describe("StandaloneOperatorRuntime", () => {
   });
 
   it("starts, syncs, recovers, lists, and cancels background tasks", async () => {
+    // Deterministic execution: the real launch script writes the state file
+    // non-atomically and asynchronously, racing (and corrupting) the manual
+    // state writes and reads below. The simulator drives everything from the
+    // test's own writes plus `isProcessRunning`.
+    const simulatedBackground = createSimulatedBackgroundExecution({ aliveOnSpawn: false });
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
-      backgroundTaskIsProcessRunning: () => false,
+      backgroundTaskSpawnProcess: simulatedBackground.spawnProcess,
+      backgroundTaskIsProcessRunning: simulatedBackground.isProcessRunning,
     });
     const session = await runtime.startSession({ title: "Tasks", agentId: "main" });
 

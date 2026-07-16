@@ -8,6 +8,7 @@ import { OperatorCronService } from "./cron-service.js";
 import { OperatorDeliveryService } from "./delivery.js";
 import { buildRuntimeEventFilter, subscribeRuntimeEvents } from "./subscriptions.js";
 import { StandaloneOperatorRuntime } from "../orchestrator/operator-runtime.js";
+import { createSimulatedBackgroundExecution } from "../harness/simulated-background.js";
 import type { ReviewedExportManifest } from "../training/export-manifest.js";
 
 const tempDirs: string[] = [];
@@ -81,9 +82,15 @@ const exportManifest: ReviewedExportManifest = {
 describe("OperatorControlPlaneServer", () => {
   it("handles session, transcript, approval, trajectory, memory, and orchestration methods", async () => {
     const rootDir = await makeTempDir();
+    // Deterministic background-task execution: no real child process (whose
+    // launch script would write the state file asynchronously and race the
+    // status reads below). `isProcessRunning` stays false to preserve the
+    // recovery/repair scenarios this test exercises.
+    const simulatedBackground = createSimulatedBackgroundExecution({ aliveOnSpawn: false });
     const runtime = new StandaloneOperatorRuntime({
       rootDir,
-      backgroundTaskIsProcessRunning: () => false,
+      backgroundTaskSpawnProcess: simulatedBackground.spawnProcess,
+      backgroundTaskIsProcessRunning: simulatedBackground.isProcessRunning,
       delivery: new OperatorDeliveryService(rootDir, {
         sendBrowserPush: async () => {},
       }),
@@ -950,9 +957,11 @@ describe("OperatorControlPlaneServer", () => {
     });
 
     const driftingRootDir = await makeTempDir();
+    const driftingBackground = createSimulatedBackgroundExecution({ aliveOnSpawn: false });
     const driftingRuntime = new StandaloneOperatorRuntime({
       rootDir: driftingRootDir,
-      backgroundTaskIsProcessRunning: () => false,
+      backgroundTaskSpawnProcess: driftingBackground.spawnProcess,
+      backgroundTaskIsProcessRunning: driftingBackground.isProcessRunning,
     });
     const driftingServer = new OperatorControlPlaneServer({ runtime: driftingRuntime });
     const driftingBootstrap = await driftingServer.handle({
@@ -1016,9 +1025,11 @@ describe("OperatorControlPlaneServer", () => {
     });
 
     const breakerRootDir = await makeTempDir();
+    const breakerBackground = createSimulatedBackgroundExecution({ aliveOnSpawn: false });
     const breakerRuntime = new StandaloneOperatorRuntime({
       rootDir: breakerRootDir,
-      backgroundTaskIsProcessRunning: () => false,
+      backgroundTaskSpawnProcess: breakerBackground.spawnProcess,
+      backgroundTaskIsProcessRunning: breakerBackground.isProcessRunning,
     });
     const breakerServer = new OperatorControlPlaneServer({ runtime: breakerRuntime });
     const breakerOne = await breakerServer.handle({

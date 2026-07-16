@@ -45,6 +45,20 @@ unchecked items are queued. Keep this richer than you found it each run.
       have the engine run it as a per-run pre-push self-check.
 - [ ] Add a minimal CI workflow mirroring `verify` for human-opened PRs.
 
+## Reliability / test determinism
+- [x] **Deterministic background-task execution seam** (2026-07-16, run 9).
+      `createSimulatedBackgroundExecution()` (`src/harness/simulated-background.ts`)
+      replaces real OS process spawning in tests; fixed a red/flaky suite where
+      async, non-atomic launch-script state writes raced diagnostics reads and
+      corrupted state JSON. CLI now threads the spawn/liveness seams too.
+- [ ] **Atomic launch-script state writes.** `renderLaunchScript` writes the
+      execution-state file with a plain redirect; a concurrent `readState`
+      /diagnostics can observe a half-written file (the production version of the
+      race run 9 fixed in tests). Write to a temp file + `mv` (atomic rename).
+- [ ] **Flaky-guard in the pre-push self-check.** Run the suite 3× (or a marked
+      subset) before pushing to `main` so nondeterminism is caught locally
+      instead of landing green-by-luck.
+
 ## Capability parity (audit reference agents → port gaps)
 - [ ] Build a "capability inventory" generator: enumerate bee-agent's exported
       RPC/tool surface (`src/index.ts`) and diff it against `openclaw`,

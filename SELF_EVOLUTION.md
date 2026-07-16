@@ -6,6 +6,56 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-16 (run 9) — Deterministic background-task execution seam: fixed a flaky/red suite
+
+**Audited:** Project health at HEAD. The suite was **red** (3 tests failing,
+non-deterministically 1–3 per run) even though run 8 reported 174/174 green.
+Root cause (confirmed empirically, not guessed): four tests spawn **real**
+detached OS processes (`sleep 5`, `printf ...`, `tail -f`) whose shell launch
+script writes the execution-state file *asynchronously and non-atomically*.
+That async write races everything that reads the state:
+- `deriveRemoteDiagnostics` reads a task whose state momentarily says `running`
+  while the injected `isProcessRunning: () => false` calls it dead → spurious
+  `degraded`/`missing-process` (repro: repeated `remoteStatus` calls flipped
+  `active`→`degraded` once the launch script's write landed).
+- The platform-breaker test expected `mixed` (1 of 3 remotes degraded) but the
+  other two remotes' real launch scripts had already written `running` state →
+  premature `degraded`.
+- Under the full parallel suite, the launch script's non-atomic write collided
+  with the test's own `writeJsonAtomic`, so `readJsonFile` parsed a half-written
+  file → `SyntaxError: Expected ',' or '}' ... at position 311`.
+
+**Changed (additive, reversible):**
+- **New `src/harness/simulated-background.ts`** — `createSimulatedBackgroundExecution()`
+  returns deterministic `{ spawnProcess, isProcessRunning }` seams (plus
+  `livePids` / `markStopped` / `markRunning`). It spawns **no** real process and
+  writes **no** state file, so background-task record/diagnostics tests are
+  driven entirely by explicit state writes + a controllable in-memory pid set.
+  Exported from `src/index.ts`; covered by `simulated-background.test.ts` (3 tests).
+- **`src/cli/app.ts`** — threaded `backgroundTaskSpawnProcess` /
+  `backgroundTaskIsProcessRunning` through `OperatorCliAppOptions` into the
+  runtime (previously only the runtime accepted these seams; the CLI didn't).
+- **Injected the simulator** into the four real-process tests (`server.test.ts`
+  ×3 runtimes, `app.test.ts` ×2 tests, `operator-runtime.test.ts` ×1). Where a
+  test asserted real command output, the output is now written explicitly
+  (mirroring the pattern the monitor test already used).
+
+**Test results:** full suite **177/177**, green **5×** in a row (was flaky
+1–3 failures). `typecheck:src` ✅. Build ✅. Full `tsc` total **still 125** (new
+source + test files add **zero** errors). This directly serves objective #2's
+guardrail: OS-interacting features behind interfaces with a simulated impl so
+cloud/CI tests are deterministic.
+
+**New idea:** the real `renderLaunchScript` writes state with a plain redirect
+(non-atomic), which is the *production* corruption risk this run only worked
+around in tests. Next: make the launch script write state via a temp-file +
+`mv` (atomic rename) so live `readState`/diagnostics never observe a
+half-written file even outside tests. Also add a tiny `flaky-guard` CI note:
+run the suite 3× in the pre-push self-check to catch nondeterminism like this
+before it reaches `main`.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

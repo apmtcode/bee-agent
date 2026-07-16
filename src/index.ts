@@ -75,6 +75,11 @@ export {
   type StopBackgroundTaskParams,
 } from "./harness/background-tasks.js";
 export {
+  createSimulatedBackgroundExecution,
+  type SimulatedBackgroundExecution,
+  type SimulatedBackgroundExecutionOptions,
+} from "./harness/simulated-background.js";
+export {
   FileSessionStore,
   type SessionStoreRecord,
   type SessionStoreShape,
