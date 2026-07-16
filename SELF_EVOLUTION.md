@@ -6,6 +6,68 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-16 (run 9) — 🩹 Green gate restored: eliminated real-process flakiness in the background-task tests
+
+**Audited:** The project's own verification gate. On a clean install the suite was
+**RED** — `npm test` showed **3 non-deterministic failures** (`app.test.ts` ×2,
+`server.test.ts` ×1), plus a 4th (`operator-runtime.test.ts`) that surfaced only
+under full-suite load. Re-running the affected files gave different failure counts
+each time (2, then 1, then 2), confirming flakiness rather than a logic regression
+(the prior run's faster environment happened to pass 174/174).
+
+**Root cause (one class, three surfaces):** these tests call
+`runtime.startBackgroundTask({command: "sleep 5" | "tail -f app.log" | "printf …"})`,
+which spawns a **real detached OS process** whose launch script *asynchronously*
+writes an execution-state file. The tests then assert on process liveness and
+state files, so they race that write:
+1. **Health flips to degraded** (`server.test.ts:719`, `app.test.ts` platform/remote
+   list): `deriveRemoteDiagnostics` reads the launch-written `running` state file and,
+   with `isProcessRunning=false`, reports `degraded:…background task missing-process`
+   instead of `active` — depending on whether the file landed before the check.
+2. **Task not active** (`app.test.ts` watch-active): `printf ok` completed on the
+   real machine before the assertion, so the task was no longer `running`.
+3. **Torn JSON read** (`operator-runtime.test.ts:605`): the real launch script wrote
+   the state file *concurrently* with the test's own `writeState`, producing a
+   partial-read `SyntaxError` in `readJsonFile`.
+
+**Changed (additive, test-hermeticity — mirrors the run-1 `configHome` precedent):**
+- `src/cli/app.ts`: threaded the two **already-existing** runtime injection seams
+  (`backgroundTaskSpawnProcess`, `backgroundTaskIsProcessRunning`) through
+  `OperatorCliAppOptions` into the runtime it constructs. Production default is
+  unchanged (real detached spawn); tests can now make CLI background execution
+  deterministic — the app previously hard-coded `new StandaloneOperatorRuntime({ rootDir })`.
+- `src/cli/app.test.ts`: added `deterministicBackgroundExecution()` (fake spawn →
+  unique **alive** pids + alive-tracking probe) and injected it into the 4 tests that
+  start background/monitor tasks; seeded expected command output via `writeOutput`
+  where the fake replaces a real `printf`.
+- `src/control-plane/server.test.ts`: added `deadProcessBackgroundExecution(pid)`
+  (no-op fake spawn + **dead**-process probe) for the main/drifting/breaker runtimes —
+  the exact shape their assertions were written against (record reports `running`;
+  `getExecutionState` is NOT_FOUND until a state file is explicitly written; an
+  explicitly-written `running` state reconciles to `missing-process`). No real
+  `sleep 5`/`printf` processes, no racy state-file writes.
+- `src/orchestrator/operator-runtime.test.ts`: added a no-op fake spawn so the manual
+  `writeState` calls are authoritative — the torn-JSON read is gone.
+
+**Why fake-spawn choices differ per test:** the CLI tests want tasks to stay *active*
+after an explicit sync (→ alive probe), whereas the control-plane/runtime tests assert
+NOT_FOUND-until-written and missing-process-on-dead (→ dead probe + no launch-script
+write). Both are deterministic once no real process writes state concurrently.
+
+**Test results:** 🟢 **174/174 passing**, deterministic across **3 full-suite runs**
+and **5 isolated runs** of the affected files. Build ✅. `typecheck:src` ✅ **0**.
+Full `tsc` **125** (unchanged — all pre-existing test-file debt, untouched here).
+
+**New idea:** two hardening follow-ups. (a) A tiny test-lint guard that fails if any
+`*.test.ts` constructs a runtime/app which starts a background task **without**
+injecting a fake spawn — so real-process flakiness can't creep back in. (b) In
+production, `renderLaunchScript` writes execution state via a **non-atomic** multi-line
+`printf | sed > state` sequence; switching it to write-temp-then-`rename` (like
+`writeJsonAtomic`) would harden the real runtime against the very torn-read that
+surfaced here, not just the tests.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

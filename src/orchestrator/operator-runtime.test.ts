@@ -530,6 +530,13 @@ describe("StandaloneOperatorRuntime", () => {
   it("starts, syncs, recovers, lists, and cancels background tasks", async () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
+      // Fake spawn: start no real OS process, so no launch script asynchronously
+      // (re)writes the execution-state file. This keeps the manual writeState
+      // calls below authoritative and avoids torn JSON reads when a real launch
+      // script's write races reconciliation (a source of flakiness in slower/
+      // cloud environments). Paired with the dead-process probe so a written
+      // running state deterministically reconciles to missing-process.
+      backgroundTaskSpawnProcess: () => ({ pid: 424200, unref() {} }),
       backgroundTaskIsProcessRunning: () => false,
     });
     const session = await runtime.startSession({ title: "Tasks", agentId: "main" });

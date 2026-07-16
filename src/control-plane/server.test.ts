@@ -22,6 +22,27 @@ afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })));
 });
 
+/**
+ * Deterministic background-task execution for the control-plane tests: a fake
+ * spawn that starts no real OS process (so no launch script asynchronously
+ * writes an execution-state file) paired with a "dead process" liveness probe.
+ * This is the shape these tests were written against — a task record reports
+ * `running` from the store, `getExecutionState` returns NOT_FOUND until a state
+ * file is written explicitly, and reconciliation of an explicitly-written
+ * running state deterministically yields missing-process. It removes the real
+ * `sleep 5`/`printf` processes whose asynchronous state-file writes raced
+ * reconciliation and made these tests flaky in slower/cloud environments.
+ */
+function deadProcessBackgroundExecution(nextPid: number): Pick<
+  ConstructorParameters<typeof StandaloneOperatorRuntime>[0],
+  "backgroundTaskSpawnProcess" | "backgroundTaskIsProcessRunning"
+> {
+  return {
+    backgroundTaskSpawnProcess: () => ({ pid: nextPid, unref() {} }),
+    backgroundTaskIsProcessRunning: () => false,
+  };
+}
+
 const exportManifest: ReviewedExportManifest = {
   version: 1,
   createdAt: "2026-01-01T00:00:00.000Z",
@@ -83,7 +104,7 @@ describe("OperatorControlPlaneServer", () => {
     const rootDir = await makeTempDir();
     const runtime = new StandaloneOperatorRuntime({
       rootDir,
-      backgroundTaskIsProcessRunning: () => false,
+      ...deadProcessBackgroundExecution(424200),
       delivery: new OperatorDeliveryService(rootDir, {
         sendBrowserPush: async () => {},
       }),
@@ -952,7 +973,10 @@ describe("OperatorControlPlaneServer", () => {
     const driftingRootDir = await makeTempDir();
     const driftingRuntime = new StandaloneOperatorRuntime({
       rootDir: driftingRootDir,
-      backgroundTaskIsProcessRunning: () => false,
+      // No real process is spawned, so the manual writeState below is authoritative
+      // (no async launch-script write can overwrite it); the dead-process probe
+      // then deterministically drives the missing-process/degraded path.
+      ...deadProcessBackgroundExecution(525200),
     });
     const driftingServer = new OperatorControlPlaneServer({ runtime: driftingRuntime });
     const driftingBootstrap = await driftingServer.handle({
@@ -1018,7 +1042,10 @@ describe("OperatorControlPlaneServer", () => {
     const breakerRootDir = await makeTempDir();
     const breakerRuntime = new StandaloneOperatorRuntime({
       rootDir: breakerRootDir,
-      backgroundTaskIsProcessRunning: () => false,
+      // Fake spawn keeps the manual running-state writes below authoritative and
+      // avoids leaving real `sleep 5` processes behind; the dead-process probe
+      // drives the missing-process/breaker path deterministically.
+      ...deadProcessBackgroundExecution(626200),
     });
     const breakerServer = new OperatorControlPlaneServer({ runtime: breakerRuntime });
     const breakerOne = await breakerServer.handle({

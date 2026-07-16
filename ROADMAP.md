@@ -8,6 +8,20 @@ unchecked items are queued. Keep this richer than you found it each run.
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`
       (2026-06-22).
+- [x] **Make background-task execution hermetic in tests** (2026-07-16, run 9).
+      The CLI/control-plane/runtime tests spawned real detached OS processes
+      (`sleep 5`, `tail -f`, `printf`) and raced their async state-file writes →
+      3 flaky failures + 1 torn-JSON read. Threaded the runtime's
+      `backgroundTaskSpawnProcess`/`backgroundTaskIsProcessRunning` seams through
+      `OperatorCliAppOptions` and injected fake spawns in all three test files.
+      Now 174/174 deterministic (verified over 3 full + 5 isolated runs).
+- [ ] **Test-lint guard: no real spawn in tests.** Fail if any `*.test.ts`
+      constructs a runtime/app that starts a background task without injecting a
+      fake `backgroundTaskSpawnProcess`, so real-process flakiness can't return.
+- [ ] **Atomic execution-state writes in the launch script.** `renderLaunchScript`
+      writes state via a non-atomic `printf | sed > state` sequence; switch to
+      write-temp-then-`rename` (like `writeJsonAtomic`) to harden the *production*
+      runtime against torn reads under concurrent reconciliation.
 - [ ] **Pay down typecheck debt** (surfaced by the `typecheck` script). Full
       `tsc --noEmit` count was **397** on 2026-06-22; now **125**. 🎯 ALL source
       (`src/**` non-test) files typecheck clean since run 7; remaining 125 errors

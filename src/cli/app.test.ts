@@ -5,7 +5,7 @@ import path from "node:path";
 import process from "node:process";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
-import { OperatorCliApp, parseSlashCommand } from "./app.js";
+import { OperatorCliApp, parseSlashCommand, type OperatorCliAppOptions } from "./app.js";
 
 const tempDirs: string[] = [];
 const execFileAsync = promisify(execFile);
@@ -14,6 +14,31 @@ async function makeTempDir(): Promise<string> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "operator-cli-app-"));
   tempDirs.push(dir);
   return dir;
+}
+
+/**
+ * Deterministic background-task execution for the CLI app tests. Instead of
+ * spawning real OS processes (whose liveness and output arrive on unpredictable
+ * timing and made these tests flaky in slower/cloud environments), every
+ * "launch" returns a unique synthetic pid that the paired liveness probe reports
+ * as running. Manually written state files that carry a different pid (e.g. the
+ * `999999` sentinel used to simulate a dead process) are reported as not
+ * running, so degraded/missing-process reconciliation stays deterministic.
+ */
+function deterministicBackgroundExecution(): {
+  backgroundTaskSpawnProcess: NonNullable<OperatorCliAppOptions["backgroundTaskSpawnProcess"]>;
+  backgroundTaskIsProcessRunning: NonNullable<OperatorCliAppOptions["backgroundTaskIsProcessRunning"]>;
+} {
+  const alive = new Set<number>();
+  let nextPid = 424200;
+  return {
+    backgroundTaskSpawnProcess: () => {
+      const pid = nextPid++;
+      alive.add(pid);
+      return { pid, unref() {} };
+    },
+    backgroundTaskIsProcessRunning: (pid: number) => alive.has(pid),
+  };
 }
 
 afterEach(async () => {
@@ -801,7 +826,7 @@ describe("OperatorCliApp", () => {
 
   it("supports session lifecycle, transcript, approvals, pairing, config, and prompt commands", async () => {
     const rootDir = await makeTempDir();
-    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25", ...deterministicBackgroundExecution() });
     const firstSession = await app.runtime.startSession({ title: "first", cwd: rootDir, agentId: "operator-cli" });
     const secondSession = await app.runtime.startSession({ title: "second", cwd: rootDir, agentId: "operator-cli" });
 
@@ -1063,7 +1088,7 @@ describe("OperatorCliApp", () => {
 
   it("supports background and monitor task commands plus cron commands", async () => {
     const rootDir = await makeTempDir();
-    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25", ...deterministicBackgroundExecution() });
     const session = await app.runtime.startSession({ title: "CLI ops", cwd: rootDir, agentId: "operator-cli" });
 
     const startOutput = await app.dispatchSlashCommand(
@@ -1078,6 +1103,9 @@ describe("OperatorCliApp", () => {
     if (!task) {
       throw new Error("expected background task");
     }
+    // The deterministic spawn does not run the real command, so seed the output
+    // the assertions below expect (mirrors the manual monitor output write).
+    await app.runtime.backgroundTasks.executionService.writeOutput(task, "ok\n");
 
     const listOutput = await app.dispatchSlashCommand({ kind: "background-list" });
     expect(listOutput).toContain(task.id);
@@ -1184,7 +1212,7 @@ describe("OperatorCliApp", () => {
     const rootDir = await makeTempDir();
     await fs.mkdir(path.join(rootDir, ".claude"), { recursive: true });
     await fs.writeFile(path.join(rootDir, ".claude", "settings.local.json"), '{"permissionMode":"default"}');
-    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25", ...deterministicBackgroundExecution() });
     const session = await app.runtime.startSession({ title: "policy", cwd: rootDir, agentId: "operator-cli" });
 
     const firstAttempt = await app.dispatchSlashCommand(
@@ -1227,7 +1255,7 @@ describe("OperatorCliApp", () => {
         },
       }),
     );
-    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25", ...deterministicBackgroundExecution() });
     const session = await app.runtime.startSession({ title: "hooks", cwd: rootDir, agentId: "operator-cli" });
 
     const output = await app.dispatchSlashCommand(
