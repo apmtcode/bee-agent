@@ -6,6 +6,78 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-16 (run 9) — Pluggable movement-model backend + deterministic mock (learn → replay → generalize)
+
+**Audited:** Standing objective #2 (local-movement learning subsystem) against
+what `src/capture/` + `src/training/` already implement. Finding: capture →
+schema → dataset → replay scaffolding exists, and `runner.ts` emits real
+on-device training *plans/launch-scripts* (mlx/axolotl), but there was **no
+actual trainable model** — nothing that consumes recorded movements and learns
+to repeat or generalize them, and no pluggable seam or cloud-runnable backend to
+validate the train→infer loop. This is the top queued movement-subsystem
+roadmap item.
+
+**Changed (additive, new files only — no existing module modified except the
+`src/index.ts` barrel):**
+- `src/training/movement-model.ts` — the backend contract: a flat,
+  JSON-serializable `MovementEvent` schema (mouse/keyboard/window/app/touch),
+  `MovementContext`, `MovementTrajectory`/`MovementTrainingDataset`,
+  `MovementPrediction`, and the pluggable `MovementModelBackend` /
+  `TrainedMovementModel` interfaces. `MovementModelRegistry` makes the backend
+  swappable at runtime (mock now; a real on-device MLX/axolotl policy later —
+  same interface, zero call-site changes). Includes a stable event tokenizer
+  (coarse coordinate bucketing so "click near here" generalizes instead of
+  memorizing exact pixels) and context/app/global bucket-key helpers.
+- `src/training/mock-movement-backend.ts` — `NgramMovementBackend`: a small but
+  *real* learning algorithm. An order-k Markov policy over tokenized events,
+  learned per-context with **nested backoff** for generalization — exact
+  context (same app+goal) → same app/any goal → global — and within each bucket
+  it backs off order-k → unigram. Fully deterministic (argmax + lexical
+  tie-break, no clock, no RNG) so the whole loop is cloud-testable. Serializes
+  to/from plain JSON. This delivers objective #2 pieces **(c) post-train a model
+  to repeat recorded movements** and **(d) generalize to new but related
+  movements**.
+- `src/training/movement-synthetic.ts` — deterministic synthetic event-stream
+  generator (`synthesizeTrajectory`/`synthesizeDataset`) + a semantic
+  `movementsMatch` comparator, so capture→dataset→train→replay round-trips are
+  validated with no real OS input (also a separately-queued roadmap item).
+- `src/training/mock-movement-backend.test.ts` — 9 tests: faithful replay of a
+  learned trajectory, cross-run determinism, **generalization to an unseen goal
+  in the same app via app-level backoff**, end-of-sequence prediction (no
+  infinite loop), serialize→load behavioral round-trip, empty-dataset safety,
+  registry register/resolve/rehydrate + duplicate/unknown guards, and tokenizer
+  coordinate-bucketing.
+- `src/index.ts` — exported all the above.
+
+**Test results:** new suite ✅ **9/9**. `npm run typecheck:src` ✅ (exit 0 —
+source stays fully green). `npm run build` ✅ (5 files). Full `npm test`: my file
+passes; the suite shows **3–4 pre-existing failures** (see blocker) that also
+reproduce on clean HEAD with my files removed, so they are **not** from this
+change.
+
+**⚠️ Blocker discovered (pre-existing, environment/timing-sensitive):** three
+tests — `operator-runtime.test.ts` "starts, syncs, recovers… background tasks",
+`server.test.ts` orchestration omnibus, and `app.test.ts` lifecycle omnibus —
+fail intermittently (flaky 3↔4 count across runs) with `SyntaxError: Expected
+',' or '}' after property value in JSON` from `readJsonFile` during background-
+task recovery. Root cause is a **race**: `startBackgroundTask` spawns a
+*detached* bash launch script (`runner.ts`/`background-tasks.ts`) whose
+state-writer rewrites the task's `state.json` via `sed` PID substitution
+asynchronously, and the test's synchronous `writeState` + subsequent
+`recoverBackgroundTasks` read can observe a half-written/`sed`-mangled file. Run
+8 logged 174/174, so this surfaced under this container's bash/sed/node — timing,
+not a logic regression here. Filed to ROADMAP with the fix direction (atomic
+state writes from the launch script + a test barrier awaiting script exit).
+
+**New idea:** a **generalization-fidelity eval harness** for the movement model —
+hold out one trajectory per context family, train on the rest, and score
+rollout-vs-heldout token overlap (precision/recall) under increasing context
+distance (exact → same-app → cross-app). This turns "does it generalize?" into a
+tracked metric the engine can watch regress, and gives the future real backend a
+ready-made benchmark to beat the mock on.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

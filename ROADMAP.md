@@ -59,16 +59,45 @@ unchecked items are queued. Keep this richer than you found it each run.
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
 (exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
-      objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
-      deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+- [x] Inventory `src/capture` + `src/training` vs. the five pieces (2026-07-16,
+      run 9): capture→schema→dataset→replay scaffolding present; `runner.ts`
+      emits real on-device train *plans/scripts* but there was no trainable
+      model, pluggable seam, or cloud-runnable train→infer loop — now added.
+- [x] Pluggable local-model backend interface + deterministic mock backend
+      (2026-07-16, run 9) — `MovementModelBackend`/`TrainedMovementModel` +
+      `MovementModelRegistry` in `src/training/movement-model.ts`;
+      `NgramMovementBackend` (order-k Markov, context→app→global backoff,
+      deterministic, JSON-serializable) in `mock-movement-backend.ts`. Documented
+      seam for a real on-device MLX/axolotl policy (same interface).
+- [x] Synthetic event-stream generator (2026-07-16, run 9) —
+      `movement-synthetic.ts` (`synthesizeTrajectory`/`synthesizeDataset` +
+      `movementsMatch`); validates capture→dataset→train→replay with no real OS
+      input.
+- [ ] Generalization-fidelity eval harness: hold out one trajectory per context
+      family, train on the rest, score rollout-vs-heldout token overlap
+      (precision/recall) under increasing context distance (exact → same-app →
+      cross-app). Turns "does it generalize?" into a tracked, regressible metric
+      and a benchmark the real backend must beat the mock on.
+- [ ] Bridge recorded `TrajectorySpan`/reviewed-export actions →
+      `MovementTrajectory` so the new model trains on real captured data, not
+      only synthetic streams (converter + tests).
+- [ ] Wire `NgramMovementBackend` into the training `runner.ts`/execution
+      service as a selectable runtime (alongside mlx/axolotl) so a job can
+      actually train + emit a serialized model artifact in-cloud.
+
+## Known blockers (fix to get the suite green in-cloud)
+- [ ] **Background-task recovery flaky JSON parse** (surfaced run 9). Three
+      omnibus tests (`operator-runtime.test.ts` background-tasks,
+      `server.test.ts`, `app.test.ts`) intermittently fail (3↔4 count) with
+      `SyntaxError: Expected ',' or '}' … JSON` from `readJsonFile` during
+      background-task recovery. Cause: `startBackgroundTask` spawns a *detached*
+      bash launch script whose state-writer rewrites `state.json` via `sed` PID
+      substitution asynchronously, racing the test's synchronous `writeState` +
+      `recoverBackgroundTasks` read (observes a half-written/`sed`-mangled file).
+      Fix direction: make the launch-script state write atomic (write temp +
+      `mv`, drop the in-place `sed`), and/or add a test barrier that awaits
+      script exit before recovery. Run 8 logged 174/174, so this is
+      environment/timing-sensitive, not a logic regression.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

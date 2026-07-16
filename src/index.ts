@@ -394,6 +394,42 @@ export type {
   TrainingExecutionState,
 } from "./training/execution-service.js";
 export {
+  MovementModelRegistry,
+  MOVEMENT_END_TOKEN,
+  MOVEMENT_GLOBAL_KEY,
+  MOVEMENT_START_TOKEN,
+  movementAppKey,
+  movementContextKey,
+  movementEventToken,
+} from "./training/movement-model.js";
+export type {
+  MovementActor,
+  MovementContext,
+  MovementDirection,
+  MovementEvent,
+  MovementModelBackend,
+  MovementModelTrainingConfig,
+  MovementPrediction,
+  MovementPredictionSource,
+  MovementRolloutOptions,
+  MovementTrainingDataset,
+  MovementTrajectory,
+  SerializedMovementModel,
+  TrainedMovementModel,
+} from "./training/movement-model.js";
+export {
+  MOCK_MOVEMENT_BACKEND_ID,
+  NgramMovementBackend,
+} from "./training/mock-movement-backend.js";
+export {
+  movementsMatch,
+  synthesizeDataset,
+  synthesizeTrajectory,
+} from "./training/movement-synthetic.js";
+export type {
+  SyntheticTaskSpec,
+} from "./training/movement-synthetic.js";
+export {
   LocalAppleSiliconTrainingRunner,
 } from "./training/runner.js";
 export type {
