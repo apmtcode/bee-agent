@@ -801,7 +801,9 @@ describe("OperatorCliApp", () => {
 
   it("supports session lifecycle, transcript, approvals, pairing, config, and prompt commands", async () => {
     const rootDir = await makeTempDir();
-    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25",
+      backgroundTaskSpawnProcess: () => ({ pid: 4321, unref() {} }),
+    });
     const firstSession = await app.runtime.startSession({ title: "first", cwd: rootDir, agentId: "operator-cli" });
     const secondSession = await app.runtime.startSession({ title: "second", cwd: rootDir, agentId: "operator-cli" });
 
@@ -1063,7 +1065,17 @@ describe("OperatorCliApp", () => {
 
   it("supports background and monitor task commands plus cron commands", async () => {
     const rootDir = await makeTempDir();
-    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    // No-op spawn + always-live process check so the background/monitor tasks
+    // are driven deterministically here (via explicit writeOutput/writeState)
+    // instead of racing a real `printf` subprocess that completes before the
+    // watch-active/view assertions run.
+    const app = new OperatorCliApp({
+      rootDir,
+      cwd: rootDir,
+      currentDate: "2026-05-25",
+      backgroundTaskSpawnProcess: () => ({ pid: 4321, unref() {} }),
+      backgroundTaskIsProcessRunning: () => true,
+    });
     const session = await app.runtime.startSession({ title: "CLI ops", cwd: rootDir, agentId: "operator-cli" });
 
     const startOutput = await app.dispatchSlashCommand(
@@ -1078,6 +1090,9 @@ describe("OperatorCliApp", () => {
     if (!task) {
       throw new Error("expected background task");
     }
+    // The no-op spawn never runs the real command, so seed the output the
+    // view/watch assertions below expect.
+    await app.runtime.backgroundTasks.executionService.writeOutput(task, "ok\n");
 
     const listOutput = await app.dispatchSlashCommand({ kind: "background-list" });
     expect(listOutput).toContain(task.id);
@@ -1227,7 +1242,9 @@ describe("OperatorCliApp", () => {
         },
       }),
     );
-    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25",
+      backgroundTaskSpawnProcess: () => ({ pid: 4321, unref() {} }),
+    });
     const session = await app.runtime.startSession({ title: "hooks", cwd: rootDir, agentId: "operator-cli" });
 
     const output = await app.dispatchSlashCommand(

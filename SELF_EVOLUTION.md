@@ -6,6 +6,60 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-16 (run 9) — 🐛 Real bug: `shellQuote` corrupted quoted commands; deflaked background-task tests → suite green
+
+**Audited:** The full test suite health (the required per-run green gate). Found
+the suite was **red at clean HEAD** — 3 failing tests (server.test:719,
+app.test:906, operator-runtime.test:603) plus a 4th flaky one
+(app.test "background and monitor"). Diagnosed two distinct root causes.
+
+**Root cause 1 — production bug in `src/harness/background-tasks.ts` (`shellQuote`).**
+The POSIX single-quote escape was written as `"'"'"'` (6 chars, spurious leading
+double-quote) instead of the correct `'"'"'` (5 chars). Consequence: **any**
+background-task command containing a single quote (e.g. `printf 'line-1\n'`) was
+mis-quoted when embedded in the launch script, so the initial `state.json`
+written by the `printf | sed` step was **invalid JSON**. On recovery,
+`readState`→`JSON.parse` threw, and the launch script's `python3 json.loads`
+step also failed under `set -e`, killing the task. This is a real runtime defect,
+not a test artifact. Fixed the escape and documented why. Verified the corrected
+quoting reconstructs valid JSON for quoted commands.
+
+**Root cause 2 — real-subprocess timing flakiness in integration tests.**
+`operator-runtime`, `server`, and `app` tests started **real detached
+subprocesses** (`sleep 5`, `printf …`) via the default `spawn`, then asserted on
+task/remote/platform state. The async script racing the tests' explicit
+`writeState`/`writeOutput` calls (and drifting tasks to `missing-process` under
+`isProcessRunning:false`, which degraded the automatic platform breaker) made
+outcomes scheduling-dependent. Fixed by injecting a **no-op spawn** at the
+existing `backgroundTaskSpawnProcess` seam so no real subprocess races:
+- `operator-runtime.test.ts`: added the spawn mock to the background-task test.
+- `server.test.ts`: added the spawn mock to the 3 runtimes that set
+  `backgroundTaskIsProcessRunning:false`.
+- `app.test.ts`: added a **pass-through injection seam to `OperatorCliApp`**
+  (new optional `backgroundTaskSpawnProcess` / `backgroundTaskIsProcessRunning`
+  options forwarded to the runtime — additive, undefined in production) and used
+  it in the two affected tests. The "background and monitor" test additionally
+  seeds output explicitly and pins `isProcessRunning:true` so the task stays live
+  through the watch-active assertion (mirroring how it already drives the monitor).
+
+**Test results:** suite **red (3–4 failing/flaky) → 174/174 GREEN**, and green on
+**3 consecutive full runs** (previously scheduling-dependent). `typecheck:src` ✅
+(exit 0). Full `tsc` unchanged at **125** (all in test files; no regression).
+Build ✅.
+
+**New idea (queued):** the launch script hand-rolls JSON via `printf | sed` +
+`python3` heredoc string interpolation — exactly the fragility that caused bug #1.
+Replace it with a single `python3`/`node` state-writer that receives the payload
+as **argv/stdin** and does `json.dumps`, eliminating all shell-quoting of
+structured data. Bigger idea: a `verify` npm script (`typecheck:src && build &&
+test`) plus a tiny **flake-guard** that runs the suite N× in CI and the engine's
+pre-push check, so real-subprocess timing regressions are caught as flakiness
+rather than a one-shot pass. Also: default the test harness to a no-op spawn
+unless a test explicitly opts into real execution, so new background-task tests
+can't reintroduce this class of flake.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

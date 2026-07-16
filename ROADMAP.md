@@ -40,6 +40,22 @@ unchecked items are queued. Keep this richer than you found it each run.
     fix residual test-only typings.
 - [ ] Add a `verify` npm script (`typecheck && build && test`) and have the
       engine run it as a pre-push self-check each cycle.
+- [x] **Deflake background-task integration tests** (2026-07-16, run 9). The
+      suite was red/flaky because `operator-runtime`, `server`, and `app` tests
+      spawned real detached subprocesses (`sleep`/`printf`) that raced explicit
+      state writes. Injected a no-op spawn at the `backgroundTaskSpawnProcess`
+      seam and added a pass-through seam to `OperatorCliApp`. Suite now 174/174
+      green on 3 consecutive runs.
+- [ ] **Flake-guard**: run the suite N× (e.g. 3) in the engine's pre-push check
+      and in CI, so real-subprocess timing regressions surface as flakiness
+      instead of a lucky one-shot pass. Consider defaulting the test harness to a
+      no-op spawn unless a test explicitly opts into real execution.
+- [ ] **Harden the launch-script state writer** (`src/harness/background-tasks.ts`).
+      It builds `state.json` via `printf | sed` + a `python3` heredoc with
+      shell-interpolated JSON — the exact fragility that produced the run-9
+      `shellQuote` corruption bug. Replace with a single state-writer process
+      that receives the payload via argv/stdin and does `json.dumps`/`JSON.parse`,
+      removing all shell-quoting of structured data.
 - [x] Interim **source-only typecheck gate** — DONE run 7. `tsconfig.src.json`
       (excludes `**/*.test.ts`) + `typecheck:src` script; passes (exit 0). Next:
       have the engine run it as a per-run pre-push self-check.

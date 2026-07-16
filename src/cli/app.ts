@@ -121,6 +121,15 @@ export type OperatorCliAppOptions = {
   stdin?: NodeJS.ReadableStream;
   stdout?: NodeJS.WritableStream;
   stderr?: NodeJS.WritableStream;
+  /**
+   * Optional injection seams for background-task execution, forwarded to the
+   * underlying runtime. Tests pass a no-op spawn (and/or a deterministic
+   * process-liveness check) so integration tests never race a real detached
+   * subprocess writing the task state file. Left undefined in production, where
+   * the runtime spawns a real launch script.
+   */
+  backgroundTaskSpawnProcess?: ConstructorParameters<typeof StandaloneOperatorRuntime>[0]["backgroundTaskSpawnProcess"];
+  backgroundTaskIsProcessRunning?: ConstructorParameters<typeof StandaloneOperatorRuntime>[0]["backgroundTaskIsProcessRunning"];
 };
 
 type OperatorCliWorktreeSession = {
@@ -147,7 +156,11 @@ export class OperatorCliApp {
   readonly teams: FileOperatorCliTeamStore;
 
   constructor(private readonly options: OperatorCliAppOptions) {
-    this.runtime = new StandaloneOperatorRuntime({ rootDir: options.rootDir });
+    this.runtime = new StandaloneOperatorRuntime({
+      rootDir: options.rootDir,
+      ...(options.backgroundTaskSpawnProcess ? { backgroundTaskSpawnProcess: options.backgroundTaskSpawnProcess } : {}),
+      ...(options.backgroundTaskIsProcessRunning ? { backgroundTaskIsProcessRunning: options.backgroundTaskIsProcessRunning } : {}),
+    });
     this.server = new OperatorControlPlaneServer({ runtime: this.runtime });
     this.teams = new FileOperatorCliTeamStore(options.rootDir);
     this.cwd = options.cwd ?? process.cwd();
