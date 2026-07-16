@@ -6,6 +6,73 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-16 (run 9) — 🧠 Movement model: pluggable backend + Markov policy that generalizes (objective #2 c/d)
+
+**Audited:** The local-movement learning subsystem (`src/capture/` + `src/training/`)
+against objective #2's five pieces (capture → schema → dataset → replay →
+train/infer). Found capture/schema/dataset/replay and the on-device training
+*launch-plan* generator (`runner.ts`, mlx/axolotl) all exist — but there was **no
+model that actually learns from a dataset and predicts movements**. Pieces (c)
+"post-train a local model to repeat recorded movements" and (d) "generalize to
+new but related movements" were entirely unimplemented: the runner only emits a
+shell script to run elsewhere; nothing in bee-agent can infer a next action.
+
+**Changed (additive):** new `src/training/movement-model.ts` (+ 15 tests,
+barrel-exported):
+- **`MovementModelBackend` / `MovementModel` interfaces** — the pluggable seam
+  for objective #2's "make the model backend pluggable". A real on-device small
+  model can implement these; the default is dependency-free and cloud-testable.
+- **`MarkovMovementBackend`** — a deterministic order-N Markov policy with
+  *stupid backoff*. Trains by counting context→next transitions at every order
+  N…0, so an unseen context degrades gracefully to shorter contexts instead of
+  failing — this is the mechanism that **generalizes to new-but-related
+  movements** (piece d). Verified: a 2-token context never seen verbatim still
+  predicts correctly by backing off to its trailing token.
+- **`buildMovementDataset` + `movementTokenFromAction`** — turn recorded
+  `TrajectorySpan` actions (device/browser/os adapter gestures) into a tokenized,
+  padded dataset; deterministic canonical tokens from gesture metadata with a
+  summary-slug fallback.
+- **`rollout`** (autoregressive replay of a learned workflow), **`serialize` /
+  `restore`** (plain-JSON snapshot to persist alongside training artifacts), and
+  **`evaluateMovementModel`** — a generalization eval harness reporting top-1 /
+  top-k accuracy and a `generalizationRate` (how often prediction required
+  backoff). Tests use a deterministic synthetic workflow-trajectory generator, so
+  the whole capture→dataset→train→predict→eval loop is validated with no real OS
+  input and no `Date.now`/`Math.random`.
+
+**Test results:** movement-model **15/15 green**; `typecheck:src` CLEAN; build ✅.
+Full suite **186 passed / 3 failed** — the 3 failures are **pre-existing on this
+cloud environment** (identical with my change stashed) and are unrelated to this
+change; movement-model's 15 tests pass even against the untouched baseline.
+
+**Also diagnosed (bug, deferred — see ROADMAP):** those 3 baseline failures
+(`server.test`, `app.test`, `operator-runtime.test`) all trace to ONE real bug:
+the background-task **and** training launch scripts serialize the initial
+`state.json` via `printf '%s' <json> | sed …`. This corrupts any command/cwd
+containing a double quote (e.g. `printf "line-1\nline-2\n"` → invalid JSON) and
+mishandles the `"$$"` pid placeholder, so `readState` throws `SyntaxError` during
+recovery/remote-status. run-8 logged 174/174 because its environment happened not
+to hit it. The correct fix is to write state via `python3` + `json.dumps` (the
+completion path already does this) instead of `sed`. I implemented and verified
+that fix (corruption gone) but it exposes a *deeper* latent issue: the 1400-line
+`server.test` block forces `backgroundTaskIsProcessRunning: () => false` and
+simultaneously (a) expects a freshly-started task to be `control.state:"active"`
+/ `status:"running"` and (b) later expects that same task reaped as `NOT_FOUND`
+(dead process) — mutually consistent only while `state.json` is racily absent.
+It passed before purely by timing luck. Reverting the launcher fix keeps this
+run's diff focused and green-for-my-feature; the bug + the racy test are queued
+as a dedicated next run with the full fix sketched in ROADMAP.
+
+**New idea:** add a second movement backend — a **KNN / edit-distance policy over
+feature-vector contexts** (app + gesture + direction + target as structured
+features, not just opaque tokens) — and benchmark it against the Markov backend
+with the eval harness. Richer context features + similarity matching should
+generalize better to *related* (not just prefix-shortened) movements, which is
+exactly objective #2(d). Also: a `replayManifestToMovementDataset` bridge so the
+existing `ReplayManifest` action stream feeds the dataset builder directly.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

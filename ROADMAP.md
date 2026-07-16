@@ -3,6 +3,27 @@
 Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
+## Bugs (highest priority)
+- [ ] **Launch-script state JSON is corrupted by `printf|sed`** (diagnosed
+      2026-07-16, run 9). `renderLaunchScript` in BOTH
+      `src/harness/background-tasks.ts` and `src/training/runner.ts` writes the
+      initial `state.json` as `printf '%s' <json> | sed "…s/\"\$\$\"/$$/g"`. Any
+      command/cwd containing a double quote (e.g. `printf "a\nb\n"`) yields
+      **invalid JSON**, and the `"$$"`→pid substitution is fragile — so
+      `readState` throws `SyntaxError` during recovery / remote-status. This is
+      the root cause of the 3 deterministic suite failures on the cloud env
+      (`server.test`, `app.test`, `operator-runtime.test`); run-8's 174/174 was
+      environment-luck. **Fix:** write the initial state via `python3` +
+      `json.dumps` (the completion writer already does this) — pass the base
+      payload as a shell-quoted argv and json.loads/json.dumps it. **Blocker for
+      that fix:** it exposes a race in the 1400-line `server.test` block, which
+      forces `backgroundTaskIsProcessRunning: () => false` yet both expects a
+      fresh task `active`/`running` AND later expects it reaped (`NOT_FOUND`) —
+      consistent only while `state.json` is racily absent. The test needs
+      splitting into a "healthy running" runtime (`() => true`) and a
+      "dead-process recovery" runtime (`() => false`) so state presence is
+      deterministic. Do launcher-fix + test-split together in one dedicated run.
+
 ## Foundations / DX
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
@@ -59,16 +80,33 @@ unchecked items are queued. Keep this richer than you found it each run.
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
 (exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
-      objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
-      deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+- [x] Inventory what `src/capture` + `src/training` already implement vs. the
+      objective's five pieces (2026-07-16, run 9). capture/schema/dataset/replay
+      + on-device training *launch-plan* generator exist; the missing piece was
+      an actual learn-from-dataset / predict-movement model (pieces c & d).
+- [x] Pluggable local-model backend interface **with inference** (2026-07-16,
+      run 9): `src/training/movement-model.ts` — `MovementModelBackend` /
+      `MovementModel` seam + deterministic `MarkovMovementBackend` (order-N with
+      stupid backoff) that trains, predicts, rolls out, serializes, and
+      generalizes to unseen contexts via backoff. Documented seam for a real
+      on-device small model.
+- [x] Synthetic event-stream generator to validate capture→dataset→predict
+      round-trips without real OS input (2026-07-16, run 9) — lives in
+      `movement-model.test.ts` (`synthesizeWorkflowTrajectories`); deterministic,
+      no `Date.now`/`Math.random`.
+- [x] Generalization eval harness (2026-07-16, run 9): `evaluateMovementModel`
+      reports top-1 / top-k accuracy + a `generalizationRate` (fraction of
+      predictions that required backoff) on held-out synthetic trajectories.
+- [ ] **Second movement backend**: a KNN / edit-distance policy over
+      *feature-vector* contexts (app + gesture + direction + target as structured
+      features, not opaque tokens) benchmarked against the Markov backend with the
+      eval harness — should generalize to *related* (not just prefix-shortened)
+      movements. Plus a `replayManifestToMovementDataset` bridge feeding the
+      existing `ReplayManifest` action stream into `buildMovementDataset`.
+- [ ] Wire the movement model into the training pipeline: after
+      `LocalTrainingExporter` produces a reviewed export, offer a
+      `trainMovementModel(dataset)` step whose serialized snapshot is written as a
+      training artifact and whose eval metrics gate promotion.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
