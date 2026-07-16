@@ -6,6 +6,61 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-16 (run 9) — 🐛 Two real background-task bugs: red suite (171/174) → green (175/175)
+
+**Audited:** The actual `npm test` baseline in this cloud environment. Despite
+run 8 logging "174/174", a fresh checkout was **red — 3 tests failing**
+(`operator-runtime.test.ts`, `app.test.ts`, `server.test.ts`). The "174/174"
+was environment-specific; these failures reproduce deterministically here. Root
+cause was two genuine latent bugs in `src/harness/background-tasks.ts`, both in
+the code that spawns and tracks OS background tasks (a core capability the
+movement/monitor subsystems build on).
+
+**Bugs found & fixed (additive, `src/harness/background-tasks.ts`):**
+1. **Corrupt initial `state.json`.** `renderLaunchScript` wrote the task's
+   initial "running" state with `printf … | sed "s/…/g; s/\"\$\$\"/$$/g"`. The
+   `\"`/`\$` were meant to survive into the emitted bash, but a JS *template
+   literal* collapses `\"`→`"` and `\$`→`$`, so bash saw `s/"$$"/$$/g`, quote-
+   split it, and the substitution silently no-op'd — leaving invalid JSON on
+   disk whenever the command/payload had metacharacters. Reading it back threw
+   `SyntaxError` and broke recovery/reconcile. **Fix:** replaced the sed dance
+   with a `python3` initial-state writer (`renderInitialStateWriterPython`) that
+   mirrors the existing completion-path writer — the base payload is passed as a
+   single `argv`, pid/timestamps injected in Python, no text munging.
+2. **Broken `shellQuote`.** Its single-quote escape was `"'"'"'` (6 chars),
+   which inserts a *spurious* `"` — so any command **or** JSON payload
+   containing a `'` was corrupted (`a'b` → `a"'b`). **Fix:** the correct POSIX
+   idiom `'"'"'`. This also means single-quoted shell commands (e.g.
+   `printf 'line-1\nline-2\n'`) now actually execute as written.
+
+**Determinism fix (`src/control-plane/server.test.ts`):** the three runtimes in
+the big control-plane test launched **real** `sleep 5`/`printf` subprocesses
+whose async launch-script state writes raced the reconcile/diagnostics logic
+(`deriveRemoteDiagnostics` reads `state.json` directly). Injected a mock
+`backgroundTaskSpawnProcess: () => ({ pid: 4242, unref() {} })` (the pattern
+already used in `background-tasks.test.ts`) so tasks stay inert unless the test
+writes their state explicitly — matching every asserted value.
+
+**New test:** `background-tasks.test.ts` now executes the *real* launch script
+synchronously (via a controlled spawn) for a command containing quotes and
+newlines and asserts the on-disk state parses back to the original command —
+locks in both fixes.
+
+**Test results:** `npm test` **3 failing → 0**; **175/175** (was 174 + 1 new
+regression test). Build ✅. `typecheck:src` ✅. Full `tsc` still **125** (no new
+debt). Verified with per-file isolation runs and a standalone bash+python repro.
+
+**New idea:** the launch script is a large templated bash/python blob assembled
+by string concatenation — exactly the class of code where these two bugs hid.
+Add a `renderLaunchScript` golden-snapshot test plus a tiny property test that
+round-trips a fuzz set of nasty commands (embedded `'`, `"`, `$`, `` ` ``,
+newlines, `\`) through the real script and asserts (a) the state JSON parses and
+(b) the command executes verbatim. That converts "shell quoting is scary" into a
+caught regression, and is a prerequisite for safely porting the reference
+agents' richer background-exec features.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

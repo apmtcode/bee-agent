@@ -70,6 +70,19 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Generalization eval harness: measure replay fidelity on held-out but
       related synthetic trajectories.
 
+## Reliability / correctness
+- [x] Fix corrupt background-task `state.json` (sed→python initial-state writer)
+      and broken `shellQuote` single-quote escaping (2026-07-16, run 9). Restored
+      a red suite to green (175/175) and made single-quoted shell commands
+      execute correctly.
+- [ ] `renderLaunchScript` golden-snapshot test + a property/fuzz test that
+      round-trips nasty commands (embedded `'`, `"`, `$`, backtick, newline, `\`)
+      through the *real* launch script and asserts the state JSON parses and the
+      command executes verbatim. Prereq for porting richer background-exec
+      features from the reference agents.
+- [ ] Audit other shell-templated code paths (if any) for the same
+      template-literal `\"`/`\$` collapse and single-quote-escape pitfalls.
+
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in

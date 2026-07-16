@@ -109,6 +109,42 @@ describe("FileBackgroundTaskStore", () => {
     });
   });
 
+  it("writes valid JSON state when the command contains quotes and newlines", async () => {
+    // Regression: the launch script's initial-state writer used sed/`$$`
+    // substitution on a JSON payload, which produced invalid JSON whenever the
+    // command contained shell/JSON metacharacters (quotes, newlines). Executing
+    // the real launch script synchronously lets us assert the on-disk state
+    // parses back to the original command.
+    const { execFileSync } = await import("node:child_process");
+    const rootDir = await makeTempDir();
+    const filePath = path.join(rootDir, "background-tasks.json");
+    const store = new FileBackgroundTaskStore(
+      filePath,
+      (command, _args, options) => {
+        execFileSync("bash", [command], { cwd: options.cwd });
+        return { pid: 4242, unref() {} };
+      },
+      () => false,
+    );
+
+    const command = `printf 'a"b"c\nsecond-line\n'`;
+    const task = await store.start({
+      sessionId: "sess-quote",
+      title: "Quoted command",
+      command,
+      cwd: rootDir,
+      kind: "task",
+    });
+
+    const raw = await fs.readFile(path.join(rootDir, task.execution.stateFile), "utf8");
+    const parsed = JSON.parse(raw) as BackgroundTaskExecutionState;
+    expect(parsed.command).toBe(command);
+    expect(parsed.taskId).toBe(task.id);
+    expect(parsed.status).toBe("completed");
+    expect(parsed.exitCode).toBe(0);
+    expect(typeof parsed.pid).toBe("number");
+  });
+
   it("cancels running tasks and records cancelled state", async () => {
     const rootDir = await makeTempDir();
     const filePath = path.join(rootDir, "background-tasks.json");
