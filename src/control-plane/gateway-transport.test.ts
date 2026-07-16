@@ -467,8 +467,14 @@ describe("OperatorGatewayTransportConnection", () => {
     expect(secondBootstrap.result.events.some((event) => event.type === "run.progress" && (event.payload as { message?: string }).message === "Second progress")).toBe(true);
     expect(secondBootstrap.result.events.some((event) => event.type === "run.progress" && (event.payload as { message?: string }).message === "First progress")).toBe(false);
 
-    await new Promise((resolve) => setTimeout(resolve, 10));
-    const ping = secondTransport.sent.find((message) => message.type === "ping");
+    // Poll for the heartbeat ping (interval 5ms) rather than assuming a single
+    // fixed delay, then answer immediately so the pong lands well inside the
+    // 20ms heartbeat timeout — removes a timing flake under a loaded event loop.
+    let ping = secondTransport.sent.find((message) => message.type === "ping");
+    for (let attempt = 0; attempt < 50 && !ping; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 2));
+      ping = secondTransport.sent.find((message) => message.type === "ping");
+    }
     if (!ping || ping.type !== "ping") {
       throw new Error("expected ping");
     }

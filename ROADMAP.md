@@ -4,6 +4,19 @@ Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
 ## Foundations / DX
+- [x] **Fix launch-script shell-quoting bug** (2026-07-16, run 9) — `shellQuote`
+      in `background-tasks.ts` used the wrong single-quote escape (`"'"'"'`),
+      corrupting the JSON state file for any command containing a `'`; also fixed
+      the never-firing `sed` `$$`→pid substitution (both here and in
+      `training/runner.ts`). Added a real-execution regression test, made 4
+      execution tests hermetic via injected spawn, and hardened a gateway
+      heartbeat flake. `npm test` 4-failing → **175/175 stable**.
+- [ ] Add a shared `mockBackgroundSpawn()` test helper + convention so tests that
+      construct a runtime touching background tasks don't accidentally execute
+      real launch scripts (races); reserve real execution for dedicated
+      poll-based tests. Consider a property test round-tripping arbitrary strings
+      through `shellQuote` → real `bash -c` → JSON parse to catch quoting
+      regressions mechanically.
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`

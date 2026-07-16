@@ -6,6 +6,64 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-16 (run 9) — 🐛 Fix launch-script shell-quoting bug corrupting task state JSON
+
+**Audited:** The actual `npm test` baseline in this cloud environment — which,
+contrary to the "174/174" recorded by earlier runs, showed **4 deterministic
+failures** (`operator-runtime`, `app` ×2, `server`) all tracing to a
+`SyntaxError: Expected ',' or '}'` while parsing a background-task **state
+file**. Reproduced the exact bytes the runtime writes by instrumenting a real
+`startBackgroundTask` run.
+
+**Root cause (genuine bug in `src/harness/background-tasks.ts`):** the launch
+script embeds the task's command inside a single-quoted shell argument via
+`shellQuote`, but the helper escaped `'` as **`"'"'"'`** instead of the correct
+POSIX sequence **`'"'"'`** (the version in `src/training/runner.ts` was already
+correct). Any command containing a single quote (e.g. `printf 'line-1\n...'`)
+mis-closed the quoting, leaking literal `"` characters into the JSON so it could
+not be parsed back. Second, latent bug: the `sed` `$$`→pid substitution used
+`\"` in a TS template literal, which collapses to `"` and broke the bash
+double-quoting, so the `"pid":"$$"` placeholder was never replaced.
+
+**Changed (additive, minimal):**
+- `src/harness/background-tasks.ts`: corrected `shellQuote` (`"'"'"'` → `'"'"'`);
+  switched the pid placeholder to a quote-free token `"__OPENCLAW_PID__"` and
+  fixed the `sed` to `s/\\"__OPENCLAW_PID__\\"/$$/g` so the running-state `pid`
+  is now a real number.
+- `src/training/runner.ts`: applied the identical pid-placeholder/`sed` fix (its
+  `shellQuote` was already correct) so the training launch script writes valid
+  running state too.
+- **New regression test** (`background-tasks.test.ts`): actually *executes* the
+  generated launch script (real spawn) with a single-quoted, multi-line command
+  and asserts the state file is valid JSON, `pid` is numeric, the command
+  round-trips unchanged, and it reaches `completed`/exit 0.
+- **Made 3 execution tests hermetic:** `operator-runtime` and `server.test`
+  (×3 runtimes) mixed manual `writeState` calls with a *real* spawned launch
+  script. The broken script used to be silently ignored (corrupt state); now
+  that it works, its async writes raced the manual writes. Injected
+  `backgroundTaskSpawnProcess: () => ({ pid, unref })` (the pattern the passing
+  `background-tasks` test already uses) so those tests control state
+  deterministically. Real execution stays covered by the new regression test.
+- **Hardened a pre-existing gateway heartbeat flake:** the reconnect test waited
+  a fixed 10ms for a 5ms-interval ping; replaced with a bounded poll that
+  answers `pong` the instant the ping appears, keeping it inside the 20ms
+  timeout.
+
+**Test results:** `npm test` **4 failing → 0**, now **175/175** and **stable
+across 6 consecutive runs** (was intermittently 174/175 on the gateway flake
+before the hardening). `npm run build` ✅. `npm run typecheck:src` ✅ (exit 0).
+
+**New idea:** add a tiny shared `mockBackgroundSpawn()` test helper plus a
+convention (or a lightweight test-lint) so any test constructing a
+`StandaloneOperatorRuntime` that touches background tasks opts into a
+non-executing spawn by default — real launch-script execution should be
+exercised only in dedicated, poll-based tests. Bigger: a property test that
+round-trips arbitrary strings through `shellQuote` → real `bash -c` → parse, so
+a future quoting regression is caught mechanically rather than by a downstream
+JSON parse error.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

@@ -21,6 +21,51 @@ afterEach(async () => {
 });
 
 describe("FileBackgroundTaskStore", () => {
+  it("executes the launch script and writes a valid-JSON state file for quote-containing commands", async () => {
+    // Regression: the launch script embeds the command in a single-quoted shell
+    // argument. A broken single-quote escape (or an unquoted `$$` placeholder)
+    // used to corrupt the running-state JSON so it could not be parsed back.
+    const rootDir = await makeTempDir();
+    const filePath = path.join(rootDir, "background-tasks.json");
+    // Real spawn: run the generated launch script as a child process.
+    const store = new FileBackgroundTaskStore(filePath);
+
+    const task = await store.start({
+      sessionId: "sess-quote",
+      title: "Quoted command",
+      // Contains single quotes and embedded newlines — the exact shape that
+      // previously broke shell-quoting of the JSON state payload.
+      command: "printf 'line-1\nline-2\n'",
+      cwd: rootDir,
+      kind: "task",
+    });
+
+    const stateFile = path.join(rootDir, task.execution.stateFile);
+    // Poll until the launch script has written a terminal state.
+    let raw = "";
+    for (let attempt = 0; attempt < 50; attempt += 1) {
+      raw = await fs.readFile(stateFile, "utf8").catch(() => "");
+      if (raw) {
+        const parsed = JSON.parse(raw) as BackgroundTaskExecutionState;
+        if (parsed.status !== "running") {
+          break;
+        }
+      }
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+
+    // The state file must be valid JSON regardless of the command's quoting.
+    const state = JSON.parse(raw) as BackgroundTaskExecutionState;
+    expect(state.taskId).toBe(task.id);
+    // The `$$` placeholder must be substituted with a real numeric pid.
+    expect(typeof state.pid).toBe("number");
+    expect(Number.isNaN(state.pid)).toBe(false);
+    // The single-quoted command must round-trip unchanged.
+    expect(state.command).toBe("printf 'line-1\nline-2\n'");
+    expect(state.status).toBe("completed");
+    expect(state.exitCode).toBe(0);
+  });
+
   it("starts tasks, persists output, syncs terminal state, and reloads", async () => {
     const rootDir = await makeTempDir();
     const filePath = path.join(rootDir, "background-tasks.json");
