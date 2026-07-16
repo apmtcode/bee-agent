@@ -6,6 +6,61 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-16 (run 9) — Pluggable background-task launch backend + hermetic tests (fixed 4 flaky failures on `main`)
+
+**Audited:** Project health. `npm test` on a clean checkout of `main` showed **4
+failing tests** across 3 files (`operator-runtime.test.ts`,
+`server.test.ts`, `app.test.ts` ×2) — a regression from the last run's claimed
+174/174. Root cause was **non-hermetic background-task tests**, not a product
+bug: `StartBackgroundTaskParams` → `start()` → `launch()` spawns the rendered
+launch script as a *real detached OS process* that writes its state/output
+files via `printf|sed`/`python3` asynchronously. Those writes race the tests'
+own `writeState`/assertions, and the outcome depends on OS scheduling:
+- `operator-runtime`: a torn read of the single-line running-state file →
+  `SyntaxError: Expected ',' or '}' … position 311`.
+- `server`: `sessions.remoteStatus.control` flipped `active`→`degraded` because
+  the detached `sleep 5` task's state was reconciled to `missing-process`.
+- `app`: `control=active` became `degraded:…background task missing-process`,
+  and a background-view/watch-active lost the task's output/`running` status.
+
+This passed on the previous run's machine purely because the detached processes
+happened to be scheduled favourably there — textbook flakiness.
+
+**Changed (additive, reversible):**
+- **New pluggable backend seam** in `src/harness/background-tasks.ts`:
+  `BackgroundTaskLaunchExecutor` — an optional 4th ctor arg on
+  `BackgroundTaskExecutionService`/`FileBackgroundTaskStore`. When supplied,
+  `launch()` delegates to it instead of spawning the detached script; when
+  omitted, production behaviour is byte-for-byte unchanged. This is also the
+  documented seam for future non-shell / remote / Windows execution backends.
+- **`createSimulatedBackgroundRuntime()`** (+ `createSimulatedBackgroundExecutor`
+  convenience wrapper): a deterministic, non-detached backend. It runs the task
+  command synchronously with a hard timeout (default 250ms, so `tail -f`/`sleep`
+  can't hang), captures stdout into the output file, writes no partial state
+  file, and pairs the executor with an `isProcessRunning` probe backed by a
+  shared *issued-PID set* — so executor-launched tasks read as alive while a
+  sentinel PID a test hand-writes (e.g. `999999`) reads as a crashed process.
+- Threaded `backgroundTaskLaunchExecutor` through `StandaloneOperatorOptions`
+  and added `backgroundTaskLaunchExecutor` + `backgroundTaskIsProcessRunning`
+  to `OperatorCliAppOptions` (same DI pattern as the existing `configHome`
+  hermeticity seam).
+- Injected the simulated backend into the 4 affected tests (server/operator use
+  the executor with their existing `isProcessRunning:()=>false`; the two app
+  tests use the paired runtime so liveness is consistent with issued PIDs).
+
+**Test results:** `npm test` **174/174 ✅** (was 170/174). Re-ran the three
+previously-flaky files 3× → 50/50 every time (deterministic). `npm run build`
+✅. `npm run typecheck:src` ✅ (exit 0, source stays clean). Full `tsc` total
+**125 → 125** (no new debt).
+
+**New idea:** the launch-script writes (`printf|sed > state`, `python … write_text`)
+are still **non-atomic in production** — a recovery read concurrent with a
+detached task's own state write can hit the same torn-file window in the wild,
+not just in tests. Follow-up: make `renderLaunchScript`/`renderStateWriterPython`
+write to `${state}.tmp` then `mv`/`os.replace` (atomic on same fs), mirroring
+`writeJsonAtomic`. Cheap, purely additive, and closes the production torn-read
+hole the simulated backend sidesteps in tests. (Logged to ROADMAP.)
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

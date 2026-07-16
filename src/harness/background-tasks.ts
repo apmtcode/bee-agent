@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { ensureParentDir, readJsonFile, writeJsonAtomic } from "../shared/fs.js";
 
@@ -108,6 +108,20 @@ export type SpawnBackgroundProcess = (
 
 export type IsProcessRunning = (pid: number) => boolean;
 
+/**
+ * Pluggable backend for actually launching a prepared background task. The
+ * default backend spawns the rendered launch script as a detached OS process
+ * (see {@link BackgroundTaskExecutionService.launch}). Alternative backends can
+ * run the task inline, on a remote host, or — in tests and non-shell
+ * environments — simulate execution deterministically. The executor receives
+ * the owning service so it can reuse `writeOutput`/`writeState` instead of
+ * re-deriving on-disk paths.
+ */
+export type BackgroundTaskLaunchExecutor = (
+  task: BackgroundTaskRecord,
+  service: BackgroundTaskExecutionService,
+) => Promise<{ pid: number }>;
+
 export type BackgroundTaskRecoveryReason =
   | "unchanged"
   | "state-running"
@@ -157,6 +171,7 @@ export class BackgroundTaskExecutionService {
     private readonly rootDir: string,
     private readonly spawnProcess: SpawnBackgroundProcess = (command, args, options) => spawn(command, args, options),
     private readonly isProcessRunningImpl: IsProcessRunning = defaultIsProcessRunning,
+    private readonly launchExecutor?: BackgroundTaskLaunchExecutor,
   ) {}
 
   async writeArtifacts(task: BackgroundTaskRecord): Promise<void> {
@@ -169,6 +184,9 @@ export class BackgroundTaskExecutionService {
   }
 
   async launch(task: BackgroundTaskRecord): Promise<{ pid: number }> {
+    if (this.launchExecutor) {
+      return await this.launchExecutor(task, this);
+    }
     const launchScriptPath = path.join(this.rootDir, task.execution.launchScript);
     const child = this.spawnProcess(launchScriptPath, [], {
       cwd: this.rootDir,
@@ -271,10 +289,20 @@ export class FileBackgroundTaskStore {
   readonly executionService: BackgroundTaskExecutionService;
   private readonly rootDir: string;
 
-  constructor(filePath: string, spawnProcess?: SpawnBackgroundProcess, isProcessRunning?: IsProcessRunning) {
+  constructor(
+    filePath: string,
+    spawnProcess?: SpawnBackgroundProcess,
+    isProcessRunning?: IsProcessRunning,
+    launchExecutor?: BackgroundTaskLaunchExecutor,
+  ) {
     this.filePath = filePath;
     this.rootDir = path.dirname(filePath);
-    this.executionService = new BackgroundTaskExecutionService(this.rootDir, spawnProcess, isProcessRunning);
+    this.executionService = new BackgroundTaskExecutionService(
+      this.rootDir,
+      spawnProcess,
+      isProcessRunning,
+      launchExecutor,
+    );
   }
 
   private readonly filePath: string;
@@ -795,4 +823,77 @@ function renderStateWriterPython(status: BackgroundTaskExecutionState["status"])
 
 function shellQuote(value: string): string {
   return `'${value.replaceAll(`'`, `"'"'"'`)}'`;
+}
+
+export type SimulatedBackgroundExecutorOptions = {
+  /**
+   * Upper bound on how long the simulated command is allowed to run before it
+   * is terminated. Keeps deterministic, fast tests even when a task command
+   * would otherwise block (e.g. `tail -f` / `sleep`). Defaults to 250ms.
+   */
+  commandTimeoutMs?: number;
+  /**
+   * When true, actually run `task.command` via a short-lived, non-detached
+   * shell to capture real stdout into the task's output file. When false, no
+   * command runs and the output file is left untouched. Defaults to true.
+   */
+  runCommand?: boolean;
+};
+
+/**
+ * A matched launch executor + liveness probe backed by a shared set of
+ * "issued" PIDs. Every task the executor launches is assigned a synthetic PID
+ * that `isProcessRunning` then reports as alive, while any other PID (e.g. a
+ * sentinel a test writes into a hand-authored state file to simulate a crashed
+ * process) reports as dead. This lets tests deterministically distinguish
+ * "still running" from "process gone" without touching the real OS.
+ */
+export type SimulatedBackgroundRuntime = {
+  launchExecutor: BackgroundTaskLaunchExecutor;
+  isProcessRunning: IsProcessRunning;
+};
+
+/**
+ * Build a deterministic, non-detached background-task backend for tests and
+ * non-shell environments. Unlike the default backend it never leaves a detached
+ * OS process racing the caller: the command (if any) runs synchronously with a
+ * hard timeout, its stdout is captured into the task output file, and no partial
+ * state file is written — so callers observe the record's `running` status from
+ * `markStarted` without a torn-read window. Explicit `writeState` calls remain
+ * the source of truth for lifecycle transitions.
+ */
+export function createSimulatedBackgroundRuntime(
+  options: SimulatedBackgroundExecutorOptions = {},
+): SimulatedBackgroundRuntime {
+  const commandTimeoutMs = options.commandTimeoutMs ?? 250;
+  const runCommand = options.runCommand ?? true;
+  const livePids = new Set<number>();
+  let pidCounter = 90_000;
+  const launchExecutor: BackgroundTaskLaunchExecutor = async (task, service) => {
+    const pid = (pidCounter += 1);
+    livePids.add(pid);
+    if (runCommand) {
+      const result = spawnSync("bash", ["-c", task.command], {
+        cwd: task.cwd,
+        encoding: "utf8",
+        timeout: commandTimeoutMs,
+        env: { ...process.env },
+      });
+      await service.writeOutput(task, result.stdout ?? "");
+    }
+    return { pid };
+  };
+  const isProcessRunning: IsProcessRunning = (pid) => livePids.has(pid);
+  return { launchExecutor, isProcessRunning };
+}
+
+/**
+ * Convenience wrapper returning only the {@link BackgroundTaskLaunchExecutor}
+ * from {@link createSimulatedBackgroundRuntime}, for callers that supply (or
+ * omit) their own liveness probe.
+ */
+export function createSimulatedBackgroundExecutor(
+  options: SimulatedBackgroundExecutorOptions = {},
+): BackgroundTaskLaunchExecutor {
+  return createSimulatedBackgroundRuntime(options).launchExecutor;
 }

@@ -55,6 +55,20 @@ unchecked items are queued. Keep this richer than you found it each run.
       gaps.
 - [ ] Audit `claude-code` reference for slash-command / hook coverage gaps.
 
+## Reliability / harness
+- [x] **Pluggable background-task launch backend** (`BackgroundTaskLaunchExecutor`)
+      + deterministic `createSimulatedBackgroundRuntime` — DONE run 9. Fixed 4
+      flaky tests that depended on real detached-process OS scheduling; also the
+      documented seam for future non-shell/remote/Windows execution backends.
+- [ ] **Atomic launch-script state writes** (follow-up from run 9): the default
+      backend's `printf|sed > state` and `python … write_text` are non-atomic, so
+      a production recovery read concurrent with a task's own state write can hit
+      a torn-file window (the same `SyntaxError … position N` seen in tests).
+      Fix: write `${state}.tmp` then `mv`/`os.replace` in
+      `renderLaunchScript`/`renderStateWriterPython`, mirroring `writeJsonAtomic`.
+- [ ] Consider a shared `spawnSync`-cap helper / test-support module so future
+      background-task tests default to the hermetic backend instead of opting in.
+
 ## Local-movement learning subsystem
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
@@ -64,7 +78,9 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
       and write the gap list here before adding code.
 - [ ] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
+      for a real on-device small model. (Note: the background-task
+      `BackgroundTaskLaunchExecutor` seam added in run 9 is a reusable template
+      for this — same optional-ctor-arg + simulated-implementation pattern.)
 - [ ] Synthetic event-stream generator to validate capture→dataset→replay
       round-trips without real OS input.
 - [ ] Generalization eval harness: measure replay fidelity on held-out but

@@ -103,6 +103,7 @@ export type StandaloneOperatorOptions = {
   replayLimit?: number;
   backgroundTaskSpawnProcess?: ConstructorParameters<typeof FileBackgroundTaskStore>[1];
   backgroundTaskIsProcessRunning?: ConstructorParameters<typeof FileBackgroundTaskStore>[2];
+  backgroundTaskLaunchExecutor?: ConstructorParameters<typeof FileBackgroundTaskStore>[3];
   executionConfig?: OperatorCliExecutionConfig;
   delivery?: OperatorDeliveryService;
 };
@@ -455,6 +456,7 @@ export class StandaloneOperatorRuntime {
       path.join(options.rootDir, "background-tasks.json"),
       options.backgroundTaskSpawnProcess,
       options.backgroundTaskIsProcessRunning,
+      options.backgroundTaskLaunchExecutor,
     );
     this.trainingJobs = new FileTrainingJobStore(path.join(options.rootDir, "training-jobs.json"));
     this.plugins = new FilePluginManifestRegistry(path.join(options.rootDir, "plugins.json"), options.rootDir);
