@@ -109,6 +109,47 @@ describe("FileBackgroundTaskStore", () => {
     });
   });
 
+  it("runs the real launch script and persists a valid, atomic terminal state", async () => {
+    const rootDir = await makeTempDir();
+    const filePath = path.join(rootDir, "background-tasks.json");
+    // Default (real) spawn: exercise the generated launch script end-to-end so
+    // the atomic state-file writes are covered. Poll to a terminal status
+    // instead of racing the process, keeping the test deterministic.
+    const store = new FileBackgroundTaskStore(filePath);
+
+    const task = await store.start({
+      title: "Emit output",
+      command: "printf 'alpha\\nbeta\\n'",
+      cwd: rootDir,
+      kind: "task",
+    });
+
+    let state: BackgroundTaskExecutionState | undefined;
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      state = await store.executionService.readState(task);
+      if (state && state.status !== "running") {
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+
+    // The state file must always be complete/parseable JSON (never a truncated
+    // mid-write document) and must reach the completed terminal state.
+    const rawState = await fs.readFile(path.join(rootDir, task.execution.stateFile), "utf8");
+    expect(() => JSON.parse(rawState)).not.toThrow();
+    expect(state?.status).toBe("completed");
+    expect(state?.exitCode).toBe(0);
+
+    // No leftover atomic-write temp files should remain in the state directory.
+    const stateDir = path.dirname(path.join(rootDir, task.execution.stateFile));
+    const leftovers = (await fs.readdir(stateDir)).filter((name) => name.endsWith(".tmp"));
+    expect(leftovers).toEqual([]);
+
+    const output = await store.executionService.readOutput(task);
+    expect(output).toContain("alpha");
+    expect(output).toContain("beta");
+  });
+
   it("cancels running tasks and records cancelled state", async () => {
     const rootDir = await makeTempDir();
     const filePath = path.join(rootDir, "background-tasks.json");

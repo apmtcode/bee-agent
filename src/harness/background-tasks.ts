@@ -166,6 +166,17 @@ export class BackgroundTaskExecutionService {
       encoding: "utf8",
       mode: 0o700,
     });
+    // Persist the base "running" state as a correctly-encoded JSON template so
+    // the launch script never has to shell-quote/`sed` the command into JSON
+    // (which corrupted state for any command containing quotes/backslashes).
+    // The launch script fills in pid + timestamps and writes state atomically.
+    const templatePath = path.join(this.rootDir, stateTemplateFile(task));
+    await ensureParentDir(templatePath);
+    await fs.writeFile(
+      templatePath,
+      `${JSON.stringify(buildRunningStateTemplate(task), null, 2)}\n`,
+      { encoding: "utf8", mode: 0o600 },
+    );
   }
 
   async launch(task: BackgroundTaskRecord): Promise<{ pid: number }> {
@@ -729,32 +740,40 @@ function applyExecutionState(task: BackgroundTaskRecord, state: BackgroundTaskEx
   };
 }
 
+function stateTemplateFile(task: BackgroundTaskRecord): string {
+  return `${task.execution.stateFile}.tmpl`;
+}
+
+function buildRunningStateTemplate(task: BackgroundTaskRecord): Omit<BackgroundTaskExecutionState, "pid" | "startedAt" | "updatedAt"> {
+  return {
+    version: 1,
+    taskId: task.id,
+    kind: task.kind,
+    status: "running",
+    outputFile: task.execution.outputFile,
+    cwd: task.cwd,
+    command: task.command,
+  };
+}
+
 function renderLaunchScript(task: BackgroundTaskRecord): string {
   const quotedStatePath = shellQuote(task.execution.stateFile);
+  const quotedTemplatePath = shellQuote(stateTemplateFile(task));
   const quotedOutputFile = shellQuote(task.execution.outputFile);
   const quotedCwd = shellQuote(task.cwd);
   const quotedCommand = shellQuote(task.command);
-  const quotedStatePayload = shellQuote(
-    JSON.stringify({
-      version: 1,
-      taskId: task.id,
-      kind: task.kind,
-      status: "running",
-      pid: "$$",
-      startedAt: "__OPENCLAW_STARTED_AT__",
-      updatedAt: "__OPENCLAW_STARTED_AT__",
-      outputFile: task.execution.outputFile,
-      cwd: task.cwd,
-      command: task.command,
-    }),
-  );
 
   return [
     "#!/usr/bin/env bash",
     "set -euo pipefail",
     `mkdir -p $(dirname ${quotedStatePath}) $(dirname ${quotedOutputFile})`,
     "started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-    `printf '%s' ${quotedStatePayload} | sed "s/__OPENCLAW_STARTED_AT__/$started_at/g; s/\"\$\$\"/$$/g" > ${quotedStatePath}`,
+    // Fill pid + timestamps into the Node-encoded running-state template and
+    // write it atomically. No shell-quoting of the command into JSON, so
+    // commands containing quotes/backslashes can no longer corrupt the state.
+    `python3 - ${quotedTemplatePath} ${quotedStatePath} $$ "$started_at" <<'PY'`,
+    ...renderRunningStateWriterPython(),
+    "PY",
     `printf '%s\n' "starting ${task.kind} ${task.id}" >> ${quotedOutputFile}`,
     `if cd ${quotedCwd} && bash -lc ${quotedCommand} >> ${quotedOutputFile} 2>&1; then`,
     "  completed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
@@ -773,9 +792,37 @@ function renderLaunchScript(task: BackgroundTaskRecord): string {
   ].join("\n");
 }
 
+// Shared atomic-write tail: serialize `state` to a pid-unique temp file then
+// os.replace() over the real path so readers see either the old or new complete
+// document, never a truncated one mid-write.
+const PYTHON_ATOMIC_WRITE_TAIL = [
+  "tmp_path = state_path.with_name(state_path.name + f'.{pid}.tmp')",
+  "tmp_path.write_text(json.dumps(state, indent=2) + '\\n')",
+  "os.replace(tmp_path, state_path)",
+];
+
+function renderRunningStateWriterPython(): string[] {
+  return [
+    "import json",
+    "import os",
+    "import pathlib",
+    "import sys",
+    "template_path = pathlib.Path(sys.argv[1])",
+    "state_path = pathlib.Path(sys.argv[2])",
+    "pid = int(sys.argv[3])",
+    "timestamp = sys.argv[4]",
+    "state = json.loads(template_path.read_text())",
+    "state['pid'] = pid",
+    "state['startedAt'] = timestamp",
+    "state['updatedAt'] = timestamp",
+    ...PYTHON_ATOMIC_WRITE_TAIL,
+  ];
+}
+
 function renderStateWriterPython(status: BackgroundTaskExecutionState["status"]): string[] {
   return [
     "import json",
+    "import os",
     "import pathlib",
     "import sys",
     "state_path = pathlib.Path(sys.argv[1])",
@@ -789,10 +836,12 @@ function renderStateWriterPython(status: BackgroundTaskExecutionState["status"])
     "state['completedAt'] = timestamp",
     "state['exitCode'] = exit_code",
     `state['error'] = None if '${status}' == 'completed' else f'background task exited non-zero ({exit_code})'`,
-    "state_path.write_text(json.dumps(state, indent=2) + '\\n')",
+    ...PYTHON_ATOMIC_WRITE_TAIL,
   ];
 }
 
 function shellQuote(value: string): string {
-  return `'${value.replaceAll(`'`, `"'"'"'`)}'`;
+  // Wrap in single quotes and escape embedded single quotes the POSIX way:
+  // close the quote, emit a quoted literal quote, reopen — i.e. ' -> '"'"'.
+  return `'${value.replaceAll(`'`, `'"'"'`)}'`;
 }

@@ -6,6 +6,62 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-16 (run 9) — Fix 3 real background-task launch bugs; deterministic test suite
+
+**Audited:** Project health on a fresh checkout. The suite that run 8 reported as
+174/174 was in fact **flaky** — repeated `vitest run` gave 4 / 2 / 3 failures
+across `operator-runtime.test.ts`, `cli/app.test.ts`, and
+`control-plane/server.test.ts`. Root-caused the flakiness to the background-task
+launch pipeline, which turned up **three genuine product bugs** (not test bugs):
+
+1. **Non-atomic state writes.** `renderLaunchScript` wrote the state file with
+   `printf … > state.json` and Python `write_text` (truncate-then-write). A
+   concurrent reader (`readState` during status reconciliation) could observe a
+   half-written document → `SyntaxError: … JSON at position 311`. This was the
+   flake surfacing intermittently depending on spawn/read interleaving.
+2. **Command→JSON corruption.** The running-state JSON was built by shell-quoting
+   the command into a payload and `sed`-substituting `"$$"`→pid. For any command
+   containing quotes/backslashes this produced **invalid JSON** and left the task
+   stuck `"running"` with `"pid":"$$"` — every real background task with a quoted
+   command recorded a corrupt, never-completing state.
+3. **`shellQuote` broken single-quote escaping.** It emitted `"'"'"'` (6 chars,
+   leading `"`) instead of the POSIX `'"'"'` (5 chars). Any command containing a
+   single quote reached `bash -lc` with unbalanced quotes → `unexpected EOF while
+   looking for matching '` → exit 2. Undetected because no test ever *launched* a
+   quoted command (tests inject state via `writeState`).
+
+**Changed (all additive, `src/`):**
+- `harness/background-tasks.ts`: (a) atomic writes everywhere — Python serializes
+  to a pid-unique `*.tmp` then `os.replace()`; (b) replaced the fragile
+  `printf|sed` running-state write with a **Node-encoded template file**
+  (`<stateFile>.tmpl`, written in `writeArtifacts`) that the launch script fills
+  with pid+timestamps via Python — no shell-quoting of the command into JSON;
+  (c) fixed `shellQuote`.
+- `cli/app.ts`: `OperatorCliApp` now forwards `backgroundTaskSpawnProcess` /
+  `backgroundTaskIsProcessRunning` to the runtime, so callers/tests can inject a
+  deterministic spawn (previously impossible — the app hard-coded the real spawn).
+- Tests: injected a no-op spawn stub in the three formerly-flaky tests (state is
+  now driven by the test, not a racing launch script), and added a new
+  `background-tasks.test.ts` case that runs the **real** launch script end-to-end,
+  polls to a terminal status, and asserts valid/atomic JSON + no `.tmp` leftovers
+  + captured output — deterministic coverage of the launch path that nothing had
+  before.
+
+**Test results:** `npm run typecheck:src` ✅ (source stays green). Build ✅. Full
+suite **175/175, stable across 4 consecutive runs** (was flaky 4/2/3). Full `tsc`
+(incl. tests) unchanged at **125** (no regression).
+
+**New idea:** add a tiny **launch-script golden/property test** — generate the
+script for a matrix of adversarial commands (embedded `'`, `"`, `$`, backticks,
+newlines, `PY` heredoc-terminator lookalikes) and assert the produced state file
+is always valid JSON with the command round-tripped verbatim. Fuzzing the
+quoting seam would have caught all three bugs above at authoring time. Longer
+term, consider dropping the Python dependency for a Node-based post-run state
+writer (spawn a short-lived `node` finalizer) so the pipeline has no hidden
+`python3` runtime requirement.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

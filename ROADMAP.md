@@ -45,6 +45,24 @@ unchecked items are queued. Keep this richer than you found it each run.
       have the engine run it as a per-run pre-push self-check.
 - [ ] Add a minimal CI workflow mirroring `verify` for human-opened PRs.
 
+## Reliability (background-task launch pipeline)
+- [x] **Atomic state-file writes** in the generated launch script (temp + rename
+      / `os.replace`) so readers never see half-written JSON (2026-07-16, run 9).
+- [x] **Command→JSON safety**: running-state is now built from a Node-encoded
+      template file instead of shell-quoting the command through `printf|sed`
+      (run 9). Fixed corrupt state for any command with quotes/backslashes.
+- [x] **`shellQuote` fix**: correct POSIX single-quote escaping so quoted commands
+      run under `bash -lc` instead of failing with "unexpected EOF" (run 9).
+- [x] **Injectable spawn on `OperatorCliApp`** (`backgroundTaskSpawnProcess` /
+      `backgroundTaskIsProcessRunning`) → deterministic background-task tests
+      (run 9). The suite is now stable at 175/175.
+- [ ] **Launch-script property test**: generate the script for a matrix of
+      adversarial commands (embedded `'`, `"`, `$`, backticks, newlines, a `PY`
+      heredoc-terminator lookalike) and assert the produced state file is always
+      valid JSON with the command round-tripped verbatim.
+- [ ] Consider a Node-based post-run state finalizer to drop the hidden `python3`
+      runtime dependency from the launch pipeline.
+
 ## Capability parity (audit reference agents → port gaps)
 - [ ] Build a "capability inventory" generator: enumerate bee-agent's exported
       RPC/tool surface (`src/index.ts`) and diff it against `openclaw`,
