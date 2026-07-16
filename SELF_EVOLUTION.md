@@ -6,6 +6,65 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-16 (run 9) — Movement subsystem: in-process pluggable model backend (train + generalize + eval)
+
+**Audited:** Objective #2 (local-movement learning). The capture→schema→
+dataset→export→shell-plan pipeline was already scaffolded, but the training
+side only *generated shell commands* for external MLX/axolotl runners
+(`src/training/runner.ts`) — there was **no in-process model** that actually
+learns from movement sequences, so pieces (c) "post-train a model to repeat
+movements" and (d) "generalize to new-but-related movements" were unmet, and
+nothing in the loop was runnable/testable in the cloud. Three ROADMAP items
+(pluggable local-model backend, synthetic event-stream generator,
+generalization eval harness) targeted exactly this gap.
+
+**Changed (additive):** new `src/training/movement-model.ts` +
+`movement-model.test.ts`, exported via the barrel:
+- **`MovementModelBackend` interface** — the pluggable seam. A real on-device
+  small model (MLX/torch) can implement `train()` later without touching call
+  sites.
+- **`NGramMovementBackend`** — a deterministic, on-device-friendly reference
+  model. Learns transition counts for every context length up to `order-1`.
+  `predictNext` uses the longest matching context, **backs off** to shorter
+  contexts, then **generalizes** via Jaccard feature-similarity to the nearest
+  seen movement (this is piece (d): a `tap` on an unseen `search-box` borrows
+  the learnt continuation of `tap` on `search-field`), then falls back to the
+  global prior. All ties break lexicographically → fully reproducible, no
+  `Math.random`/`Date` (both banned in some run contexts).
+- **`buildMovementDataset(replays)`** + **`parseMovementToken`** — turn the
+  exporter's replay `action` events into structured `MovementToken` sequences
+  (tolerant inverse of the capture adapters' "tapped X"/"swiped up" phrasing).
+- **`serialize()` / `loadMovementModel()`** — persist/rehydrate a trained model.
+- **`generateSyntheticMovementSequences`** — seeded LCG synthetic streams to
+  validate the full capture→train→infer loop with no real OS input.
+- **`evaluateMovementModel`** — generalization eval harness: top-1 next-movement
+  accuracy over held-out (related-but-unseen) sequences.
+
+**Test results:** new suite ✅ **17/17** (repeat-recorded-grammar, backoff,
+generalization, autoregressive `generate`, snapshot round-trip, synthetic
+byte-stability, held-out accuracy >0.5). `typecheck:src` ✅ CLEAN (exit 0).
+Build ✅ (549 kB). Full suite: **188/191**.
+
+**Pre-existing failures (NOT caused by this run):** 4 sub-cases across
+`operator-runtime.test.ts`, `server.test.ts`, `app.test.ts` fail on the clean
+baseline commit `3c7b7236` too (verified by `git stash`). Root cause: the
+background-task default `spawnProcess` (`background-tasks.ts:158`) launches a
+**real** `bash`/`sed`/`python3` script that writes the state file
+asynchronously and **races** the test's explicit `writeState`, yielding
+malformed single-line JSON (`Expected ',' or '}' … at position 311`). This is
+environment-dependent (real subprocess behaviour in this container; run 8
+reported 174/174 on a different host) and a spawn-race redesign is out of scope
+for a movement-subsystem run. Queued in ROADMAP as a focused fix. My change is
+fully green in isolation and additive-only.
+
+**New idea:** an **online movement adapter** — instead of only batch-training,
+let `NGramMovementModel` accept incremental `observe(sequence)` updates so
+bee-agent can adapt to a user's movement style *during* a session (few-shot,
+on-device), then checkpoint via `serialize()`. Pair it with a
+**confidence-gated autopilot**: only auto-execute a predicted movement when
+`confidence > τ` and `source !== "prior"`, else ask — a safe bridge from
+"replay recorded movements" to "assist with live ones".
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

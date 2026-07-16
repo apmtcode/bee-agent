@@ -431,3 +431,26 @@ export type {
   FailTrainingJobParams,
   TrainingJobStoreShape,
 } from "./training/job-store.js";
+export {
+  NGramMovementBackend,
+  buildMovementDataset,
+  evaluateMovementModel,
+  generateSyntheticMovementSequences,
+  loadMovementModel,
+  movementTokenId,
+  parseMovementToken,
+  trainMovementModel,
+} from "./training/movement-model.js";
+export type {
+  MovementDataset,
+  MovementEvalResult,
+  MovementModelBackend,
+  MovementModelSnapshot,
+  MovementPrediction,
+  MovementPredictionCandidate,
+  MovementPredictionSource,
+  MovementSequence,
+  MovementToken,
+  TrainMovementModelOptions,
+  TrainedMovementModel,
+} from "./training/movement-model.js";

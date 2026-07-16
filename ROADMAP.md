@@ -59,16 +59,41 @@ unchecked items are queued. Keep this richer than you found it each run.
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
 (exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
-      objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Inventory what `src/capture` + `src/training` already implement vs. the
+      objective's five pieces (2026-07-16, run 9). Gap found: capture→schema→
+      dataset→export existed, but train/infer was **shell-command generation
+      only** (`runner.ts`) with no in-process model.
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      for a real on-device small model — DONE run 9 (`MovementModelBackend` +
+      `NGramMovementBackend` in `src/training/movement-model.ts`).
+- [x] Synthetic event-stream generator to validate capture→dataset→replay
+      round-trips without real OS input — DONE run 9
+      (`generateSyntheticMovementSequences`, seeded LCG, byte-stable).
+- [x] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories — DONE run 9 (`evaluateMovementModel`,
+      top-1 next-movement accuracy).
+- [ ] **Online movement adapter** — add incremental `observe(sequence)` updates
+      to the model so bee-agent adapts to a user's movement style *during* a
+      session (few-shot, on-device), checkpointing via `serialize()`. Pair with
+      a **confidence-gated autopilot** that only auto-executes a predicted
+      movement when `confidence > τ` and `source !== "prior"`.
+- [ ] Wire the movement model into the training job pipeline: have
+      `LocalAppleSiliconTrainingRunner` also emit a `movement-model.json`
+      snapshot (via `NGramMovementBackend.train` over the reviewed export's
+      replays) as an immediately-usable baseline alongside the MLX/axolotl plan.
+
+## Known failures (pre-existing, environment-dependent)
+- [ ] **Background-task spawn race → malformed state JSON.** 4 test sub-cases
+      (`operator-runtime.test.ts`, `server.test.ts`, `app.test.ts`) fail because
+      the default `spawnProcess` (`src/harness/background-tasks.ts:158`) launches
+      a real `bash`/`sed`/`python3` script that writes the state file
+      asynchronously and races the test's explicit `writeState`, producing
+      malformed single-line JSON. Fix options: (a) tests should inject a mock
+      `backgroundTaskSpawnProcess` instead of spawning real subprocesses; and/or
+      (b) make the launch script write state atomically (temp+rename like
+      `writeJsonAtomic`) so a half-written file is never observed. Verified
+      pre-existing on baseline `3c7b7236` via `git stash`.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
