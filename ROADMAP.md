@@ -4,6 +4,23 @@ Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
 ## Foundations / DX
+- [x] **Green the test suite** (2026-07-16, run 9) — root-caused the 4 arriving
+      failures to a real `shellQuote` POSIX-escaping bug in the background-task
+      launcher (embedded `'` → `"'"'"'` instead of `'"'"'`, leaving an
+      unbalanced quote that corrupted the launch script + `state.json`). Fixed +
+      regression-tested; hardened 4 racy tests with a deterministic spawn seam.
+      `npm test` 175/175.
+- [x] Injectable `backgroundTaskSpawnProcess` / `backgroundTaskIsProcessRunning`
+      on `OperatorCliAppOptions` (2026-07-16) — lets CLI tests avoid forking real
+      detached processes that race `state.json`.
+- [ ] **`shellQuote` round-trip/fuzz guard** (run 9 idea): assert
+      `bash -c "printf %s <quoted>"` echoes back a corpus of nasty inputs
+      (embedded `'`/`"`/`$`/backtick/`\n`/`\\`). 5 lines; would have caught this
+      class instantly.
+- [ ] **Node-written launch state** (run 9 idea): replace the "JSON.stringify →
+      shellQuote → `sed` post-process" initial-`state.json` path with an atomic
+      Node write before/after spawn, removing the launcher's entire shell-escaping
+      surface (quoting, `sed` interaction) and the shell-timing race with tests.
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`

@@ -1,7 +1,11 @@
+import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
+
+const execFileAsync = promisify(execFile);
 import {
   BackgroundTaskExecutionService,
   FileBackgroundTaskStore,
@@ -369,5 +373,39 @@ describe("BackgroundTaskExecutionService", () => {
     await expect(fs.readFile(path.join(rootDir, task.execution.launchScript), "utf8")).resolves.toContain("bash -lc");
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
+  });
+
+  it("emits a launch script that writes valid JSON state for commands containing single quotes", async () => {
+    const rootDir = await makeTempDir();
+    const store = new FileBackgroundTaskStore(
+      path.join(rootDir, "background-tasks.json"),
+      // Mock the spawn so the launch script is generated but not auto-run; we
+      // execute it deterministically below to inspect the state it produces.
+      () => ({ pid: 3131, unref() {} }),
+      () => true,
+    );
+    // A command peppered with single quotes is the exact shape that a broken
+    // POSIX single-quote escaper corrupts into an unparseable launch script.
+    const command = `printf '%s\\n' 'it'\\''s a test' | grep 'test'`;
+    const task = await store.start({
+      title: "Quote-heavy command",
+      command,
+      cwd: rootDir,
+      kind: "task",
+    });
+
+    const scriptPath = path.join(rootDir, task.execution.launchScript);
+    // The script must be syntactically valid bash (a corrupted quote sequence
+    // would blow up here with "unexpected EOF while looking for matching quote").
+    await expect(execFileAsync("bash", ["-n", scriptPath])).resolves.toBeDefined();
+    await execFileAsync("bash", [scriptPath], { cwd: rootDir });
+
+    const statePath = path.join(rootDir, task.execution.stateFile);
+    const raw = await fs.readFile(statePath, "utf8");
+    const state = JSON.parse(raw) as BackgroundTaskExecutionState;
+    // The command must round-trip verbatim through JSON.stringify → shell → sed.
+    expect(state.command).toBe(command);
+    expect(state.taskId).toBe(task.id);
+    expect(state.status).toBe("completed");
   });
 });

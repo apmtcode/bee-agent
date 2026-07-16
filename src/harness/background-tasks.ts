@@ -793,6 +793,11 @@ function renderStateWriterPython(status: BackgroundTaskExecutionState["status"])
   ];
 }
 
+// POSIX-safe single-quoting: wrap in single quotes and replace each embedded
+// single quote with the close-quote / escaped-quote / reopen-quote sequence
+// `'\''` written here as `'"'"'`. Any other arrangement (e.g. `"'"'"'`) leaves
+// an unbalanced quote and corrupts the generated shell script for commands that
+// themselves contain single quotes.
 function shellQuote(value: string): string {
-  return `'${value.replaceAll(`'`, `"'"'"'`)}'`;
+  return `'${value.replaceAll(`'`, `'"'"'`)}'`;
 }

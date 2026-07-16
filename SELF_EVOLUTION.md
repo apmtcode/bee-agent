@@ -6,6 +6,51 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-16 (run 9) — 🐛 Fix POSIX single-quote shell escaping in background-task launcher (real correctness bug)
+
+**Audited:** The test suite health, which was **red on arrival** (4 failing
+tests across `background-tasks`, `operator-runtime`, `app`, and `server`) — a
+regression versus run 8's "174/174". Root-caused it rather than papering over.
+
+**Real bug found & fixed** in `src/harness/background-tasks.ts` (`shellQuote`):
+the helper that POSIX-single-quotes strings for the generated bash launch script
+escaped an embedded `'` as `"'"'"'` instead of the correct `'"'"'`. The extra
+leading `"` leaves an **unbalanced quote**, so any background-task *command*
+containing a single quote produced a launch script the shell refused to parse
+(`unexpected EOF while looking for matching quote`) and a corrupted, unparseable
+`state.json`. Confirmed by isolating the pipeline in bash and by a round-trip
+table (`bad` corrupts every quoted string; `good` round-trips verbatim). This is
+a latent shell-injection/corruption class bug that would bite any real user
+whose command contains `'` (extremely common: `printf 'x'`, `grep 'y'`, …).
+
+**Regression test added** (`background-tasks.test.ts`): starts a task whose
+command is peppered with single quotes, runs `bash -n` on the generated launch
+script (syntax gate) then executes it, and asserts `state.json` parses and the
+command round-trips.
+
+**Test determinism hardening** (cloud-safe, per the "mock the OS" guardrail):
+the four failing tests spawned **real detached processes** (`sleep 5`,
+`tail -f`, `printf`) whose launch scripts asynchronously rewrote `state.json`,
+racing the assertions and manual `writeState` calls. Added an injectable
+`backgroundTaskSpawnProcess` / `backgroundTaskIsProcessRunning` seam to
+`OperatorCliAppOptions` (forwarded to the runtime) and pointed the affected
+tests at deterministic stubs — no real fork, so only the tests' own state drives
+the breaker/missing-process logic exactly one task at a time.
+
+**Test results:** `npm test` **175/175** (was 171/175 on arrival; +1 new test).
+`typecheck:src` ✅ clean. `npm run build` ✅. Full `tsc` still **125** (all in
+test files — unchanged, no new debt).
+
+**New idea:** add a tiny property/round-trip test for `shellQuote` itself over a
+fuzzed corpus of nasty strings (embedded `'`, `"`, `$`, backticks, `\n`,
+`\\`) asserting `bash -c "printf %s <quoted>"` echoes the input verbatim — a
+5-line guard that would have caught this class immediately. Longer term, replace
+the "stringify JSON then post-process with `sed`" launch-state approach with a
+Node-written initial `state.json` (atomic, no shell quoting surface at all),
+eliminating the entire category of shell-escaping fragility in the launcher.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

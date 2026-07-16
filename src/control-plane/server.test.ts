@@ -81,9 +81,13 @@ const exportManifest: ReviewedExportManifest = {
 describe("OperatorControlPlaneServer", () => {
   it("handles session, transcript, approval, trajectory, memory, and orchestration methods", async () => {
     const rootDir = await makeTempDir();
+    let mockPid = 60000;
     const runtime = new StandaloneOperatorRuntime({
       rootDir,
       backgroundTaskIsProcessRunning: () => false,
+      // Deterministic spawn: avoid forking real detached processes that would
+      // asynchronously rewrite background-task state and race the assertions.
+      backgroundTaskSpawnProcess: () => ({ pid: (mockPid += 1), unref() {} }),
       delivery: new OperatorDeliveryService(rootDir, {
         sendBrowserPush: async () => {},
       }),
@@ -950,9 +954,13 @@ describe("OperatorControlPlaneServer", () => {
     });
 
     const driftingRootDir = await makeTempDir();
+    let driftingMockPid = 61000;
     const driftingRuntime = new StandaloneOperatorRuntime({
       rootDir: driftingRootDir,
       backgroundTaskIsProcessRunning: () => false,
+      // No real detached process: only the manually-written states below drive
+      // the missing-process detection, so counts stay deterministic.
+      backgroundTaskSpawnProcess: () => ({ pid: (driftingMockPid += 1), unref() {} }),
     });
     const driftingServer = new OperatorControlPlaneServer({ runtime: driftingRuntime });
     const driftingBootstrap = await driftingServer.handle({
@@ -1016,9 +1024,13 @@ describe("OperatorControlPlaneServer", () => {
     });
 
     const breakerRootDir = await makeTempDir();
+    let breakerMockPid = 62000;
     const breakerRuntime = new StandaloneOperatorRuntime({
       rootDir: breakerRootDir,
       backgroundTaskIsProcessRunning: () => false,
+      // No real detached process: only the manually-written states below drive
+      // the breaker, so failureCount increments exactly one task at a time.
+      backgroundTaskSpawnProcess: () => ({ pid: (breakerMockPid += 1), unref() {} }),
     });
     const breakerServer = new OperatorControlPlaneServer({ runtime: breakerRuntime });
     const breakerOne = await breakerServer.handle({
