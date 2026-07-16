@@ -6,6 +6,60 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-16 (run 9) — Fix launch-script shell-quoting/PID bugs + atomic state writes; suite green again
+
+**Audited:** Ran `npm test` first thing and found **3 tests failing deterministically**
+on the branch HEAD (last run logged 174/174 — the failures reproduce in isolation,
+so they are real, not flaky env noise): `operator-runtime` background-tasks,
+`server` orchestration methods, and `app` session-lifecycle. All three traced back
+to the background-task / training **launch-script generator**.
+
+**Two genuine production correctness bugs found & fixed** (both in the shell the
+detached task/training process runs):
+1. **`shellQuote` used the wrong POSIX single-quote escape.**
+   `src/harness/background-tasks.ts` replaced `'` with `"'"'"'` (shifted) instead of
+   the canonical `'"'"'` — so any command containing a single quote (e.g.
+   `printf 'line-1\nline-2\n'`) was mangled into invalid shell → a **corrupt JSON
+   state file** → `JSON.parse` threw in `readState` and crashed reconcile/recovery.
+   `src/training/runner.ts` already had the correct escape; the two had silently
+   **diverged**. Fixed bg's to match.
+2. **PID placeholder was never substituted.** The init-state write used
+   `sed "…; s/\"\$\$\"/$$/g"`; rendered, the embedded `"` **closed the double-quoted
+   sed arg**, so `"pid":"$$"` survived as a literal string (not the process id).
+   Replaced with a token placeholder `__OPENCLAW_PID__` + a single-quoted sed `-e`
+   expression (`-e 's/"__OPENCLAW_PID__"/'"$$"'/g'`) that yields a **JSON number**.
+   Applied to both generators.
+
+**Reliability hardening (additive):** both launch scripts now write the state file
+**atomically** — `printf|sed > state.json.tmp && mv -f …` and the python writer uses
+`os.replace(tmp, state)` — mirroring the TS `writeJsonAtomic`, so a concurrent
+reader can never observe a half-written file.
+
+**Test determinism:** the 3 failing tests spawned **real detached processes** that
+raced their own `writeState` calls. Injected a mock `backgroundTaskSpawnProcess`
+(the pattern `background-tasks.test.ts` already uses everywhere) so no real process
+runs. Added a `backgroundTaskSpawnProcess` / `backgroundTaskIsProcessRunning` **test
+seam** to `OperatorCliApp` (threaded into its runtime; production leaves them unset).
+
+**New regression test** (`background-tasks.test.ts`): starts a task whose command
+contains single quotes, executes the generated `run.sh` end-to-end, and asserts the
+state file is valid JSON with `status:"completed"`, a **numeric** pid, `exitCode:0`,
+and a verbatim command round-trip — it fails against either old bug.
+
+**Test results:** **175/175** (was 3 failing; +1 new regression test), stable across
+3 consecutive full runs. Build ✅. `typecheck:src` ✅ (exit 0). Full `tsc` unchanged
+at **125** (no regression). Pushed to `main`.
+
+**New idea:** the two generators had *divergent* `shellQuote` implementations, which
+is exactly how one stayed buggy for so long. Extract a single shared
+`shellQuote` + `renderAtomicJsonWrite` shell-snippet helper (in `src/shared/`) used
+by both `background-tasks.ts` and `runner.ts`, and add a tiny lint/test that flags
+the two footguns anywhere in generated scripts: a double-quoted `sed "…"` arg that
+contains an embedded `"`, and any `shellQuote` body not equal to the canonical
+`'"'"'` escape. Prevents this whole class from recurring.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

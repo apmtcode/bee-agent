@@ -70,6 +70,20 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Generalization eval harness: measure replay fidelity on held-out but
       related synthetic trajectories.
 
+## Reliability / correctness
+- [x] Fix launch-script generator bugs (run 9, 2026-07-16): `shellQuote` used the
+      wrong POSIX escape (`"'"'"'` vs `'"'"'`) → corrupt state JSON for commands
+      with single quotes; PID `sed` substitution was broken by an embedded `"`
+      closing the double-quoted arg. Also made state-file writes atomic
+      (`.tmp` + `mv`/`os.replace`). Added a run.sh end-to-end regression test.
+- [ ] **De-duplicate the two shell-script generators.** `background-tasks.ts` and
+      `runner.ts` carry near-identical `shellQuote` + launch-script logic that has
+      already drifted (one had the correct single-quote escape, one did not).
+      Extract a shared `shellQuote` + `renderAtomicJsonWrite` helper into
+      `src/shared/` so they cannot diverge, plus a lint/test that flags the two
+      footguns: a double-quoted `sed "…"` arg containing an embedded `"`, and any
+      `shellQuote` body ≠ the canonical `'"'"'` escape.
+
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in

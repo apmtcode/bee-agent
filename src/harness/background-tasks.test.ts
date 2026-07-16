@@ -1,7 +1,11 @@
+import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
+
+const execFileAsync = promisify(execFile);
 import {
   BackgroundTaskExecutionService,
   FileBackgroundTaskStore,
@@ -369,5 +373,30 @@ describe("BackgroundTaskExecutionService", () => {
     await expect(fs.readFile(path.join(rootDir, task.execution.launchScript), "utf8")).resolves.toContain("bash -lc");
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
+  });
+
+  it("emits a launch script that writes a valid state file for commands containing single quotes", async () => {
+    // Regression: the launch script's shell-quoting must round-trip commands that
+    // contain single quotes, and the pid placeholder must be substituted to a JSON
+    // number. A prior bug produced malformed JSON (unreadable state) for such commands.
+    const rootDir = await makeTempDir();
+    // Mock spawn so start() writes artifacts but does not launch a real detached process.
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"), () => ({ pid: 1234, unref() {} }));
+    const command = "printf 'it'\\''s done: %s\\n' 'a b'";
+    const task = await store.start({ title: "Quoted", command, cwd: rootDir, kind: "task" });
+
+    // Execute the generated launch script to completion (the mock spawn never ran it).
+    const scriptPath = path.join(rootDir, task.execution.launchScript);
+    await execFileAsync("bash", [scriptPath], { cwd: rootDir });
+
+    const raw = await fs.readFile(path.join(rootDir, task.execution.stateFile), "utf8");
+    const state = JSON.parse(raw) as BackgroundTaskExecutionState;
+    expect(state.status).toBe("completed");
+    expect(state.exitCode).toBe(0);
+    expect(typeof state.pid).toBe("number");
+    expect(state.command).toBe(command);
+    // The command's single-quoted content must have executed verbatim.
+    const output = await fs.readFile(path.join(rootDir, task.execution.outputFile), "utf8");
+    expect(output).toContain("it's done: a b");
   });
 });
