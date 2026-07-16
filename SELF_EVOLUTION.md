@@ -6,6 +6,57 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-16 (run 9) — 🐛 Real `shellQuote` corruption bug + atomic state writes + deterministic background-task tests
+
+**Audited:** Project health. The full suite, reported green (174/174) at the end
+of run 8, was in fact **flaky** — 3–4 tests failed nondeterministically per run
+(`operator-runtime`, `cli/app` ×2, `control-plane/server`). Root-caused two
+distinct defects, one a genuine **production bug**.
+
+**Bug 1 — `shellQuote` did not round-trip (production correctness bug).** In
+`src/harness/background-tasks.ts` the launch-script renderer escaped an embedded
+single quote as `"'"'"'` (6 chars), which does **not** reconstruct the original
+string under bash. Any background-task `command` containing a single quote — e.g.
+the test's `printf 'line-1\nline-2\n'` — produced a **corrupt state file**
+(invalid JSON), so every subsequent `readState`/`syncBackgroundTask` threw
+`SyntaxError: Expected ',' or '}'…`. Replaced with the canonical POSIX sequence
+`'\''` (verified to round-trip). This bug would corrupt state for *any* real
+command with a quote, not just tests.
+
+**Bug 2 — non-atomic state writes (reliability).** The launch script wrote the
+state file twice non-atomically: the initial `printf … | sed > stateFile`
+(in-place truncate) and the Python completion writer (`write_text`). A concurrent
+reader could observe a half-written file. Made both atomic: render to a per-pid
+`*.tmp` then `mv` / `os.replace` (atomic rename). Defense-in-depth on top of
+Bug 1's fix.
+
+**Flakiness — real detached processes racing manual state writes.** Several tests
+launched **real** background processes (`sleep 5`, `printf ok`, `printf drift`)
+via the default `spawn`, then also manually wrote state and asserted on
+non-deterministic completion timing. Fix: added `backgroundTaskSpawnProcess` /
+`backgroundTaskIsProcessRunning` injection to `OperatorCliApp`
+(`src/cli/app.ts`) — plumbed straight through to `StandaloneOperatorRuntime`, a
+genuine testability/DX improvement — and injected deterministic mock spawns
+(pid 4242 = "alive") in `operator-runtime.test.ts`, `cli/app.test.ts` (×2), and
+`control-plane/server.test.ts` (×3 runtimes). Where a test asserted on real
+process output, wrote that output explicitly (matching the existing monitor-task
+pattern).
+
+**Test results:** full `npm test` now **174/174, deterministic** — ran the whole
+suite 5× back-to-back with zero failures (was 3–4 failing per run). `npm run
+build` ✅. `npm run typecheck:src` ✅ (source stays green).
+
+**New idea (innovation):** the `shellQuote` bug and the python3 dependency both
+stem from generating a hand-rolled **bash launch script** with embedded quoting.
+Replace it with a tiny Node **runner entrypoint** (`operator-run-task`) that reads
+task params from a JSON sidecar and does all spawn/output/state writing in Node
+using the already-atomic `writeJsonAtomic`. That removes (a) every shell-quoting
+hazard, (b) the hard `python3` runtime dependency, and (c) the `bash`/`sed`
+dependency — making background tasks portable to Windows and safe against
+injection. Queued in ROADMAP under reliability.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

@@ -8,6 +8,14 @@ unchecked items are queued. Keep this richer than you found it each run.
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`
       (2026-06-22).
+- [x] **Fix flaky background-task tests + a real `shellQuote` corruption bug**
+      (2026-07-16, run 9). `shellQuote` used a non-round-tripping single-quote
+      escape → any command with a `'` corrupted the state file (invalid JSON);
+      replaced with canonical `'\''`. Made the launch script's state writes
+      atomic (temp + rename / `os.replace`). Added
+      `backgroundTaskSpawnProcess`/`backgroundTaskIsProcessRunning` injection to
+      `OperatorCliApp` and used deterministic mock spawns in the 4 affected
+      tests. Suite is now 174/174 deterministic (5× clean).
 - [ ] **Pay down typecheck debt** (surfaced by the `typecheck` script). Full
       `tsc --noEmit` count was **397** on 2026-06-22; now **125**. 🎯 ALL source
       (`src/**` non-test) files typecheck clean since run 7; remaining 125 errors
@@ -71,9 +79,18 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
       related synthetic trajectories.
 
 ## Innovation backlog
+- [ ] **Node runner entrypoint to replace the bash launch script** (from run 9).
+      Background tasks are launched via a generated `bash`+`sed`+`python3` script
+      (`renderLaunchScript`), the source of run 9's `shellQuote` corruption bug
+      and a hard `python3` dependency. Replace it with a small Node entrypoint
+      (`operator-run-task`) that reads task params from a JSON sidecar and does
+      all spawn/output/state writing in Node via `writeJsonAtomic` — removing all
+      shell-quoting hazards, the `python3`/`bash`/`sed` dependencies, and making
+      background tasks portable to Windows and safe against command injection.
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in
-      project health over time.
+      project health over time. (Run 9 note: this would have caught the
+      "green→flaky" regression between runs 8 and 9 automatically.)
 - [ ] Coordination guard between the parallel cloud + local self-evolve runs
       (e.g. a lightweight lock/heartbeat file) to avoid duplicated work and
       merge churn.
