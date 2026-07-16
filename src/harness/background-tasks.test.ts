@@ -370,4 +370,35 @@ describe("BackgroundTaskExecutionService", () => {
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
   });
+
+  it("writes valid state JSON when the command contains single quotes (real launch script)", async () => {
+    // Regression: shellQuote previously escaped single quotes with a stray
+    // leading double quote, so a command like `printf 'x'` mis-quoted the
+    // launch script's embedded JSON payload and produced a state.json that
+    // failed JSON.parse. Run the real launch script (default spawn) end-to-end
+    // and assert the resulting state round-trips.
+    const rootDir = await makeTempDir();
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"));
+    const command = "printf '%s' 'quoted-value'";
+    const task = await store.start({ title: "Quoted command", command, cwd: rootDir, kind: "task" });
+
+    let state: BackgroundTaskExecutionState | undefined;
+    for (let attempt = 0; attempt < 200 && !state; attempt += 1) {
+      try {
+        state = await store.executionService.readState(task);
+      } catch {
+        // Mid-write truncation or (pre-fix) corrupt JSON — keep polling; a
+        // genuinely corrupt payload never becomes parseable and the assertion
+        // below fails after the timeout.
+        state = undefined;
+      }
+      if (!state) {
+        await new Promise((resolve) => setTimeout(resolve, 15));
+      }
+    }
+
+    expect(state).toBeDefined();
+    expect(state?.taskId).toBe(task.id);
+    expect(state?.command).toBe(command);
+  });
 });

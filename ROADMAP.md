@@ -70,6 +70,22 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Generalization eval harness: measure replay fidelity on held-out but
       related synthetic trajectories.
 
+## Reliability / correctness
+- [x] **Fix launch-script shell-quoting corruption** (run 9). `shellQuote` in
+      `src/harness/background-tasks.ts` used `"'"'"'` (malformed) instead of
+      `'"'"'`, so any background-task command containing a single quote produced
+      an invalid `state.json` that crashed `readState`. Fixed + added a
+      real-launch-script regression test; hardened 4 racy tests to stub spawn.
+- [ ] **Deduplicate `shellQuote`** (surfaced run 9). Two copies exist
+      (`harness/background-tasks.ts`, `training/runner.ts`) and had *already
+      diverged* — one correct, one not. Extract `src/shared/shell.ts#shellQuote`
+      (POSIX-correct) + a fuzz test over quotes/newlines/backslashes/`$`, and
+      import it in both. Kills this divergence class permanently.
+- [ ] **Guard launch-script writes with `writeJsonAtomic`-equivalent atomicity.**
+      The sed/python state writers in `background-tasks.ts` and `training/runner.ts`
+      use non-atomic `>`/`write_text`, so a concurrent `readState` can observe a
+      truncated file. Make them write-temp-then-rename like `writeJsonAtomic`.
+
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in
