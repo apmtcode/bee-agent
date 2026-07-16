@@ -530,6 +530,12 @@ describe("StandaloneOperatorRuntime", () => {
   it("starts, syncs, recovers, lists, and cancels background tasks", async () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
+      // This test drives every task's execution state explicitly via
+      // writeState(). A real launch subprocess would asynchronously write its
+      // own "running" state, racing (and clobbering) those explicit writes and
+      // making the recover/sync assertions flaky. A deterministic no-op spawn
+      // keeps the test's writeState() calls the sole source of truth.
+      backgroundTaskSpawnProcess: () => ({ pid: 4242, unref() {} }),
       backgroundTaskIsProcessRunning: () => false,
     });
     const session = await runtime.startSession({ title: "Tasks", agentId: "main" });

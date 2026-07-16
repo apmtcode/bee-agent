@@ -6,6 +6,75 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-16 (run 9) — 🐛 Fix background-task state corruption (`shellQuote`) + de-flake real-subprocess tests
+
+**Audited:** Repo health. Baseline `npm test` was **red** (3–4 failing, and the
+count *varied between runs* — a raciness tell) even though run 8 logged 174/174.
+`typecheck:src` and `build` were green. Root-caused the failures instead of
+papering over them.
+
+**Genuine correctness bug found & fixed** (`src/harness/background-tasks.ts`):
+`shellQuote()` escaped an embedded single quote as `"'"'"'` (6 chars, a stray
+leading `"`) instead of the POSIX-correct `'"'"'` (5 chars). **Any background
+task whose command or cwd contained a single quote produced invalid state JSON**
+— which then made the completion writer's `json.loads()` throw under
+`set -euo pipefail`, so the task's state stayed stuck at a corrupt "running"
+document and every concurrent reader (`sync`/`recover`/monitor polling,
+`getBackgroundTaskExecutionState`) crashed with `SyntaxError: Expected ',' or
+'}'`. Verified end-to-end with a live spawn repro (torn/invalid reads → 0).
+Fix: correct the escape sequence. This is the actual defect that made the
+`printf 'line-1\nline-2\n'` fixtures fail.
+
+**Additional reliability hardening (additive):**
+- **Atomic state writes in the launch script.** The initial write was
+  `printf … | sed … > state.json` (truncate-and-stream in place) and the Python
+  completion writer used `write_text` — both non-atomic, so a concurrent reader
+  could observe a torn document. Now both write to a unique temp file and
+  `mv`/`os.replace` into place (atomic rename on the same filesystem).
+- **Fixed the `sed` pid substitution.** `s/"$$"/…/` broke out of the
+  double-quoted sed argument, so the running-state `pid` was left as the literal
+  string `"$$"` (never the numeric PID) — which then failed every
+  `isProcessRunning(pid)` liveness check. Replaced with a bare-token placeholder
+  `__OPENCLAW_PID__` (same mechanism the timestamp already uses).
+- **`readJsonFile` defense-in-depth** (`src/shared/fs.ts`): bounded retry (4×,
+  short backoff) on `SyntaxError` only, so any residual mid-write read from a
+  non-atomic external writer resolves instead of crashing; genuinely corrupt
+  files still surface the error.
+
+**De-flaked the integration tests (root cause, not masking).** `server.test.ts`,
+`operator-runtime.test.ts`, and (via cross-file pollution) `app.test.ts` each
+spawned **real** `printf`/`sleep`/`tail -f` subprocesses while *also* driving
+execution state explicitly via `writeState`/`writeOutput` and mocking
+`isProcessRunning`. The real subprocesses' async state writes raced (and
+clobbered) the explicit writes, so assertions flaked on subprocess scheduling
+(e.g. `active`↔`degraded`, breaker `failureCount` 2↔3, recover `unchanged`↔
+`missing-process`). Any test that mocks liveness clearly intends deterministic
+control, so it should also mock the spawn: added a no-op
+`backgroundTaskSpawnProcess: () => ({ pid, unref(){} })` to those four runtimes.
+
+**New regression test** (`background-tasks.test.ts`): starts a real task whose
+command contains single quotes and asserts the state file always parses, ends
+`completed` with `exitCode 0` and a **numeric** pid, and the command
+round-trips byte-for-byte.
+
+**Test results:** `typecheck:src` ✅ (exit 0), `build` ✅. `npm test` ✅
+**175/175, verified green across 7 consecutive full-suite runs** (was flaky
+3–4-failing). Net: +1 test, previously-failing operator-runtime/server tests now
+deterministic, and the intermittent app.test pollution eliminated.
+
+**New idea:** the real-subprocess-in-unit-tests hazard is systemic — several
+other runtimes (`gateway-transport.test.ts`, `session-stream.test.ts`) mock
+`isProcessRunning` and could latently spawn real processes. Add a tiny test
+helper `deterministicBackgroundTaskOptions()` (returns both the no-op spawn and
+`isProcessRunning`) and a lightweight lint/grep guard in CI that flags any test
+runtime mocking one without the other, so this class of flakiness can't
+reappear. Longer term: give `StandaloneOperatorRuntime` a documented
+"in-process executor" backend (no shell/OS spawn at all) so background-task
+logic can be unit-tested hermetically, reserving the real shell launcher for a
+small number of explicit integration tests.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

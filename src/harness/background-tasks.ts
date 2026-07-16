@@ -740,7 +740,7 @@ function renderLaunchScript(task: BackgroundTaskRecord): string {
       taskId: task.id,
       kind: task.kind,
       status: "running",
-      pid: "$$",
+      pid: "__OPENCLAW_PID__",
       startedAt: "__OPENCLAW_STARTED_AT__",
       updatedAt: "__OPENCLAW_STARTED_AT__",
       outputFile: task.execution.outputFile,
@@ -754,7 +754,17 @@ function renderLaunchScript(task: BackgroundTaskRecord): string {
     "set -euo pipefail",
     `mkdir -p $(dirname ${quotedStatePath}) $(dirname ${quotedOutputFile})`,
     "started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-    `printf '%s' ${quotedStatePayload} | sed "s/__OPENCLAW_STARTED_AT__/$started_at/g; s/\"\$\$\"/$$/g" > ${quotedStatePath}`,
+    "launch_pid=$$",
+    // Write the initial state atomically: stream into a unique temp file, then
+    // rename into place. A bare `> ${statePath}` truncates and streams in place,
+    // so any concurrent reader (sync/recover/monitor polling) can observe a torn
+    // JSON document and crash. `mv` on the same filesystem is atomic.
+    // The pid placeholder is substituted (quotes included) so `pid` lands as a
+    // JSON number; matching a bare token avoids the shell-quoting hazards of the
+    // old `s/"$$"/.../` form (whose unescaped `"` broke out of the sed argument,
+    // leaving the running-state pid as the literal string "$$").
+    `printf '%s' ${quotedStatePayload} | sed "s/__OPENCLAW_STARTED_AT__/$started_at/g; s/\\"__OPENCLAW_PID__\\"/$launch_pid/g" > ${quotedStatePath}.$launch_pid.tmp`,
+    `mv ${quotedStatePath}.$launch_pid.tmp ${quotedStatePath}`,
     `printf '%s\n' "starting ${task.kind} ${task.id}" >> ${quotedOutputFile}`,
     `if cd ${quotedCwd} && bash -lc ${quotedCommand} >> ${quotedOutputFile} 2>&1; then`,
     "  completed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
@@ -776,6 +786,7 @@ function renderLaunchScript(task: BackgroundTaskRecord): string {
 function renderStateWriterPython(status: BackgroundTaskExecutionState["status"]): string[] {
   return [
     "import json",
+    "import os",
     "import pathlib",
     "import sys",
     "state_path = pathlib.Path(sys.argv[1])",
@@ -789,10 +800,19 @@ function renderStateWriterPython(status: BackgroundTaskExecutionState["status"])
     "state['completedAt'] = timestamp",
     "state['exitCode'] = exit_code",
     `state['error'] = None if '${status}' == 'completed' else f'background task exited non-zero ({exit_code})'`,
-    "state_path.write_text(json.dumps(state, indent=2) + '\\n')",
+    // Atomic write: serialize to a unique temp file then os.replace() into
+    // place, so concurrent readers never observe a partially written document.
+    "tmp_path = state_path.with_name(state_path.name + f'.{os.getpid()}.tmp')",
+    "tmp_path.write_text(json.dumps(state, indent=2) + '\\n')",
+    "os.replace(tmp_path, state_path)",
   ];
 }
 
 function shellQuote(value: string): string {
-  return `'${value.replaceAll(`'`, `"'"'"'`)}'`;
+  // Wrap in single quotes and escape any embedded single quote as '"'"' — the
+  // standard POSIX idiom: close the quote, emit a double-quoted single quote,
+  // reopen. (The previous sequence "'"'"' had a stray leading double quote,
+  // which corrupted any command or path containing a single quote — e.g. it
+  // produced invalid state JSON that then broke the task's completion writer.)
+  return `'${value.replaceAll(`'`, `'"'"'`)}'`;
 }

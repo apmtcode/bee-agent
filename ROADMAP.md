@@ -4,6 +4,27 @@ Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
 ## Foundations / DX
+- [x] **Fix background-task state corruption + de-flake real-subprocess tests**
+      (2026-07-16, run 9). `shellQuote` escaped embedded single quotes as
+      `"'"'"'` instead of `'"'"'`, corrupting state JSON for any single-quoted
+      command → completion writer crash → stuck task + reader crashes. Fixed the
+      escape, made both launch-script state writers atomic (temp + rename),
+      fixed the `sed` pid substitution (bare-token placeholder), and hardened
+      `readJsonFile` with a bounded `SyntaxError` retry. De-flaked the
+      integration tests that spawned real `printf`/`sleep`/`tail` subprocesses
+      while driving state explicitly (added no-op `backgroundTaskSpawnProcess`
+      to the four affected runtimes). `npm test` **175/175 green across 7
+      consecutive runs** (was flaky 3–4-failing).
+- [ ] **Guard against real-subprocess-in-unit-test flakiness (systemic).** Add a
+      `deterministicBackgroundTaskOptions()` test helper (returns both the no-op
+      spawn and `isProcessRunning`) and a grep/lint guard that flags any test
+      runtime mocking `backgroundTaskIsProcessRunning` *without*
+      `backgroundTaskSpawnProcess`. Audit `gateway-transport.test.ts` and
+      `session-stream.test.ts` for the same latent hazard.
+- [ ] **In-process background-task executor backend.** Give
+      `StandaloneOperatorRuntime` a documented shell-free executor so
+      background-task logic is unit-testable hermetically, reserving the real
+      shell launcher for a few explicit integration tests.
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`

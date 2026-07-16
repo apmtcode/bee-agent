@@ -370,4 +370,39 @@ describe("BackgroundTaskExecutionService", () => {
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
   });
+
+  it("produces valid state JSON for commands containing single quotes (shell-quote round-trip)", async () => {
+    const rootDir = await makeTempDir();
+    // A command containing single quotes and a newline — the exact shape that
+    // the buggy shellQuote escape (`"'"'"'`) corrupted into invalid JSON, which
+    // then broke the completion writer's json.loads() and left the task stuck.
+    const command = "printf 'quoted line\n'";
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"));
+    const task = await store.start({
+      title: "Quoted command",
+      command,
+      cwd: rootDir,
+    });
+    expect(task.status).toBe("running");
+
+    const statePath = path.join(rootDir, task.execution.stateFile);
+    // Poll until the launched process writes its (atomic) terminal state.
+    let state: BackgroundTaskExecutionState | undefined;
+    for (let i = 0; i < 100; i += 1) {
+      const raw = await fs.readFile(statePath, "utf8").catch(() => "");
+      if (raw.trim()) {
+        // Must always parse — a torn or mis-quoted write would throw here.
+        state = JSON.parse(raw) as BackgroundTaskExecutionState;
+        expect(typeof state.pid).toBe("number");
+        if (state.status !== "running") break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+
+    expect(state).toBeDefined();
+    expect(state?.status).toBe("completed");
+    expect(state?.exitCode).toBe(0);
+    // The command round-tripped through JSON + shell quoting unchanged.
+    expect(state?.command).toBe(command);
+  });
 });
