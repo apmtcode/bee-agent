@@ -1,7 +1,11 @@
+import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
+
+const execFileAsync = promisify(execFile);
 import {
   BackgroundTaskExecutionService,
   FileBackgroundTaskStore,
@@ -21,6 +25,38 @@ afterEach(async () => {
 });
 
 describe("FileBackgroundTaskStore", () => {
+  it("renders a launch script that writes valid JSON state for commands with shell/JSON metacharacters", async () => {
+    const rootDir = await makeTempDir();
+    const filePath = path.join(rootDir, "background-tasks.json");
+    // Mock spawn so `start` writes the launch script without executing it; we
+    // run the script ourselves below to exercise the real state-writing path.
+    const store = new FileBackgroundTaskStore(filePath, () => ({ pid: 4242, unref() {} }), () => true);
+
+    // A command laced with the characters that previously corrupted the
+    // `printf | sed`-based initial-state writer: double quotes, single quotes,
+    // backslashes, ampersands, and a newline escape. The command must exit 0.
+    const hostileCommand = `printf 'a"b&c\\d\ne'`;
+    const task = await store.start({
+      sessionId: "sess-hostile",
+      title: "Hostile command",
+      command: hostileCommand,
+      cwd: rootDir,
+      kind: "task",
+    });
+
+    const scriptPath = path.join(rootDir, task.execution.launchScript);
+    await execFileAsync("bash", [scriptPath], { cwd: rootDir });
+
+    const raw = await fs.readFile(path.join(rootDir, task.execution.stateFile), "utf8");
+    // The crux: the on-disk state must be parseable JSON and preserve the
+    // command verbatim — the old sed pipeline produced invalid JSON here.
+    const parsed = JSON.parse(raw) as BackgroundTaskExecutionState;
+    expect(parsed.command).toBe(hostileCommand);
+    expect(parsed.status).toBe("completed");
+    expect(parsed.exitCode).toBe(0);
+    expect(typeof parsed.pid).toBe("number");
+  });
+
   it("starts tasks, persists output, syncs terminal state, and reloads", async () => {
     const rootDir = await makeTempDir();
     const filePath = path.join(rootDir, "background-tasks.json");

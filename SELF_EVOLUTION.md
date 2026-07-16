@@ -6,6 +6,62 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-16 (run 9) — 🐛 Real bug fix: `shellQuote` corrupted every single-quoted background-task command
+
+**Audited:** Ran the suite fresh and found **3 failing tests** (app.test.ts,
+server.test.ts, operator-runtime.test.ts) — a regression versus the last run's
+reported 174/174. All three traced to the *same* root cause via the background-
+task launcher: `recoverBackgroundTasks`/reconcile crashed with a
+`SyntaxError`/`JSONDecodeError` reading a corrupted `state.json`.
+
+**Root cause (a genuine latent bug, not a type/test artifact):**
+`renderLaunchScript`'s `shellQuote()` used the **wrong** POSIX single-quote
+escape — `"'"'"'` (6 chars, spurious leading `"`) instead of the canonical
+`'"'"'` (5 chars: close-sq / dq-quoted `'` / reopen-sq). So **any** task whose
+command contained a single quote (`printf 'line-1\nline-2\n'` in the tests, and
+in production any shell command with `'`) produced a mangled launch script: the
+initial `state.json` came out as invalid JSON, and every later reconcile/recover
+that `json.loads`-ed it threw. Commands without single quotes (`printf ok`,
+`tail -f app.log`) were unaffected — which is why the bug hid until a
+single-quoted command was reconciled. `shellQuote` quotes the command, cwd,
+output path, **and** the JSON state payload, so the fault was load-bearing across
+the whole launcher.
+
+**Changed (`src/harness/background-tasks.ts`, additive/surgical):**
+1. **Fixed `shellQuote`** to the correct `'"'"'` replacement (+ explanatory
+   comment). This alone fixes all 3 failures.
+2. **Hardened the initial-state write:** replaced the fragile
+   `printf '%s' <json> | sed "s/__OPENCLAW_STARTED_AT__/…/; s/\"\$\$\"/$$/"`
+   pipeline with a `python3 json.loads/json.dumps` writer
+   (`renderInitialStateWriterPython`) that takes pid + timestamp via argv —
+   mirroring the existing completion/failure writers. `sed` post-processing was
+   inherently unsafe (breaks on `&`, backslashes, or a command containing the
+   sentinels); routing the payload through `json.loads` removes that entire class
+   of corruption. No new dependency — python3 is already required by the same
+   script's completion path.
+
+**New test (`background-tasks.test.ts`):** the existing suite only ever called
+`writeState` (JS-side, always valid JSON) — the *rendered launch script itself
+was never executed*, which is exactly why this shipped. Added a regression test
+that `start`s a task with a hostile command (`printf 'a"b&c\d\ne'` — double
+quotes, single quotes, backslash, `&`, newline), **executes the generated
+`run.sh` through real `bash`+`python3`**, and asserts the resulting `state.json`
+parses and preserves the command verbatim with `status: completed, exitCode: 0`.
+
+**Test results:** `npm test` **175/175** (was 3 failing → all green, +1 new
+test). `typecheck:src` ✅ clean. `npm run build` ✅.
+
+**New idea:** property-test `shellQuote` against a known-good oracle — generate
+random strings (quotes, backslashes, `$`, newlines, unicode) and assert
+`bash -c "printf %s $(shellQuote(s))" === s`, i.e. round-trip through a real
+shell. Escaping bugs like this are invisible to `tsc` and to any test that
+doesn't actually *run* the shell; an execution-level round-trip oracle would have
+caught it immediately and guards the other shell-interpolation sites too
+(`printf '%s\n' "starting ${task.kind} ${task.id}"` still interpolates unescaped,
+safe only because id/kind are constrained today).
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

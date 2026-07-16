@@ -70,6 +70,21 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Generalization eval harness: measure replay fidelity on held-out but
       related synthetic trajectories.
 
+## Reliability / correctness (found by running the suite each cycle)
+- [x] **Fix `shellQuote` POSIX escape bug** (2026-07-16, run 9). Used `"'"'"'`
+      instead of the correct `'"'"'`, corrupting the launch script (and its
+      `state.json`) for any background-task command containing a single quote —
+      crashed reconcile/recover. Fixed + routed the initial-state write through
+      `python3 json.dumps` instead of the fragile `printf | sed` pipeline.
+- [ ] **Execution-level shell-escaping round-trip test** for `shellQuote`:
+      property-test random strings (quotes, backslashes, `$`, newlines, unicode)
+      by asserting `bash -c "printf %s $(shellQuote(s))" === s`. Escaping bugs are
+      invisible to `tsc` and to tests that never run the shell.
+- [ ] Escape the still-raw interpolations in `renderLaunchScript`
+      (`"starting ${task.kind} ${task.id}"`) — safe only while id/kind are
+      constrained; make them defensively escaped so a future free-form kind/title
+      can't inject.
+
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in
