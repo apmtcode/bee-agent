@@ -4,6 +4,16 @@ Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
 ## Foundations / DX
+- [x] **Fix corrupt launch-script state writes** (2026-07-16, run 9) — the
+      background-task + training launch scripts built the initial `running`
+      state with a `printf | sed` pipeline whose `s/"$$"/…/` expression was
+      re-parsed by bash, writing invalid JSON (and dropping quote-escaping) for
+      any command containing `"`. Replaced both with a `python3` argv+`json.loads`
+      writer; fixed a divergent malformed `shellQuote` in background-tasks.ts;
+      added a real-bash regression test. Suite 174→175, all green.
+- [ ] Extract a single shared `shellQuote` into `src/shared/` (both callers had
+      their own copy and diverged — one correct, one malformed). Add a property
+      test that round-trips a fuzzed string through `bash -c 'printf %s'`.
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`

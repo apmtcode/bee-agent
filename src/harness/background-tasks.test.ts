@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -369,5 +370,26 @@ describe("BackgroundTaskExecutionService", () => {
     await expect(fs.readFile(path.join(rootDir, task.execution.launchScript), "utf8")).resolves.toContain("bash -lc");
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
+  });
+
+  it("writes valid JSON state when the command contains double quotes", async () => {
+    const rootDir = await makeTempDir();
+    // The command embeds double quotes — the historical `printf | sed` initial
+    // state writer produced invalid JSON for exactly this shape, corrupting the
+    // state file on disk. Executing the generated script for real proves the
+    // python-based writer is quote-safe end to end.
+    const command = `printf '%s' "a\\"b\\"c"`;
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"), () => ({ pid: 1, unref() {} }));
+    const task = await store.start({ title: "Quote check", command, cwd: rootDir, kind: "task" });
+
+    const scriptPath = path.join(rootDir, task.execution.launchScript);
+    const result = spawnSync("bash", [scriptPath], { cwd: rootDir, encoding: "utf8" });
+    expect(result.status).toBe(0);
+
+    const raw = await fs.readFile(path.join(rootDir, task.execution.stateFile), "utf8");
+    const state = JSON.parse(raw) as BackgroundTaskExecutionState;
+    expect(state.command).toBe(command);
+    expect(state.status).toBe("completed");
+    expect(typeof state.pid).toBe("number");
   });
 });

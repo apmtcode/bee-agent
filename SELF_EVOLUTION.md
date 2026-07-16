@@ -6,6 +6,61 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-16 (run 9) — 🐛 Fix corrupt background/training launch state (suite green again: 175/175)
+
+**Audited:** Suite health first (a new habit worth keeping). Found the recorded
+"174/174 green" had **regressed to 3 consistently-failing tests** in isolation —
+`operator-runtime.test.ts` (background-task recovery), `server.test.ts` and
+`app.test.ts` (remote-control status). Not flakiness: each failed deterministically
+when run alone.
+
+**Root cause (one bug, three symptoms):** the background-task **and** training
+launch scripts wrote the initial `"running"` execution state via a fragile
+`printf '%s' <json> | sed "…; s/\"$$\"/$$/g" > state.json` pipeline. Instrumenting
+`readJsonFile` showed the on-disk JSON was invalid: `"pid":"$$"` (unsubstituted)
+and `"command":"printf "line-1…""` (unescaped quotes). Two failures compound:
+1. In the sed argument `"…; s/\"$$\"/$$/g"`, the JS source `\"` renders to a bare
+   `"` in the script, so **bash re-parses those quotes** and the expression
+   collapses to `s/<pid>/<pid>/g` — a no-op that never substitutes `"$$"`, and
+   drops the `\"` escaping on any command containing double quotes → **invalid
+   JSON on disk**.
+2. On read, `JSON.parse`/`json.loads` throws (op-runtime), or the corrupt
+   still-`"running"` state makes `deriveRemoteDiagnostics` report
+   `background task missing-process` → control state `degraded` instead of
+   `active` (server + app).
+
+**Second latent bug found:** `background-tasks.ts` `shellQuote` used the malformed
+POSIX escape `"'"'"'` (leading `"`) instead of `'"'"'`, corrupting any command
+containing a single quote (e.g. `git commit -m 'msg'`). `runner.ts` already had
+the correct form — the two copies had silently diverged.
+
+**Changed (additive/corrective):**
+- `src/harness/background-tasks.ts` + `src/training/runner.ts`: replaced both
+  `printf | sed` initial-state writers with a `python3` heredoc
+  (`renderInitialStateWriterPython`) — identical in spirit to the existing
+  *completion* writer — that receives the payload via argv and parses it with
+  `json.loads`. Quote-safe for arbitrary commands; no sed, no quote-in-quote.
+- `src/harness/background-tasks.ts`: fixed `shellQuote` to `'"'"'`.
+- `src/harness/background-tasks.test.ts`: new end-to-end regression test that
+  **executes the generated script with real bash** on a command containing both
+  single and double quotes (`printf '%s' "a\"b\"c"`) and asserts `state.json` is
+  valid JSON with the command preserved and a completed status.
+- `src/training/runner.test.ts`: updated the one assertion that checked the old
+  `> state.json` sed redirect to match the new `python3 - 'state.json'` writer.
+
+**Test results:** **175/175** (was 3 failing; +1 new regression test). Build ✅.
+`typecheck:src` ✅. Full `tsc` debt unchanged at **125** (all in test files).
+
+**New idea:** extract a single shared `shellQuote` into `src/shared/` with a
+property test (round-trip a fuzzed string through `bash -c 'printf %s'`) so the
+two copies can't diverge again — this run's second bug was pure copy-drift. And
+bank the "run the suite first, treat any regression from the last-green baseline
+as top priority" habit: record the last-green pass count to a metrics file (ties
+into the queued self-check-telemetry item) so a regression is caught by data, not
+by luck.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
