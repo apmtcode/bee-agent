@@ -6,6 +6,56 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-17 (run 9) — 🟢 Restore a deterministic green gate: hermetic background-task tests + `verify` script
+
+**Audited:** Full `npm test` health. Found **3–4 tests failing nondeterministically**
+(3 failed one run, 4 the next) — `operator-runtime.test.ts` ("starts, syncs,
+recovers… background tasks"), `cli/app.test.ts` (two tests), and
+`control-plane/server.test.ts` (the big RPC test). Root cause was a single
+hermeticity defect, not product bugs: these tests call `startBackgroundTask`,
+which by default spawns a **real detached `run.sh`** launch script. That process
+writes the task's execution-state file asynchronously (via `sed`, and in this
+cloud container the sed-templated JSON is malformed at ~byte 308), while the
+tests *also* write the state file by hand. The two writers race, so
+`deriveRemoteDiagnostics`/`syncBackgroundTask` intermittently read a
+half-written or malformed state → task flips to `missing-process` →
+`control=degraded` (or a `JSON.parse` `SyntaxError`). Failure count varied with
+process-scheduling timing.
+
+**Changed (additive, test-focused):**
+- `src/cli/app.ts`: exposed the same spawn seam the runtime already had —
+  new optional `backgroundTaskSpawnProcess` / `backgroundTaskIsProcessRunning`
+  options on `OperatorCliAppOptions`, forwarded into the `StandaloneOperatorRuntime`
+  it constructs. Production behavior is unchanged (defaults to real `spawn`).
+- Tests now inject a **hermetic spawn stub** (fake pid, no real process) so the
+  state file is written *only* by the test:
+  - `operator-runtime.test.ts` + `control-plane/server.test.ts`: added a
+    `hermeticSpawnStub()` helper and passed it to every runtime that starts a
+    background task (main, `driftingRuntime`, `breakerRuntime`).
+  - `cli/app.test.ts`: routed all 21 `new OperatorCliApp(...)` calls through a
+    `makeApp()` factory that injects the stub by default. The one task-lifecycle
+    test that needs its task to stay live through `background-sync` also passes
+    `backgroundTaskIsProcessRunning: () => true`.
+- `package.json`: added the long-requested **`verify`** script
+  (`typecheck:src && build && test`) so the engine has a single pre-push green
+  gate.
+
+**Test results:** three-file set **50/50 passing 8× in a row** (was 46–47/50,
+flapping); full `npm test` **174/174, deterministic across 3 consecutive runs**
+(previously flaky). `npm run typecheck:src` ✅, `npm run build` ✅,
+`npm run verify` ✅ (5.2s).
+
+**New idea:** the deeper latent bug is still there — the `renderLaunchScript`
+`sed "…s/\"\$\$\"/$$/g"` state-templating produces malformed JSON on some
+`sed`/locale combos (that's the byte-308 parse error). Even outside tests, a
+real background task could persist an unparseable state file and get wrongly
+reconciled to `missing-process`. Next run: replace the fragile `printf | sed`
+state bootstrap with a tiny `node -e`/`python -c` writer that emits the running
+state as real JSON (the completed/failed writers already use `python3 … json`),
+and add a unit test that executes the rendered script in a tmp dir and asserts
+`JSON.parse(stateFile)` succeeds. That closes the actual production risk this
+run's test fix only *worked around*.
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

@@ -38,8 +38,21 @@ unchecked items are queued. Keep this richer than you found it each run.
     `skills.executable.*`, `push.subscriptions.*`, `trajectories.*`, `replays.*`,
     `cron.runs`/misc — plus a few genuine test-only typings. Map the rest, then
     fix residual test-only typings.
-- [ ] Add a `verify` npm script (`typecheck && build && test`) and have the
-      engine run it as a pre-push self-check each cycle.
+- [x] Add a `verify` npm script — DONE run 9. `verify` =
+      `typecheck:src && build && test` (fast source-only typecheck, not the
+      full test-inclusive `typecheck` which still has debt). Engine should now
+      run `npm run verify` as its pre-push self-check each cycle.
+- [ ] **Harden `renderLaunchScript` state bootstrap** (surfaced run 9). The
+      background-task launch script writes its initial `running` state via
+      `printf '<json>' | sed "…s/\"\$\$\"/$$/g"`, which produces malformed JSON
+      on some `sed`/locale combos (byte-308 `JSON.parse` error seen in the cloud
+      container). Run 9 made the *tests* hermetic to dodge the race, but a real
+      background task can still persist an unparseable state file → wrong
+      `missing-process` reconciliation. Replace the sed templating with a
+      `node -e`/`python3 -c` JSON writer (matching the existing completed/failed
+      writers) and add a test that runs the rendered script and asserts
+      `JSON.parse(stateFile)` succeeds. Same fix applies to
+      `src/training/runner.ts`, which has the identical sed pattern.
 - [x] Interim **source-only typecheck gate** — DONE run 7. `tsconfig.src.json`
       (excludes `**/*.test.ts`) + `typecheck:src` script; passes (exit 0). Next:
       have the engine run it as a per-run pre-push self-check.
