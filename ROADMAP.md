@@ -70,6 +70,24 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Generalization eval harness: measure replay fidelity on held-out but
       related synthetic trajectories.
 
+## Reliability
+- [x] **Launch-script JSON corruption + `shellQuote` bug** (2026-07-17, run 9).
+      `renderLaunchScript` now writes the initial `state.json` via a `python3`
+      argv writer instead of `printf|sed` (which produced invalid JSON for
+      commands with quotes/backslashes and never expanded `"$$"`→pid because `$`
+      is a sed anchor). `shellQuote` fixed to the POSIX `'\''` idiom (the old
+      `"'"'"'` did not round-trip, corrupting `bash -lc` execution + state for
+      single-quoted commands). Added the first test that runs the real launch
+      script end-to-end.
+- [x] **Deterministic background-task spawn in tests** (2026-07-17, run 9).
+      Threaded `backgroundTaskSpawnProcess` through `OperatorCliApp`; injected a
+      no-op spawn in the runtime/server/app tests that were racing real detached
+      processes (which also skewed the circuit-breaker counts). Suite is now
+      green 8×/8 instead of flaky.
+- [ ] `spawnProcess`-injection test helper: make runtime/server test factories
+      default to the deterministic stub so a real `spawn` only runs when a test
+      explicitly opts in — kills this class of timing flakiness at the source.
+
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in

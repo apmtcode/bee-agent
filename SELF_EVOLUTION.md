@@ -6,6 +6,61 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-17 (run 9) — 🐛 Reliability: launch-script JSON corruption + `shellQuote` bug; flaky suite made deterministic
+
+**Audited:** Test health on a fresh checkout. The suite was **flaky** —
+`npm test` alternated between 175/175 and 2–3 failures across runs. Root-caused
+via a temporary `readJsonFile` dump: a background-task `state.json` on disk was
+**invalid JSON** (`"pid":"$$"` unexpanded; `"command":"printf "line-1…""` with
+unescaped quotes), which `readState`→`recoverBackgroundTasks` threw on.
+
+**Two real bugs found & fixed in `src/harness/background-tasks.ts`:**
+1. **Launch-script JSON generation was unsafe.** `renderLaunchScript` hand-rolled
+   the initial `state.json` via `printf '%s' <json> | sed …`. The
+   `s/"$$"/<pid>/g` substitution *never matched* (in sed, `$` is a regex anchor,
+   not a literal), and the `sed` pass mangled JSON string-escaping for any
+   command containing quotes/backslashes → **unparseable state files**. Replaced
+   it with a `python3` heredoc writer (`renderInitialStateWriterPython`) that
+   receives every dynamic value as **argv** (safe for arbitrary content) and
+   emits `json.dumps(...)` — mirroring the already-present completed/failed
+   writers. No more shell string-substitution into pre-escaped JSON.
+2. **`shellQuote` was incorrect for single quotes** (latent). It replaced `'`
+   with a malformed 6-char sequence `"'"'"'` instead of the POSIX idiom `'\''`,
+   so it did not round-trip. This corrupted **both** the `bash -lc <command>`
+   execution path and the state payload for *any* single-quoted command — never
+   caught because every prior test **mocked** the spawn so the launch script
+   never actually ran. Fixed to `value.replaceAll("'", "'\\''")`; verified
+   round-trip through real `bash` for quote/backslash/single-quote cases.
+
+**Test hermeticity (the flakiness itself):** several runtime/server/app tests
+constructed `StandaloneOperatorRuntime`/`OperatorCliApp` with only
+`backgroundTaskIsProcessRunning` mocked, leaving the **real `spawn`** to launch
+actual detached processes whose async state-writes raced the tests' explicit
+`writeState` (and fed the platform circuit-breaker's failure counts →
+nondeterministic `threshold`/`state`). Threaded the already-existing
+`backgroundTaskSpawnProcess` option through **`OperatorCliApp`** (new additive
+`OperatorCliAppOptions` fields, production default unchanged) and injected a
+deterministic no-op spawn in the 5 affected tests (operator-runtime, server ×4
+runtimes: main/drifting/breaker/event-filter, app lifecycle).
+
+**New regression test** (`background-tasks.test.ts`): runs the **real** generated
+launch script (bash + python) with a hostile command
+(`echo "he said \"hi\"" && printf 'tab\there\n'`) and asserts the resulting
+state is valid JSON with the command preserved verbatim — this is the first test
+that actually executes the launch script rather than mocking it.
+
+**Test results:** full `npm test` **175/175, green 8×/8 consecutive runs**
+(was flaky 173–175). Build ✅. `typecheck:src` ✅ (source stays clean). Full
+`tsc` unchanged at **125** (test-file debt only; no regression).
+
+**New idea:** promote "run the real launch script once" into a tiny
+cross-platform smoke fixture, and add a `spawnProcess`-injection lint/helper so
+future runtime tests default to the deterministic stub (real spawn only when a
+test explicitly opts in) — eliminating this whole class of timing flakiness at
+the source.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

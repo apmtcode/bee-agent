@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -369,5 +370,51 @@ describe("BackgroundTaskExecutionService", () => {
     await expect(fs.readFile(path.join(rootDir, task.execution.launchScript), "utf8")).resolves.toContain("bash -lc");
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
+  });
+
+  it("writes valid JSON state when the command contains quotes and backslashes", async () => {
+    // Regression: the launch script previously hand-rolled its initial state.json
+    // via `printf | sed`, which mangled JSON escaping for any command containing
+    // quotes/backslashes (producing unparseable JSON that readState threw on) and
+    // never substituted the pid because `$` is a sed regex anchor. Exercise the
+    // real launch script (bash + python) end-to-end with a hostile command.
+    const rootDir = await makeTempDir();
+    const filePath = path.join(rootDir, "background-tasks.json");
+    let child: { on(event: string, listener: (...args: unknown[]) => void): unknown } | undefined;
+    const store = new FileBackgroundTaskStore(
+      filePath,
+      (command, args, options) => {
+        const spawned = spawn(command, args, options);
+        child = spawned;
+        return spawned;
+      },
+      () => true,
+    );
+
+    const command = 'echo "he said \\"hi\\"" && printf \'tab\\there\\n\'';
+    const task = await store.start({
+      sessionId: "sess-quote",
+      title: "Quote heavy",
+      command,
+      cwd: rootDir,
+      kind: "task",
+    });
+
+    await new Promise<void>((resolve, reject) => {
+      if (!child) {
+        reject(new Error("launch process was not spawned"));
+        return;
+      }
+      child.on("exit", () => resolve());
+      child.on("error", (error) => reject(error as Error));
+    });
+
+    // The state file must be valid, parseable JSON — readState throws otherwise.
+    const state = await store.executionService.readState(task);
+    expect(state).toBeDefined();
+    expect(state?.taskId).toBe(task.id);
+    expect(state?.command).toBe(command);
+    expect(typeof state?.pid).toBe("number");
+    expect(state?.status).toBe("completed");
   });
 });
