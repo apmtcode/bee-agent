@@ -6,6 +6,63 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-17 (run 9) — Red baseline rescued: two launch-script bugs fixed + background-task tests made deterministic
+
+**Audited:** The build/test baseline before doing anything else. Found the suite
+was **RED** — 3–4 tests failing (flaky under load, deterministic in isolation),
+despite run 8 logging "174/174". Root-caused two genuine correctness bugs in the
+background-task launch script (`src/harness/background-tasks.ts`) plus a
+test-infrastructure race, all in the background-task subsystem.
+
+**Bug 1 — broken shell single-quote escaping (`shellQuote`).** The escape
+sequence was `"'"'"'` (quotes in the wrong order) instead of the POSIX-correct
+`'"'"'` (the very sequence `training/runner.ts` already uses). Any task whose
+command contained a single quote (e.g. the test's `printf 'line-1\nline-2\n'`)
+produced a **malformed state JSON file** (mangled `command`, unescaped newline)
+that crashed `readState`'s `JSON.parse`. Captured the exact corrupt bytes to
+confirm, then fixed the sequence to match `runner.ts`.
+
+**Bug 2 — pid never substituted.** The initial-state writer did
+`printf '%s' PAYLOAD | sed "s/\"\$\$\"/$$/g"`, but the TS template literal
+consumed the backslashes, emitting bash `sed "s/"$$"/$$/g"` — the bare `"`
+closed sed's double-quoted arg so `$$` expanded to the shell PID, turning the
+program into a no-op `s/PID/PID/g`. The JSON's `"pid":"$$"` survived as the
+literal **string** `"$$"`, so recovery read a non-numeric pid and reported
+`missing-process`. Replaced the fragile `printf|sed` with the same **python
+read-modify-write** already used by the completed/failed writers (robust, no
+shell-quoting hazard).
+
+**Test determinism.** The three failing tests spawned **real detached bash**
+(`sleep 5`, `tail -f`, `printf ok`) whose async state/output writes raced the
+tests' manual `writeState`/reads — surfacing as `control: "degraded"` (a
+still-`running` state with `isProcessRunning:false`) and JSON-corruption crashes.
+Added `src/harness/background-tasks-testing.ts`
+(`createNoopSpawnBackgroundProcess`, `createSynchronousSpawnBackgroundProcess`),
+threaded `backgroundTaskSpawnProcess`/`backgroundTaskIsProcessRunning` through
+`OperatorCliAppOptions`, and injected deterministic spawns per test intent
+(no-op where state is driven manually / non-terminating commands; the app
+background/monitor test now drives output via `writeOutput` + an always-running
+process check so the task stays active through sync/watch).
+
+**New regression test** `src/harness/background-tasks-launch.test.ts` starts a
+single-quoted, newline-bearing command through the *real* launch script (via the
+synchronous spawn) and asserts the state file is valid JSON with a numeric pid,
+`status:"completed"`, exit 0, and an exactly round-tripped command. **Verified it
+fails on the pre-fix code** and passes after.
+
+**Test results:** **174 → 175 passing, 0 failing**, green both
+`--no-file-parallelism` and full-parallel across repeated runs (was 3–4 failing).
+Build ✅. `typecheck:src` ✅. All changes additive/reversible; no reference code
+touched.
+
+**New idea:** the real-subprocess-in-unit-tests anti-pattern that caused this
+should be guarded structurally — default `StandaloneOperatorRuntime` to a
+deterministic spawn when `NODE_ENV==="test"`/`VITEST` is set (opt-out for the
+few integration tests that want real processes), so no future test silently
+reintroduces a timing race. Pair it with the long-queued `verify` script
+(`typecheck:src && build && test`) run as a per-run pre-push gate — this run
+proves a green log entry is not a substitute for actually re-running the suite.
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

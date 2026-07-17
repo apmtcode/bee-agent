@@ -4,6 +4,16 @@ Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
 ## Foundations / DX
+- [x] **Rescue the red baseline** (2026-07-17, run 9) — the suite was failing
+      3–4 tests (two real launch-script bugs + real-subprocess test races). Fixed
+      `shellQuote` POSIX escaping and the `sed` pid-substitution in
+      `src/harness/background-tasks.ts`, added deterministic spawn helpers
+      (`background-tasks-testing.ts`), and a launch-script regression test. Suite
+      now 175/175, green in parallel and single-threaded.
+- [ ] **Guard against real-subprocess test races** (from run 9): default
+      `StandaloneOperatorRuntime` to a deterministic background-task spawn when
+      `VITEST`/`NODE_ENV==="test"` is set (integration tests opt out), so a future
+      test can't silently reintroduce the timing race that made the baseline red.
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`

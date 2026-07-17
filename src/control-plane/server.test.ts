@@ -6,6 +6,7 @@ import { OperatorControlPlaneServer } from "./server.js";
 import { buildWebhookChatRemoteId } from "./webhook-chat.js";
 import { OperatorCronService } from "./cron-service.js";
 import { OperatorDeliveryService } from "./delivery.js";
+import { createNoopSpawnBackgroundProcess } from "../harness/background-tasks-testing.js";
 import { buildRuntimeEventFilter, subscribeRuntimeEvents } from "./subscriptions.js";
 import { StandaloneOperatorRuntime } from "../orchestrator/operator-runtime.js";
 import type { ReviewedExportManifest } from "../training/export-manifest.js";
@@ -84,6 +85,10 @@ describe("OperatorControlPlaneServer", () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir,
       backgroundTaskIsProcessRunning: () => false,
+      // No-op spawn: the remote-status assertions expect a "running" task record
+      // with no state file (→ control "active"); a real detached process would
+      // write a running state that, with isProcessRunning:false, reads degraded.
+      backgroundTaskSpawnProcess: createNoopSpawnBackgroundProcess(),
       delivery: new OperatorDeliveryService(rootDir, {
         sendBrowserPush: async () => {},
       }),
@@ -953,6 +958,7 @@ describe("OperatorControlPlaneServer", () => {
     const driftingRuntime = new StandaloneOperatorRuntime({
       rootDir: driftingRootDir,
       backgroundTaskIsProcessRunning: () => false,
+      backgroundTaskSpawnProcess: createNoopSpawnBackgroundProcess(),
     });
     const driftingServer = new OperatorControlPlaneServer({ runtime: driftingRuntime });
     const driftingBootstrap = await driftingServer.handle({
@@ -1019,6 +1025,7 @@ describe("OperatorControlPlaneServer", () => {
     const breakerRuntime = new StandaloneOperatorRuntime({
       rootDir: breakerRootDir,
       backgroundTaskIsProcessRunning: () => false,
+      backgroundTaskSpawnProcess: createNoopSpawnBackgroundProcess(),
     });
     const breakerServer = new OperatorControlPlaneServer({ runtime: breakerRuntime });
     const breakerOne = await breakerServer.handle({
