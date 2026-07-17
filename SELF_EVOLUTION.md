@@ -6,6 +6,73 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-17 (run 9) — 🧠 Movement-model training backend: real train→infer→generalize loop (objective #2c/#2d)
+
+**Audited:** The local-movement learning subsystem (`src/training/`), standing
+objective #2. Found the flagship gap: the training subsystem could only *emit
+shell commands* (`LocalAppleSiliconTrainingRunner` → MLX/axolotl plans +
+launch scripts) — there was **no pluggable backend and no way to actually
+train a model or run inference in the cloud/CI**. Objectives 2(c) "post-train a
+local model to repeat the recorded movements" and 2(d) "generalize to new but
+related movements" had zero executable, testable implementation.
+
+**Changed (additive, two new source modules + barrel exports):**
+- **`src/training/movement-model.ts`** — the pluggable seam and a real default
+  backend:
+  - `MovementModelBackend` interface (async `train()`), so a real on-device
+    small model (MLX/axolotl) can be dropped in without touching callers.
+  - `MarkovMovementBackend` — a deterministic, cloud/CI-safe **backed-off
+    n-gram** learner over movement tokens. Trains a serializable
+    `MovementModelArtifact` (plain JSON: order-0..k transition counts with
+    START/END sentinels). No randomness, no OS access.
+  - `MovementModelInference` — pure decoder: `predictNext()` (backs off from
+    full order to the unigram prior, START-padded so the first movement
+    resolves correctly), `generate()` (greedy decode; **repeats** dominant
+    recorded flows, stops at END), and `scoreSequence()`.
+  - `evaluateMovementModel()` — generalization eval harness (top-1
+    next-movement accuracy on held-out sequences).
+- **`src/training/movement-dataset.ts`** — the capture→training bridge +
+  synthetic data:
+  - `extractMovementSequences()` (from replay manifests, action events only) and
+    `sequencesFromTrajectories()` (from `TrajectorySpan`s pre-export).
+  - `generateSyntheticMovementSequences()` — **deterministic** (seeded
+    mulberry32) synthetic movement-stream generator over related UI flows
+    (launch-app / save-file / switch-window / search-select), so the full
+    capture→dataset→train→replay loop is validated with **no real OS input**.
+- Exported all of the above from `src/index.ts`.
+
+This closes the loop end-to-end in the cloud: synthetic (or real, once captured)
+movements → dataset → trained model → **repeat** (greedy decode reproduces
+recorded flows) → **generalize** (backoff predicts held-out related flows).
+
+**Test results:** 2 new test files, **+15 tests** (train/artifact round-trip,
+order clamping, repeat-fidelity, END termination, frequency-weighted &
+backed-off prediction, empty-model safety, eval harness, and an end-to-end
+synthetic train→held-out-generalize check @ >0.6 accuracy). `typecheck:src` ✅
+(source stays green). `npm run build` ✅. New tests **15/15** ✅.
+
+**⚠️ Pre-existing failures discovered (NOT caused by this run):** the full
+`npm test` is red on the **clean base branch** too — **3 failing tests** in
+files this run never touched:
+`src/orchestrator/operator-runtime.test.ts` (background-task state JSON parse
+error — "Expected ',' or '}' … position 311"),
+`src/cli/app.test.ts` (2: a cron command + a `control=active` status-line
+string assertion), and `src/control-plane/server.test.ts` (an object-shape
+`result` mismatch). Prior runs logged 174/174; the suite has since rotted
+(likely date-dependent given today is 2026-07-17 vs. the 06-22/23 baseline, plus
+the shell-launch-script JSON fixture). Verified by `git stash` → base is
+`3 failed | 47 passed`. Logged as a dedicated ROADMAP item; left untouched here
+to keep this diff focused (guardrail: no mass-rewrite of unrelated code).
+
+**New idea:** an *argument/payload* sub-model. Movement tokens capture *which*
+action; the `summary` payload (coordinates, typed text, target) is currently
+carried but not learned. A second head — per-token, a small parametric or
+templated generator conditioned on the decoded token + context — would let the
+model emit *executable* movements (real coordinates/text), not just the action
+sequence. Pluggable behind the same `MovementModelBackend` seam.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

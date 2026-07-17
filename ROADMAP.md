@@ -62,13 +62,41 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      for a real on-device small model. **DONE run 9** — `MovementModelBackend`
+      interface + `MarkovMovementBackend` (backed-off n-gram) +
+      `MovementModelInference` in `src/training/movement-model.ts`.
+- [x] Synthetic event-stream generator to validate capture→dataset→replay
+      round-trips without real OS input. **DONE run 9** —
+      `generateSyntheticMovementSequences` (seeded mulberry32) +
+      `extractMovementSequences`/`sequencesFromTrajectories` in
+      `src/training/movement-dataset.ts`.
+- [x] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories. **DONE run 9** — `evaluateMovementModel`
+      (top-1 next-movement accuracy) + an end-to-end synthetic
+      train→held-out-split test.
+- [ ] **Wire the movement backend into the runner/execution-service** so a
+      real training job can invoke `MovementModelBackend.train()` in-process
+      (cloud/CI path) as an alternative to the MLX/axolotl shell-launch path,
+      and persist the `MovementModelArtifact` next to the existing artifacts.
+- [ ] **Argument/payload sub-model** (run 9 idea): learn the movement `summary`
+      (coordinates, typed text, target), not just the action token, so decoded
+      movements are *executable*, not just an action sequence. Same backend seam.
+
+## Project health (discovered run 9)
+- [ ] **Fix 3 pre-existing test failures** — the full `npm test` is red on the
+      clean base (`3 failed | 47 passed` for the affected files; prior runs
+      logged 174/174, so the suite rotted since 06-23). Triage each:
+  - `src/orchestrator/operator-runtime.test.ts` — `recoverBackgroundTasks`
+    hits a JSON parse error ("Expected ',' or '}' … position 311") reading a
+    background-task state file; suspect the shell launch-script `sed`/`$$`
+    substitution or a malformed fixture in `src/harness/background-tasks.ts`.
+  - `src/cli/app.test.ts` (×2) — a cron command assertion + a status-line
+    expecting `control=active` that now renders `control=de…`.
+  - `src/control-plane/server.test.ts` — a `result` object-shape mismatch
+    (`…(10)` vs expected `…(2)`), likely a handler now returning more fields.
+      Each is a small, isolated fix; do them one file per run (no mass-rewrite).
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
