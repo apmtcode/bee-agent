@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -369,5 +370,54 @@ describe("BackgroundTaskExecutionService", () => {
     await expect(fs.readFile(path.join(rootDir, task.execution.launchScript), "utf8")).resolves.toContain("bash -lc");
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
+  });
+
+  it("writes the state file atomically (temp file then rename)", async () => {
+    const rootDir = await makeTempDir();
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"), () => ({ pid: 1111, unref() {} }));
+    const task = await store.start({
+      title: "Atomic state",
+      command: "printf 'ok'",
+      cwd: rootDir,
+    });
+
+    const script = await fs.readFile(path.join(rootDir, task.execution.launchScript), "utf8");
+    // Both the initial and terminal writes stage to a temp file then os.replace,
+    // so a concurrent reader (recovery/sync) never observes a torn/truncated file.
+    expect(script).toContain("os.replace(tmp_path, state_path)");
+    // The fragile printf|sed initial write and non-atomic write_text are gone.
+    expect(script).not.toContain("| sed ");
+    expect(script).not.toContain("state_path.write_text(");
+  });
+
+  it("executes the launch script end-to-end producing valid terminal state", async () => {
+    const rootDir = await makeTempDir();
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"), () => ({ pid: 1111, unref() {} }));
+    // Command deliberately contains backslash-escapes, single quotes, and braces
+    // that would corrupt a printf|sed based JSON payload — proving the Python
+    // writer round-trips arbitrary command text safely.
+    const task = await store.start({
+      title: "Real run",
+      command: "printf 'line-1\\nline-2\\n' && echo \"done {ok}\"",
+      cwd: rootDir,
+    });
+
+    const scriptPath = path.join(rootDir, task.execution.launchScript);
+    await new Promise<void>((resolve, reject) => {
+      const child = spawn("bash", [scriptPath], { cwd: rootDir, stdio: "ignore" });
+      child.on("error", reject);
+      child.on("exit", (code) => (code === 0 ? resolve() : reject(new Error(`exit ${code}`))));
+    });
+
+    const raw = await fs.readFile(path.join(rootDir, task.execution.stateFile), "utf8");
+    const state = JSON.parse(raw) as BackgroundTaskExecutionState;
+    expect(state.status).toBe("completed");
+    expect(state.exitCode).toBe(0);
+    expect(state.taskId).toBe(task.id);
+    // Command text survived the shell → JSON → Python round-trip intact.
+    expect(state.command).toBe(task.command);
+    // No temp files should linger after an atomic rename/replace.
+    const dirEntries = await fs.readdir(path.join(rootDir, path.dirname(task.execution.stateFile)));
+    expect(dirEntries.some((entry) => entry.includes(".tmp"))).toBe(false);
   });
 });

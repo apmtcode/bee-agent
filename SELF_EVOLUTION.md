@@ -6,6 +6,71 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-17 (run 9) — Fix `shellQuote` corruption + atomic background-task state writes (green, flake-free suite)
+
+**Audited:** Project health first. On a clean checkout `npm test` was **flaky** —
+4/3 tests failed nondeterministically across runs (`operator-runtime.test.ts`,
+`server.test.ts`, `app.test.ts`), all with the same root symptom bubbling out of
+`readJsonFile`: `SyntaxError: Expected ',' or '}' after property value in JSON`
+during background-task recovery/sync. A flaky suite silently defeats the
+procedure's step-5 verification gate, so this was the highest-value fix.
+
+**Root causes found (two real production bugs + one test-design race):**
+1. **`shellQuote` was broken** (`src/harness/background-tasks.ts`). Its
+   single-quote escape used the 6-char sequence `"'"'"'` instead of the correct
+   5-char POSIX idiom `'"'"'` (a stray leading `"`). Empirically, every value
+   containing a single quote round-tripped through bash **corrupted**
+   (`printf 'hi' x` → `printf "'hi"' x`). This silently mangled any background-task
+   **command or cwd path containing a single quote** — a genuine correctness bug,
+   not just a test artifact.
+2. **The launch script wrote its state file non-atomically and unsafely.** The
+   initial "running" write used a fragile `printf | sed` substitution that (a)
+   produced malformed JSON for any command containing backslashes/quotes and (b)
+   truncated-then-wrote in place, so a concurrent reader (`recoverBackgroundTasks`
+   / `syncBackgroundTask`) could observe a **torn write**. The terminal Python
+   writer likewise used `write_text()` (non-atomic).
+3. **Three tests spawned real detached launch scripts** while also managing task
+   state by hand with `isProcessRunning: () => false`; the detached process's own
+   async state write raced the assertions (nondeterministic failure counts, torn
+   reads).
+
+**Changes made (additive, reversible):**
+- **`src/harness/background-tasks.ts`:**
+  - Fixed `shellQuote` to the correct `'"'"'` escape (documented why the length
+    matters).
+  - Replaced the `printf | sed` initial-state write with a robust `python3`
+    writer (`renderInitialStateWriterPython`): the base payload rides through as a
+    single shell-quoted JSON argument that Python parses and enriches with
+    pid + timestamps, then stages to a temp file and `os.replace()`s it — safe for
+    arbitrary command text and **atomic**.
+  - Made the terminal Python writer atomic too (temp file + `os.replace`, was
+    `write_text`).
+- **`src/cli/app.ts`:** added optional `backgroundTaskSpawnProcess` /
+  `backgroundTaskIsProcessRunning` injection seams to `OperatorCliAppOptions`,
+  forwarded to the runtime (mirrors the runtime's existing seam) so tests can run
+  background-task logic deterministically.
+- **Tests:** injected a deterministic mock spawn into the three racy runtimes
+  (`operator-runtime.test.ts`, `server.test.ts` main + drifting + breaker
+  runtimes, `app.test.ts`), and added two new `background-tasks.test.ts` cases:
+  one asserts the atomic-write contract (both writers use `os.replace`, no
+  `| sed`, no `write_text`), one executes the launch script **end-to-end** with a
+  command containing backslashes, single quotes, and braces and asserts the
+  command survives the shell→JSON→Python round-trip intact.
+
+**Test results:** `npm run build` ✅. `npm test` ✅ **176/176** (was 174 flaky;
++2 new tests) — **6 consecutive full-suite runs green, zero flakes** (previously
+1–4 failures per run). `typecheck:src` ✅ **0** errors. Full `tsc` unchanged at
+**125** (test-only debt; no new debt introduced).
+
+**New idea (logged to ROADMAP):** A `shellQuote` unit + property test and a
+shared `src/shared/shell.ts` helper — the escaping bug lived undetected because
+`shellQuote` was a private, untested one-liner. Extracting it and fuzzing it
+against real `bash -c` round-trips (random strings with quotes/backslashes/
+newlines) would have caught this class of bug immediately, and other modules that
+build shell commands could reuse the audited implementation.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
