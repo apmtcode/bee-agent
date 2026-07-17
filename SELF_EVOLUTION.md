@@ -6,6 +6,61 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-17 (run 9) — Fix a latent shell-quoting bug crashing background-task reconciliation (suite was RED)
+
+**Audited:** The test suite itself — it was **failing at baseline** (3–4 flaky
+failures per full run; `npm test` was NOT green as the run-8 log implied). The
+dominant symptom was `SyntaxError: Expected ',' or '}' after property value in
+JSON` thrown from `readJsonFile` while reconciling background tasks.
+
+**Root cause (a real production bug, not a test bug):** `shellQuote()` in
+`src/harness/background-tasks.ts` used a **malformed POSIX single-quote escape**
+— it replaced `'` with `"'"'"'` (leading `"`) instead of the correct `'\''`,
+leaving an **unbalanced double quote**. So any background-task command
+containing a single quote (e.g. `printf 'x'`) was corrupted when the generated
+launch script ran under a real shell (`bash: unexpected EOF while looking for
+matching "`), and the task wrote a garbage/failed state file. This was
+**invisible to the whole test suite because every existing test mocked the
+spawn** — the launch script was never executed by a real shell. Compounding it:
+the initial-state writer used a fragile `printf | sed` pipeline (its
+`s/"$$"/$$/g` had its own broken shell quoting) and wrote state
+**non-atomically**, so a concurrent reconciler could `JSON.parse` a
+half-written or corrupted file.
+
+**Changed (additive, `src/harness/background-tasks.ts`):**
+- **`shellQuote`**: correct POSIX escaping (`'\''`). One-line fix, the true root
+  cause.
+- **Initial state write**: replaced the `printf | sed` round-trip with a
+  `python3` writer that receives every dynamic value as an **argv element**
+  (bash-quoted) and serializes JSON itself — robust to quotes/newlines/
+  backslashes. Written **atomically** (temp file + `pathlib.replace`).
+- **Completion state write**: made atomic too (temp + `replace`).
+- **`src/cli/app.ts`**: added optional `backgroundTaskSpawnProcess` /
+  `backgroundTaskIsProcessRunning` test seams (mirrors the runtime's existing
+  options; production default unchanged).
+
+**Tests:** injected a no-op spawn into the tests that *manually* drive execution
+state (operator-runtime, server breaker/drifting/main, app session-lifecycle) so
+the real launch script can't race their explicit writes — making them
+deterministic. Added **2 new regression tests** that execute the **real** launch
+script with shell-hostile commands (single/double quotes + backslash; and a
+literal-newline command) and assert the state file is valid JSON, the command
+round-trips **verbatim**, and the task completes with exit 0.
+
+**Results:** `npm test` **174 → 176**, and now **12/12 consecutive full-suite
+runs green** (was 1–4 failing before). Build ✅. `typecheck:src` ✅. Full `tsc`
+unchanged at **125** (no regression).
+
+**New idea:** *Add a guard that shell/script-generating code is covered by at
+least one **real-execution** test, not only mocked spawns.* This entire class of
+bug (a broken shell escape) hid for the project's lifetime purely because the
+launch script was never run by a real shell in CI. A lightweight convention —
+each module that emits a shell/python script must have ≥1 test that actually
+executes it — would have caught it immediately. Concretely: promote `shellQuote`
+to `src/shared/shell.ts` with property-based tests (round-trip every string
+through `bash -c 'printf %s'` and assert equality), and reuse it everywhere
+shell strings are built.
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

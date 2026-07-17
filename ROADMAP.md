@@ -70,6 +70,22 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Generalization eval harness: measure replay fidelity on held-out but
       related synthetic trajectories.
 
+## Reliability / correctness
+- [x] **Fix malformed `shellQuote` POSIX escaping** in `background-tasks.ts`
+      (2026-07-17, run 9) — it emitted `"'"'"'` instead of `'\''`, corrupting any
+      background-task command containing a single quote when the launch script
+      ran under a real shell; crashed reconciliation with JSON parse errors. Also
+      hardened the launch script: python3+argv initial-state writer (was fragile
+      `printf | sed`) and atomic state writes (temp + rename).
+- [ ] **Real-execution test guard**: every module that emits a shell/python
+      script must have ≥1 test that actually *executes* it (not just a mocked
+      spawn). The shellQuote bug survived because the launch script was never run
+      by a real shell in the suite. Promote `shellQuote` → `src/shared/shell.ts`
+      with property-based round-trip tests (`bash -c 'printf %s'`).
+- [ ] Audit for other non-atomic file writes that a concurrent reader could
+      observe mid-write (grep for `writeFile`/`write_text`/`>` redirections that
+      aren't temp+rename).
+
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in

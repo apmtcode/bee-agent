@@ -6,6 +6,7 @@ import {
   BackgroundTaskExecutionService,
   FileBackgroundTaskStore,
   type BackgroundTaskExecutionState,
+  type BackgroundTaskRecord,
 } from "./background-tasks.js";
 
 const tempDirs: string[] = [];
@@ -369,5 +370,60 @@ describe("BackgroundTaskExecutionService", () => {
     await expect(fs.readFile(path.join(rootDir, task.execution.launchScript), "utf8")).resolves.toContain("bash -lc");
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
+  });
+
+  async function waitForTerminalState(
+    store: FileBackgroundTaskStore,
+    task: BackgroundTaskRecord,
+  ): Promise<BackgroundTaskExecutionState | undefined> {
+    let state: BackgroundTaskExecutionState | undefined;
+    for (let attempt = 0; attempt < 120; attempt += 1) {
+      // readState must never throw: the state file is always valid JSON,
+      // even mid-run and even for shell-hostile commands.
+      state = await store.executionService.readState(task);
+      if (state && state.status !== "running") {
+        return state;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    return state;
+  }
+
+  // Regression: the launch script previously embedded the JSON state payload
+  // into the shell via `printf | sed`. Commands containing shell-significant
+  // characters (single/double quotes, backslashes, real newlines) corrupted the
+  // written state.json, so a concurrent reconciler's JSON.parse threw. The
+  // writer now serializes the state via python3 with the command passed as an
+  // argv element, so the state file is always valid JSON and round-trips the
+  // command verbatim. These tests execute the *real* launch script to guard it.
+  it("round-trips a command with quotes and backslashes through a valid state file", async () => {
+    const rootDir = await makeTempDir();
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"));
+    // Single quote, double quote and backslash — every character the old sed
+    // path mangled — but no literal newline, so the command executes cleanly.
+    const command = "printf '%s' \"d'q\\\\b\"";
+    const task = await store.start({ title: "hostile", command, cwd: rootDir, kind: "task" });
+
+    const state = await waitForTerminalState(store, task);
+    expect(state?.status).toBe("completed");
+    expect(state?.exitCode).toBe(0);
+    // Command preserved verbatim through the shell -> python argv round-trip.
+    expect(state?.command).toBe(command);
+    await expect(store.executionService.readOutput(task, { lineLimit: 1 })).resolves.toBe("d'q\\b");
+  });
+
+  it("keeps the state file valid JSON for a command containing a literal newline", async () => {
+    const rootDir = await makeTempDir();
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"));
+    // The exact shape that used to corrupt state.json (the single-quoted arg
+    // spans two real newlines) and crash reconciliation with a JSON parse error.
+    const command = "printf 'line-1\nline-2\n'";
+    const task = await store.start({ title: "newline", command, cwd: rootDir, kind: "task" });
+
+    const state = await waitForTerminalState(store, task);
+    expect(state?.status).toBe("completed");
+    expect(state?.exitCode).toBe(0);
+    expect(state?.command).toBe(command);
+    await expect(store.executionService.readOutput(task)).resolves.toContain("line-2");
   });
 });

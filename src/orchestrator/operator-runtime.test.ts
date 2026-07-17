@@ -15,6 +15,16 @@ async function makeTempDir(): Promise<string> {
   return dir;
 }
 
+// A no-op process spawner: returns a fake pid without launching a real
+// subprocess. Tests that drive background-task execution state manually (via
+// executionService.writeState/writeOutput) inject this so the real launch
+// script never races their explicit writes.
+let stubPidCounter = 40000;
+function noopSpawn(): { pid: number; unref(): void } {
+  stubPidCounter += 1;
+  return { pid: stubPidCounter, unref() {} };
+}
+
 function buildHookCaptureCommand(outputFile: string): string {
   const script = [
     "import fs from 'node:fs';",
@@ -530,6 +540,7 @@ describe("StandaloneOperatorRuntime", () => {
   it("starts, syncs, recovers, lists, and cancels background tasks", async () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
+      backgroundTaskSpawnProcess: noopSpawn,
       backgroundTaskIsProcessRunning: () => false,
     });
     const session = await runtime.startSession({ title: "Tasks", agentId: "main" });

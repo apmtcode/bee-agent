@@ -16,6 +16,15 @@ async function makeTempDir(): Promise<string> {
   return dir;
 }
 
+// A no-op process spawner: returns a fake pid without launching a real
+// subprocess. Tests that drive background-task execution state manually inject
+// this so the real launch script never races their explicit state writes.
+let stubPidCounter = 40000;
+function noopSpawn(): { pid: number; unref(): void } {
+  stubPidCounter += 1;
+  return { pid: stubPidCounter, unref() {} };
+}
+
 afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })));
 });
@@ -801,7 +810,7 @@ describe("OperatorCliApp", () => {
 
   it("supports session lifecycle, transcript, approvals, pairing, config, and prompt commands", async () => {
     const rootDir = await makeTempDir();
-    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25", backgroundTaskSpawnProcess: noopSpawn });
     const firstSession = await app.runtime.startSession({ title: "first", cwd: rootDir, agentId: "operator-cli" });
     const secondSession = await app.runtime.startSession({ title: "second", cwd: rootDir, agentId: "operator-cli" });
 
