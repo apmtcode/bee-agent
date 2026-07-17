@@ -70,6 +70,23 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Generalization eval harness: measure replay fidelity on held-out but
       related synthetic trajectories.
 
+## Reliability / correctness
+- [x] **Atomic, non-mangling background-task state writes** (2026-07-17, run 9).
+      `renderLaunchScript` no longer round-trips the initial state JSON through
+      `printf|sed` (which corrupted commands with quotes/newlines) and all state
+      writes now use temp-file + atomic `rename`. Removed the engine "starting …"
+      preamble that polluted command output. Suite went from 4 hard failures +
+      flakes to green 8/8.
+- [ ] **`renderLaunchScript` golden test**: render the launch script for a
+      command containing `'`, `"`, newlines, `$`, and backticks, execute it under
+      `bash` in a temp dir, and assert the resulting `state.json` parses and
+      round-trips the command verbatim. Catches shell-quoting/heredoc regressions
+      directly instead of via the large integration tests.
+- [ ] **Guard against `python3` being absent** in the launch script: the state
+      writers assume `python3` on PATH. Detect at task-start and fall back to a
+      pure-`bash`/`node` atomic writer (or surface a clear error) so background
+      tasks degrade gracefully on minimal hosts.
+
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in

@@ -6,6 +6,57 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-17 (run 9) — Reliability: atomic + non-mangling background-task state writes
+
+**Audited:** The full test suite health. Found the suite was **not green in this
+environment** — the big `server.test.ts`/`app.test.ts`/`operator-runtime.test.ts`
+integration tests were failing (4 tests) with
+`SyntaxError: Expected ',' or '}' … at position 311` while reading a background
+task's `state.json` during recovery/sync.
+
+**Root cause (a real production bug, not a test bug):** `renderLaunchScript` in
+`src/harness/background-tasks.ts` wrote the initial `running` state by piping a
+JSON template through `printf '%s' … | sed …` and redirecting with `>`
+(truncate-then-write). Two defects:
+1. **Deterministic corruption.** The `printf | sed` round-trip mangled any
+   `command` containing shell single-quotes + newlines (e.g.
+   `printf 'line-1\nline-2\n'`) — the shell-quoted `'` sequences came back as
+   `"'`, producing invalid JSON. Any real background task with such a command
+   would persist a corrupt state file.
+2. **Non-atomic writes.** Both the initial `>` redirect and the python
+   completion writer (`state_path.write_text(...)`) truncate-then-write in place,
+   so a concurrent reader (recovery/sync) could observe a half-written file.
+
+**Changed (additive, `src/harness/background-tasks.ts`):**
+- Initial state is now written by a small **python** program (`argv`-passed
+  payload → `json.loads` → inject pid/startedAt/updatedAt), eliminating the
+  fragile `printf|sed` reconstruction — python receives the JSON verbatim.
+- **All** state writes (initial + completion) now write to a `.tmp` sibling and
+  `pathlib.replace()` (atomic rename), matching `writeJsonAtomic` in `shared/fs.ts`.
+- Removed the `printf … "starting <kind> <id>" >> output` preamble that injected
+  engine status text into the user's command-output stream (no reader depends on it).
+- **Test determinism:** `server.test.ts` + `operator-runtime.test.ts` already
+  faked `backgroundTaskIsProcessRunning: () => false` but still ran the *real*
+  `spawn`, so a detached subprocess raced writes into the seeded state/output
+  files (surfacing as a flaky `mixed` vs `degraded` platform-breaker state, and a
+  monitor-output mismatch). Injected a matching fake `backgroundTaskSpawnProcess`
+  (the pattern already used in `background-tasks.test.ts`) so seeded data is
+  authoritative.
+
+**Test results:** full `npm test` **174/174**, green **8/8 consecutive runs**
+(was 4 hard failures + intermittent flakes before). `typecheck:src` CLEAN (exit 0).
+Build ✅. Full `tsc` debt unchanged at **125** (all in test files).
+
+**New idea:** add a tiny **`launch-script` golden test** that renders
+`renderLaunchScript` for a command containing single-quotes, double-quotes,
+newlines, `$`, and backticks, then actually executes it under `bash` in a temp
+dir and asserts the resulting `state.json` parses and round-trips the command
+exactly. That would have caught this class of shell-quoting corruption directly,
+independent of the large integration tests — and guards the python heredocs
+against future edits. Queued in ROADMAP.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

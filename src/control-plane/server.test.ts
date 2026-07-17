@@ -84,6 +84,9 @@ describe("OperatorControlPlaneServer", () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir,
       backgroundTaskIsProcessRunning: () => false,
+      // Use a fake spawn (no real detached subprocess) so seeded state/output are
+      // authoritative; the real process would race writes into state/output files.
+      backgroundTaskSpawnProcess: () => ({ pid: 4242, unref() {} }),
       delivery: new OperatorDeliveryService(rootDir, {
         sendBrowserPush: async () => {},
       }),
@@ -953,6 +956,9 @@ describe("OperatorControlPlaneServer", () => {
     const driftingRuntime = new StandaloneOperatorRuntime({
       rootDir: driftingRootDir,
       backgroundTaskIsProcessRunning: () => false,
+      // Use a fake spawn (no real detached subprocess) so seeded state/output are
+      // authoritative; the real process would race writes into state/output files.
+      backgroundTaskSpawnProcess: () => ({ pid: 4242, unref() {} }),
     });
     const driftingServer = new OperatorControlPlaneServer({ runtime: driftingRuntime });
     const driftingBootstrap = await driftingServer.handle({
@@ -1019,6 +1025,9 @@ describe("OperatorControlPlaneServer", () => {
     const breakerRuntime = new StandaloneOperatorRuntime({
       rootDir: breakerRootDir,
       backgroundTaskIsProcessRunning: () => false,
+      // Use a fake spawn (no real detached subprocess) so seeded state/output are
+      // authoritative; the real process would race writes into state/output files.
+      backgroundTaskSpawnProcess: () => ({ pid: 4242, unref() {} }),
     });
     const breakerServer = new OperatorControlPlaneServer({ runtime: breakerRuntime });
     const breakerOne = await breakerServer.handle({
