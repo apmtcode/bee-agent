@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { StandaloneOperatorRuntime } from "./operator-runtime.js";
+import { createSimulatedBackgroundSpawn } from "../harness/background-tasks.js";
 import { resolveOperatorCliExecutionConfig } from "../cli/config.js";
 import { runOperatorHooks } from "../cli/execution-policy.js";
 import type { ReviewedExportManifest } from "../training/export-manifest.js";
@@ -531,6 +532,8 @@ describe("StandaloneOperatorRuntime", () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
       backgroundTaskIsProcessRunning: () => false,
+      // Simulated spawn: no real child process races the manual state writes below.
+      backgroundTaskSpawnProcess: createSimulatedBackgroundSpawn(),
     });
     const session = await runtime.startSession({ title: "Tasks", agentId: "main" });
 

@@ -62,9 +62,16 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
+- [x] **Simulated background-process spawn** (`createSimulatedBackgroundSpawn`,
+      run 9) — deterministic, side-effect-free `SpawnBackgroundProcess` so the
+      background-task subsystem is hermetic in the cloud/CI. Also fixed a real
+      torn-read concurrency bug (atomic `state.json` writes + resilient
+      `readState`). Establishes the "pluggable + simulated backend" pattern the
+      training runner should follow next.
 - [ ] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
+      for a real on-device small model. (Mirror the background-spawn seam from
+      run 9: a real impl by default, an injectable simulated impl for tests.)
 - [ ] Synthetic event-stream generator to validate capture→dataset→replay
       round-trips without real OS input.
 - [ ] Generalization eval harness: measure replay fidelity on held-out but
@@ -80,6 +87,13 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Barrel-collision lint: scan `src/index.ts` re-exports for names exported
       from more than one module and flag them, so duplicate-identifier debt is
       caught at authoring time instead of accumulating silently.
+- [ ] **Flake-detector pre-push gate** (from run 9): run the suite twice (or with
+      a shuffled seed) and diff the pass sets — a test that passes once and fails
+      once is a flake to fix, not a green suite. Run 9's real-process races would
+      have been caught immediately instead of masked by a single lucky pass.
+- [ ] **No-real-spawn lint for tests**: flag any test that constructs a runtime/
+      app without injecting a simulated `backgroundTaskSpawnProcess`, so real OS
+      process races can't re-enter the suite.
 - [ ] Per-module typecheck ratchet: record each module's current `tsc` error
       count to a baseline file and fail if a module regresses above it. Lets the
       engine pay debt down module-by-module without one green-gate blocking

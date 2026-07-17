@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { setTimeout as delay } from "node:timers/promises";
 import { ensureParentDir, readJsonFile, writeJsonAtomic } from "../shared/fs.js";
 
 export type BackgroundTaskKind = "task" | "monitor";
@@ -107,6 +108,29 @@ export type SpawnBackgroundProcess = (
 ) => { pid?: number; unref(): void };
 
 export type IsProcessRunning = (pid: number) => boolean;
+
+/**
+ * Build a deterministic, side-effect-free {@link SpawnBackgroundProcess} for
+ * tests and simulations. It allocates a stable, monotonically increasing pid and
+ * launches nothing — no real OS process, no launch-script execution, and no
+ * concurrent writes to `state.json`. This lets callers drive background-task
+ * state explicitly (via `writeState`/`writeOutput`) without racing a real child
+ * process, which is essential for hermetic runs in the cloud/CI where spawning
+ * `bash`/`tail`/`printf` would produce nondeterministic timing.
+ */
+export function createSimulatedBackgroundSpawn(startPid = 100_000): SpawnBackgroundProcess {
+  let nextPid = startPid;
+  return () => {
+    const pid = nextPid;
+    nextPid += 1;
+    return {
+      pid,
+      unref() {
+        // no-op: simulated processes are never attached to the event loop.
+      },
+    };
+  };
+}
 
 export type BackgroundTaskRecoveryReason =
   | "unchanged"
@@ -231,10 +255,26 @@ export class BackgroundTaskExecutionService {
   }
 
   async readState(task: BackgroundTaskRecord): Promise<BackgroundTaskExecutionState | undefined> {
-    return await readJsonFile<BackgroundTaskExecutionState | undefined>(
-      path.join(this.rootDir, task.execution.stateFile),
-      undefined,
-    );
+    const statePath = path.join(this.rootDir, task.execution.stateFile);
+    // The background process may write state.json concurrently. Our own writers
+    // do so atomically (temp + rename), but a real external process that we don't
+    // control could truncate-then-write, so tolerate a transient torn read: retry
+    // a few times on a JSON parse error before giving up, and never let a partial
+    // read crash reconciliation.
+    let lastError: unknown;
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        return await readJsonFile<BackgroundTaskExecutionState | undefined>(statePath, undefined);
+      } catch (error) {
+        if (!(error instanceof SyntaxError)) {
+          throw error;
+        }
+        lastError = error;
+        await delay(5);
+      }
+    }
+    void lastError;
+    return undefined;
   }
 
   async writeOutput(task: BackgroundTaskRecord, content: string): Promise<void> {
@@ -754,7 +794,11 @@ function renderLaunchScript(task: BackgroundTaskRecord): string {
     "set -euo pipefail",
     `mkdir -p $(dirname ${quotedStatePath}) $(dirname ${quotedOutputFile})`,
     "started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-    `printf '%s' ${quotedStatePayload} | sed "s/__OPENCLAW_STARTED_AT__/$started_at/g; s/\"\$\$\"/$$/g" > ${quotedStatePath}`,
+    // Write the initial state atomically: render to a temp file, then rename it
+    // into place. A plain `> state.json` redirect truncates-then-writes, leaving a
+    // window in which a concurrent reader (reconcile/sync) sees partial JSON.
+    `printf '%s' ${quotedStatePayload} | sed "s/__OPENCLAW_STARTED_AT__/$started_at/g; s/\"\$\$\"/$$/g" > ${quotedStatePath}.$$.tmp`,
+    `mv -f ${quotedStatePath}.$$.tmp ${quotedStatePath}`,
     `printf '%s\n' "starting ${task.kind} ${task.id}" >> ${quotedOutputFile}`,
     `if cd ${quotedCwd} && bash -lc ${quotedCommand} >> ${quotedOutputFile} 2>&1; then`,
     "  completed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
@@ -789,7 +833,12 @@ function renderStateWriterPython(status: BackgroundTaskExecutionState["status"])
     "state['completedAt'] = timestamp",
     "state['exitCode'] = exit_code",
     `state['error'] = None if '${status}' == 'completed' else f'background task exited non-zero ({exit_code})'`,
-    "state_path.write_text(json.dumps(state, indent=2) + '\\n')",
+    // Write atomically (temp file + os.replace) so a concurrent reader never
+    // observes a truncated read-modify-write of state.json.
+    "tmp_path = state_path.with_name(state_path.name + '.' + str(pid) + '.tmp')",
+    "tmp_path.write_text(json.dumps(state, indent=2) + '\\n')",
+    "import os",
+    "os.replace(tmp_path, state_path)",
   ];
 }
 

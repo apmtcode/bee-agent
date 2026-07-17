@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   BackgroundTaskExecutionService,
   FileBackgroundTaskStore,
+  createSimulatedBackgroundSpawn,
   type BackgroundTaskExecutionState,
 } from "./background-tasks.js";
 
@@ -369,5 +370,64 @@ describe("BackgroundTaskExecutionService", () => {
     await expect(fs.readFile(path.join(rootDir, task.execution.launchScript), "utf8")).resolves.toContain("bash -lc");
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
+  });
+
+  it("launches deterministically with a simulated spawn and never touches a real process", async () => {
+    const rootDir = await makeTempDir();
+    const spawn = createSimulatedBackgroundSpawn(100_000);
+    const store = new FileBackgroundTaskStore(
+      path.join(rootDir, "background-tasks.json"),
+      spawn,
+      () => true,
+    );
+
+    const first = await store.start({ title: "One", command: "printf one", cwd: rootDir, kind: "task" });
+    const second = await store.start({ title: "Two", command: "printf two", cwd: rootDir, kind: "task" });
+
+    // Deterministic, monotonically increasing pids — no real OS process involved.
+    expect(first.execution.processId).toBe(100_000);
+    expect(second.execution.processId).toBe(100_001);
+    expect(first.status).toBe("running");
+
+    // The simulated process writes no state of its own, so the store's view is
+    // driven entirely by explicit calls — nothing raced the start above.
+    await expect(store.executionService.readState(first)).resolves.toBeUndefined();
+  });
+
+  it("tolerates a torn/partial state.json read instead of crashing reconciliation", async () => {
+    const rootDir = await makeTempDir();
+    const store = new FileBackgroundTaskStore(
+      path.join(rootDir, "background-tasks.json"),
+      createSimulatedBackgroundSpawn(),
+      () => true,
+    );
+    const task = await store.start({ title: "Torn", command: "printf x", cwd: rootDir, kind: "task" });
+
+    // Simulate a non-atomic external writer that left a truncated JSON document
+    // (e.g. a reader observed the file mid-write). readState must not throw.
+    const statePath = path.join(rootDir, task.execution.stateFile);
+    await fs.mkdir(path.dirname(statePath), { recursive: true });
+    await fs.writeFile(statePath, '{"version":1,"taskId":"', "utf8");
+    await expect(store.executionService.readState(task)).resolves.toBeUndefined();
+
+    // A subsequent well-formed (atomic) write is read back cleanly.
+    await store.executionService.writeState(task, {
+      version: 1,
+      taskId: task.id,
+      kind: "task",
+      status: "completed",
+      pid: task.execution.processId ?? 1,
+      startedAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:01.000Z",
+      completedAt: "2026-01-01T00:00:01.000Z",
+      exitCode: 0,
+      outputFile: task.execution.outputFile,
+      cwd: rootDir,
+      command: task.command,
+    });
+    await expect(store.executionService.readState(task)).resolves.toMatchObject({
+      taskId: task.id,
+      status: "completed",
+    });
   });
 });

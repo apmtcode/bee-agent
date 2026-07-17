@@ -6,6 +6,69 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-17 (run 9) — Fix flaky background-task tests + hermetic simulated spawn; atomic state writes
+
+**Audited:** Full suite health on a fresh cloud checkout. The suite was **RED at
+HEAD** — 4 tests failing (not 174/174 as prior logs recorded on their machines):
+`operator-runtime` (background tasks), `server.test` (orchestration/remote
+control), and 2 in `app.test` (session lifecycle "control=active"; background &
+monitor commands). Failures were **nondeterministic** (line numbers drifted run
+to run, error shapes changed: JSON `SyntaxError` → assertion mismatch).
+
+**Root cause (single, shared):** these tests construct runtimes/apps with the
+**real** process spawn, so `start()` launches actual `bash`/`printf`/`tail -f`/
+`sleep` children. Those children write `state.json` **non-atomically** and at
+unpredictable times, racing the tests' own manual `writeState`/reconcile reads:
+- The launch script wrote state via `> state.json` (truncate-then-write) and the
+  Python completion writer via `read_text()`+`write_text()` — both leave a window
+  where a concurrent reader sees a **truncated/torn JSON** doc → `readState`
+  throws `SyntaxError` → reconciliation crashes.
+- A real child that already exited while its state still said `running` made
+  `deriveRemoteDiagnostics` report `background task missing-process` → remotes
+  flickered to `degraded`, breaking `control=active` assertions.
+
+**Changed (additive, reversible):**
+- `src/harness/background-tasks.ts`:
+  - **Atomic state writes in the launch script.** Initial state now renders to
+    `state.json.$$.tmp` then `mv -f` into place; the Python completion writer
+    writes a temp file then `os.replace`. Rename is atomic on the same fs, so a
+    reader always sees a whole document.
+  - **Torn-read resilience in `readState`:** retry a few times on a `SyntaxError`
+    (external, non-atomic writers we don't control), then return `undefined`
+    rather than letting a partial read crash reconciliation. Non-parse errors
+    still propagate.
+  - **New exported `createSimulatedBackgroundSpawn(startPid?)`** — a
+    deterministic, side-effect-free `SpawnBackgroundProcess` (monotonic pids,
+    no-op `unref`, launches nothing). A first-class simulated backend for the
+    background-task subsystem (objective #2: "simulated implementation so tests
+    pass in the cloud").
+- `src/cli/app.ts`: `OperatorCliAppOptions` now accepts optional
+  `backgroundTaskSpawnProcess` / `backgroundTaskIsProcessRunning`, threaded into
+  the runtime. Production leaves them unset (real spawn); tests inject the
+  simulated spawn.
+- Tests updated to inject the simulated spawn (and, where a test drives a "dead
+  pid" degraded path, a matching `isProcessRunning`): `operator-runtime.test.ts`,
+  `server.test.ts` (main + drifting + breaker runtimes), `app.test.ts` (both
+  failing tests; the background/monitor test now seeds its `"ok"` output
+  explicitly since the simulated process writes none).
+- Added 2 regression tests in `background-tasks.test.ts`: deterministic simulated
+  launch (stable pids, no self-written state) and torn-read tolerance.
+
+**Test results:** suite **RED (170/174) → GREEN 176/176**, verified **stable
+across 3 full runs** and 5× per-file runs (previously flaked within 2 runs).
+Build ✅. `typecheck:src` ✅ (source stays clean). Full `tsc` **125** (unchanged —
+new code typechecks clean).
+
+**New idea:** add a lightweight **flake-detector** to the engine's pre-push
+self-check — run `vitest run` **twice** (or with a shuffled seed) and diff the
+pass set; a test that passes once and fails once is a flake to fix, not a green
+suite. This run's failures would have been caught immediately by a
+double-invocation gate instead of masked by a single lucky pass. Longer term:
+mark any test that spawns a real OS process and assert (in a lint) it injects a
+simulated spawn, so real-process races can't re-enter the suite.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
