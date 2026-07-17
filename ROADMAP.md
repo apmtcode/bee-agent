@@ -59,16 +59,44 @@ unchecked items are queued. Keep this richer than you found it each run.
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
 (exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
-      objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Inventory what `src/capture` + `src/training` already implement vs. the
+      objective's five pieces — DONE run 9. capture/schema/dataset/replay exist;
+      `runner.ts` emits on-device mlx/axolotl launch scripts. Gap was an
+      in-process train+infer model → closed by the pluggable backend below.
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
+      for a real on-device small model — DONE run 9. `training/model-backend.ts`
+      (`MovementModelBackend`/`TrainedMovementModel` + dataset bridge from replay
+      manifests) and `training/markov-backend.ts` (deterministic variable-order
+      n-gram w/ stupid-backoff: exact-repeat 2c + backoff-generalize 2d).
+      12 tests. Next: wire a backend into `LocalTrainingExecutionService` so a
+      trained model artifact is produced alongside the launch-script plan.
 - [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      round-trips without real OS input. (Backend tests already use hand-built
+      sequences; a reusable generator would parameterize app/gesture patterns.)
+- [ ] Generalization eval harness: measure replay fidelity (edit distance
+      between generated and held-out recorded sequences) across backends via the
+      shared `MovementModelBackend` interface, so post-training generalization is
+      a tracked number. (queued run 9)
+- [ ] Second reference backend (prefix-tree / suffix-automaton) implementing
+      `MovementModelBackend` to prove the seam isn't Markov-shaped and give
+      exact-repeat with shared memory across overlapping trajectories. (run 9)
+- [ ] Wire a `MovementModelBackend` into the training runner/execution service so
+      that, when the on-device runtime is unavailable, the deterministic backend
+      still yields a usable (repeat+generalize) model artifact. (run 9)
+
+## Discovered bugs (found while auditing; fix in a focused run)
+- [ ] **Corrupt background-task state throws instead of recovering.**
+      `recoverBackgroundTasks` (via `FileBackgroundTaskStore.reconcileTask` →
+      `BackgroundTaskExecutionService.readState` → `readJsonFile` in
+      `src/shared/fs.ts`) propagates a `SyntaxError` when a task's state file is
+      malformed JSON; `operator-runtime.test.ts` expects graceful recovery. Fix:
+      tolerate/quarantine unparseable state (treat as failed/unrecoverable) so
+      one corrupt file can't abort a whole recovery sweep. (found run 9)
+- [ ] **Date/timing-sensitive control-plane tests.** `app.test.ts` and
+      `server.test.ts` were green 2026-06-23, fail 2026-07-17; one app.test case
+      is flaky. Likely relative-date/`now`-based fixtures. Make time injectable
+      in those tests. (found run 9)
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

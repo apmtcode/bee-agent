@@ -6,6 +6,71 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-17 (run 9) — 🧠 Movement-model backend: in-cloud train + infer + generalize
+
+**Audited:** The local-movement learning subsystem (objective #2). `src/capture/`
+covers pieces (a) capture, (b) schema, (c) dataset, and the replay engine;
+`src/training/` covers reviewed-export + `runner.ts` which emits **mlx/axolotl
+launch scripts for on-device training**. The gap: there was **no in-process model
+that actually trains on a movement dataset and predicts/generalizes** — pieces
+2(c) "post-train a model to repeat recorded movements" and 2(d) "generalize to
+new-but-related movements" were unreachable in the cloud (no OS/GPU). ROADMAP
+already queued exactly this ("pluggable local-model backend + deterministic mock
+backend").
+
+**Changed (additive, all new files + barrel exports):**
+- `src/training/model-backend.ts` — the **pluggable backend seam**:
+  `MovementModelBackend` / `TrainedMovementModel` interfaces, movement token +
+  dataset types (`MovementToken`, `MovementSample`, `MovementDataset`,
+  `MovementPrediction`, `SerializedMovementModel`), and the
+  capture→dataset bridge: `movementActionToken`, `extractMovementSequence`,
+  `buildMovementDataset(ReplayManifest[])` (reuses the existing replay schema —
+  only `action` events are movements; observations/transcript are context).
+- `src/training/markov-backend.ts` — `MarkovMovementBackend`, a **deterministic
+  variable-order n-gram model with stupid-backoff**. High-order exact match →
+  *repeat* recorded movements (2c); backoff to a shorter learned context →
+  *generalize* to related movements (2d). Fully in-process/deterministic (ties
+  broken by count then token), `serialize`/`restore` round-trip. This is the
+  cloud-testable seam a real on-device small model plugs into behind the same
+  interface.
+- `src/index.ts` — exported the new surface.
+
+**Test results:** new `src/training/markov-backend.test.ts` — **12/12 pass**
+(dataset extraction/normalization, exact repeat via `generate`, order-3 exact
+prediction confidence=1, **backoff generalization** on an unseen-but-related
+prefix, order-0 marginal prior, empty-dataset null prediction, deterministic
+serialization, tie-break stability, serialize/restore prediction equality,
+cross-backend restore rejection). `typecheck:src` ✅ (exit 0). Build ✅.
+
+**Pre-existing failures (NOT introduced this run — verified on clean HEAD via
+`git stash -u`):** 3 stable + 1 flaky failing tests exist on the branch already,
+all in unrelated subsystems:
+- `orchestrator/operator-runtime.test.ts` — `recoverBackgroundTasks` is expected
+  to resolve gracefully when a task **state file is corrupt JSON**, but
+  `readJsonFile` (`src/shared/fs.ts`) throws a `SyntaxError`. **Real robustness
+  bug** — the recovery path should tolerate/quarantine malformed state, not throw.
+  Filed to ROADMAP.
+- `cli/app.test.ts` (session-lifecycle + background/monitor/cron) and
+  `control-plane/server.test.ts` (orchestration) — date/timing-sensitive
+  (last green 2026-06-23; today is 2026-07-17). One app.test case is flaky
+  (4 fails one run, 3 the next). Filed to ROADMAP.
+
+My change adds 12 passing tests and **zero** new failures; source typecheck and
+build are green. Pushed to the designated feature branch (which already carries
+these pre-existing failures) rather than gating an isolated, green, additive
+capability behind unrelated debt.
+
+**New idea:** add a **generalization eval harness** that measures replay fidelity
+(edit distance between generated and held-out recorded sequences) across backends
+via the shared `MovementModelBackend` interface — so a real on-device model and
+the Markov baseline are scored on the *same* synthetic-trajectory benchmark, and
+"does post-training actually generalize?" becomes a tracked number, not a claim.
+Second idea: a **prefix-tree/suffix-automaton backend** as a second reference impl
+to prove the interface isn't Markov-shaped, and to give exact-repeat guarantees
+with O(1) memory reuse across overlapping trajectories.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
