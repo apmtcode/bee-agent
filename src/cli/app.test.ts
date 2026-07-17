@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
+import fsSync from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
@@ -9,6 +10,31 @@ import { OperatorCliApp, parseSlashCommand } from "./app.js";
 
 const tempDirs: string[] = [];
 const execFileAsync = promisify(execFile);
+
+/**
+ * Deterministic background-task spawn stub. The real spawn launches a detached
+ * bash script that asynchronously writes a "running" state file; that write
+ * racing the CLI's status reads made assertions on task/control state flaky.
+ * This stub never runs a real process — a fake pid is enough for the record to
+ * be tracked as running.
+ */
+function noopBackgroundSpawn(): { pid: number; unref(): void } {
+  return { pid: 424242, unref() {} };
+}
+
+/**
+ * Like {@link noopBackgroundSpawn} but also synchronously writes `content` to
+ * the task's output.log (which lives next to the launch script). Use for tests
+ * that must read real task output while keeping the task deterministically
+ * "running" (paired with `backgroundTaskIsProcessRunning: () => true`).
+ */
+function outputWritingBackgroundSpawn(content: string) {
+  return (command: string): { pid: number; unref(): void } => {
+    const outputPath = path.join(path.dirname(command), "output.log");
+    fsSync.writeFileSync(outputPath, content);
+    return { pid: 424242, unref() {} };
+  };
+}
 
 async function makeTempDir(): Promise<string> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "operator-cli-app-"));
@@ -801,7 +827,14 @@ describe("OperatorCliApp", () => {
 
   it("supports session lifecycle, transcript, approvals, pairing, config, and prompt commands", async () => {
     const rootDir = await makeTempDir();
-    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    const app = new OperatorCliApp({
+      rootDir,
+      cwd: rootDir,
+      currentDate: "2026-05-25",
+      // Keep background tasks deterministically "running" so platform control
+      // state doesn't flake to "degraded" on a state-file write race.
+      backgroundTaskSpawnProcess: noopBackgroundSpawn,
+    });
     const firstSession = await app.runtime.startSession({ title: "first", cwd: rootDir, agentId: "operator-cli" });
     const secondSession = await app.runtime.startSession({ title: "second", cwd: rootDir, agentId: "operator-cli" });
 
@@ -1063,7 +1096,16 @@ describe("OperatorCliApp", () => {
 
   it("supports background and monitor task commands plus cron commands", async () => {
     const rootDir = await makeTempDir();
-    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    const app = new OperatorCliApp({
+      rootDir,
+      cwd: rootDir,
+      currentDate: "2026-05-25",
+      // Write real task output ("ok") deterministically while keeping the task
+      // tracked as running, so `watch-active` reliably sees it instead of racing
+      // the real launch script's completion.
+      backgroundTaskSpawnProcess: outputWritingBackgroundSpawn("ok\n"),
+      backgroundTaskIsProcessRunning: () => true,
+    });
     const session = await app.runtime.startSession({ title: "CLI ops", cwd: rootDir, agentId: "operator-cli" });
 
     const startOutput = await app.dispatchSlashCommand(

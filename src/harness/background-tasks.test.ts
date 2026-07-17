@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -369,5 +370,27 @@ describe("BackgroundTaskExecutionService", () => {
     await expect(fs.readFile(path.join(rootDir, task.execution.launchScript), "utf8")).resolves.toContain("bash -lc");
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
+  });
+
+  it("executes a launch script for a single-quoted command and writes valid state JSON", async () => {
+    // Regression: shellQuote must POSIX-escape embedded single quotes. A buggy
+    // escape corrupts the JSON payload the launch script writes, so the state
+    // file fails to parse and getExecutionState throws. Run the real script.
+    const rootDir = await makeTempDir();
+    const store = new FileBackgroundTaskStore(
+      path.join(rootDir, "background-tasks.json"),
+      () => ({ pid: 4321, unref() {} }),
+    );
+    const command = "printf 'line-1\\nline-2\\n'";
+    const task = await store.start({ title: "Quoted", command, cwd: rootDir });
+
+    const scriptPath = path.join(rootDir, task.execution.launchScript);
+    // The launch script resolves state/output paths relative to the store root,
+    // exactly as the real detached spawn does (cwd: rootDir).
+    execFileSync("bash", [scriptPath], { cwd: rootDir, stdio: "ignore" });
+
+    const state = await store.getExecutionState(task.id);
+    expect(state).toMatchObject({ taskId: task.id, status: "completed", exitCode: 0, command });
+    expect(await store.getOutput(task.id, 2)).toBe("line-1\nline-2");
   });
 });

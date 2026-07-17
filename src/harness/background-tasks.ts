@@ -794,5 +794,10 @@ function renderStateWriterPython(status: BackgroundTaskExecutionState["status"])
 }
 
 function shellQuote(value: string): string {
-  return `'${value.replaceAll(`'`, `"'"'"'`)}'`;
+  // POSIX single-quote escaping: to embed a literal single quote inside a
+  // single-quoted string, close the quote, emit an escaped quote, and reopen:
+  // `'` -> `'"'"'`. The previous replacement started with a `"`, which injected
+  // a stray double-quote and corrupted any command/path containing a single
+  // quote (e.g. `printf 'x'`), producing malformed JSON in the launch state file.
+  return `'${value.replaceAll(`'`, `'"'"'`)}'`;
 }

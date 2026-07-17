@@ -6,6 +6,70 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-17 (run 9) — Fix `shellQuote` corruption bug + de-flake the whole test suite
+
+**Audited:** Test-suite health first (a hard prerequisite for pushing to `main`).
+The suite was intermittently red — running the full run repeatedly produced
+**4, then 3, then 2** failures on the *unchanged* baseline, i.e. genuine
+flakiness, not a static regression. Traced every flaky failure to one of two
+root causes in the background-task subsystem (`src/harness/background-tasks.ts`).
+
+**Root cause 1 — real correctness bug in `shellQuote` (fixed).** The POSIX
+single-quote escaper used `"'"'"'` (starts with a `"`) instead of the correct
+`'"'"'`. Embedding *any* single quote in a command or path (e.g. the default
+test command `printf 'line-1\nline-2\n'`) injected a stray double-quote, so the
+JSON payload the launch script writes to the task **state file** was malformed —
+`JSON.parse` then threw `Expected ',' or '}' … position 311` when the runtime
+read execution state. This breaks background-task tracking for **any** real user
+command containing a `'`. Fixed the escape and proved it end-to-end (a
+buggy-vs-fixed `printf | bash` round-trip: buggy → unparseable, fixed → exact
+round-trip).
+
+**Root cause 2 — real-spawn races in tests (de-flaked).** Several tests started
+`startBackgroundTask` with the *real* detached-`spawn` launch script, then read
+back control/task state. The launch script writes a `"running"` state file
+asynchronously; whether it landed before the assertion decided
+`control = active` vs `degraded (missing-process)` and whether `watch-active`
+saw the task — pure timing. The `StandaloneOperatorRuntime` already exposes
+`backgroundTaskSpawnProcess` / `backgroundTaskIsProcessRunning` seams (used by
+the deterministic drift/breaker tests), but the CLI's `OperatorCliApp` did not
+forward them.
+
+**Changed (additive):**
+- `src/harness/background-tasks.ts`: corrected `shellQuote` (+ explanatory
+  comment on why the previous form corrupted quoted commands).
+- `src/cli/app.ts`: threaded `backgroundTaskSpawnProcess` /
+  `backgroundTaskIsProcessRunning` through `OperatorCliAppOptions` into the
+  runtime — a real testability/DX seam the CLI was missing.
+- `src/harness/background-tasks.test.ts`: **new regression test** that executes
+  the *real* generated launch script (`bash run.sh`, `cwd: rootDir`) for a
+  single-quoted command and asserts the state file parses to valid JSON with the
+  command preserved and the output readable. (Existing tests all used a mock
+  spawn, so the launch artifact was never actually run — which is why the bug
+  slipped through.)
+- Injected deterministic spawn stubs into the flaky tests
+  (`operator-runtime.test.ts` background-task test; `server.test.ts` main +
+  drift + breaker runtimes; `app.test.ts` lifecycle + background/monitor tests).
+  A `noopBackgroundSpawn` (fake pid, no state file) for tests that drive state
+  explicitly, and an `outputWritingBackgroundSpawn` for the one test that must
+  read real task output while staying "running".
+
+**Test results:** `typecheck:src` ✅ (clean). Build ✅. Full `tsc` unchanged at
+**125** (all test-only). Suite: **175/175** (was 174 + 1 new regression test),
+**8 consecutive full runs green** (previously 2–4 failures per run). The
+subsystem is now deterministic in CI/cloud.
+
+**New idea:** add a tiny `spawnProcess` test double *factory* to a shared
+`src/harness/testing/` (or `src/shared/testing.ts`) that the whole suite imports
+— `fakeSpawn({ output?, writeState? })` — so future tests don't re-hand-roll
+`() => ({ pid, unref() {} })` (the pattern now appears ~6×) and can't
+accidentally reintroduce a real-spawn race. Longer term: make
+`startBackgroundTask` optionally accept a per-call spawn override, and add a
+lightweight "no real child processes were leaked" afterEach guard so a stray
+detached `sleep`/`tail` in a test is caught immediately.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

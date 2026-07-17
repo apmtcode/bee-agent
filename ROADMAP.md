@@ -8,6 +8,13 @@ unchecked items are queued. Keep this richer than you found it each run.
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`
       (2026-06-22).
+- [x] **De-flake the test suite** (2026-07-17, run 9). The suite was
+      intermittently red (2–4 failures/run) from background-task real-spawn
+      races. Fixed a real `shellQuote` corruption bug (malformed state-file JSON
+      for any single-quoted command), forwarded the runtime's
+      `backgroundTaskSpawnProcess`/`…IsProcessRunning` seams through
+      `OperatorCliApp`, and injected deterministic spawn stubs into the racy
+      tests. Now 8/8 full runs green. Added a launch-script regression test.
 - [ ] **Pay down typecheck debt** (surfaced by the `typecheck` script). Full
       `tsc --noEmit` count was **397** on 2026-06-22; now **125**. 🎯 ALL source
       (`src/**` non-test) files typecheck clean since run 7; remaining 125 errors
@@ -84,3 +91,12 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
       count to a baseline file and fail if a module regresses above it. Lets the
       engine pay debt down module-by-module without one green-gate blocking
       progress, and prevents backsliding while the total is still > 0.
+- [ ] Shared spawn test-double factory (`src/shared/testing.ts` or
+      `src/harness/testing/`): a `fakeSpawn({ output?, writeState? })` helper to
+      replace the ~6 hand-rolled `() => ({ pid, unref() {} })` stubs and prevent
+      reintroducing real-spawn races (added run 9). Pair with an `afterEach`
+      "no leaked child processes" guard so a stray detached `sleep`/`tail` in a
+      test is caught immediately rather than flaking a later assertion.
+- [ ] Optional per-call spawn override on `startBackgroundTask` so a single
+      task can be run deterministically without reconstructing the whole
+      runtime with an injected spawn.
