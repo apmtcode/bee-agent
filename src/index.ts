@@ -400,6 +400,30 @@ export type {
   LocalTrainingRuntime,
   TrainingJobPlan,
 } from "./training/runner.js";
+export {
+  NgramMovementPolicyBackend,
+  evaluateNextTokenFidelity,
+} from "./training/movement-policy.js";
+export type {
+  MovementDataset,
+  MovementFidelityResult,
+  MovementPolicyBackend,
+  MovementPrediction,
+  MovementPredictionSource,
+  MovementSequence,
+  MovementToken,
+  NgramMovementBackendOptions,
+  TrainedMovementModel,
+} from "./training/movement-policy.js";
+export {
+  DEFAULT_MOVEMENT_MOTIFS,
+  generateSyntheticMovementDataset,
+  movementSequencesFromReplays,
+  movementTokenFromAction,
+} from "./training/movement-synthetic.js";
+export type {
+  SyntheticMovementOptions,
+} from "./training/movement-synthetic.js";
 export type {
   ExportedMemoryReference,
   ExportedPromotedSkill,

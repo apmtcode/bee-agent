@@ -6,6 +6,73 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-17 (run 9) — Movement-policy model backend (in-process, cloud-runnable) + real shell-escaping bug fix
+
+**Audited:** The local-movement learning subsystem (`src/capture` + `src/training`)
+against objective #2's five pieces. Found the biggest gap in piece **(c) train**
+and **(d) generalize**: `training/runner.ts` only *renders launch scripts* that
+shell out to `mlx`/`axolotl` on the user's Apple-silicon machine — there was **no
+model backend that can train/predict inside the cloud engine or CI**, so the
+"post-train a local model to repeat and generalize movements" objective had no
+executable, testable core. Also ran the full suite first and triaged 3 failing
+test files.
+
+**Changed (additive):**
+- **New `src/training/movement-policy.ts`** — the first in-process, dependency-free
+  model backend. `MovementPolicyBackend` is the pluggable seam a real on-device
+  small model implements later; `NgramMovementPolicyBackend` is the deterministic
+  default mock: a variable-order n-gram sequence model that **memorizes recorded
+  transitions (→ exact repeat, objective 2c)** and **backs off to shorter matched
+  contexts (→ generalization to related movements, objective 2d)**. Ties break
+  lexicographically so runs are byte-reproducible in CI. Includes `predict`,
+  `rollout`, and `evaluateNextTokenFidelity` (teacher-forced repeat/generalization
+  eval harness).
+- **New `src/training/movement-synthetic.ts`** — deterministic (mulberry32, no
+  `Math.random`/time) synthetic movement-stream generator that stitches sequences
+  from a motif library (click/drag/type/scroll/…), plus `movementSequencesFromReplays`
+  to derive the same dataset shape from real reviewed `ReplayManifest`s. This is the
+  simulated event stream the objective mandates for cloud validation.
+- Exported the surface from `src/index.ts`.
+- **Real production bug fixed** in `src/harness/background-tasks.ts`: `shellQuote`
+  used the malformed single-quote escape `"'"'"'` (leading `"`) instead of the
+  correct `'"'"'` (as `training/runner.ts` already had). This mangled `'x'` → `"'x"'`,
+  producing **invalid state JSON and a broken `bash -lc <command>` invocation for any
+  background-task command containing a single quote** (confirmed by reproducing the
+  exact `printf '%s' … | sed` pipeline). One-character-class fix.
+- **Test hermeticity:** `operator-runtime.test.ts`'s background-task test drove all
+  execution state manually but let the real detached launch script run and clobber it
+  asynchronously — deterministically failing here. Injected a no-op
+  `backgroundTaskSpawnProcess` (mirroring run-1's `configHome` isolation fix). Now green.
+
+**Test results:** new movement-policy suite **11/11 green** (repeat fidelity = 1.0;
+held-out generalization accuracy **0.695 > 0.6** and > unigram baseline 0.594,
+both deterministic). `operator-runtime.test.ts` **17/17** (was failing). Source-only
+typecheck `typecheck:src` ✅ (exit 0). Build ✅. Full suite **182/185**.
+
+**Blocker (pre-existing, NOT introduced this run — reproduced on a clean `git stash`
+tree):** `server.test.ts` (1) and `app.test.ts` (1–2, flaky count) fail because the
+background-task tests spawn **real detached OS processes** and assert on their
+lifecycle. Root cause traced precisely: an instant command (`printf ok`) is expected
+to still be "running" at watch/sync time, which only holds while the child is an
+unreaped zombie — pure process-reaping/timing coupling — and the same test asserts on
+real shell *output* ("ok"), so it can't be mocked with a plain no-op spawn. The
+control-state aggregation test (`control=active`) has the same real-spawn coupling. A
+proper fix needs a controlled spawn+`isProcessRunning`+output fake threaded through
+`OperatorCliApp` (which today forwards neither) and expected-value alignment — queued
+in ROADMAP as its own reviewable change rather than risked in this diff. Because the
+suite is not fully green, this run is pushed to the working branch for review, not to
+`main`.
+
+**New idea:** add a *generalization-gap metric* to the eval harness — train on N
+synthetic sequences, evaluate on held-out related sequences, and record
+`repeat_accuracy − heldout_accuracy` as a single health number per backend. Wire it
+into the future self-check telemetry so a regression in the movement model's ability
+to generalize (or a real backend underperforming the n-gram mock) is caught
+automatically. Longer term: a `rollout`-based *behavioral* eval (does the generated
+movement sequence reach the same UI end-state?) rather than only next-token accuracy.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

@@ -530,6 +530,11 @@ describe("StandaloneOperatorRuntime", () => {
   it("starts, syncs, recovers, lists, and cancels background tasks", async () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
+      // Deterministic, hermetic background-task execution: don't run the real
+      // detached launch script (it writes state asynchronously and races the
+      // manual writeState/writeOutput calls below). This test drives execution
+      // state manually, so a no-op spawn is exactly what it wants.
+      backgroundTaskSpawnProcess: () => ({ pid: 424242, unref: () => {} }),
       backgroundTaskIsProcessRunning: () => false,
     });
     const session = await runtime.startSession({ title: "Tasks", agentId: "main" });

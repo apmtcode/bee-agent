@@ -62,13 +62,37 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      for a real on-device small model. — DONE run 9 (`movement-policy.ts`:
+      `MovementPolicyBackend` seam + `NgramMovementPolicyBackend` mock;
+      memorize→repeat, backoff→generalize).
+- [x] Synthetic event-stream generator to validate capture→dataset→replay
+      round-trips without real OS input. — DONE run 9 (`movement-synthetic.ts`:
+      seeded mulberry32 motif stitcher + `movementSequencesFromReplays`).
+- [x] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories. — DONE run 9 (`evaluateNextTokenFidelity`;
+      held-out accuracy 0.695 > unigram 0.594, deterministic).
+- [ ] Wire the movement-policy backend into the training `execution-service`/
+      `runner` so a reviewed export can be trained + evaluated in-process (mock
+      backend) end-to-end, not just via the shelled-out mlx/axolotl plan.
+- [ ] Behavioral (rollout-based) generalization eval + a `generalization-gap`
+      health metric (`repeat_accuracy − heldout_accuracy`) per backend.
+
+## Test hermeticity / reliability
+- [x] `operator-runtime.test.ts` background-task test made hermetic (inject no-op
+      `backgroundTaskSpawnProcess`) — DONE run 9.
+- [ ] **Make `server.test.ts` + `app.test.ts` background-task tests hermetic.**
+      They spawn real detached OS processes and assert on process lifecycle +
+      real shell output, so they are flaky/environment-coupled (fail on this
+      container, reproduced on a clean tree). Fix: forward
+      `backgroundTaskSpawnProcess`/`backgroundTaskIsProcessRunning` through
+      `OperatorCliApp` (today it forwards neither), inject a controlled fake that
+      writes deterministic state+output, and align the `control=active`/`"mixed"`
+      expected values. Separate reviewable change — do not fold into feature diffs.
+- [x] Fixed real `shellQuote` bug in `background-tasks.ts` (malformed single-quote
+      escape corrupted state JSON + `bash -lc` for any command containing `'`) —
+      DONE run 9.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
