@@ -6,6 +6,63 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-17 (run 9) — 🐞 Two real launcher bugs fixed; suite deterministic 175/175
+
+**Audited:** Ran the full gate on a fresh cloud checkout and found the recorded
+"174/174 green" no longer held — **3 tests failed deterministically** in this
+environment (operator-runtime, server, app), all in the background-task
+subsystem. Root-caused two genuine, latent, cross-platform correctness bugs in
+`src/harness/background-tasks.ts` — the background-task *launcher* script.
+
+**Bug 1 — corrupt `state.json` (the `printf | sed` initial-state write).** The
+launcher built the initial `running` state via
+`printf '%s' <json> | sed "…s/\"\$\$\"/$$/g"`. Two failures: (a) in a sed regex
+`$` is an *end-of-line anchor*, so the `"$$"` → real-PID substitution silently
+matched nothing on GNU sed, leaving `"pid":"$$"`; (b) piping the pre-serialized
+JSON through shell-quoting + sed corrupts any embedded `command` string
+(quotes/newlines), yielding **invalid JSON on disk** → `JSON.parse` throws in
+`readState` during recovery. **Fix:** write the initial state with the same
+`python3` + `json.dumps` path already used for the terminal state, passing
+values as shell-quoted **argv** (never a pre-serialized blob). `json.dumps`
+escapes any content correctly and `$$` is the launcher's real PID. Added
+`renderInitialStateWriterPython()`.
+
+**Bug 2 — `shellQuote` mangled single quotes** (caught by a new regression
+test). The single-quote escape was `"'"'"'` (6 chars) instead of the POSIX
+`'"'"'` (5 chars), so **any command containing a `'`** (e.g. `printf 'x'`) was
+corrupted before `bash -lc` — the command silently failed. Masked until now
+because every unit test mocked `spawnProcess` and never executed the generated
+script. **Fix:** correct the replacement to `'"'"'`.
+
+**Tests:**
+- New `background-tasks.test.ts` case actually *executes* the generated `run.sh`
+  (via `spawnSync`) with an adversarial-but-valid command (real newline, single
+  + double quotes, literal `$$`) and asserts the persisted `state.json` parses,
+  round-trips `command` verbatim, and has a numeric pid + `status: completed`.
+  This is the first test that exercises the real launcher end-to-end — it is
+  what surfaced Bug 2.
+- De-flaked three runtimes in `server.test.ts` (main/drifting/breaker) and the
+  `operator-runtime.test.ts` background-task test by injecting a **no-op
+  `backgroundTaskSpawnProcess`**: those tests drive execution state manually, so
+  a live detached launcher was racing the manual writes and the breaker
+  failure-count assertions. `app.test.ts` needed no injection — its
+  `sleep 5` / `printf drift` tasks became deterministic once the launcher wrote
+  valid state.
+
+**Test results:** **175/175 passing, verified stable across 5 consecutive full
+runs** (was 3 failing). `npm run build` ✅. `typecheck:src` ✅ **0** (source stays
+clean). Full `tsc` unchanged at **125** (test-file debt, untouched).
+
+**New idea:** the launcher is a *code-generator* emitting a bash+python program
+we only validate by running it. Add a tiny `renderLaunchScript` golden/behaviour
+test matrix — a handful of adversarial commands (embedded `$$`, backticks,
+`$(...)`, unicode, a command that exits non-zero) each executed through
+`spawnSync`, asserting the final `state.json` status/exitCode. That turns "the
+generated shell script is correct on this platform" into a first-class,
+continuously-checked contract instead of something only the integration tests
+trip over by accident. Longer term: factor the shell/python emission behind a
+`ScriptEmitter` seam so the same contract can target a Windows/pwsh backend.
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

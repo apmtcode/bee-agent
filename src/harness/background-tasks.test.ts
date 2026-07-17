@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -369,5 +370,36 @@ describe("BackgroundTaskExecutionService", () => {
     await expect(fs.readFile(path.join(rootDir, task.execution.launchScript), "utf8")).resolves.toContain("bash -lc");
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
+  });
+
+  it("generates a launch script whose state.json stays valid JSON for adversarial commands", async () => {
+    const rootDir = await makeTempDir();
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"), () => ({
+      pid: 1212,
+      unref() {},
+    }));
+    // A valid command (exits 0) that nonetheless carries every character that
+    // previously corrupted the `printf | sed` initial-state write: a real
+    // newline, single quotes, double quotes, and a literal `$$`. sed's `$` is an
+    // end-of-line anchor, so the old `"$$"` -> pid substitution silently failed
+    // and the payload was mangled, leaving invalid JSON on disk.
+    const command = "printf 'first\nsecond\n'; true \"dq $$\"";
+    const task = await store.start({ title: "Adversarial", command, cwd: rootDir, kind: "task" });
+
+    const launchScriptPath = path.join(rootDir, task.execution.launchScript);
+    const result = spawnSync("bash", [launchScriptPath], { cwd: rootDir, encoding: "utf8" });
+    expect(result.status).toBe(0);
+
+    const raw = await fs.readFile(path.join(rootDir, task.execution.stateFile), "utf8");
+    // Must parse — the whole point of the fix — and round-trip the command verbatim.
+    const state = JSON.parse(raw) as BackgroundTaskExecutionState;
+    expect(state.command).toBe(command);
+    expect(state.taskId).toBe(task.id);
+    expect(state.kind).toBe("task");
+    expect(state.status).toBe("completed");
+    expect(state.exitCode).toBe(0);
+    expect(typeof state.pid).toBe("number");
+    // pid must be the launcher's real PID, never the literal string "$$".
+    expect(state.pid).not.toBe("$$");
   });
 });

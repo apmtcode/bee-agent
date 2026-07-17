@@ -45,6 +45,23 @@ unchecked items are queued. Keep this richer than you found it each run.
       have the engine run it as a per-run pre-push self-check.
 - [ ] Add a minimal CI workflow mirroring `verify` for human-opened PRs.
 
+## Reliability / correctness
+- [x] **Fix background-task launcher bugs** (2026-07-17, run 9). Two real
+      cross-platform bugs in `src/harness/background-tasks.ts`: (1) the initial
+      `state.json` was built with `printf | sed` where sed's `$` anchor broke the
+      `"$$"`→pid substitution and shell-quoting corrupted embedded commands →
+      invalid JSON on disk; rewrote it to use `python3` + `json.dumps` from
+      shell-quoted argv. (2) `shellQuote` used `"'"'"'` instead of the POSIX
+      `'"'"'`, mangling any command containing a single quote. Added the first
+      test that executes the generated `run.sh` end-to-end, and de-flaked the
+      runtime/server background-task tests with a no-op injected spawn.
+- [ ] **Launcher golden/behaviour test matrix**: run a handful of adversarial
+      commands (`$$`, backticks, `$(...)`, unicode, non-zero exit) through the
+      real generated `run.sh` via `spawnSync` and assert final `state.json`
+      status/exitCode — make "the emitted shell script is correct on this
+      platform" a continuously-checked contract, not an accidental integration
+      trip. Longer term: a `ScriptEmitter` seam for a Windows/pwsh backend.
+
 ## Capability parity (audit reference agents → port gaps)
 - [ ] Build a "capability inventory" generator: enumerate bee-agent's exported
       RPC/tool surface (`src/index.ts`) and diff it against `openclaw`,
