@@ -59,18 +59,40 @@ unchecked items are queued. Keep this richer than you found it each run.
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
 (exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
-      objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Inventory what `src/capture` + `src/training` already implement vs. the
+      objective's five pieces (2026-07-17, run 9). Findings: capture (recorder,
+      consent, adapters, trajectory schema) ✅ and replay manifest ✅ existed;
+      dataset export (`exporter.ts`) ✅; **train/infer was the gap** — the runner
+      only *planned* MLX/Axolotl shell jobs that can't run in the cloud.
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      for a real on-device small model — DONE run 9 (`src/training/movement-model.ts`:
+      `MovementModelBackend` + `MarkovMovementBackend` n-gram with back-off).
+- [x] Synthetic event-stream generator to validate capture→dataset→replay
+      round-trips without real OS input — DONE run 9
+      (`generateSyntheticMovementDataset` + `splitMovementDataset`, seeded PRNG).
+- [x] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories — DONE run 9 (`evaluateNextTokenAccuracy`,
+      `evaluateReplayFidelity`).
+- [ ] Online/continual backend: update transition counts incrementally as new
+      trajectories arrive (vs. batch retrain), behind the same `MovementModelBackend`.
+- [ ] Controllable policy: `predictTopK` + temperature-sampled `generate` so the
+      replay engine can offer alternative movements, plus a confidence-gated
+      "ask before acting" threshold (deterministic-argmax → policy).
+- [ ] Fidelity acceptance gate: wire `evaluateReplayFidelity` into the training
+      job manifest so an artifact is only "accepted" if held-out fidelity clears
+      a bar.
+- [ ] Wire the model layer into `LocalAppleSiliconTrainingRunner` /
+      execution-service so a job can (optionally) train + eval the mock backend
+      in-process as a dry-run before emitting the real MLX/Axolotl launch script.
 
 ## Innovation backlog
+- [ ] **Stabilize 3 flaky env-dependent tests** (surfaced run 9): the
+      background-task/process-spawning + control-plane-timing assertions in
+      `app.test.ts`, `server.test.ts`, `operator-runtime.test.ts` fluctuate
+      (4↔3 failing across baseline runs with a clean tree) in the cloud sandbox.
+      Make them deterministic (inject a fake clock / mock process handle) so the
+      suite has a trustworthy green baseline for the pre-push gate.
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in
       project health over time.

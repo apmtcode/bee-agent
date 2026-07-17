@@ -6,6 +6,56 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-17 (run 9) — 🧠 Movement subsystem: pluggable model backend + train→infer→replay loop
+
+**Audited:** The local-movement learning subsystem (standing objective #2). The
+capture pipeline (`src/capture/`: recorder, adapters, trajectory schema, replay
+manifest) and the training scaffolding (`src/training/`: exporter, job-store,
+`LocalAppleSiliconTrainingRunner`) were solid, but the runner only *plans* real
+MLX/Axolotl shell jobs — those **cannot execute in the cloud**, so there was no
+actual **learn → infer** step and pieces (c) "post-train a model to repeat
+movements" and (d) "generalize to related movements" were untested end-to-end.
+
+**Changed (additive, one new module + barrel export):**
+`src/training/movement-model.ts` — a backend-agnostic movement-model layer:
+- **`MovementModelBackend` interface** (`train` / `restore`) — the documented
+  seam where a real on-device small model plugs in behind the same contract.
+- **`MarkovMovementBackend`** — a deterministic variable-order n-gram with
+  back-off. It **reproduces recorded movements exactly** (trains with a
+  `MOVEMENT_END_TOKEN` sentinel so it learns where a movement stops) and
+  **generalizes**: an unseen high-order prefix backs off to shorter contexts it
+  has seen. Fully in-process — no OS, no external runtime — so it runs in CI.
+- **`tokenizeAction` / `datasetFromTrajectories`** — turn captured trajectories
+  (gesture metadata → `tool:gesture-direction`, else first summary word) into a
+  trainable `MovementDataset`.
+- **Eval harness:** `evaluateNextTokenAccuracy` (top-1 generalization on held-out
+  movements) and `evaluateReplayFidelity` (prompt→autoregressive regenerate→
+  in-order overlap + exact-match).
+- **Synthetic stream:** `generateSyntheticMovementDataset` (seeded LCG PRNG — no
+  `Math.random`, reproducible) with a shared adjacency bias so the data is
+  learnable, plus `splitMovementDataset` for train/held-out. Validates the whole
+  capture→dataset→train→infer→replay round-trip without real input.
+- Exported the surface from `src/index.ts`.
+
+**Test results:** new `movement-model.test.ts` — **11/11 pass** (exact replay,
+tie-break determinism, back-off generalization, held-out accuracy >0.4 vs ~0.11
+chance, JSON round-trip, empty-model safety, seeded determinism). `npm run
+build` ✅. `typecheck:src` ✅ (source stays green). Full suite **182/185**; the
+**3 failures are pre-existing and environmental** (app/server/operator-runtime
+background-process spawning + control-plane timing — fluctuated 4→3 across two
+baseline runs with a clean tree, i.e. flaky, not caused by this change). No new
+regressions; movement module is clean. Pushed to the designated feature branch.
+
+**New idea:** add an **online/continual backend** that updates counts
+incrementally as new trajectories arrive (vs. batch retrain), plus a
+`predictTopK` + temperature-sampled `generate` so the replay engine can offer
+*alternative* movements and a confidence-gated "ask before acting" threshold —
+turning the model from deterministic-argmax into a controllable policy. Also:
+wire `evaluateReplayFidelity` into the training job manifest as an acceptance
+gate (a job's artifact is only "accepted" if held-out fidelity clears a bar).
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
