@@ -84,6 +84,12 @@ describe("OperatorControlPlaneServer", () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir,
       backgroundTaskIsProcessRunning: () => false,
+      // Every background task in this test has its execution state/output
+      // authored by hand; a real launch script writing concurrently would race
+      // those writes. A no-op spawn makes the test the sole state authority
+      // without changing any record-status assertions (those read the task
+      // record, which stays "running" until explicitly reconciled).
+      backgroundTaskSpawnProcess: () => ({ pid: 424242, unref() {} }),
       delivery: new OperatorDeliveryService(rootDir, {
         sendBrowserPush: async () => {},
       }),
@@ -953,6 +959,9 @@ describe("OperatorControlPlaneServer", () => {
     const driftingRuntime = new StandaloneOperatorRuntime({
       rootDir: driftingRootDir,
       backgroundTaskIsProcessRunning: () => false,
+      // The test drives execution state by hand; a real launch script would
+      // race those writes, so spawn a no-op process instead.
+      backgroundTaskSpawnProcess: () => ({ pid: 424242, unref() {} }),
     });
     const driftingServer = new OperatorControlPlaneServer({ runtime: driftingRuntime });
     const driftingBootstrap = await driftingServer.handle({
@@ -1019,6 +1028,10 @@ describe("OperatorControlPlaneServer", () => {
     const breakerRuntime = new StandaloneOperatorRuntime({
       rootDir: breakerRootDir,
       backgroundTaskIsProcessRunning: () => false,
+      // Deterministic launch: the breaker assertions count failed tasks
+      // precisely, so a real launch script writing its own "running" state
+      // would race the test's manual writes and skew the counts.
+      backgroundTaskSpawnProcess: () => ({ pid: 424242, unref() {} }),
     });
     const breakerServer = new OperatorControlPlaneServer({ runtime: breakerRuntime });
     const breakerOne = await breakerServer.handle({

@@ -734,27 +734,31 @@ function renderLaunchScript(task: BackgroundTaskRecord): string {
   const quotedOutputFile = shellQuote(task.execution.outputFile);
   const quotedCwd = shellQuote(task.cwd);
   const quotedCommand = shellQuote(task.command);
-  const quotedStatePayload = shellQuote(
-    JSON.stringify({
-      version: 1,
-      taskId: task.id,
-      kind: task.kind,
-      status: "running",
-      pid: "$$",
-      startedAt: "__OPENCLAW_STARTED_AT__",
-      updatedAt: "__OPENCLAW_STARTED_AT__",
-      outputFile: task.execution.outputFile,
-      cwd: task.cwd,
-      command: task.command,
-    }),
-  );
+  // The base state payload is emitted verbatim through a *quoted* heredoc so no
+  // shell interpolation/escaping is applied to it. `pid`/`startedAt`/`updatedAt`
+  // are filled in by python from argv — never by shell string munging, which
+  // corrupts JSON for any command containing quotes, backslashes, or newlines.
+  const statePayload = JSON.stringify({
+    version: 1,
+    taskId: task.id,
+    kind: task.kind,
+    status: "running",
+    pid: 0,
+    startedAt: "",
+    updatedAt: "",
+    outputFile: task.execution.outputFile,
+    cwd: task.cwd,
+    command: task.command,
+  });
 
   return [
     "#!/usr/bin/env bash",
     "set -euo pipefail",
     `mkdir -p $(dirname ${quotedStatePath}) $(dirname ${quotedOutputFile})`,
     "started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-    `printf '%s' ${quotedStatePayload} | sed "s/__OPENCLAW_STARTED_AT__/$started_at/g; s/\"\$\$\"/$$/g" > ${quotedStatePath}`,
+    `python3 - ${quotedStatePath} $$ "$started_at" <<'PY'`,
+    ...renderInitialStateWriterPython(statePayload),
+    "PY",
     `printf '%s\n' "starting ${task.kind} ${task.id}" >> ${quotedOutputFile}`,
     `if cd ${quotedCwd} && bash -lc ${quotedCommand} >> ${quotedOutputFile} 2>&1; then`,
     "  completed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
@@ -771,6 +775,31 @@ function renderLaunchScript(task: BackgroundTaskRecord): string {
     "fi",
     "",
   ].join("\n");
+}
+
+function renderInitialStateWriterPython(statePayload: string): string[] {
+  return [
+    "import json",
+    "import pathlib",
+    "import sys",
+    "state_path = pathlib.Path(sys.argv[1])",
+    "pid = int(sys.argv[2])",
+    "started_at = sys.argv[3]",
+    // The payload is a single JSON literal embedded verbatim in this quoted
+    // heredoc; json.loads round-trips it without any shell escaping concerns.
+    `state = json.loads(${pythonStringLiteral(statePayload)})`,
+    "state['pid'] = pid",
+    "state['startedAt'] = started_at",
+    "state['updatedAt'] = started_at",
+    "state_path.write_text(json.dumps(state, indent=2) + '\\n')",
+  ];
+}
+
+function pythonStringLiteral(value: string): string {
+  // JSON string syntax is a subset of Python string syntax, so a JSON-encoded
+  // string is a valid Python string literal — reuse it to embed arbitrary text
+  // (quotes, backslashes, newlines) safely inside the generated python source.
+  return JSON.stringify(value);
 }
 
 function renderStateWriterPython(status: BackgroundTaskExecutionState["status"]): string[] {
@@ -794,5 +823,10 @@ function renderStateWriterPython(status: BackgroundTaskExecutionState["status"])
 }
 
 function shellQuote(value: string): string {
-  return `'${value.replaceAll(`'`, `"'"'"'`)}'`;
+  // Wrap in single quotes and escape any embedded single quote with the POSIX
+  // idiom `'"'"'` (close-quote, double-quoted quote, reopen-quote). The previous
+  // idiom `"'"'"'` had a stray leading `"`, so a value like `a'b` round-tripped
+  // through the shell as `a"'b` — corrupting any command/path containing a
+  // single quote when the launch script executed it.
+  return `'${value.replaceAll(`'`, `'"'"'`)}'`;
 }

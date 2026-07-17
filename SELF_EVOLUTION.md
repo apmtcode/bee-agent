@@ -6,6 +6,64 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-17 (run 9) — 🐛 Two real reliability bugs in background-task launch + flaky-suite cure
+
+**Audited:** The test suite's actual pass state (not just typecheck). The last
+entry claimed 174/174 green, but on a clean `npm test` **3–4 tests failed and the
+set of failures changed run to run** — a flaky suite. Traced it into the
+`src/harness` background-task launch path.
+
+**Two genuine production bugs found & fixed** (`src/harness/background-tasks.ts`):
+
+1. **Corrupt state JSON from `printf | sed` templating.** The launch script
+   built the initial `running` state by embedding a JSON payload into the shell
+   and munging it with `printf '%s' … | sed …`. For any command containing
+   single quotes / backslashes / newlines (e.g. `printf 'line-1\nline-2\n'`),
+   this produced **unparseable JSON** — `readState` then threw
+   `SyntaxError: Expected ',' or '}' …`, crashing `recoverBackgroundTasks`. Fixed
+   by writing the initial state with **python3 from a quoted heredoc** (same
+   mechanism the completion writer already used): the JSON payload is embedded
+   verbatim as a Python string literal (JSON ⊂ Python string syntax) and
+   `pid`/`startedAt` are injected from argv — no shell escaping of the payload at
+   all. Reproduced the exact corruption before fixing; confirmed valid JSON after.
+
+2. **`shellQuote` mis-escaped single quotes.** The idiom was `"'"'"'` (a stray
+   leading `"`) instead of the correct POSIX `'"'"'`. So a value like `a'b`
+   round-tripped through the shell as `a"'b` — meaning **any background-task
+   command containing a single quote was corrupted before `bash -lc` even ran
+   it** (my regression command exited 2 until this was fixed). One-character-class
+   fix; verified `printf 'x' && echo ok` now executes cleanly.
+
+**Test hermeticity (flaky-suite cure).** Four tests spawned *real* OS launch
+scripts while also authoring execution state by hand; the two writers raced
+(worse once fix #1 made the launcher's writes actually valid and competitive),
+and with `isProcessRunning:()=>false` the launcher's own `running` writes skewed
+deterministic failure counts. Injected a **no-op `backgroundTaskSpawnProcess`**
+into exactly the tests that control state manually (operator-runtime
+background-tasks test; server.test main/drifting/breaker runtimes), leaving them
+the sole state authority. Record-status assertions are unaffected (they read the
+task record, not the reconciled process).
+
+**New regression test** (`background-tasks.test.ts`): starts a *real* background
+task whose command carries single quotes, double quotes, and backslashes, waits
+for terminal state, and asserts the persisted `state.json` is valid JSON, the
+command round-trips byte-for-byte, and the task completes with exit 0 — guarding
+both bug fixes end-to-end.
+
+**Test results:** `npm test` **174/174**, green **10/10 consecutive full-suite
+runs** (was flaky 3–4 failing before). `typecheck:src` CLEAN (exit 0). Full `tsc`
+unchanged at **125** (test-only debt, untouched). Build ✅ (5 files, 531 kB).
+
+**New idea (logged to ROADMAP):** A tiny `renderLaunchScript` golden/property
+test that feeds a fuzz set of adversarial commands (quotes, `$()`, backticks,
+newlines, unicode) through the generator and asserts (a) the embedded state JSON
+parses and round-trips and (b) `bash -n` reports no syntax error — so shell/JSON
+escaping regressions are caught at the unit level without spawning real
+processes. Bigger: a shared, audited `shellQuote`/`shArgv` util in `src/shared`
+so quoting logic lives in one tested place instead of per-module copies.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

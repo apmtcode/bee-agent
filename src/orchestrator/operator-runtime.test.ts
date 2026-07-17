@@ -531,6 +531,10 @@ describe("StandaloneOperatorRuntime", () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
       backgroundTaskIsProcessRunning: () => false,
+      // Deterministic launch: this test controls every state/output write by
+      // hand, so a real launch script running concurrently would race those
+      // writes. A no-op spawn makes the test the sole authority over state.
+      backgroundTaskSpawnProcess: () => ({ pid: 424242, unref() {} }),
     });
     const session = await runtime.startSession({ title: "Tasks", agentId: "main" });
 

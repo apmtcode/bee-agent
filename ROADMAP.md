@@ -4,6 +4,17 @@ Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
 ## Foundations / DX
+- [x] **Cure the flaky test suite** (2026-07-17, run 9). Root-caused two real
+      background-task launch bugs (corrupt state JSON from `printf|sed`
+      templating; `shellQuote` single-quote mis-escape) and de-raced four tests
+      that spawned real launch scripts while authoring state by hand (no-op
+      spawn injection). Suite now green 10/10 consecutive full runs.
+- [ ] **`renderLaunchScript` golden/property test**: fuzz adversarial commands
+      (quotes, `$()`, backticks, newlines, unicode) through the generator and
+      assert the embedded state JSON round-trips AND `bash -n` finds no syntax
+      error — catch shell/JSON escaping regressions at unit level, no real spawn.
+- [ ] **Shared audited `shellQuote`/`shArgv` util in `src/shared`** so quoting
+      logic lives in one tested place instead of per-module copies.
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`

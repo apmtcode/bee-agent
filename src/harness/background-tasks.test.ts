@@ -370,4 +370,46 @@ describe("BackgroundTaskExecutionService", () => {
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
   });
+
+  it("persists valid JSON state when the command contains quotes and newlines", async () => {
+    // Regression: the initial "running" state used to be templated into the
+    // launch script via `printf | sed`, which mangled any command containing
+    // single quotes, backslashes, or newlines — producing an unparseable
+    // state.json that crashed recovery. The state is now written by python from
+    // the JSON verbatim, so arbitrary command text round-trips safely.
+    const rootDir = await makeTempDir();
+    // Single quotes, double quotes, and backslash escapes — exactly the
+    // characters that the old printf|sed templating corrupted — in a command
+    // that still exits 0.
+    const command = "printf '%s\\n' \"a'b\\c\"";
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"));
+    const service = new BackgroundTaskExecutionService(rootDir);
+    const task = await store.start({ title: "Quoted command", command, cwd: rootDir });
+
+    const state = await waitForTerminalState(service, task, 8000);
+    expect(state).toBeDefined();
+    expect(state?.status).toBe("completed");
+    expect(state?.exitCode).toBe(0);
+    // The exact command text survived the shell → python → JSON round-trip.
+    expect(state?.command).toBe(command);
+    // And the raw file on disk is valid JSON (readState would throw otherwise).
+    const raw = await fs.readFile(path.join(rootDir, task.execution.stateFile), "utf8");
+    expect(() => JSON.parse(raw)).not.toThrow();
+  });
 });
+
+async function waitForTerminalState(
+  service: BackgroundTaskExecutionService,
+  task: Awaited<ReturnType<FileBackgroundTaskStore["start"]>>,
+  timeoutMs: number,
+): Promise<BackgroundTaskExecutionState | undefined> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const state = await service.readState(task);
+    if (state && (state.status === "completed" || state.status === "failed" || state.status === "cancelled")) {
+      return state;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  return await service.readState(task);
+}
