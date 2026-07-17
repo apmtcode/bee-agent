@@ -231,10 +231,20 @@ export class BackgroundTaskExecutionService {
   }
 
   async readState(task: BackgroundTaskRecord): Promise<BackgroundTaskExecutionState | undefined> {
-    return await readJsonFile<BackgroundTaskExecutionState | undefined>(
-      path.join(this.rootDir, task.execution.stateFile),
-      undefined,
-    );
+    try {
+      return await readJsonFile<BackgroundTaskExecutionState | undefined>(
+        path.join(this.rootDir, task.execution.stateFile),
+        undefined,
+      );
+    } catch (error) {
+      // A state file that is mid-write, truncated, or corrupted must not crash
+      // a recovery sweep over sibling tasks. Treat unreadable state as absent so
+      // the caller degrades to the missing-state reconciliation path instead.
+      if (error instanceof SyntaxError) {
+        return undefined;
+      }
+      throw error;
+    }
   }
 
   async writeOutput(task: BackgroundTaskRecord, content: string): Promise<void> {
@@ -740,9 +750,9 @@ function renderLaunchScript(task: BackgroundTaskRecord): string {
       taskId: task.id,
       kind: task.kind,
       status: "running",
-      pid: "$$",
-      startedAt: "__OPENCLAW_STARTED_AT__",
-      updatedAt: "__OPENCLAW_STARTED_AT__",
+      pid: 0,
+      startedAt: "",
+      updatedAt: "",
       outputFile: task.execution.outputFile,
       cwd: task.cwd,
       command: task.command,
@@ -754,8 +764,9 @@ function renderLaunchScript(task: BackgroundTaskRecord): string {
     "set -euo pipefail",
     `mkdir -p $(dirname ${quotedStatePath}) $(dirname ${quotedOutputFile})`,
     "started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-    `printf '%s' ${quotedStatePayload} | sed "s/__OPENCLAW_STARTED_AT__/$started_at/g; s/\"\$\$\"/$$/g" > ${quotedStatePath}`,
-    `printf '%s\n' "starting ${task.kind} ${task.id}" >> ${quotedOutputFile}`,
+    `python3 - ${quotedStatePath} $$ "$started_at" ${quotedStatePayload} <<'PY'`,
+    ...renderRunningStateWriterPython(),
+    "PY",
     `if cd ${quotedCwd} && bash -lc ${quotedCommand} >> ${quotedOutputFile} 2>&1; then`,
     "  completed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
     `  python3 - ${quotedStatePath} $$ "$completed_at" 0 <<'PY'`,
@@ -773,9 +784,33 @@ function renderLaunchScript(task: BackgroundTaskRecord): string {
   ].join("\n");
 }
 
+// Writes the initial "running" state. The real integer pid arrives as argv[2]
+// ($$ of the launch script, which is the detached process-group leader), so
+// isProcessRunning() can later check the group. The write goes to a temp file
+// and is atomically renamed so a concurrent recovery read never sees torn JSON.
+function renderRunningStateWriterPython(): string[] {
+  return [
+    "import json",
+    "import os",
+    "import pathlib",
+    "import sys",
+    "state_path = pathlib.Path(sys.argv[1])",
+    "pid = int(sys.argv[2])",
+    "timestamp = sys.argv[3]",
+    "state = json.loads(sys.argv[4])",
+    "state['pid'] = pid",
+    "state['startedAt'] = timestamp",
+    "state['updatedAt'] = timestamp",
+    "tmp_path = state_path.with_name(state_path.name + '.tmp')",
+    "tmp_path.write_text(json.dumps(state, indent=2) + '\\n')",
+    "os.replace(tmp_path, state_path)",
+  ];
+}
+
 function renderStateWriterPython(status: BackgroundTaskExecutionState["status"]): string[] {
   return [
     "import json",
+    "import os",
     "import pathlib",
     "import sys",
     "state_path = pathlib.Path(sys.argv[1])",
@@ -789,7 +824,9 @@ function renderStateWriterPython(status: BackgroundTaskExecutionState["status"])
     "state['completedAt'] = timestamp",
     "state['exitCode'] = exit_code",
     `state['error'] = None if '${status}' == 'completed' else f'background task exited non-zero ({exit_code})'`,
-    "state_path.write_text(json.dumps(state, indent=2) + '\\n')",
+    "tmp_path = state_path.with_name(state_path.name + '.tmp')",
+    "tmp_path.write_text(json.dumps(state, indent=2) + '\\n')",
+    "os.replace(tmp_path, state_path)",
   ];
 }
 

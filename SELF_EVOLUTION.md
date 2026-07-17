@@ -6,6 +6,68 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-17 (run 9) — Fix background-task launch: real pid + atomic state writes (suite red→green)
+
+**Audited:** Ran the full suite fresh in this environment and found it **red — 3
+deterministic failures** (`operator-runtime.test.ts`, `server.test.ts`,
+`app.test.ts`), despite run 8 logging "174/174". Every prior run's green gate is
+what future runs' `push to main` depends on, so a red suite is the highest-value
+thing to fix. Traced all three to the **background-task launch script**
+(`src/harness/background-tasks.ts` `renderLaunchScript`).
+
+**Root causes found (all genuine bugs, not test artifacts):**
+1. **Broken pid substitution.** The launch script recorded the pid via
+   `... | sed "…; s/\"\$\$\"/$$/g" > state`. Bash quote-splitting made the middle
+   `$$` expand to the shell pid *before* sed ran, so the sed program became
+   `s/<pid>/<pid>/g` — a no-op that never touched the literal `"$$"` in the JSON.
+   Result: **`state.pid` was the string `"$$"`**, so `isProcessRunning(state.pid)`
+   (`Number.isFinite("$$")` → false) reported every live background task as
+   `missing-process` → platform control flipped to `degraded`. This is exactly the
+   `app.test`/`server.test` `control=active`→`degraded` failures.
+2. **Non-atomic state writes.** Both the shell (`printf … > state`) and the
+   python terminal-state writer (`state_path.write_text(...)`) truncate-then-write,
+   so a concurrent recovery sweep could read a torn file → `JSON.parse` threw and
+   crashed the whole sweep (the `operator-runtime.test.ts` `SyntaxError`).
+3. **Output pollution.** The script appended a `starting <kind> <id>` harness
+   banner into the task's `output.log`, conflating harness noise with captured
+   command output and racing the monitor-output assertion.
+
+**Changed (additive, behaviour-preserving except the fixed bugs):**
+- `renderLaunchScript` now writes the initial `running` state via
+  `python3 - <state> $$ "$started_at" <payload>` using a new
+  `renderRunningStateWriterPython()` — real **integer pid**, temp-file +
+  `os.replace` **atomic** write, no fragile `sed`. Removed the banner line.
+- `renderStateWriterPython` (completed/failed) now also writes via temp +
+  `os.replace`.
+- `readState` now swallows `SyntaxError` (torn/corrupt state file → treated as
+  absent, degrading to the missing-state path) so one bad file can't crash a
+  recovery sweep over siblings.
+- Mirrored the identical latent pid/atomicity bug fix into
+  `src/training/runner.ts` (same `sed` pattern; on-device only, no spawn test) and
+  updated its launch-script assertion.
+- `server.test.ts` breaker case: the circuit-breaker accounting test already
+  injected `isProcessRunning: () => false` for determinism but still spawned real
+  OS processes, whose (now-reliable) async state writes raced the staged
+  `failureCount` assertions. Added the parallel `backgroundTaskSpawnProcess` stub
+  so the test depends only on the state it explicitly writes.
+
+**Test results:** full `tsc` **125** (unchanged — test additions type-clean).
+`typecheck:src` ✅. Build ✅. Tests ✅ **174/174**, verified **stable across 6
+consecutive full runs** (was 0/5 before the breaker stub, 3 hard failures before
+the launch fix). Confirmed the emitted state file now contains e.g.
+`"pid": 14011` (integer) via a live spawn repro.
+
+**New idea:** the two `renderLaunchScript`/`renderStateWriterPython` pairs in
+`background-tasks.ts` and `training/runner.ts` are now near-duplicates of the same
+"atomic JSON state file written by a detached shell process" pattern. Extract a
+shared `src/shared/launch-script.ts` helper (atomic-state-writer python snippet +
+detached-group pid capture) so this class of quoting/atomicity bug can only be
+fixed once, and add a tiny unit test that actually *executes* a rendered script in
+a tmpdir and asserts the resulting state JSON parses with an integer pid — turning
+"the launch script is silently wrong" into a caught regression.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

@@ -1016,9 +1016,16 @@ describe("OperatorControlPlaneServer", () => {
     });
 
     const breakerRootDir = await makeTempDir();
+    // Deterministic spawn stub: the circuit-breaker accounting under test depends
+    // only on which tasks have persisted "running" state (written explicitly
+    // below), not on real OS processes. A real spawn would let each task's launch
+    // script write its state asynchronously and race these assertions, so we stub
+    // it out alongside the existing isProcessRunning injection.
+    let breakerFakePid = 40000;
     const breakerRuntime = new StandaloneOperatorRuntime({
       rootDir: breakerRootDir,
       backgroundTaskIsProcessRunning: () => false,
+      backgroundTaskSpawnProcess: () => ({ pid: (breakerFakePid += 1), unref() {} }),
     });
     const breakerServer = new OperatorControlPlaneServer({ runtime: breakerRuntime });
     const breakerOne = await breakerServer.handle({

@@ -70,6 +70,23 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Generalization eval harness: measure replay fidelity on held-out but
       related synthetic trajectories.
 
+## Reliability / correctness
+- [x] **Fix broken background-task pid capture + non-atomic state writes** (run 9,
+      2026-07-17). The `sed`-based pid substitution recorded `state.pid` as the
+      literal string `"$$"`, so live tasks were misreported as `missing-process`
+      and platform control flipped to `degraded`; state files were also written
+      non-atomically (torn reads crashed recovery). Rewrote the launch scripts
+      (`background-tasks.ts` + `training/runner.ts`) to write state via `python3`
+      with a real integer pid and an atomic temp+`os.replace`; made `readState`
+      tolerate corrupt JSON; de-flaked the breaker test with a spawn stub. Suite
+      went from 3 hard failures to a stable 174/174 across 6 runs.
+- [ ] Extract a shared `src/shared/launch-script.ts` (atomic-state-writer python
+      snippet + detached process-group pid capture) to dedupe the two
+      near-identical `renderLaunchScript`/`renderStateWriterPython` pairs, and add
+      a unit test that *executes* a rendered script in a tmpdir and asserts the
+      resulting state JSON parses with an integer pid (catch launch-script
+      regressions that typecheck/build can't see).
+
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in
