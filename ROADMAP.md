@@ -62,13 +62,40 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      for a real on-device small model. — DONE run 9 (`src/training/movement-model.ts`:
+      `MovementModelBackend` seam + `DeterministicMovementBackend`, a variable-order
+      Markov model with stupid-backoff that memorizes recorded chains AND
+      generalizes to unseen prefixes).
+- [x] Synthetic event-stream generator to validate capture→dataset→replay
+      round-trips without real OS input. — DONE run 9
+      (`src/training/movement-synthetic.ts`, seeded mulberry32, no `Math.random`).
+- [x] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories. — DONE run 9 (`evaluateMovementModel`:
+      next-token top-1 accuracy + per-backoff-order breakdown; >60% on held-out).
+- [ ] **`MovementReplayPlanner`** (run-9 idea): invert `tokenizeMovement` to turn
+      a generated token sequence back into concrete `DeviceCaptureInput`/gesture
+      actions, validated against the `CapturePolicy` denylist before execution —
+      closes the loop from learned model → guarded on-device replay.
+- [ ] Top-k / temperature prediction mode on `MovementModelBackend` so the eval
+      harness can report top-3 accuracy and the planner can offer alternative
+      movements when the top-1 is policy-blocked.
+- [ ] Wire the movement model into the reviewed-export → training-job flow: have
+      `LocalTrainingExporter` also emit a `MovementDataset`, and let the runner
+      pick backend = deterministic-mock (cloud) vs mlx/axolotl (on-device).
+
+## Known bugs
+- [ ] **Background-task subprocess writes malformed JSON state** (found run 9).
+      3 tests fail on a clean tree: `app.test.ts` (2), `server.test.ts` (1),
+      `operator-runtime.test.ts` (1). The launch/state-writer in
+      `src/training/runner.ts` + `src/harness/background-tasks.ts` builds state
+      JSON via `printf '%s' … | sed "s/\"\$\$\"/$$/g"`; under the spawned bash it
+      yields `SyntaxError: Expected ',' or '}' … at position 311` when
+      `readJsonFile` parses the state. Env-dependent subprocess race. Fix: write
+      state JSON with a single `python3`/node writer (as the completion path
+      already does) instead of `printf`+`sed` placeholder substitution, so the
+      PID/timestamp splice can't corrupt the JSON.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

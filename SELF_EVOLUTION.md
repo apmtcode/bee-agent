@@ -6,6 +6,71 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-17 (run 9) — 🧠 In-process movement-model backend: train + generalize (objective #2 c/d)
+
+**Audited:** The local-movement learning subsystem (standing objective #2) and
+its roadmap gaps. Found the pipeline had capture (`device/os/browser` adapters →
+recorder → `TrajectorySpan`), an event schema, a replay manifest builder, and a
+training *runner* — but that runner (`LocalAppleSiliconTrainingRunner`) only
+emits mlx/axolotl shell scripts that require the user's real machine. The two
+hardest objective pieces — **(c) post-train a model to repeat recorded
+movements** and **(d) generalize to new-but-related movements** — had **no
+cloud-testable, in-process implementation at all**. The roadmap explicitly
+queued exactly this: a pluggable local-model backend with a deterministic mock,
+a synthetic event-stream generator, and a generalization eval harness.
+
+**Changed (additive, three new files):**
+- `src/training/movement-model.ts` — the core learning seam:
+  - `MovementToken` schema + `tokenizeMovement(action)` reducing a captured
+    action to a bounded, generalizable token from its gesture metadata
+    (`gesture/direction/target`), falling back to a summary slug.
+  - `buildMovementDataset(trajectories)` → time-ordered movement sequences +
+    derived sorted vocabulary.
+  - `MovementModelBackend` **pluggable interface** (`train(dataset) → MovementModel`)
+    so a real on-device small model can be swapped in behind the same seam.
+  - `DeterministicMovementBackend` — a **variable-order Markov model with
+    stupid-backoff**. High-order contexts memorize recorded chains → **exact
+    replay** (objective c); backoff to shorter-context statistics predicts
+    plausible next movements for **unseen prefixes** → **generalization**
+    (objective d). Fully deterministic (ties break by token order; no `Date`/
+    `Math.random`), so training is reproducible in CI and on-device.
+    `predictNext()` + autoregressive `generate()`.
+  - `evaluateMovementModel(model, heldOut)` — generalization eval harness:
+    next-token top-1 accuracy + avg confidence + per-backoff-order breakdown.
+- `src/training/movement-synthetic.ts` — `generateSyntheticMovementTrajectories()`,
+  a **seeded** (mulberry32, no `Math.random`) generator that fabricates
+  related-but-varied movement trajectories (substitution + insertion noise) from
+  a template "skill", so the whole capture→dataset→train→eval loop is validated
+  without real OS input (the engine has no access to the user's machine).
+- `src/training/movement-model.test.ts` — 13 tests: tokenization/slug, dataset
+  ordering, **exact memorized replay**, training determinism, **backoff on
+  unseen prefix**, empty-model safety, **generalization to held-out trajectories
+  (>60% top-1, chance ≪20%)**, perfect self-replay, and synthetic-generator
+  reproducibility/variation.
+- `src/index.ts` — exported the new surface (values + types).
+
+**Test results:** new module **13/13 ✅**. `npm run typecheck:src` ✅ (source
+stays green). `npm run build` ✅ (tsdown, 5 files, 546 kB). Full `npm test`:
+**184 passed**, with **3 pre-existing failures** in `app.test.ts` (2),
+`server.test.ts` (1), `operator-runtime.test.ts` (1) — **not caused by this
+change**: verified they fail identically on a clean tree (`git stash -u`) with
+none of my files present. Root cause: the background-task tests spawn a real
+bash subprocess whose launch-script state-writer (`printf … | sed "s/\"\$\$\"/$$/g"`
+in `runner.ts`/`background-tasks.ts`) produces **truncated/malformed JSON**
+(`SyntaxError: Expected ',' or '}' … at position 311`) — an environment-dependent
+subprocess race, unrelated to the movement subsystem. Logged to ROADMAP as a
+distinct bug to fix.
+
+**New idea:** now that movements are tokenized and a model can `generate()`
+sequences, add a **`MovementReplayPlanner`** that turns a generated token
+sequence back into concrete `DeviceCaptureInput`/gesture actions (the inverse of
+`tokenizeMovement`) and validates it against the `CapturePolicy` denylist before
+execution — closing the loop from *learned model → guarded on-device replay*,
+and giving objective #2 (d) an executable output rather than just a metric. A
+second idea: a **top-k / temperature** prediction mode on the backend so the eval
+harness can report top-3 accuracy and the planner can offer alternative
+movements when the top-1 is policy-blocked.
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
