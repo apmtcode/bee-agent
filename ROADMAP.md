@@ -70,6 +70,23 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Generalization eval harness: measure replay fidelity on held-out but
       related synthetic trajectories.
 
+## Reliability / test hygiene
+- [x] **Kill background-task test flakiness** (2026-07-17, run 9). Two roots:
+      (A) a real production bug — the launch script wrote the `running`
+      execution-state via `printf|sed` string-munging that corrupted JSON when a
+      command contained quotes; fixed by writing it through Python's `json`
+      module, atomically (temp + `os.replace`). (B) non-hermetic tests spawning
+      real OS processes; fixed by threading a pluggable
+      `backgroundTaskSpawnProcess` through `OperatorCliApp` and injecting a no-op
+      spawn in the four affected runtimes. Suite now stable (20/20 consecutive).
+- [ ] Add a `test:flaky` npm script (run the suite N≈10× and fail on any red) and
+      wire it into the engine's pre-push self-check so flaky-green can't be
+      mistaken for green.
+- [ ] CI/lint guard: flag any test that constructs `StandaloneOperatorRuntime` /
+      `OperatorCliApp` and calls `startBackgroundTask` without a
+      `backgroundTaskSpawnProcess` override — enforce "tests never spawn real OS
+      processes".
+
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in

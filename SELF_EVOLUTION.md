@@ -6,6 +6,70 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-17 (run 9) — 🟢 Reliability: kill background-task test flakiness at its two roots
+
+**Audited:** Project health. The suite that prior runs logged as 174/174 was in
+fact **flaky** in this environment: repeated `npm test` runs failed a rotating
+set of 1–4 tests across `operator-runtime.test.ts`, `server.test.ts`, and
+`app.test.ts`. Flaky green is worse than red for a self-evolution engine — it
+makes the per-run pre-push gate lie. Root-caused two independent defects.
+
+**Root cause A — a real production bug (corrupted state files).** The background
+task launch script (`src/harness/background-tasks.ts` → `renderLaunchScript`)
+wrote the initial `"running"` execution-state via `printf '%s' <json> | sed …`
+string-munging. When a task's `command` contained single quotes (e.g.
+`printf 'line-1\nline-2\n'`), the shell-quoting + a broken `s/"$$"/$$/g`
+substitution corrupted the JSON, so any reader (`reconcileTask` → `readState`)
+got a `SyntaxError` (`position 311`). This affects **real** background tasks, not
+just tests. Fixed by writing the running-state through Python's `json` module
+(new `renderRunningStateWriterPython()`) exactly like the completed/failed
+writers already did — arbitrary command/cwd strings can no longer corrupt the
+document — and **atomically** (temp file + `os.replace`) so a concurrent reader
+never sees a half-written file. Also hardened the completed/failed Python writer
+to use the same temp-file + `os.replace` atomic pattern.
+
+**Root cause B — non-hermetic tests (real OS processes racing).** Several tests
+constructed `StandaloneOperatorRuntime` injecting only
+`backgroundTaskIsProcessRunning: () => false` but **not** a spawn override, so
+`startBackgroundTask` launched **real detached OS processes** (`bash`, `python3`,
+`tail -f`) whose async launch-script output/state writes raced with the tests'
+own deterministic `writeOutput`/`writeState` calls (e.g. reading
+`"starting monitor …"` instead of `"monitor-line-2"`, or the platform
+circuit-breaker counting an extra failure → `state=paused threshold=3` instead of
+`degraded/2`). The runtime already accepts `backgroundTaskSpawnProcess`; I
+threaded the same override (plus `backgroundTaskIsProcessRunning`) through
+`OperatorCliApp` (`OperatorCliAppOptions`) so embedders/tests can supply a pluggable
+process backend, and injected a no-op spawn (`() => ({ pid: 999999, unref(){} })`)
+into the four affected runtimes: the operator-runtime background-tasks test, the
+server omnibus + breaker tests, and the app lifecycle test. State is now driven
+entirely by the tests — no real processes, no race.
+
+**Changed:**
+- `src/harness/background-tasks.ts` — running-state written via Python `json`
+  (new `renderRunningStateWriterPython`), atomic temp+`os.replace`; completed/
+  failed writers made atomic too. (source fix)
+- `src/cli/app.ts` — `OperatorCliAppOptions` gains
+  `backgroundTaskSpawnProcess` / `backgroundTaskIsProcessRunning`, threaded to
+  the runtime. (additive, production-facing pluggable backend seam)
+- `src/orchestrator/operator-runtime.test.ts`, `src/control-plane/server.test.ts`
+  (×2 runtimes), `src/cli/app.test.ts` — inject no-op spawn.
+
+**Test results:** full suite **174/174**, now **stable — 20/20 consecutive
+`npm test` runs green** (plus 12/12 on the flaky-file subset in parallel), where
+before the fix it failed ~1–5 of every 6–10 runs. `npm run build` ✅.
+`npm run typecheck:src` ✅ (exit 0). No source regressions.
+
+**New idea:** add a `test:flaky` npm script that runs the suite N times
+(`for i in $(seq 1 N); do vitest run || exit 1; done`, N≈10) and wire it into the
+engine's pre-push self-check, so a green-but-flaky state can never again be
+mistaken for green. Longer term, add an ESLint/`grep` guard in CI that flags any
+test constructing `StandaloneOperatorRuntime`/`OperatorCliApp` that calls
+`startBackgroundTask` without a `backgroundTaskSpawnProcess` override — making the
+"tests must not spawn real OS processes" invariant enforceable instead of
+tribal.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

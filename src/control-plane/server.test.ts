@@ -83,6 +83,10 @@ describe("OperatorControlPlaneServer", () => {
     const rootDir = await makeTempDir();
     const runtime = new StandaloneOperatorRuntime({
       rootDir,
+      // No-op spawn so background tasks don't launch real OS processes whose
+      // launch-script output/state writes would race with the deterministic
+      // writeOutput/writeState calls this test relies on.
+      backgroundTaskSpawnProcess: () => ({ pid: 999999, unref() {} }),
       backgroundTaskIsProcessRunning: () => false,
       delivery: new OperatorDeliveryService(rootDir, {
         sendBrowserPush: async () => {},
@@ -1018,6 +1022,10 @@ describe("OperatorControlPlaneServer", () => {
     const breakerRootDir = await makeTempDir();
     const breakerRuntime = new StandaloneOperatorRuntime({
       rootDir: breakerRootDir,
+      // No-op spawn so background tasks don't launch real OS processes whose
+      // async state writes would race with the deterministic writeState calls
+      // that drive the platform circuit-breaker below.
+      backgroundTaskSpawnProcess: () => ({ pid: 999999, unref() {} }),
       backgroundTaskIsProcessRunning: () => false,
     });
     const breakerServer = new OperatorControlPlaneServer({ runtime: breakerRuntime });
