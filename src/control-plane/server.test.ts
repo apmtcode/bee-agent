@@ -83,6 +83,11 @@ describe("OperatorControlPlaneServer", () => {
     const rootDir = await makeTempDir();
     const runtime = new StandaloneOperatorRuntime({
       rootDir,
+      // Stub spawn so no real OS process is launched (real process scheduling is
+      // flaky under parallel/cloud load, and the detached launch script's own
+      // state writes race consumer reads). No execution-state file is written
+      // until one is explicitly authored, matching this test's expectations.
+      backgroundTaskSpawnProcess: () => ({ pid: 41000, unref() {} }),
       backgroundTaskIsProcessRunning: () => false,
       delivery: new OperatorDeliveryService(rootDir, {
         sendBrowserPush: async () => {},
@@ -952,6 +957,9 @@ describe("OperatorControlPlaneServer", () => {
     const driftingRootDir = await makeTempDir();
     const driftingRuntime = new StandaloneOperatorRuntime({
       rootDir: driftingRootDir,
+      // Stub spawn so the detached launch script never races/overwrites the
+      // manual "running" state this test writes to simulate a dead process.
+      backgroundTaskSpawnProcess: () => ({ pid: 42000, unref() {} }),
       backgroundTaskIsProcessRunning: () => false,
     });
     const driftingServer = new OperatorControlPlaneServer({ runtime: driftingRuntime });
@@ -1018,6 +1026,9 @@ describe("OperatorControlPlaneServer", () => {
     const breakerRootDir = await makeTempDir();
     const breakerRuntime = new StandaloneOperatorRuntime({
       rootDir: breakerRootDir,
+      // Stub spawn so the detached launch script never races/overwrites the
+      // manual "running" states this test writes to simulate dead processes.
+      backgroundTaskSpawnProcess: () => ({ pid: 43000, unref() {} }),
       backgroundTaskIsProcessRunning: () => false,
     });
     const breakerServer = new OperatorControlPlaneServer({ runtime: breakerRuntime });

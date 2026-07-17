@@ -6,6 +6,62 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-17 (run 9) — Fix 3 real background-task launch bugs; de-flake the suite
+
+**Audited:** Started by running the baseline suite and found it **RED** — 4 tests
+failing (not the 174/174 the last run recorded). Traced through the
+background-task subsystem (`src/harness/background-tasks.ts` launch script +
+`deriveRemoteDiagnostics` in `src/control-plane/server.ts`). Root cause was a
+chain of **three genuine production bugs** in how a detached background task
+writes and reads its execution-state file, surfaced now because this machine
+actually spawns the real processes (prior runs got lucky on timing):
+
+1. **Invalid-JSON state writes (crash).** `renderLaunchScript` built the initial
+   "running" state by `sed`-substituting into a hand-written JSON string. The
+   `sed "s/\"\$\$\"/$$/g"` nested double-quotes inside a `sed "..."` shell string,
+   so the shell split it and the pid substitution became a no-op (`"pid":"$$"`
+   stayed literal), and any command containing quotes broke the JSON. A concurrent
+   `reconcileTask` → `readJsonFile` then threw `SyntaxError` and rejected recovery
+   of the whole session. **Fix:** write the state in **python from argv** (python3
+   was already a dependency for the completion writer) — valid JSON for any
+   command content — using temp-file + `os.replace` for an **atomic** write. Did
+   the same for the completion/failure writer (`renderStateWriterPython`).
+2. **`shellQuote` single-quote escaping was wrong.** It replaced each `'` with
+   `"'"'"'` instead of the POSIX-correct `'"'"'`, leaving commands that contain a
+   single quote (e.g. `printf 'foo'` — extremely common) with unbalanced quotes,
+   so they **failed to execute** (`bash: -c: unexpected EOF`). Never caught because
+   no test ran the *real* launch script with a single-quoted command. **Fix:**
+   corrected the escape sequence.
+3. **Real-process test flakiness.** Several tests started real OS background
+   processes (`sleep 5`, `printf …`) whose detached launch script raced the manual
+   `writeState` calls the tests use to stage scenarios — non-deterministic under
+   parallel/cloud load. **Fix:** threaded a `backgroundTaskSpawnProcess` /
+   `backgroundTaskIsProcessRunning` test seam through `OperatorCliApp`
+   (`src/cli/app.ts`, additive optional options) and stubbed the spawn in the
+   flaky tests (`app.test.ts`, `server.test.ts` main/drifting/breaker runtimes,
+   `operator-runtime.test.ts`) so no real process runs and staged state is
+   authoritative. `isProcessRunning` set per intent (alive vs. simulated-dead).
+
+**New regression test** (`background-tasks.test.ts` → "real launch script"): runs
+the **actual** generated launch script with a command containing both a double
+quote and a literal newline, polls the state file (every read must parse), and
+asserts valid JSON, numeric pid, preserved command, `status: completed`,
+exitCode 0. This is the only test that exercises `renderLaunchScript` end-to-end
+and is what caught bug #2.
+
+**Test results:** suite **RED (4 failing) → GREEN 175/175** (174 + the new
+regression test), stable across **5×** full-suite runs and **12×** on the
+previously-flaky trio. `typecheck:src` ✅ clean. Full `tsc` unchanged at **125**
+(no new debt). Build ✅.
+
+**New idea:** the `shellQuote` bug hid for so long because the launch script is
+only ever run behind a mocked spawn in unit tests. Add a tiny **golden-script
+test** that snapshots `renderLaunchScript(task)` for a few adversarial commands
+(single quotes, double quotes, `$()`, newlines, backticks) and shell-lints the
+output with `bash -n`, so quoting regressions are caught at authoring time
+without needing a live process. Longer term, consider replacing the bespoke
+`shellQuote` with a single well-tested quoting helper shared across the codebase.
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

@@ -4,6 +4,13 @@ Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
 ## Foundations / DX
+- [x] **Fix background-task launch subsystem** (2026-07-17, run 9) — three real
+      bugs: sed-built state JSON was invalid (pid never substituted, quotes
+      mangled) → replaced with an atomic python-from-argv writer; `shellQuote`
+      single-quote escaping was malformed (`"'"'"'` → `'"'"'`) so single-quoted
+      commands failed to run; and real-process tests raced manual state writes →
+      added a spawn test seam + a real-launch-script regression test. Suite
+      RED→GREEN 175/175.
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`
@@ -80,6 +87,13 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Barrel-collision lint: scan `src/index.ts` re-exports for names exported
       from more than one module and flag them, so duplicate-identifier debt is
       caught at authoring time instead of accumulating silently.
+- [ ] **Golden-script + `bash -n` lint for `renderLaunchScript`** (run 9 idea):
+      snapshot the generated launch script for adversarial commands (single/double
+      quotes, `$()`, backticks, newlines) and shell-lint each with `bash -n`, so
+      shell-quoting regressions are caught at authoring time without a live
+      process. The `shellQuote` single-quote bug (run 9) survived precisely
+      because the real script is only ever run behind a mocked spawn in tests.
+      Longer term: unify on one well-tested quoting helper across the codebase.
 - [ ] Per-module typecheck ratchet: record each module's current `tsc` error
       count to a baseline file and fail if a module regresses above it. Lets the
       engine pay debt down module-by-module without one green-gate blocking

@@ -801,7 +801,16 @@ describe("OperatorCliApp", () => {
 
   it("supports session lifecycle, transcript, approvals, pairing, config, and prompt commands", async () => {
     const rootDir = await makeTempDir();
-    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    const app = new OperatorCliApp({
+      rootDir,
+      cwd: rootDir,
+      currentDate: "2026-05-25",
+      // Stub the background-task OS seam so the started tasks stay deterministically
+      // "running" (their process reads as alive) instead of depending on real
+      // process scheduling, which is flaky under parallel/cloud test load.
+      backgroundTaskSpawnProcess: () => ({ pid: 43210, unref() {} }),
+      backgroundTaskIsProcessRunning: (pid) => pid === 43210,
+    });
     const firstSession = await app.runtime.startSession({ title: "first", cwd: rootDir, agentId: "operator-cli" });
     const secondSession = await app.runtime.startSession({ title: "second", cwd: rootDir, agentId: "operator-cli" });
 

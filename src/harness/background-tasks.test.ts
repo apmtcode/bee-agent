@@ -355,6 +355,50 @@ describe("FileBackgroundTaskStore", () => {
   });
 });
 
+describe("real launch script", () => {
+  // Exercises the actual generated launch script (real bash + python3) rather
+  // than a stubbed spawn. Guards against regressions in renderLaunchScript's
+  // JSON state writing — an earlier version sed-substituted into a hand-built
+  // JSON string, which mangled commands containing quotes and never injected
+  // the pid, producing invalid JSON that concurrent reconcile reads crashed on.
+  it("writes a valid, atomically-updated state file for a command with quotes and newlines", async () => {
+    const rootDir = await makeTempDir();
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"));
+    // A double quote (broke the old sed writer) plus a literal newline (must be
+    // JSON-escaped) — the exact shapes that used to corrupt the state file.
+    const command = 'printf \'x"y\nz\'';
+    const task = await store.start({ title: "Quoted command", command, cwd: rootDir, kind: "task" });
+
+    const statePath = path.join(rootDir, task.execution.stateFile);
+    const deadline = Date.now() + 8000;
+    let state: BackgroundTaskExecutionState | undefined;
+    // Poll until the launch script has written a terminal state. Every read must
+    // parse cleanly — a partial/corrupt write would throw here and fail the test.
+    while (Date.now() < deadline) {
+      let raw: string;
+      try {
+        raw = await fs.readFile(statePath, "utf8");
+      } catch {
+        await new Promise((resolve) => setTimeout(resolve, 25));
+        continue;
+      }
+      const parsed = JSON.parse(raw) as BackgroundTaskExecutionState;
+      if (parsed.status === "completed" || parsed.status === "failed") {
+        state = parsed;
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+
+    expect(state).toBeDefined();
+    expect(state?.status).toBe("completed");
+    expect(typeof state?.pid).toBe("number");
+    expect(state?.command).toBe(command);
+    expect(state?.exitCode).toBe(0);
+    await expect(store.getOutput(task.id)).resolves.toContain('x"y');
+  });
+});
+
 describe("BackgroundTaskExecutionService", () => {
   it("writes launch artifacts and reads task output", async () => {
     const rootDir = await makeTempDir();

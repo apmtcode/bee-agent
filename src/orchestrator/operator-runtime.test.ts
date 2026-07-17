@@ -530,6 +530,9 @@ describe("StandaloneOperatorRuntime", () => {
   it("starts, syncs, recovers, lists, and cancels background tasks", async () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
+      // Stub spawn so the detached launch script never races/overwrites the
+      // manual execution states this test writes; state is authored explicitly.
+      backgroundTaskSpawnProcess: () => ({ pid: 44000, unref() {} }),
       backgroundTaskIsProcessRunning: () => false,
     });
     const session = await runtime.startSession({ title: "Tasks", agentId: "main" });
