@@ -40,6 +40,16 @@ unchecked items are queued. Keep this richer than you found it each run.
     fix residual test-only typings.
 - [ ] Add a `verify` npm script (`typecheck && build && test`) and have the
       engine run it as a pre-push self-check each cycle.
+- [x] **Green + hermetic the test gate** (2026-07-17, run 9). The suite was
+      flaky-failing 2–4/174 on fresh containers because background-task tests
+      spawned real detached bash processes that raced their own state writes.
+      Fixed the underlying non-atomic state write in `renderLaunchScript`
+      (temp+`mv` / `os.replace`) *and* threaded `backgroundTaskSpawnProcess` /
+      `backgroundTaskIsProcessRunning` through `OperatorCliAppOptions` so tests
+      inject deterministic spawn stubs. Now 174/174, stable across repeated runs.
+- [ ] **Flakiness sentinel** in the pre-push self-check: run the suite twice and
+      fail if the pass set differs between runs, catching non-deterministic tests
+      the run they appear instead of letting them rot the gate silently.
 - [x] Interim **source-only typecheck gate** — DONE run 7. `tsconfig.src.json`
       (excludes `**/*.test.ts`) + `typecheck:src` script; passes (exit 0). Next:
       have the engine run it as a per-run pre-push self-check.

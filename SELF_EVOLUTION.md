@@ -6,6 +6,52 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-17 (run 9) — Fixed a real background-task race + made task tests hermetic
+
+**Audited:** The verification gate itself. On a fresh container `npm test` was
+**flaky-failing** (2–4 of 174 tests, non-deterministically) — the build/test
+gate the whole procedure depends on was red. Traced every failure to one root
+cause in the background-task subsystem (`src/harness/background-tasks.ts`).
+
+**Root cause (a genuine product bug, not just a test bug):** the launch script
+(`renderLaunchScript`) writes its execution-state JSON **non-atomically** — the
+initial write via `printf … | sed > state.json` truncates-then-writes, and the
+Python completion writer did a plain `write_text`. Any concurrent reader — most
+importantly **crash recovery** (`recoverBackgroundTasks` → `reconcileTask` →
+`readState`) — can observe a *half-written* file and crash with
+`SyntaxError: Expected ',' or '}' … in JSON`. The tests surfaced it because they
+spawned **real detached bash processes** (only `isProcessRunning` was stubbed,
+never `spawnProcess`), so those processes wrote state files asynchronously and
+raced the tests' own `writeState`/`readState`.
+
+**Changed (additive, two parts):**
+1. **Reliability fix** in `renderLaunchScript` — both state writes are now
+   **atomic**: the initial `sed` output goes to `state.json.tmp` then `mv`s into
+   place, and the Python writer uses `tmp.write_text(...)` + `os.replace(...)`
+   (atomic on POSIX & Windows). Recovery can no longer read a partial state file.
+2. **Test hermeticity** — threaded the existing `backgroundTaskSpawnProcess` /
+   `backgroundTaskIsProcessRunning` runtime seams through `OperatorCliAppOptions`
+   (mirroring the `configHome` precedent from run 1), and injected deterministic
+   spawn stubs (`() => ({ pid, unref() {} })`) into the four tests that start
+   background tasks (`operator-runtime`, `app` ×2, `server` ×3 constructions).
+   No real OS process launches in tests anymore. The active-watch test reports
+   the stub as alive (`isProcessRunning: () => true`) since it exercises live
+   task/monitor watching; recovery-to-failed stays covered by the false-stub
+   tests.
+
+**Test results:** `typecheck:src` ✅ (exit 0), `npm run build` ✅ (tsdown, 5
+files, 532 kB). `npm test` ✅ **174/174**, and — the point — **stable across 3
+consecutive full runs** and 3 consecutive affected-file runs (was 170–172/174,
+varying every run). The source-only typecheck gate stays green.
+
+**New idea (logged to ROADMAP):** A **flakiness sentinel** for the pre-push
+self-check — run the suite twice (or `vitest --retry=0` with a repeat) and fail
+the gate if the pass set differs between runs, so non-deterministic tests are
+caught the run they're introduced instead of silently rotting the gate. Cheap
+insurance now that the suite is hermetic.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
