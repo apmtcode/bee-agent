@@ -370,4 +370,38 @@ describe("BackgroundTaskExecutionService", () => {
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
   });
+
+  it("launches a real subprocess whose initial state is valid JSON with a numeric pid and an intact single-quoted command", async () => {
+    const rootDir = await makeTempDir();
+    // Use the DEFAULT (real) spawn so the generated launch script runs end-to-end.
+    // This is the only coverage of the launcher's state-writing shell pipeline.
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"));
+    // Single quotes exercise shellQuote(); the blocking tail keeps the process alive
+    // long enough for the initial "running" state to be observed before completion.
+    const command = "printf 'line-1\nline-2\n'; sleep 5";
+    const task = await store.start({ title: "Real launch", command, cwd: rootDir });
+
+    let state: BackgroundTaskExecutionState | undefined;
+    for (let attempt = 0; attempt < 150; attempt += 1) {
+      // readState() must never throw: an atomic (temp + rename) write means readers
+      // only ever see a complete JSON document, never a torn one.
+      state = await store.executionService.readState(task);
+      if (state) {
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+
+    expect(state).toBeDefined();
+    expect(state?.status).toBe("running");
+    // Regression guard for the sed `"$$"` substitution: the pid must be the
+    // launcher's numeric pid, not the unreplaced literal string "$$" (which would
+    // fail every isProcessRunning() check and mis-report the task as missing-process).
+    expect(typeof state?.pid).toBe("number");
+    expect(state?.pid).toBeGreaterThan(0);
+    // Regression guard for shellQuote(): a command containing single quotes must
+    // round-trip intact instead of corrupting the JSON state document.
+    expect(state?.command).toBe(command);
+    expect(state?.taskId).toBe(task.id);
+  });
 });

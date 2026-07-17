@@ -70,6 +70,21 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Generalization eval harness: measure replay fidelity on held-out but
       related synthetic trajectories.
 
+## Background-task launcher robustness (run 9)
+- [x] Fix `shellQuote()` single-quote escaping (`"'"'"'` → `'"'"'`) — corrupted
+      JSON state for any command containing `'` (run 9).
+- [x] Fix `sed` pid substitution so `"$$"` is replaced by the numeric launcher pid
+      instead of being left as the literal string `"$$"` (run 9).
+- [x] Make launcher state writes atomic (temp + `mv`/`os.replace`) to prevent torn
+      reads (run 9).
+- [x] Real-subprocess integration test covering the launch pipeline (run 9).
+- [ ] `renderLaunchScript` golden-snapshot test + `shellQuote` property test over
+      adversarial inputs (`'`, `"`, `$`, `\n`, backtick) so quoting regressions are
+      caught at author time, not as downstream JSON-parse failures.
+- [ ] Replace the `printf | sed` placeholder substitution with a single here-doc
+      that emits the state JSON directly from bash vars — eliminates the whole
+      class of shell-quoting bugs.
+
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in

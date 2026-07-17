@@ -6,6 +6,56 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-17 (run 9) — 🐛 Two real launcher bugs fixed: background-task state corruption + false "missing-process"
+
+**Audited:** Ran the suite first (per procedure step 5) and found **3 tests failing
+on `main`** (172/174) — not flaky, deterministic, and present at the tip commit
+(`3c7b7236`), so a genuine regression surfaced by running on this machine rather
+than something I introduced. Traced all three to the background-task **launch
+script** (`src/harness/background-tasks.ts`), which spawns a detached bash process
+that writes the task's JSON state file.
+
+**Two genuine production bugs found & fixed (source, not tests):**
+1. **`shellQuote()` corrupted every command containing a single quote.** It escaped
+   `'` as `"'"'"'` (leading double quote) instead of the POSIX idiom `'"'"'`. The
+   stray `"` leaked into the launcher output, so a command like
+   `printf 'line-1\nline-2\n'` was written into the state file as
+   `"command":"printf "'…` — invalid JSON. `readState()` then threw, breaking
+   `recoverBackgroundTasks`/`syncBackgroundTask` at runtime (not just in tests).
+2. **The `sed` pid substitution never ran.** The rendered bash was
+   `sed "s/…; s/"$$"/$$/g"` — the intended-*literal* `"` around `$$` closed and
+   reopened bash's double-quoted sed argument, collapsing the pattern to
+   `s/<pid>/<pid>/g`. So `"pid":"$$"` was left as the **string** `"$$"`, which
+   fails every `isProcessRunning(pid)` check and mis-reports live tasks as
+   `missing-process` → sessions shown `degraded` instead of `active`. Fixed by
+   escaping the quotes so they reach sed literally (`s/\"\$\$\"/$$/g`).
+3. **Hardening (additive):** made both launcher state writes **atomic** (temp file
+   + `mv`/`os.replace`) so a concurrent reader can never observe a torn document —
+   matching `writeJsonAtomic()` on the TS side.
+
+**Tests:** Added a real-subprocess integration test (`background-tasks.test.ts`)
+that runs the actual launch script and asserts the initial state is valid JSON,
+`pid` is **numeric**, and a single-quoted command round-trips intact — the only
+coverage of the launcher's shell pipeline (verified it fails on the pre-fix code
+and passes after). The 3 previously-failing state-machine tests were racing a
+**real detached subprocess** against their own `writeState()` calls; injected a
+deterministic no-op `backgroundTaskSpawnProcess` so the test is the sole state
+writer (same hermeticity pattern as run 1's `configHome`).
+
+**Results:** `typecheck:src` ✅ (exit 0), build ✅, tests ✅ **175/175** (was
+172/174 on a fresh checkout; +1 new test). Focused, additive diff.
+
+**New idea:** the launcher embeds shell/sed/python string-templating that no unit
+test covered until now — brittle by construction. Worth a `renderLaunchScript`
+golden-snapshot test (assert the emitted bash for a fixed task) plus a tiny
+`shellQuote` property test over adversarial inputs (embedded `'`, `"`, `$`, `\n`,
+`\``), so quoting regressions are caught at author time instead of as downstream
+JSON-parse failures. Bigger: replace the `printf | sed` placeholder dance with a
+single here-doc that emits the JSON directly from bash vars — removes the whole
+class of quoting bugs.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

@@ -754,7 +754,17 @@ function renderLaunchScript(task: BackgroundTaskRecord): string {
     "set -euo pipefail",
     `mkdir -p $(dirname ${quotedStatePath}) $(dirname ${quotedOutputFile})`,
     "started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-    `printf '%s' ${quotedStatePayload} | sed "s/__OPENCLAW_STARTED_AT__/$started_at/g; s/\"\$\$\"/$$/g" > ${quotedStatePath}`,
+    // Write the initial state atomically (temp file + mv) so a concurrent reader
+    // never observes a truncated/torn JSON document mid-write.
+    //
+    // The pid substitution replaces the literal token `"$$"` in the JSON payload
+    // with the launcher's numeric pid. The double quotes around `$$` must reach
+    // sed as *literal* characters, so they are escaped (\") — otherwise they
+    // close/reopen bash's double-quoted sed argument, the pattern collapses to
+    // `s/<pid>/<pid>/g`, and `"pid"` is left as the string "$$" (which then fails
+    // every isProcessRunning() check and mis-reports tasks as missing-process).
+    `printf '%s' ${quotedStatePayload} | sed "s/__OPENCLAW_STARTED_AT__/$started_at/g; s/\\"\\$\\$\\"/$$/g" > ${quotedStatePath}.tmp`,
+    `mv -f ${quotedStatePath}.tmp ${quotedStatePath}`,
     `printf '%s\n' "starting ${task.kind} ${task.id}" >> ${quotedOutputFile}`,
     `if cd ${quotedCwd} && bash -lc ${quotedCommand} >> ${quotedOutputFile} 2>&1; then`,
     "  completed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
@@ -776,6 +786,7 @@ function renderLaunchScript(task: BackgroundTaskRecord): string {
 function renderStateWriterPython(status: BackgroundTaskExecutionState["status"]): string[] {
   return [
     "import json",
+    "import os",
     "import pathlib",
     "import sys",
     "state_path = pathlib.Path(sys.argv[1])",
@@ -789,10 +800,19 @@ function renderStateWriterPython(status: BackgroundTaskExecutionState["status"])
     "state['completedAt'] = timestamp",
     "state['exitCode'] = exit_code",
     `state['error'] = None if '${status}' == 'completed' else f'background task exited non-zero ({exit_code})'`,
-    "state_path.write_text(json.dumps(state, indent=2) + '\\n')",
+    // Atomic write: render to a temp file then os.replace() so readers only ever
+    // see a complete state document (matches writeJsonAtomic on the TS side).
+    "tmp_path = state_path.with_name(state_path.name + '.tmp')",
+    "tmp_path.write_text(json.dumps(state, indent=2) + '\\n')",
+    "os.replace(tmp_path, state_path)",
   ];
 }
 
 function shellQuote(value: string): string {
-  return `'${value.replaceAll(`'`, `"'"'"'`)}'`;
+  // Wrap in single quotes and escape any embedded single quote using the POSIX
+  // idiom: close the quote, emit a double-quoted single quote, then reopen.
+  // The replacement is exactly '"'"' — a leading double quote (as in "'"'"')
+  // leaks a literal `"` into the output and corrupts values such as
+  // `printf 'a\nb'`, producing invalid JSON in the task state file.
+  return `'${value.replaceAll(`'`, `'"'"'`)}'`;
 }
