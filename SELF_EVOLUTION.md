@@ -6,6 +6,61 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-17 (run 9) — Fix background-task launch-script quote bug; restore green test baseline
+
+**Audited:** The build/test gate first, per procedure. `npm test` came up
+**4 failing / 170 passing** in this cloud environment (prior runs recorded a
+green 174/174) — so the verification gate itself was compromised. Root-caused
+each failure before writing any feature code.
+
+**Bug found (highest value — real correctness defect, not just a test issue):**
+`src/harness/background-tasks.ts` `shellQuote()` used a **malformed POSIX
+single-quote escape** — it replaced each `'` with `` "'"'"' `` (6 chars) instead
+of the correct `` '"'"' `` (5 chars: close-quote, double-quoted quote,
+re-open-quote). The launch script embeds a JSON state payload inside a
+single-quoted `printf`, so **any background-task command containing a `'`
+produced corrupt JSON** in the execution `state.json` (e.g. the test command
+`printf 'line-1\nline-2\n'` yielded `"command":"printf "'line-1…"'"`). The
+reconcile path (`readState → JSON.parse`) then threw `SyntaxError`. The sibling
+implementation in `src/training/runner.ts:228` already had the *correct* escape,
+confirming this was a copy divergence. **Fixed** the escape to match.
+
+**Test-isolation fixes (same root class — real spawned subprocesses racing
+controlled `writeState`):** several tests construct runtimes/apps that spawn a
+**real detached background process** while also driving state via `writeState`
+for deterministic assertions. Under this environment's timing the real launch
+script's state/output writes landed *after* the controlled writes, flipping
+`running`→`missing-process`/`failed`. Injected the already-existing deterministic
+seams:
+- Threaded `backgroundTaskSpawnProcess` / `backgroundTaskIsProcessRunning`
+  through `OperatorCliAppOptions` → the runtime (additive, mirrors run-2's
+  `configHome` isolation seam). Production default unchanged (real spawn).
+- Injected stub spawns in `operator-runtime.test.ts`, `server.test.ts`
+  (session, `driftingRuntime`, `breakerRuntime`), and `app.test.ts` (session
+  lifecycle + background/monitor). The background/monitor CLI test's task half
+  now mirrors its own monitor half (stub spawn + injected `writeState`/
+  `writeOutput`), with a `withStubbedProcessKill` helper so `stop` never signals
+  an unrelated process group.
+
+**Regression test added:** `background-tasks.test.ts` now *executes the real
+generated launch script* for a single-quote command via `execFileSync("bash",…)`
+and asserts the resulting `state.json` parses and round-trips the quoted command
+— the previous suite only used a mock spawn, so it never ran the script and
+missed the bug.
+
+**Test results:** `typecheck:src` exit 0 · build ✅ (5 files, 532 kB) · `npm test`
+✅ **175/175** (was 170/175), verified green across **3 consecutive full runs**
+(the failures were load/timing-deterministic, so repeat runs matter).
+
+**New idea (logged to ROADMAP):** Add a **spawn-safety lint/guard**: a tiny
+unit test that renders each launch script (`background-tasks`, `training/runner`)
+for adversarial commands/paths (single quotes, `$`, spaces, newlines, `__`
+sentinels) and asserts the emitted state JSON parses — a shared `shellQuote`
++ property test would have caught this class at authoring time and prevents the
+two implementations from diverging again.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

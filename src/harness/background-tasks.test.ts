@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -352,6 +353,44 @@ describe("FileBackgroundTaskStore", () => {
       expect.objectContaining({ task: expect.objectContaining({ id: missing.id }), reason: "missing-process" }),
     ]);
     await expect(reloaded.get(other.id)).resolves.toMatchObject({ id: other.id, status: "running" });
+  });
+
+  it("generates a launch script that writes valid state JSON for commands containing single quotes", async () => {
+    const rootDir = await makeTempDir();
+    const filePath = path.join(rootDir, "background-tasks.json");
+    let launchScriptPath: string | undefined;
+    const store = new FileBackgroundTaskStore(
+      filePath,
+      (command) => {
+        launchScriptPath = command;
+        return { pid: 4242, unref() {} };
+      },
+      () => true,
+    );
+
+    // A command with single quotes previously corrupted the state JSON because
+    // the POSIX single-quote escape in the launch script was malformed.
+    const task = await store.start({
+      sessionId: "sess-quote",
+      title: "Print with quotes",
+      command: "printf 'line-1\nline-2\n'",
+      cwd: rootDir,
+      kind: "task",
+    });
+
+    expect(launchScriptPath).toBe(path.join(rootDir, task.execution.launchScript));
+
+    // Execute the real generated launch script and confirm it writes parseable
+    // state that round-trips the quoted command.
+    execFileSync("bash", [launchScriptPath as string], { cwd: rootDir });
+
+    const rawState = await fs.readFile(path.join(rootDir, task.execution.stateFile), "utf8");
+    const state = JSON.parse(rawState) as BackgroundTaskExecutionState;
+    expect(state.taskId).toBe(task.id);
+    expect(state.command).toBe("printf 'line-1\nline-2\n'");
+    expect(typeof state.pid).toBe("number");
+    expect(state.status).toBe("completed");
+    expect(state.exitCode).toBe(0);
   });
 });
 

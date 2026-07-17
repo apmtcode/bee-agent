@@ -8,6 +8,13 @@ unchecked items are queued. Keep this richer than you found it each run.
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`
       (2026-06-22).
+- [x] **Restore a green test baseline** (2026-07-17, run 9). Fixed a real
+      malformed POSIX single-quote escape in `background-tasks.ts` `shellQuote()`
+      that corrupted execution-state JSON for any command containing a `'`, and
+      removed real-subprocess timing races from 4 tests by injecting the existing
+      deterministic spawn seams (also threaded through `OperatorCliAppOptions`).
+      175/175 green across 3 consecutive full runs; added a launch-script
+      regression test that executes the real script.
 - [ ] **Pay down typecheck debt** (surfaced by the `typecheck` script). Full
       `tsc --noEmit` count was **397** on 2026-06-22; now **125**. 🎯 ALL source
       (`src/**` non-test) files typecheck clean since run 7; remaining 125 errors
@@ -71,6 +78,12 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
       related synthetic trajectories.
 
 ## Innovation backlog
+- [ ] **Spawn-safety property test / shared `shellQuote`** (added run 9). Render
+      every launch script (`background-tasks`, `training/runner`) for adversarial
+      commands/paths — single quotes, `$`, spaces, newlines, `__…__` sentinels —
+      and assert the emitted state JSON parses. Extract the two divergent
+      `shellQuote` copies into one shared, tested helper so the escape bug fixed
+      in run 9 cannot recur or drift between implementations.
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in
       project health over time.
