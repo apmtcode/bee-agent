@@ -6,6 +6,66 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-17 (run 9) — 🐛 Fix background-task launch-script quoting (state-JSON corruption + pid substitution) + hermetic tests
+
+**Audited:** Project health. `npm test` was **red on arrival** — 3 integration
+tests failed (`operator-runtime.test.ts`, `control-plane/server.test.ts`,
+`cli/app.test.ts`), all with the same `it(...)` blocks that *start a real
+background task*. Root cause was two genuine production bugs in
+`renderLaunchScript` (`src/harness/background-tasks.ts`), surfaced because this
+cloud container actually has `bash`+`python3`, so the detached launch script
+truly runs (prior "green" runs likely ran where it didn't):
+
+1. **State-JSON corruption.** `shellQuote` used a malformed POSIX single-quote
+   escape — `"'"'"'` (6 chars) instead of the canonical `'"'"'` (5). Any task
+   whose `command`/`cwd` contained a `'` produced invalid JSON in `state.json`
+   (`SyntaxError: Expected ',' or '}'…`), so `readState`/recovery threw at
+   runtime. (The sibling `shellQuote` in `training/runner.ts` was already
+   correct — this one had drifted.)
+2. **pid never substituted.** The launch script writes `"pid":"$$"` then
+   `sed`-replaces it with the real PID, but the pattern was written
+   `s/\"\$\$\"/$$/g` in a **JS template literal** — the backslashes are consumed
+   by JS, so the emitted shell was `sed "…; s/"$$"/$$/g"`. The bare `"`
+   prematurely closed the shell's outer double-quotes and `$$` expanded, so the
+   effective program was `s/<pid>/<pid>/` — the placeholder was left as the
+   string `"$$"`. Recovery then read `pid: "$$"` and reported bogus
+   `missing-process`. Fixed by switching to a `__OPENCLAW_PID__` sentinel (no
+   `$` in the pattern, mirroring the existing `__OPENCLAW_STARTED_AT__` seam):
+   `sed -e "s/__OPENCLAW_STARTED_AT__/…/g" -e "s/\\"__OPENCLAW_PID__\\"/$$/g"`.
+   Applied the same pid fix to `training/runner.ts` (identical latent bug, no
+   execution test there yet).
+
+**Also made the 3 integration tests hermetic** (they were racing a real detached
+process against their own `writeState`): injected a no-op
+`backgroundTaskSpawnProcess: () => ({ pid, unref(){} })` — the exact pattern
+`background-tasks.test.ts` already uses. For `app.test.ts` this required
+threading a new optional `backgroundTaskSpawnProcess` through
+`OperatorCliAppOptions` → the runtime (additive; production still spawns a real
+detached process when the option is omitted).
+
+**New regression test** (`background-tasks.test.ts`): renders the launch script
+for a command containing **both single quotes and newlines**, executes it
+**synchronously** (`execFileSync`, no detached race), and asserts `state.json`
+parses to `status: "completed"`, a **numeric** `pid > 0`, `exitCode: 0`, and the
+exact command round-tripped. This locks in both fixes end-to-end.
+
+**Test results:** `npm test` **175/175** ✅ (was 171/174 with 3 failing; +1 new
+regression test). `npm run build` ✅. `npm run typecheck:src` ✅ (exit 0). Full
+`tsc` unchanged at **125** (all pre-existing test-file debt; zero new errors in
+the 6 files touched).
+
+**New idea:** the launch-script generators in `background-tasks.ts` and
+`runner.ts` now share the same `__OPENCLAW_*` sentinel + `shellQuote` +
+state-writer-Python shape but are **copy-pasted** — and this run proved they
+drift (shellQuote was fixed in one, broken in the other). Extract a single
+`renderPosixLaunchScript({ statePayload, command, sentinels, stateWriter })`
+helper (plus one shared `shellQuote`) so a quoting fix can never again live in
+only one of them, and unit-test the helper directly on adversarial inputs
+(quotes, `$`, newlines, backticks) instead of relying on integration tests to
+catch it.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

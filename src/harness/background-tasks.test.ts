@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -369,5 +370,34 @@ describe("BackgroundTaskExecutionService", () => {
     await expect(fs.readFile(path.join(rootDir, task.execution.launchScript), "utf8")).resolves.toContain("bash -lc");
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
+  });
+
+  it("renders a launch script that writes valid completed state JSON for commands with quotes and newlines", async () => {
+    // Regression: the launch script previously (a) corrupted the state JSON via a
+    // malformed single-quote escape in shellQuote, and (b) never substituted the
+    // running pid because the sed `"$$"` pattern collapsed the shell's outer
+    // double-quotes. A command containing both single quotes and newlines exercises
+    // both bugs. We run the script synchronously (no detached race) and assert the
+    // persisted state parses and is correct.
+    const rootDir = await makeTempDir();
+    const store = new FileBackgroundTaskStore(
+      path.join(rootDir, "background-tasks.json"),
+      () => ({ pid: 1111, unref() {} }),
+    );
+    const command = "printf 'line-1\nline-2\n'";
+    const task = await store.start({ title: "Emit lines", command, cwd: rootDir, kind: "task" });
+
+    execFileSync("bash", [path.join(rootDir, task.execution.launchScript)], { cwd: rootDir });
+
+    const raw = await fs.readFile(path.join(rootDir, task.execution.stateFile), "utf8");
+    const state = JSON.parse(raw) as BackgroundTaskExecutionState;
+    expect(state.status).toBe("completed");
+    expect(typeof state.pid).toBe("number");
+    expect(state.pid).toBeGreaterThan(0);
+    expect(state.exitCode).toBe(0);
+    expect(state.command).toBe(command);
+
+    const output = await fs.readFile(path.join(rootDir, task.execution.outputFile), "utf8");
+    expect(output).toContain("line-1\nline-2");
   });
 });

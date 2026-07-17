@@ -4,6 +4,19 @@ Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
 ## Foundations / DX
+- [x] **Green the test suite** (2026-07-17, run 9) — fixed two real
+      launch-script quoting bugs in `background-tasks.ts` (malformed `shellQuote`
+      single-quote escape corrupting `state.json`; `sed` pid placeholder never
+      substituted because a JS template literal ate the escaping backslashes) +
+      the same pid bug in `runner.ts`. Made 3 integration tests hermetic via an
+      injected no-op `backgroundTaskSpawnProcess` (threaded through
+      `OperatorCliAppOptions`). Suite 171/174 → **175/175**.
+- [ ] **Extract a shared POSIX launch-script generator.** `background-tasks.ts`
+      and `training/runner.ts` copy-paste the same `printf | sed` state-payload
+      shape, `shellQuote`, and Python state-writer — and run 9 proved they drift
+      (shellQuote was correct in one, broken in the other). Factor out
+      `renderPosixLaunchScript(...)` + one shared `shellQuote`, and unit-test the
+      helper on adversarial inputs (quotes, `$`, newlines, backticks).
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`
