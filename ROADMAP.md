@@ -62,13 +62,43 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      for a real on-device small model. — DONE run 9
+      (`src/training/movement-model.ts`): `MovementModelBackend` /
+      `TrainedMovementModel` interfaces, deterministic `MarkovMovementBackend`
+      (trains + repeats + generalizes + JSON-serializable artifact), and a
+      `resolveMovementBackend` registry as the on-device seam.
+- [x] Synthetic event-stream generator to validate capture→dataset→replay
+      round-trips without real OS input. — DONE run 9 (the movement-model tests
+      build related `ReplayManifest` traces synthetically; no real OS input).
+- [x] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories. — DONE run 9 (`evaluateMovementModel`
+      scores next-token fidelity on held-out sequences).
+- [ ] **Class-backoff movement model**: hierarchical backoff keyed on the token
+      class (`act:`/`obs:`/`msg:`) so the model can predict the move *after* a
+      never-seen token (e.g. a novel `obs:field.X`), lifting held-out
+      generalization beyond just the shared action tail.
+- [ ] Wire the movement-model backend into the training runner/execution service
+      so a reviewed export can be trained + replayed end-to-end via the mock
+      backend (cloud) and the MLX/axolotl backend (on-device).
+
+## Reliability / test hermeticity
+- [x] Fix `shellQuote` single-quote escaping bug in `background-tasks.ts` that
+      corrupted state-file JSON for any command containing `'` — DONE run 9.
+- [x] Make background-task + training state-file writes atomic (temp+rename) so
+      readers never catch a partial write — DONE run 9 (`background-tasks.ts`,
+      `runner.ts`).
+- [x] Add `backgroundTaskSpawnProcess` / `backgroundTaskIsProcessRunning` DI
+      seams to `OperatorCliApp` — DONE run 9 (foundation for hermetic tests).
+- [ ] **Fake-process test harness** (`FakeBackgroundProcess`): given the spawn
+      seam, synchronously write expected output + a controllable liveness state so
+      the process-coupled command tests are fully hermetic. This is the blocker to
+      a green suite on the cloud env — `app.test.ts` (session-lifecycle @906/1017,
+      background/monitor) and `server.test.ts` (orchestration) flake because real
+      short-lived `printf` children exit before liveness/output assertions run.
+      Note @906 wants control=active while @1017 wants control=degraded:failed, so
+      the harness must model per-task liveness transitions, not a blanket toggle.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

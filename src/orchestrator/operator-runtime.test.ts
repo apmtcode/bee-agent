@@ -531,6 +531,11 @@ describe("StandaloneOperatorRuntime", () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
       backgroundTaskIsProcessRunning: () => false,
+      // Inject a no-op spawn so the test drives execution state deterministically
+      // via writeState. A real detached process (e.g. `tail -f app.log`) writes
+      // its own state asynchronously and would race the controlled writes below.
+      // Real launch/spawn behavior is covered by background-tasks.test.ts.
+      backgroundTaskSpawnProcess: () => ({ pid: 4321, unref() {} }),
     });
     const session = await runtime.startSession({ title: "Tasks", agentId: "main" });
 

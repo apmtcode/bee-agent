@@ -6,6 +6,80 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-18 (run 9) — Movement-model backend (train + generalize) + real shell-quoting bug fix + flaky-test stabilization
+
+**Audited:** The movement-learning subsystem (`src/capture` + `src/training`)
+against standing objective #2. The recording/dataset/replay pieces (a,b) exist,
+and `runner.ts` *plans/launches* real Apple-Silicon (MLX/axolotl) training — but
+there was **no in-process, cloud-testable model that actually trains on the
+dataset and generates movements** (objective #2 parts c/d). This is the roadmap's
+top movement item ("pluggable local-model backend + deterministic mock").
+
+**Changed — new capability (`src/training/movement-model.ts`, +tests):**
+- **Tokenization** `movementTokenForEvent` reduces each `ReplayTimelineEvent` to a
+  stable shape token (`act:<tool>`, `obs:<source>`, `msg:<role>`) — privacy-aligned
+  (no free-text summaries leak into the model).
+- **Dataset** `buildMovementDataset(replays)` → `{sequences, vocabulary}`.
+- **Pluggable backend interface** `MovementModelBackend` / `TrainedMovementModel`
+  + a **deterministic reference backend** `MarkovMovementBackend` (order-N n-gram):
+  genuinely trains (transition counts), **repeats** recorded trajectories
+  (objective 2c) and **generalizes** — a sliding-window seed composes transitions
+  learned across *different* trajectories into new-but-related movements (2d).
+  Serializes to/from a JSON artifact (a real reloadable model file).
+- **Eval harness** `evaluateMovementModel` measures held-out next-token fidelity
+  (the generalization signal), plus a backend **registry** (`resolveMovementBackend`)
+  as the documented seam for a real on-device neural backend.
+- 10 tests: tokenization, dataset, repeat, generalize, held-out fidelity,
+  serialize round-trip + defensive-copy, registry. Exported from `src/index.ts`.
+
+**Fixed — a genuine product bug uncovered while getting the suite green
+(`src/harness/background-tasks.ts`):** `shellQuote` used the malformed
+single-quote escape `"'"'"'` (leading `"`) instead of the POSIX-correct `'"'"'`.
+Any background-task **command containing a single quote** (e.g. `printf 'x'`)
+produced **corrupt JSON** in the launch script's state file → a `readState`
+`SyntaxError` crash at recovery time. Reproduced in isolation, fixed, verified.
+Also **hardened both state writers to atomic temp+rename** (shell redirect
+`> f.tmp && mv`, python `os.replace`) in `background-tasks.ts` and `runner.ts`, so
+a live monitor's state file can never be read mid-write (`runner.ts` had the same
+non-atomic pattern).
+
+**Fixed — flaky test** `operator-runtime.test.ts` "starts, syncs, recovers…":
+it spawned a **real** detached process whose async state write raced the test's
+controlled `writeState`. Injected the existing `backgroundTaskSpawnProcess` seam
+with a deterministic stub (real spawn behavior stays covered by
+`background-tasks.test.ts`). Now green across 8/8 repeated runs (was 1/1 failing).
+
+**Added — DI seams on `OperatorCliApp`:** `backgroundTaskSpawnProcess` +
+`backgroundTaskIsProcessRunning` options threaded to the runtime, with a
+deterministic seam test. These are the concrete foundation for making the
+remaining process-coupled command tests hermetic (queued).
+
+**Test results:** `typecheck:src` ✅ (source stays green). `build` ✅.
+`vitest run`: **movement-model 10/10, seam test 1/1, background-tasks + runner +
+operator-runtime all green.** Suite is **185 tests** (was 174). Three tests remain
+**flakily red on this cloud env** — `app.test.ts` (session-lifecycle @906/1017,
+background/monitor @1105+) and `server.test.ts` (orchestration) — all coupled to
+**real detached-process execution timing** (short-lived `printf` children exit
+before liveness/output assertions run; the 906 vs 1017 pair even asserts *both*
+alive and failed states, so a blanket liveness override can't fix it). These are
+**pre-existing** (the clean base flakes 3–4/run) and **not caused by this change**
+— this run reduced the flaky set by fixing operator-runtime and a real corruption
+bug. Full hermetic conversion needs a stateful fake-process harness (queued; seams
+now in place). Committed to the designated branch with status documented.
+
+**New idea:** *Class-backoff movement model.* The Markov backend can't predict the
+move *after* a token it has never seen (e.g. a novel `obs:field.X`). Add a
+hierarchical backoff that also learns transitions keyed on the token **class**
+(`act:`/`obs:`/`msg:`), so an unseen `obs:field.search` still backs off to "an
+observation is followed by `act:keyboard.type`" — lifting held-out fidelity from
+transferring only the shared action tail to transferring the full skill shape.
+Second idea: a **fake-process test harness** (`FakeBackgroundProcess`) that, given
+the spawn seam, synchronously writes the expected output + a controllable liveness
+state — the missing piece to make all background-task command tests hermetic in
+the cloud and finally get the suite fully green here.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

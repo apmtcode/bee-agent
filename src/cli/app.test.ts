@@ -1061,6 +1061,39 @@ describe("OperatorCliApp", () => {
     expect(promptOutput).toContain("instructionFiles=");
   });
 
+  it("routes background task spawning through the injectable spawn seam", async () => {
+    const rootDir = await makeTempDir();
+    const launched: string[] = [];
+    // A deterministic stub replaces the real detached child process. This is the
+    // DI seam future work will use to make the background-task command tests
+    // fully hermetic (no real process lifecycle to race).
+    const app = new OperatorCliApp({
+      rootDir,
+      cwd: rootDir,
+      currentDate: "2026-05-25",
+      backgroundTaskSpawnProcess: (command) => {
+        launched.push(command);
+        return { pid: 4321, unref() {} };
+      },
+      backgroundTaskIsProcessRunning: () => true,
+    });
+    const session = await app.runtime.startSession({ title: "seam", cwd: rootDir, agentId: "operator-cli" });
+
+    const output = await app.dispatchSlashCommand(
+      { kind: "background-start", title: "seam", command: "printf ok" },
+      session.id,
+    );
+    expect(output).toContain("Started background task");
+
+    const [task] = await app.runtime.listBackgroundTasks(session.id);
+    expect(task).toBeDefined();
+    // The injected spawn ran instead of a real process, and the task adopted its pid.
+    expect(launched).toHaveLength(1);
+    expect(launched[0]).toContain(task!.execution.launchScript);
+    expect(task!.execution.processId).toBe(4321);
+    expect(task!.status).toBe("running");
+  });
+
   it("supports background and monitor task commands plus cron commands", async () => {
     const rootDir = await makeTempDir();
     const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
