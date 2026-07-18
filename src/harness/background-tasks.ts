@@ -734,38 +734,32 @@ function renderLaunchScript(task: BackgroundTaskRecord): string {
   const quotedOutputFile = shellQuote(task.execution.outputFile);
   const quotedCwd = shellQuote(task.cwd);
   const quotedCommand = shellQuote(task.command);
-  const quotedStatePayload = shellQuote(
-    JSON.stringify({
-      version: 1,
-      taskId: task.id,
-      kind: task.kind,
-      status: "running",
-      pid: "$$",
-      startedAt: "__OPENCLAW_STARTED_AT__",
-      updatedAt: "__OPENCLAW_STARTED_AT__",
-      outputFile: task.execution.outputFile,
-      cwd: task.cwd,
-      command: task.command,
-    }),
-  );
 
+  // The launch script records only the terminal (completed/failed) state; a
+  // task's "running" status lives in the persisted record until then. Each
+  // terminal writer builds the full state object from argv (shell-quoted
+  // values) and embedded JSON literals, so it neither depends on a pre-existing
+  // state file (no read-before-write) nor can a command containing single/double
+  // quotes or newlines corrupt the emitted JSON — the previous `printf | sed`
+  // approach hand-rolled JSON in the shell and produced a malformed file (and
+  // silently failed to substitute the pid) for such commands. Writes are atomic
+  // (temp file + os.replace).
   return [
     "#!/usr/bin/env bash",
     "set -euo pipefail",
     `mkdir -p $(dirname ${quotedStatePath}) $(dirname ${quotedOutputFile})`,
     "started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-    `printf '%s' ${quotedStatePayload} | sed "s/__OPENCLAW_STARTED_AT__/$started_at/g; s/\"\$\$\"/$$/g" > ${quotedStatePath}`,
     `printf '%s\n' "starting ${task.kind} ${task.id}" >> ${quotedOutputFile}`,
     `if cd ${quotedCwd} && bash -lc ${quotedCommand} >> ${quotedOutputFile} 2>&1; then`,
     "  completed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-    `  python3 - ${quotedStatePath} $$ "$completed_at" 0 <<'PY'`,
-    ...renderStateWriterPython("completed"),
+    `  python3 - ${quotedStatePath} $$ "$completed_at" 0 "$started_at" ${quotedOutputFile} ${quotedCwd} ${quotedCommand} <<'PY'`,
+    ...renderStateWriterPython(task, "completed"),
     "PY",
     "else",
     "  exit_code=$?",
     "  completed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-    `  python3 - ${quotedStatePath} $$ "$completed_at" "$exit_code" <<'PY'`,
-    ...renderStateWriterPython("failed"),
+    `  python3 - ${quotedStatePath} $$ "$completed_at" "$exit_code" "$started_at" ${quotedOutputFile} ${quotedCwd} ${quotedCommand} <<'PY'`,
+    ...renderStateWriterPython(task, "failed"),
     "PY",
     '  exit "$exit_code"',
     "fi",
@@ -773,26 +767,43 @@ function renderLaunchScript(task: BackgroundTaskRecord): string {
   ].join("\n");
 }
 
-function renderStateWriterPython(status: BackgroundTaskExecutionState["status"]): string[] {
+function renderStateWriterPython(task: BackgroundTaskRecord, status: "completed" | "failed"): string[] {
   return [
     "import json",
+    "import os",
     "import pathlib",
     "import sys",
     "state_path = pathlib.Path(sys.argv[1])",
     "pid = int(sys.argv[2])",
     "timestamp = sys.argv[3]",
     "exit_code = int(sys.argv[4])",
-    "state = json.loads(state_path.read_text())",
-    `state['status'] = '${status}'`,
-    "state['pid'] = pid",
-    "state['updatedAt'] = timestamp",
-    "state['completedAt'] = timestamp",
-    "state['exitCode'] = exit_code",
-    `state['error'] = None if '${status}' == 'completed' else f'background task exited non-zero ({exit_code})'`,
-    "state_path.write_text(json.dumps(state, indent=2) + '\\n')",
+    "started_at = sys.argv[5]",
+    "state = {",
+    "    'version': 1,",
+    `    'taskId': ${JSON.stringify(task.id)},`,
+    `    'kind': ${JSON.stringify(task.kind)},`,
+    `    'status': ${JSON.stringify(status)},`,
+    "    'pid': pid,",
+    "    'startedAt': started_at,",
+    "    'updatedAt': timestamp,",
+    "    'completedAt': timestamp,",
+    "    'exitCode': exit_code,",
+    "    'outputFile': sys.argv[6],",
+    "    'cwd': sys.argv[7],",
+    "    'command': sys.argv[8],",
+    `    'error': ${status === "completed" ? "None" : "f'background task exited non-zero ({exit_code})'"},`,
+    "}",
+    "tmp_path = state_path.with_name(state_path.name + '.' + str(os.getpid()) + '.tmp')",
+    "tmp_path.write_text(json.dumps(state, indent=2) + '\\n')",
+    "os.replace(tmp_path, state_path)",
   ];
 }
 
+// POSIX-safe single-quoting: wrap in single quotes and replace each embedded
+// single quote with '\'' (close-quote, escaped literal quote, reopen). The
+// previous replacement string was mis-ordered and produced unbalanced quoting,
+// so any command containing a single quote failed to launch with a bash
+// "unexpected EOF" error.
 function shellQuote(value: string): string {
-  return `'${value.replaceAll(`'`, `"'"'"'`)}'`;
+  return `'${value.replaceAll(`'`, `'\\''`)}'`;
 }

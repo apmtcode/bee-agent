@@ -15,6 +15,11 @@ async function makeTempDir(): Promise<string> {
   return dir;
 }
 
+// Return a fake process rather than launching a real OS process, so the launch
+// script's asynchronous state/output writes cannot race with the explicit
+// writeState/writeOutput used to drive the task lifecycle in these tests.
+const inertSpawn = () => ({ pid: 424242, unref: () => {} });
+
 function buildHookCaptureCommand(outputFile: string): string {
   const script = [
     "import fs from 'node:fs';",
@@ -531,6 +536,7 @@ describe("StandaloneOperatorRuntime", () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
       backgroundTaskIsProcessRunning: () => false,
+      backgroundTaskSpawnProcess: inertSpawn,
     });
     const session = await runtime.startSession({ title: "Tasks", agentId: "main" });
 

@@ -22,6 +22,13 @@ afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })));
 });
 
+// Keep background-task assertions hermetic: return a fake process instead of
+// launching a real OS process whose asynchronous state/output writes would race
+// with the explicit writeState/writeOutput these tests use to simulate the task
+// lifecycle. The runtime still tracks the record as "running"; the only state on
+// disk is what the test writes.
+const inertSpawn = () => ({ pid: 424242, unref: () => {} });
+
 const exportManifest: ReviewedExportManifest = {
   version: 1,
   createdAt: "2026-01-01T00:00:00.000Z",
@@ -84,6 +91,7 @@ describe("OperatorControlPlaneServer", () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir,
       backgroundTaskIsProcessRunning: () => false,
+      backgroundTaskSpawnProcess: inertSpawn,
       delivery: new OperatorDeliveryService(rootDir, {
         sendBrowserPush: async () => {},
       }),
@@ -953,6 +961,7 @@ describe("OperatorControlPlaneServer", () => {
     const driftingRuntime = new StandaloneOperatorRuntime({
       rootDir: driftingRootDir,
       backgroundTaskIsProcessRunning: () => false,
+      backgroundTaskSpawnProcess: inertSpawn,
     });
     const driftingServer = new OperatorControlPlaneServer({ runtime: driftingRuntime });
     const driftingBootstrap = await driftingServer.handle({
@@ -1019,6 +1028,7 @@ describe("OperatorControlPlaneServer", () => {
     const breakerRuntime = new StandaloneOperatorRuntime({
       rootDir: breakerRootDir,
       backgroundTaskIsProcessRunning: () => false,
+      backgroundTaskSpawnProcess: inertSpawn,
     });
     const breakerServer = new OperatorControlPlaneServer({ runtime: breakerRuntime });
     const breakerOne = await breakerServer.handle({

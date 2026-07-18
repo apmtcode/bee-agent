@@ -4,6 +4,12 @@ Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
 ## Foundations / DX
+- [x] **Background-task launcher reliability** (2026-07-18, run 9): fixed
+      malformed "running"-state JSON (`printf|sed` → atomic Python writer),
+      a `shellQuote` bug that broke every single-quote command
+      (`"'"'"'` → `'\''`), and made the 3 background-task integration tests
+      hermetic (inert spawn) + added the first test that runs the real launch
+      script. Suite 174→175, stable.
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`
@@ -71,6 +77,12 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
       related synthetic trajectories.
 
 ## Innovation backlog
+- [ ] Python-free background-task state writer: probe for `python3`/`bash` at
+      startup (and expose a `BackgroundTaskExecutionService` option) and fall
+      back to a pure `node -e` terminal-state writer when absent, so background
+      tasks work on minimal images. Pair with a fuzz test round-tripping a
+      corpus of hostile commands (single/double quotes, `$()`, backticks,
+      newlines, unicode) through `shellQuote` + the real launch script.
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in
       project health over time.

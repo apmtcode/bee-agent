@@ -6,6 +6,55 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-18 (run 9) — Background-task launcher: fix malformed state JSON, broken shell-quoting, and racy tests
+
+**Audited:** Ran the suite on a real machine and found **3 test files failing**
+at HEAD (`operator-runtime.test.ts`, `control-plane/server.test.ts`,
+`cli/app.test.ts`) — contradicting prior "174/174" logs, i.e. an
+environment/timing-sensitive regression. Root-caused all three to the
+background-task launch pipeline in `src/harness/background-tasks.ts`.
+
+**Three real bugs found & fixed (all in `background-tasks.ts`):**
+1. **Malformed state JSON.** The launch script hand-rolled the "running" state
+   as compact JSON via `printf '%s' <payload> | sed "…; s/\"$$\"/$$/g" > file`.
+   The embedded `"` in the sed arg broke the shell quoting, so the pid was never
+   substituted (`"pid":"$$"` left as a string) AND a command containing single
+   quotes/newlines produced a **torn, unparseable** state file — `readJsonFile`
+   then threw `SyntaxError`, cascading into breaker/reconcile failures. Replaced
+   with a Python heredoc that builds the full state from argv (shell-quoted) +
+   JSON literals. **Writes are now atomic** (temp file + `os.replace`), killing
+   torn reads. The launch script now records only terminal state; a task's
+   "running" status lives in the record until then (removes the async
+   running-write race with tests' `writeState`).
+2. **`shellQuote` produced invalid quoting.** The single-quote escape was the
+   mis-ordered `"'"'"'` instead of POSIX `'\''`, so **every command containing a
+   single quote failed to launch** (`bash: unexpected EOF`). One-char-class fix;
+   verified across cases.
+3. **Non-hermetic tests.** The three integration tests launched **real OS
+   processes** whose async state/output writes raced with the tests' own
+   `writeState`/`writeOutput`. Injected an inert `backgroundTaskSpawnProcess`
+   (returns a fake pid, launches nothing) into the task-starting runtimes so
+   state is exactly what the test writes — fully deterministic.
+
+**New regression test** (`background-tasks.test.ts`): runs the **real** launch
+script with a single-quote+newline command and asserts the persisted state is
+valid JSON, `completed`, exit 0, with the command round-tripped. This is the
+first test to exercise the real script (all others mock spawn) — it fails
+against the old `printf|sed` writer and the old `shellQuote`, guarding both.
+
+**Test results:** full suite **175/175** (was 174 + 1 new), stable across 6
+consecutive full runs and 10–15× per-file stress runs (server 12/12, app 15/15,
+background-tasks 10/10). Build ✅. `typecheck:src` ✅ (exit 0).
+
+**New idea:** the launch pipeline still shells out to `python3` for terminal
+state and relies on `bash`/`date`. Add a capability probe at runtime startup
+(and a `BackgroundTaskExecutionService` option) that selects a pure-`node -e`
+state writer when python3 is absent, so background tasks work on minimal images
+— and add a fuzz test that round-trips a corpus of hostile commands (quotes,
+`$()`, backticks, newlines, unicode) through `shellQuote` + the launch script.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

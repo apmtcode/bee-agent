@@ -20,6 +20,25 @@ afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
 });
 
+// Polls the on-disk state file directly (no reconcile) until the launch script
+// records a terminal state, so tests that run the real script observe exactly
+// what it wrote.
+async function waitForTerminalState(
+  store: FileBackgroundTaskStore,
+  task: Awaited<ReturnType<FileBackgroundTaskStore["start"]>>,
+  timeoutMs = 8000,
+): Promise<BackgroundTaskExecutionState> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const state = await store.executionService.readState(task);
+    if (state && (state.status === "completed" || state.status === "failed" || state.status === "cancelled")) {
+      return state;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  throw new Error(`timed out waiting for terminal state of background task ${task.id}`);
+}
+
 describe("FileBackgroundTaskStore", () => {
   it("starts tasks, persists output, syncs terminal state, and reloads", async () => {
     const rootDir = await makeTempDir();
@@ -369,5 +388,40 @@ describe("BackgroundTaskExecutionService", () => {
     await expect(fs.readFile(path.join(rootDir, task.execution.launchScript), "utf8")).resolves.toContain("bash -lc");
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
+  });
+});
+
+describe("FileBackgroundTaskStore launch script (real process)", () => {
+  it("persists valid terminal-state JSON for a command containing single quotes and newlines", async () => {
+    const rootDir = await makeTempDir();
+    // Default (real) spawn + real process check: run the generated launch
+    // script end-to-end. Regression guard for the previous `printf | sed` state
+    // writer, which hand-rolled JSON in the shell and produced a malformed,
+    // unparseable state file (and never substituted the pid) whenever the
+    // command contained single quotes or newlines — the common case for any
+    // non-trivial shell command.
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"));
+    const command = "printf 'line-1\nline-2\n'";
+    const task = await store.start({
+      sessionId: "sess-json",
+      title: "Quote and newline command",
+      command,
+      cwd: rootDir,
+      kind: "task",
+    });
+
+    const terminal = await waitForTerminalState(store, task);
+    expect(terminal.status).toBe("completed");
+    expect(terminal.exitCode).toBe(0);
+    expect(terminal.command).toBe(command);
+    expect(typeof terminal.pid).toBe("number");
+    expect(Number.isNaN(terminal.pid)).toBe(false);
+
+    // The state file on disk must be valid JSON. The old writer emitted a torn,
+    // single-line document that JSON.parse rejected.
+    const raw = await fs.readFile(path.join(rootDir, task.execution.stateFile), "utf8");
+    const parsed = JSON.parse(raw) as BackgroundTaskExecutionState;
+    expect(parsed.command).toBe(command);
+    expect(parsed.status).toBe("completed");
   });
 });
