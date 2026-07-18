@@ -59,16 +59,37 @@ unchecked items are queued. Keep this richer than you found it each run.
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
 (exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
-      objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
-      deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
+- [x] Inventory what `src/capture` + `src/training` already implement vs. the
+      objective's five pieces — DONE run 9. Capture→schema→dataset→replay existed
+      (recorder/trajectory/replay + adapters); train/infer only via external
+      mlx/axolotl `spawn`. The in-process learnable model was the gap.
+- [x] Pluggable local-model backend interface with a deterministic mock backend —
+      DONE run 9. `MovementModelBackend` (`src/training/movement-model.ts`) +
+      `BackoffNgramMovementBackend` (deterministic, OS/GPU-free, cloud-testable) +
+      `MovementModel` façade (`predictNext`/`generate`). Real on-device model
+      drops in behind the same interface.
+- [x] Generalization eval harness — DONE run 9. `evaluateNextActionAccuracy`
+      scores top-1 next-movement accuracy + avg back-off order on held-out
+      related sequences.
 - [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      round-trips without real OS input (tests currently hand-build sequences; a
+      reusable generator would feed both the round-trip and the eval harness).
+- [ ] Replay-fidelity generalization benchmark: feed the synthetic generator
+      through `evaluateNextActionAccuracy` to emit one scalar "generalization
+      score" per model+dataset, checkpointed each run (ties into self-check
+      telemetry).
+
+## Reliability
+- [ ] **Fix the background-task launch-script state race** (found run 9). The
+      full test suite is flaky: 3–4 integration tests fail intermittently with a
+      varying set. Root cause (instrumented): `renderLaunchScript` writes the
+      initial running-state via a `printf | sed > file` pipeline whose
+      `$$`-substitution + escaping produce **malformed JSON** for commands
+      containing quotes/newlines (`"pid":"$$"` unsubstituted, raw newline in
+      `command`), and it races the `recoverBackgroundTasks` reader. Fix: write the
+      initial state atomically (temp + `mv`) **and** encode it robustly — reuse
+      the python state-writer already used on completion instead of `sed`. Until
+      fixed, `npm test` cannot be a reliable green gate.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

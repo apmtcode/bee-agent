@@ -6,6 +6,68 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-18 (run 9) — Movement learning loop closed: in-process pluggable model + generalization eval
+
+**Audited:** Standing objective #2 (local-movement learning subsystem), dormant
+since run 2 while runs 3–8 paid down typecheck debt. Inventoried `src/capture`
+(recorder, trajectory spans, replay manifests, device/os/browser adapters) and
+`src/training` (exporter, job-manifest, runner, execution-service). Finding: the
+subsystem could **record** movements and **shell out** to external mlx/axolotl
+training (via `LocalAppleSiliconTrainingRunner` + `LocalTrainingExecutionService`,
+which `spawn` an OS process), but had **no in-process, learnable model** — so
+objective 2(c) "train a local model to repeat the recorded movements" and 2(d)
+"generalize to new but related movements" were unreachable in the cloud/CI and
+untestable. The loop was open.
+
+**Changed (additive) — new `src/training/movement-model.ts` (+ barrel exports):**
+- **Tokenizer** `tokenizeMovementAction` / `buildMovementDataset`: turns recorded
+  `TrajectoryAction[]` into ordered movement token sequences (`tool:intent`),
+  honouring review-approval and `minSteps` filters and ts-sorting steps.
+- **Pluggable backend contract** `MovementModelBackend` (`train`/`predict` over a
+  serializable `MovementModelState`) — the seam where a real on-device small
+  model drops in behind the same interface the runner already targets.
+- **Deterministic default backend** `BackoffNgramMovementBackend`: a
+  variable-order back-off n-gram model that learns transition counts and predicts
+  the next movement. Trains and infers with **no OS and no GPU**, fully
+  reproducible → runs green in the cloud. Unseen full prefixes back off to the
+  longest observed suffix, which is exactly how it **generalizes** (2d).
+- **`MovementModel` façade** with `predictNext` and autoregressive `generate`
+  (repeat/roll-forward a recorded pattern, with a `maxRepeat` loop guard).
+- **Generalization eval** `evaluateNextActionAccuracy`: top-1 next-movement
+  accuracy + average back-off order on held-out related sequences.
+
+**Test results:** new `movement-model.test.ts` **14/14** (tokenizer, dataset
+filters, deterministic majority prediction, back-off generalization on unseen
+prefixes, rollout + repeat-guard, held-out eval, custom-backend pluggability,
+configurable order). `typecheck:src` **0** (source stays clean). Full `tsc`
+**125 → 125** (added zero new errors). Build ✅.
+
+**Pre-existing flake surfaced (NOT from this change; documented for a future run):**
+the full suite is flaky — 3–4 of the big integration tests
+(`operator-runtime` background-task recovery, `app`/`server` lifecycle) fail
+intermittently, and the *set varies* run-to-run. Root-caused by instrumenting
+`readJsonFile`: `recoverBackgroundTasks` reads a `state.json` that still contains
+an **unsubstituted `"pid":"$$"` and a raw newline embedded in the `command`
+field** → invalid JSON (`Expected ',' or '}' … line 1`). The spawned launch
+script (`renderLaunchScript`) serializes the initial running-state via a
+`printf | sed > file` pipeline whose escaping/`$$`-substitution breaks for
+commands containing quotes/newlines, and it races the recovery reader. This is a
+real reliability bug (a monitor's state can be read mid/mal-write in production),
+pre-dates this run, and deserves its own focused fix (atomic write + robust JSON
+encoding of the initial state, e.g. via the same python writer used on
+completion). I prototyped an atomic temp+`mv` write for the launch script but
+**reverted it** — it hardens one race class but does *not* fix the escaping
+defect, so shipping it here would be a tangential, misleading half-fix. Logged to
+ROADMAP instead.
+
+**New idea:** a **replay-fidelity generalization benchmark** — pair the synthetic
+event-stream generator (ROADMAP) with `evaluateNextActionAccuracy` to emit a
+single scalar "generalization score" per model+dataset, checkpointed to a metrics
+file each run, so the movement model's learning quality becomes a tracked,
+regression-guarded number (ties into the self-check-telemetry idea).
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
