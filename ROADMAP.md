@@ -62,15 +62,34 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      for a real on-device small model. **DONE run 9** — `src/training/model-backend.ts`:
+      `LocalModelBackend` interface + registry (default `ngram-mock`), a
+      deterministic stupid-backoff `NGramMovementBackend` (train→predict→generate,
+      serialize/load), dataset adapters from trajectory spans / replay manifests.
+- [x] Synthetic event-stream generator to validate capture→dataset→replay
+      round-trips without real OS input. **DONE run 9** —
+      `synthesizeMovementExamples` (deterministic LCG, drop/dup variation).
+- [x] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories. **DONE run 9** — `evaluateNextTokenAccuracy`
+      (teacher-forced next-movement accuracy; scores 0.735 on held-out under noise).
+- [ ] Wire the mock backend into the training pipeline: have the runner /
+      execution-service actually invoke a `LocalModelBackend` (defaulting to
+      `ngram-mock`) to produce a trained model artifact + eval report when the
+      real mlx/axolotl runtime is unavailable, so a full local job completes
+      in-process end to end.
+- [ ] Real on-device backend adapter behind the `LocalModelBackend` seam (small
+      open model, on-device training) — documented interface already exists.
 
 ## Innovation backlog
+- [ ] **De-flake the timing trio (blocks a green `verify` gate on main).**
+      `server.test.ts`, `app.test.ts`, `operator-runtime.test.ts` fail
+      intermittently (3↔4 tests, fluctuating) on the untouched base — they use
+      wall-clock waits in the operator runtime's background-task poller /
+      session recovery and lose races on a loaded cloud CPU. Inject a fake clock
+      / deterministic scheduler seam so these become time-controlled. This is the
+      single biggest blocker to `typecheck:src && build && test` being green.
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in
       project health over time.

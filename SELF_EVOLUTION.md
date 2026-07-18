@@ -6,6 +6,61 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-18 (run 9) — 🧠 Pluggable local-model backend: train→infer→generalize now executable in-code
+
+**Audited:** The movement-learning subsystem (standing objective #2) end-to-end.
+`src/training/runner.ts` only *emits* mlx/axolotl launch scripts — the actual
+train/infer/generalize steps (objective 2c + 2d) had **no in-code, testable
+implementation**; nothing could validate the capture → dataset → train → replay
+→ generalize round-trip in the cloud. Three roadmap items were queued for
+exactly this gap (pluggable backend + mock, synthetic stream generator,
+generalization eval harness).
+
+**Changed (additive) — new `src/training/model-backend.ts` (+ full test):**
+- **`LocalModelBackend` interface + registry** (`registerMovementBackend` /
+  `getMovementBackend` / `listMovementBackends`, default `"ngram-mock"`) — the
+  pluggable seam a real on-device small-model backend implements; documented as
+  the contract the mlx/axolotl runtime must satisfy.
+- **`NGramMovementBackend` / `NGramMovementModel`** — a deterministic
+  stupid-backoff n-gram sequence model. Trains transition counts for every
+  context length 0..order over movement-token sequences; `predictNext` walks the
+  longest matching context suffix down to the unigram prior (the backoff is what
+  yields *generalization* to related-but-unseen prefixes); `generate` rolls out
+  a movement sequence to an END boundary. `<start>`/`<end>` boundary tokens give
+  the first movement a real context and let generation stop cleanly.
+  Fully deterministic (lexicographic tie-break, no `Math.random`) and
+  serialize/load round-trips through JSON for on-disk model artifacts.
+- **Dataset adapters:** `tokenizeTrajectorySpan` (prefers export-safe redacted
+  review actions, orders by ts), `tokenizeReplayManifest`, `tokenizeAction`,
+  `slugifyMovement` — turn recorded movements into training examples.
+- **Synthetic movement-stream generator** `synthesizeMovementExamples`
+  (deterministic LCG, drop/duplicate variation) — validates the pipeline with no
+  real OS input, per the cloud guardrail.
+- **Generalization eval** `evaluateNextTokenAccuracy` — teacher-forced
+  next-movement accuracy on held-out variants; the subsystem's generalization
+  metric.
+- Exported the whole surface from `src/index.ts`.
+
+**Test results:** new `model-backend.test.ts` **17/17 green** (replay of a
+memorized sequence, deterministic tie-break, backoff generalization on an unseen
+prefix, serialize/load parity, registry pluggability, dataset adapters, and a
+train-on-synthetic → generalize-to-held-out run scoring **0.735** next-token
+accuracy under 12% drop + 10% dup noise, well above the random baseline).
+`typecheck:src` ✅ (exit 0). Build ✅. Full suite **188 passing**; the only 3
+reds are **pre-existing flaky timing tests** (server/app/operator-runtime) that
+fail on the untouched base too (verified via `git stash` — they fluctuate 3↔4
+failures independent of this change). This run added **+17 passing tests, zero
+new failures**.
+
+**New idea:** the flaky timing trio (background-task lifecycle / session
+recovery) is now the single biggest blocker to a green `verify` gate on main —
+they use wall-clock waits that lose races on a loaded cloud CPU. Next run:
+inject a fake clock / deterministic scheduler seam into the operator runtime's
+background-task poller so these tests become time-controlled and stop flaking,
+which finally unblocks the `typecheck:src && build && test` green gate.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
