@@ -431,3 +431,52 @@ export type {
   FailTrainingJobParams,
   TrainingJobStoreShape,
 } from "./training/job-store.js";
+export {
+  MOVEMENT_DIRECTIONS,
+  MOVEMENT_END_TOKEN,
+  MOVEMENT_KINDS,
+  MOVEMENT_START_TOKEN,
+  buildMovementDataset,
+  countDatasetEvents,
+  movementEventFromAction,
+  movementFromToken,
+  movementToken,
+} from "./training/movement-model.js";
+export type {
+  MovementDataset,
+  MovementDirection,
+  MovementEvent,
+  MovementGenerateOptions,
+  MovementKind,
+  MovementModel,
+  MovementModelArtifact,
+  MovementModelBackend,
+  MovementPrediction,
+  MovementPredictionAlternative,
+  MovementSequence,
+  MovementTrainOptions,
+} from "./training/movement-model.js";
+export {
+  NGRAM_BACKEND_NAME,
+  NgramMovementBackend,
+  NgramMovementModel,
+} from "./training/ngram-backend.js";
+export type {
+  NgramMovementBackendOptions,
+} from "./training/ngram-backend.js";
+export {
+  BUILT_IN_MOVEMENT_PROGRAMS,
+  createSeededRng,
+  generateSyntheticMovementDataset,
+} from "./training/synthetic-movements.js";
+export type {
+  MovementProgram,
+  SyntheticMovementOptions,
+} from "./training/synthetic-movements.js";
+export {
+  evaluateMovementModel,
+} from "./training/movement-eval.js";
+export type {
+  MovementEvalOptions,
+  MovementEvalResult,
+} from "./training/movement-eval.js";

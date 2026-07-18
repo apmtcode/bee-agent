@@ -6,6 +6,76 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-18 (run 9) — 🧠 Movement subsystem gains a real train→infer loop (pluggable in-process model)
+
+**Audited:** `src/training/` vs. objective #2's five pieces (capture → schema →
+dataset → replay → **train/infer**). Finding: pieces 1–4 exist, but **train/infer
+was entirely missing** — `runner.ts`/`execution-service.ts` only *generate
+external mlx/axolotl shell scripts*. There was no in-process learnable model, no
+inference, and **nothing about "learn to repeat/generalise movements" was
+testable in the cloud**. That is the single biggest gap for the movement
+objective, so I built the model layer.
+
+**Changed (additive, 4 new source modules + 2 test files, ~700 LOC):**
+- `src/training/movement-model.ts` — the movement schema (`MovementEvent`/
+  `MovementSequence`/`MovementDataset`), a discrete **tokenizer**
+  (`kind|target|direction`; `value` deliberately excluded so "type into username"
+  is one symbol regardless of text — the generalisation lever), a dataset builder
+  from recorded `TrajectorySpan` actions (`buildMovementDataset`, reading the
+  capture adapters' gesture metadata), and the **pluggable backend interfaces**
+  `MovementModelBackend` / `MovementModel` (train / predictNext / generate /
+  serialize). This is the documented seam: a real on-device MLX/torch policy can
+  implement the same interface later without touching callers.
+- `src/training/ngram-backend.ts` — `NgramMovementBackend`, the **deterministic
+  reference backend**: an n-gram model with stupid-backoff that learns transition
+  counts at every context length up to `order`, predicts via the longest matched
+  context (backing off to shorter contexts / unigram on novel prefixes), and rolls
+  out full sequences via `generate()`. Fully deterministic (argmax with stable
+  token tie-break), JSON-serializable artifact with round-trip `load()`.
+- `src/training/synthetic-movements.ts` — a **seeded** (mulberry32, no
+  `Math.random`) synthetic movement-stream generator over templated "programs"
+  (login/compose/browse). Lets the whole loop be validated in CI without real OS
+  input.
+- `src/training/movement-eval.ts` — a **generalization eval harness**:
+  teacher-forced next-token accuracy, free-running replay fidelity (LCS token
+  overlap + exact-match rate), and average backoff order.
+- Exported all of the above from `src/index.ts`.
+
+**Test results:** 2 new test files, **15/15 passing** (schema round-trips, action
+→ movement mapping, memorised-sequence replay, next-move prediction, backoff on
+unseen prefixes, artifact serialize round-trip, and end-to-end synthetic
+train→eval: held-in replay fidelity = 1.0, held-out token overlap > 0.8).
+`typecheck:src` ✅ **clean (exit 0)**. `npm run build` ✅.
+
+**⚠️ Blocker (pre-existing, NOT caused by this change):** the full suite has **3
+failing tests** that fail identically on the clean baseline (verified via `git
+stash`). They contradict run 8's "174/174" claim, so they regressed from the
+*environment* since then, via two time/timing root causes:
+1. **Wall-clock heartbeat staleness** — remote-control tests hardcode fixture
+   timestamps; with the clock now at 2026-07-18 the heartbeats read as stale, so
+   states resolve to `quarantined`/`degraded` instead of `active`
+   (`server.test.ts:719`, `app.test.ts:906`). Needs an **injectable clock** in the
+   remote-control staleness logic.
+2. **Launch-script state-write race** — background-task/training launch scripts
+   write their state file with a **non-atomic** shell `> statepath` (and python
+   `write_text`) from *detached* processes, racing concurrent `readJsonFile` →
+   partial-JSON `SyntaxError` (`operator-runtime.test.ts:603`, `app.test.ts:1143`).
+   Needs **atomic writes** (temp + `mv`) in the two `renderLaunchScript`s.
+Both are multi-subsystem fixes outside this run's focused movement-model diff, so
+they are queued in ROADMAP rather than chased here. Because the suite is red, this
+run pushes to the mandated feature branch `claude/peaceful-dirac-6n1t5f` (per the
+standing branch requirement), not `main`.
+
+**New idea:** now that a `MovementModelBackend` interface exists, wire it into the
+existing `LocalTrainingJobStore`/`runner` so a training job can select
+`backend: "ngram"` (in-process, executes immediately in the cloud) vs.
+`backend: "mlx"` (emits the external launch script). That turns the training
+pipeline into one abstraction with a mock backend that *actually trains* for
+tests and a real backend for on-device — closing objective #2(c/d) end to end.
+Second idea: a **"motor-babble" curriculum** — have the synthetic generator emit
+noised/reordered variants of each program so the eval harness can measure true
+generalisation (novel-but-related movements) rather than near-memorisation.
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

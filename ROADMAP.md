@@ -59,16 +59,45 @@ unchecked items are queued. Keep this richer than you found it each run.
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
 (exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
-      objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Inventory what `src/capture` + `src/training` already implement vs. the
+      objective's five pieces — DONE run 9. Pieces 1–4 (capture/schema/dataset/
+      replay) existed; **train/infer was entirely missing** (only external mlx/
+      axolotl script generation). Run 9 built the model layer.
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      for a real on-device small model — DONE run 9. `MovementModelBackend` /
+      `MovementModel` interfaces + `NgramMovementBackend` (n-gram backoff,
+      in-process, serializable). Real on-device model implements the same
+      interface.
+- [x] Synthetic event-stream generator to validate capture→dataset→replay
+      round-trips without real OS input — DONE run 9 (`synthetic-movements.ts`,
+      seeded mulberry32).
+- [x] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories — DONE run 9 (`movement-eval.ts`:
+      next-token accuracy, LCS replay fidelity, backoff order).
+- [ ] Wire `MovementModelBackend` into `LocalTrainingJobStore`/`runner` so a job
+      selects `backend: "ngram"` (executes in-process, cloud-testable) vs.
+      `backend: "mlx"` (emits external launch script) — one training abstraction,
+      mock backend that *actually trains*. Closes objective #2(c/d) end to end.
+- [ ] "Motor-babble" curriculum: have the synthetic generator emit noised/
+      reordered program variants so the eval harness measures true generalisation
+      (novel-but-related movements), not near-memorisation.
+
+## Test-suite health (pre-existing failures found run 9)
+Three tests fail on the clean baseline (verified via `git stash`) — they
+regressed from the *environment* since run 8's "174/174", not from code. Two
+time/timing root causes, both needing a small focused fix:
+- [ ] **Injectable clock for remote-heartbeat staleness.** Remote-control tests
+      hardcode fixture timestamps; with the clock at 2026-07-18 heartbeats read
+      stale → states resolve `quarantined`/`degraded` not `active`
+      (`server.test.ts:719`, `app.test.ts:906`). Thread a `now()` clock through
+      the staleness computation and have tests inject a fixed clock.
+- [ ] **Atomic launch-script state writes.** `renderLaunchScript` in
+      `harness/background-tasks.ts` and `training/runner.ts` write state via a
+      non-atomic shell `> statepath` (+ python `write_text`) from detached
+      processes, racing `readJsonFile` → partial-JSON `SyntaxError`
+      (`operator-runtime.test.ts:603`, `app.test.ts:1143`). Write to a temp file
+      then `mv` (atomic rename) so readers see old-or-complete, never partial.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
