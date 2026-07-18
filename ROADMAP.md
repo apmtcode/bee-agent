@@ -4,6 +4,18 @@ Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
 ## Foundations / DX
+- [ ] **🔴 TOP PRIORITY — de-flake `server.test.ts` remote-status test.** The case
+      "handles session, transcript, approval, trajectory, memory, and
+      orchestration methods" is a timing race: its runtime sets
+      `backgroundTaskIsProcessRunning: () => false` but starts a real `sleep 5`
+      background task, then asserts `control.state === "active"` after resume.
+      `deriveRemoteDiagnostics` (server.ts:2170–2183) flips to `"degraded"`
+      ("background task missing-process") once the task's execution-state file is
+      written to `running` while `isProcessRunning` is false. Passes only if the
+      state write loses the race. Fix: inject a deterministic background-task
+      spawn (stable fake pid, no async state file) or write a controlled
+      execution state so `isProcessRunning`/state agree. Blocks a fully-green
+      `npm test` in the cloud (run 9). Additive/test-only.
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`
@@ -62,13 +74,28 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
+      for a real on-device small model. **DONE run 9** —
+      `src/training/movement-backend.ts` (`MovementTrainingBackend` interface,
+      `MockMovementTrainingBackend`, `MovementTrainingBackendRegistry`, native
+      `nativeArtifactPath` seam) + `src/training/movement-model.ts` (order-k
+      n-gram with two-view back-off; trains + infers in-process). Closes
+      objectives 2(c) repeat and 2(d) generalize with 15 tests.
+- [ ] **Native on-device backend** implementing `MovementTrainingBackend`:
+      adapt `LocalAppleSiliconTrainingRunner` (mlx/axolotl launch-script path) to
+      the new interface so `registry.get("native-mlx")` returns a real backend
+      whose artifact points at `nativeArtifactPath`; inference stays on-device.
 - [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
+      round-trips without real OS input. (Partly enabled now: movement-model
+      tests already fabricate synthetic action/observation streams — promote to a
+      reusable generator that emits `TrajectorySpan`s with correlated
+      observation→action structure and configurable noise.)
 - [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      related synthetic trajectories. **Primitive landed run 9**
+      (`MovementModel.evaluateFidelity` + `MovementModelHandle.evaluate`). Next:
+      wrap in a CLI/RPC that splits a corpus into train / perturbed-held-out and
+      reports mean next-action accuracy per backend as a tracked metric.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

@@ -6,6 +6,77 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-18 (run 9) — 🧠 Pluggable in-process movement model: train→infer→generalize in the cloud (objective 2c/2d)
+
+**Audited:** The local-movement learning subsystem (standing objective #2) and
+`src/training/`. Found the only "training" path was
+`LocalAppleSiliconTrainingRunner`, which *emits an mlx/axolotl launch script* for
+on-device execution — it can neither train nor infer in the cloud, so objectives
+**2(c) "post-train a model to repeat recorded movements"** and **2(d) "generalize
+to related movements"** had **no runnable, testable implementation**. The
+model backend was also not pluggable — the runner hardcodes apple-silicon.
+
+**Changed (additive, new files only):**
+- **`src/training/movement-model.ts`** — a deterministic, dependency-free
+  `MovementModel`: an order-k n-gram predictor with **two-view back-off** over
+  (a) the full observation+action stream (faithful *reproduction*) and (b) an
+  action-only "skeleton" stream (*generalization* to novel-but-related
+  observation contexts). START/END sentinels give correct sequence termination.
+  Includes `train`, `predictNext`, `generate` (rollout from a seed context),
+  `evaluateFidelity` (teacher-forced generalization metric), JSON
+  serialize/`fromJSON`, plus dataset builders
+  `trajectoryToMovementSequence` / `replayToMovementSequence` /
+  `datasetFromTrajectories` that consume the existing capture/replay types.
+- **`src/training/movement-backend.ts`** — the **pluggable backend seam**:
+  `MovementTrainingBackend` interface (`train` → `MovementModelArtifact`,
+  `load` → `MovementModelHandle` with `infer`/`evaluate`/`serialize`), a
+  deterministic `MockMovementTrainingBackend` (in-process reference impl), and a
+  `MovementTrainingBackendRegistry` (+ `createDefaultMovementBackendRegistry`).
+  `MovementModelArtifact` has a documented `nativeArtifactPath` seam so an
+  on-device mlx/axolotl backend can implement the same contract later.
+- Barrel exports wired in `src/index.ts`.
+
+**Tests added (15, all green):** `movement-model.test.ts` (8) proves exact
+reproduction of a recorded sequence, learned-END termination, generalization to
+an unseen observation context via skeleton back-off, held-out fidelity scoring,
+untrained no-op, JSON round-trip, and trajectory→dataset→train wiring.
+`movement-backend.test.ts` (7) proves train/reload/infer, artifact JSON
+round-trip, handle-level fidelity, the native-artifact load guard, and registry
+registration/resolution incl. a custom backend (pluggability).
+
+**Test results:** `npm run build` ✅. `npm run typecheck:src` ✅ (source stays
+green; my new files add 0 errors). New tests ✅ **15/15**. Full `npm test`:
+**187/189** — the **2 failures are pre-existing and NOT from this change**
+(confirmed identical on a clean `git stash` tree; count varies 2↔3 run-to-run =
+flaky).
+
+**⚠️ Pre-existing blocker (root-caused, not mine):**
+`src/control-plane/server.test.ts > "handles session, transcript, approval,
+trajectory, memory, and orchestration methods"` is a **timing race**. Its
+runtime is built with `backgroundTaskIsProcessRunning: () => false` (L86) yet
+starts a **real** `sleep 5` background task and later asserts `control.state ===
+"active"` after a resume. `deriveRemoteDiagnostics` (server.ts:2170–2183) reports
+`"background task missing-process"` → control `"degraded"` whenever the task's
+execution-state file has been written to `status:"running"` while
+`isProcessRunning` returns false. The first assertion passes only because the
+spawned process hasn't written its state file yet; by the resume assertion it
+has → `degraded`. It passed at run 8 by winning the race. **Fix plan (queued
+top-priority):** make that test hermetic — inject a deterministic background-task
+spawn (fake stable pid, no async state file) or a controlled execution state, so
+`isProcessRunning`/state agree. Because that is a control-plane test change
+outside this movement-subsystem increment, per the run guardrails ("focused
+diff") I did **not** bundle it, and per step 5 (tests not fully green) I pushed
+this green, additive work to the designated feature branch rather than `main`.
+
+**New idea:** a **generalization eval harness CLI/RPC** built on
+`evaluateFidelity` — split a trajectory corpus into train/held-out-related sets
+(perturb observation summaries, keep action skeleton), report mean next-action
+accuracy per backend. This turns objective 2(d) into a tracked metric the engine
+can watch improve over runs, and gives the pluggable-backend registry a
+scoreboard to compare a future real on-device model against the mock baseline.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
