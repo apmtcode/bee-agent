@@ -3,6 +3,24 @@
 Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
+## Launch-script state reliability (run 9)
+- [x] Fix `"pid":"$$"` never-substituted bug in background-task + training launch
+      scripts (broken nested-quote sed). DONE run 9 — running-state now records a
+      numeric pid, so liveness/recovery detection works. Regression test added.
+- [ ] Fix `shellQuote` in `src/harness/background-tasks.ts`: wrong POSIX
+      single-quote escaping (`"'"'"'` → should be `'"'"'`, as in `runner.ts`).
+      Corrupts running-state JSON for any command containing a single quote.
+- [ ] Make launch-script state writes **atomic** (write `<path>.tmp` then
+      `mv`/`os.replace`) in both `background-tasks.ts` and `training/runner.ts`,
+      so concurrent `readState` never sees a partial file.
+- [ ] **Synchronous state seed:** write the initial `running` state via
+      `writeJsonAtomic` inside `startBackgroundTask`/training-launch before
+      returning; let the detached script write only terminal states. Removes the
+      async-write + partial-read races. THEN green the `server.test` +
+      `operator-runtime` giant integration tests (currently pre-existing red on
+      this environment because they rely on the old buggy timing) by making them
+      deterministic and asserting correct behaviour.
+
 ## Foundations / DX
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.

@@ -370,4 +370,37 @@ describe("BackgroundTaskExecutionService", () => {
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
   });
+
+  it("records a numeric pid in the running state (regression: literal $$ was never substituted)", async () => {
+    const rootDir = await makeTempDir();
+    // Use the real spawn so the generated launch script actually runs. A short
+    // sleep keeps the task in the "running" state long enough to read the state
+    // file that the launch script writes for itself.
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"));
+    const task = await store.start({ title: "Sleep briefly", command: "sleep 3", cwd: rootDir });
+    const statePath = path.join(rootDir, task.execution.stateFile);
+
+    let runningState: BackgroundTaskExecutionState | undefined;
+    for (let attempt = 0; attempt < 150; attempt += 1) {
+      try {
+        const raw = await fs.readFile(statePath, "utf8");
+        const parsed = JSON.parse(raw) as BackgroundTaskExecutionState;
+        if (parsed.status === "running") {
+          runningState = parsed;
+          break;
+        }
+      } catch {
+        // State file not written yet (or mid-write); retry.
+      }
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+
+    expect(runningState?.status).toBe("running");
+    // Before the fix the launch script recorded pid as the literal string "$$"
+    // because the sed substitution was broken by nested double quotes, which made
+    // every liveness/recovery check treat a running task as a missing process.
+    expect(typeof runningState?.pid).toBe("number");
+    expect(Number.isFinite(runningState?.pid)).toBe(true);
+    expect(runningState?.pid).toBeGreaterThan(0);
+  });
 });

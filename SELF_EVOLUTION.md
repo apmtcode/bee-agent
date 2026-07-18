@@ -6,6 +6,70 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-18 (run 9) — 🐛 Real bug: background-task launch scripts recorded `"pid":"$$"` (liveness detection broken)
+
+**Audited:** The full suite on this environment. Run 8 recorded 174/174 green
+(2026-06-23); on 2026-07-18 the pristine checkout shows **4 failing tests**
+(`app.test` ×2, `server.test` ×1, `operator-runtime` ×1). Ruled out a calendar
+dependency and root-caused it to a genuine latent bug exposed by hardware timing.
+
+**Root cause (real production reliability bug):** the detached launch scripts in
+`src/harness/background-tasks.ts` and `src/training/runner.ts` write the initial
+"running" state via
+`printf '%s' '<payload>' | sed "…; s/\"\$\$\"/$$/g" > state.json`. The payload
+carries `"pid":"$$"` and the sed is meant to substitute the shell PID. But
+`s/"$$"/$$/g` embeds literal `"` inside the **double-quoted** sed argument, so
+bash closes/reopens the quote and the pattern degrades to `s/<pid>/<pid>/g` — the
+`"$$"` is **never replaced**. Every running task therefore records
+`"pid":"$$"` (a string). `defaultIsProcessRunning` does
+`Number.isFinite(pid)` → **false for the string `"$$"`** → returns `false`, so a
+*live* background task is misreported as **missing-process**, flipping remote
+control from `active`→`degraded`. (The sibling `__OPENCLAW_STARTED_AT__` token
+substitutes fine because it has no embedded quotes.) Whether the failure fires
+depends on whether the diagnostic reads the state file before/after the async
+launch-script write — a race that resolved favorably on run 8's hardware.
+
+**Fix (minimal, additive):** replace the `"$$"` placeholder with a plain
+`__OPENCLAW_PID__` token (mirroring the working `__OPENCLAW_STARTED_AT__`
+substitution), strip the surrounding JSON quotes so the pid lands as a **number**,
+and substitute with `s/__OPENCLAW_PID__/$$/g` (no embedded quotes → shell-safe).
+Applied to both launch-script renderers. Verified the generated script now emits
+`"pid":<numeric>` for real commands (incl. one with escaped newlines).
+
+**Regression test:** `background-tasks.test.ts` now executes the *real* launch
+script for a `sleep 3` task, polls for the running-state file, and asserts the
+recorded pid is a finite number > 0. Confirmed it **fails against the buggy sed**
+and passes with the fix.
+
+**Test results:** build ✅. **173/175 tests pass** (was 170/174 pristine; +1 new
+regression test). `app.test` (both previously-failing control-status assertions)
+now green via correct numeric pids + real liveness. The **2 remaining failures**
+(`server.test` + `operator-runtime` giant background-task integration tests)
+**also fail on the pristine committed tree** — they are pre-existing timing races,
+not regressions from this diff (kept intentionally minimal, pid-only).
+
+**Two further latent bugs identified (NOT fixed this run — they destabilise the
+coupled integration tests, which encode the *old* buggy behaviour):**
+1. `shellQuote` in `background-tasks.ts` uses wrong POSIX single-quote escaping
+   (`"'"'"'` instead of `'"'"'`), corrupting the running-state JSON for any
+   command containing a single quote (e.g. `printf 'x'` → mangled → invalid JSON
+   → `readState` throws `INTERNAL_ERROR`). `runner.ts`'s `shellQuote` is correct.
+2. Launch scripts write state **non-atomically** (`printf|sed > path`, python
+   `write_text`), so a concurrent `readState` can observe a half-written file.
+   Both should write to `<path>.tmp` then `mv`/`os.replace` (atomic rename).
+
+**New idea (innovation):** a **synchronous state seed** — have
+`startBackgroundTask`/training-launch write the initial `running` state itself via
+`writeJsonAtomic` *before* returning, and let the detached script write only the
+terminal (`completed`/`failed`) state. This removes BOTH the async-write race and
+the partial-read race deterministically, and is the clean prerequisite for
+greening the `server.test`/`operator-runtime` integration tests (which currently
+depend on the state file *not existing yet* at diagnostic time). Ship it together
+with the shellQuote + atomic-write fixes and update those tests to assert correct
+behaviour instead of the buggy-timing behaviour.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
