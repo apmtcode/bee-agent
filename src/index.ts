@@ -265,6 +265,12 @@ export {
   ReplayRuntimeService,
 } from "./capture/replay-service.js";
 export {
+  defaultWorkflowTemplates,
+  generateSyntheticTrajectories,
+  type GenerateSyntheticOptions,
+  type SyntheticWorkflowTemplate,
+} from "./capture/synthetic.js";
+export {
   CAPTURE_TIER_VALUES,
   DEFAULT_SENSITIVE_APP_DENYLIST,
   buildTrajectorySpan,
@@ -393,6 +399,26 @@ export type {
   ReadTrainingJobLogOptions,
   TrainingExecutionState,
 } from "./training/execution-service.js";
+export {
+  buildMovementDataset,
+  evaluateMovementModel,
+  MarkovMovementBackend,
+  MovementModelRegistry,
+  MOVEMENT_END,
+  MOVEMENT_START,
+  toolTokenizer,
+  toolWithSummaryTokenizer,
+  type MovementDataset,
+  type MovementEvaluation,
+  type MovementModel,
+  type MovementModelBackend,
+  type MovementModelSnapshot,
+  type MovementPrediction,
+  type MovementSample,
+  type MovementToken,
+  type MovementTokenizer,
+  type MovementTrainConfig,
+} from "./training/movement-model.js";
 export {
   LocalAppleSiliconTrainingRunner,
 } from "./training/runner.js";

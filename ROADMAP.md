@@ -44,6 +44,15 @@ unchecked items are queued. Keep this richer than you found it each run.
       (excludes `**/*.test.ts`) + `typecheck:src` script; passes (exit 0). Next:
       have the engine run it as a per-run pre-push self-check.
 - [ ] Add a minimal CI workflow mirroring `verify` for human-opened PRs.
+- [ ] **Fix 3 pre-existing test failures** (observed run 9 on clean HEAD; not
+      regressions): `control-plane/server.test.ts:719` expects a paired
+      remote-control `state:"active"` but gets `"degraded"` (time/heartbeat
+      dependent); `cli/app.test.ts:906` and
+      `orchestrator/operator-runtime.test.ts:605` (background-task
+      recover/reconcile — one surfaces a `readJsonFile` on a transient state
+      file, and can also race under full-suite parallelism). Likely fake-clock /
+      temp-dir-isolation fixes, not logic bugs. Fix so the suite is fully green
+      before the `verify` pre-push gate can be enforced.
 
 ## Capability parity (audit reference agents → port gaps)
 - [ ] Build a "capability inventory" generator: enumerate bee-agent's exported
@@ -62,13 +71,30 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      for a real on-device small model. **DONE run 9** —
+      `src/training/movement-model.ts`: `MovementModelBackend` interface +
+      `MovementModelRegistry` + deterministic `MarkovMovementBackend` (n-gram
+      with back-off) + JSON `MovementModelSnapshot` artifact.
+- [x] Synthetic event-stream generator to validate capture→dataset→replay
+      round-trips without real OS input. **DONE run 9** —
+      `src/capture/synthetic.ts` (mulberry32-seeded, overlapping workflow
+      templates + noise injection).
+- [x] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories. **DONE run 9** — `evaluateMovementModel()`
+      (teacher-forced next-token accuracy / back-off / unknown rates); tested on
+      held-out noisy variants.
+- [ ] **Movement-model backed replay-repair** (run 9 idea): when
+      `ReplayRuntimeService` hits a step that no longer matches the live UI, call
+      `MovementModel.predict()` on the surrounding context to offer a repair
+      candidate (consent-gated, confidence-thresholded via the eval harness).
+      Makes the model an active reliability layer, not just a passive learner.
+- [ ] Train a `MovementModel` from a `ReviewedExportManifest` end-to-end (wire
+      `buildMovementDataset` to the exporter's reviewed trajectories) and persist
+      the snapshot as a real training-job artifact alongside the launch script.
+- [ ] Add a sampling (seeded-PRNG) inference mode to `MarkovMovementModel` for
+      movement *variety* under a temperature knob, in addition to argmax.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

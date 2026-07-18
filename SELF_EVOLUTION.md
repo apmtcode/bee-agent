@@ -6,6 +6,65 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-18 (run 9) — 🧠 Local-movement model: in-process train → repeat → generalize
+
+**Audited:** The local-movement learning subsystem (objective 2). `src/capture/`
+already covers capture→schema→dataset→replay, and `src/training/runner.ts`
+emits a launch script for real on-device MLX/axolotl training — but there was
+**no in-process, cloud/CI-safe model** that actually trains and infers, so
+objective 2(c) "post-train a local model to repeat recorded movements" and 2(d)
+"generalize to new but related movements" were unvalidated. This is exactly the
+queued roadmap item *"Pluggable local-model backend interface with a
+deterministic mock backend."*
+
+**Changed (all additive):**
+- **`src/training/movement-model.ts`** — the movement-learning core:
+  - `MovementModelBackend` pluggable interface (`train(dataset) → snapshot`,
+    `load(snapshot) → model`) so a real on-device small model drops in behind
+    the same seam; `MovementModelRegistry` selects backend by id.
+  - `MarkovMovementBackend` — a deterministic n-gram backend with Katz-style
+    **context back-off**: full-order context → *repeat* recorded movements;
+    unseen context → back off to a shorter seen suffix → *generalize* to related
+    movements. Argmax with a stable lexical tie-break, so it is reproducible in
+    the cloud (no RNG, no native deps).
+  - JSON-serializable `MovementModelSnapshot` (the "model artifact"), a
+    `buildMovementDataset()` tokenizer (pluggable: tool-only or tool+summary),
+    and `evaluateMovementModel()` — a teacher-forced next-token eval harness
+    reporting accuracy / back-off rate / unknown rate.
+- **`src/capture/synthetic.ts`** — deterministic (mulberry32-seeded) synthetic
+  trajectory/event-stream generator with a library of overlapping desktop
+  workflows + optional noise injection, so the whole pipeline is validated
+  against simulated streams with no real machine (also a queued roadmap item).
+- **`src/index.ts`** — additive barrel exports for both modules.
+- Tests: `movement-model.test.ts` (10) + `synthetic.test.ts` (6). Cover repeat
+  fidelity (perfect recall on unambiguous sequences; a serialized-snapshot
+  round-trip), generalization (held-out noisy variants score >3× the uniform
+  baseline via back-off, 0% unknown), termination, the registry, and generator
+  determinism.
+
+**Test results:** `typecheck:src` CLEAN (exit 0). Build ✅. My 17 new tests
+**17/17 green** (in isolation and inside the full run). Full suite: **187/191**.
+The **4 failures are pre-existing and NOT mine** — verified by stashing all my
+changes and running clean HEAD: it already fails the same 3 files
+(`cli/app.test.ts`, `control-plane/server.test.ts`,
+`orchestrator/operator-runtime.test.ts`; the 4th is a parallelism race in the
+pre-existing background-task tests). Sample: `server.test.ts:719` expects a
+paired remote-control `state:"active"` but gets `"degraded"` — a
+time/heartbeat-dependent expectation in orchestration code this run never
+touched. Logged to the roadmap rather than chased (guardrail: keep the diff
+focused, don't rewrite working code).
+
+**New idea:** *Movement-model backed replay-repair.* The `ReplayRuntimeService`
+today replays recorded events verbatim; when a step no longer matches the live
+UI (a moved button, a renamed menu), it stalls. A trained `MovementModel` gives
+a principled fallback: on a replay mismatch, ask the model to `predict()` the
+next movement from the surrounding context and offer that as a repair candidate
+(gated by consent + a confidence threshold from the eval harness). That turns
+the model from a passive learner into an active reliability layer for replay —
+and gives the generalization metric a concrete production consumer.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
