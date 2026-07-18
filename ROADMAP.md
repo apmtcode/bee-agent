@@ -62,13 +62,33 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      for a real on-device small model. — DONE run 9
+      (`src/training/movement-model.ts`: `MovementModelBackend` seam +
+      `MarkovMovementBackend` back-off n-gram + `MovementModel` wrapper).
+- [x] Synthetic event-stream generator to validate capture→dataset→replay
+      round-trips without real OS input. — DONE run 9
+      (`src/training/synthetic-movements.ts`: seedable LCG, motif library).
+- [x] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories. — DONE run 9 (`evaluateGeneralization`:
+      next-token accuracy + rank coverage + full-sequence reproduction).
+- [ ] Pre-flight generalization gate on the real `TrainingJobPlan` pipeline:
+      train the cheap in-process `MovementModel` on the reviewed dataset and
+      refuse to launch an on-device MLX/axolotl run if held-out next-token
+      accuracy is below a floor (dataset too small/inconsistent to learn from).
+- [ ] `MovementModelBackend` conformance test suite (with `MarkovMovementBackend`
+      as the reference impl) so a future real neural backend can be validated
+      against the same contract before being wired in.
+
+## Reliability
+- [ ] **Harden background-task state parsing** (surfaced run 9). Full `npm test`
+      has 3 pre-existing failures in this cloud env: `readState` →
+      `readJsonFile` in `src/harness/background-tasks.ts` throws an **uncaught
+      `SyntaxError`** on a malformed/partial JSON state file during
+      `reconcileTask`/`recoverBySession`, failing recovery instead of treating
+      the file as corrupt/missing. Wrap the parse and fall back to a
+      corrupt-state path so recovery is robust to partial writes.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

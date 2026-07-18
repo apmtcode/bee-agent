@@ -6,6 +6,64 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-18 (run 9) — 🧠 In-process movement model: learn + generalize recorded gestures
+
+**Audited:** The local-movement learning subsystem (standing objective #2) vs.
+`src/training`. Finding: the runner (`runner.ts`) only *plans* a real on-device
+MLX/axolotl job — it emits a launch script and a `TrainingJobPlan`, but nothing
+actually **learns from movement data inside the process**, so objective #2(c)
+(train a model to repeat movements) and #2(d) (generalize to new but related
+movements) had no cloud-testable implementation. The reference codebases are
+capture-heavy but leave the learner as an external Python job.
+
+**Changed (additive — two new modules + barrel exports):**
+- `src/training/movement-model.ts`: a deterministic, dependency-free movement
+  learner with a **pluggable backend seam** (`MovementModelBackend`) so a real
+  neural backend drops in without touching call sites.
+  - `tokenizeAction` / `tokenizeTrajectory` normalize recorded gestures into
+    stable movement tokens (`device:swipe:left`), preferring structured metadata
+    over free-text summaries so identical movements collapse to one token.
+  - `MarkovMovementBackend` — a genuine **back-off n-gram model** (order-N with
+    backoff to shorter contexts and the unigram) that gives real generalization:
+    a novel prefix still predicts via its previously-seen suffix. Argmax with
+    lexicographic tie-break ⇒ fully deterministic; JSON-serializable so a trained
+    policy persists next to the other training artifacts.
+  - `MovementModel` wrapper (`trainFromTrajectories`, `predictNext`, `generate`,
+    `serialize`/`load`) and `evaluateGeneralization` — a held-out eval reporting
+    next-token accuracy, rank coverage, and full-sequence reproduction.
+- `src/training/synthetic-movements.ts`: a **deterministic synthetic
+  event-stream generator** (seedable LCG — no `Math.random`/`Date`, which are
+  unavailable here) emitting gesture trajectories from a motif library
+  (open-and-search, navigate-and-select, drag-reorder, form-fill) that share
+  sub-phrases, so a trained model has real structure to generalize across. This
+  is how the subsystem is validated with no real OS input.
+- Exported all of the above from `src/index.ts`.
+
+**Test results:** 2 new test files, **19 new tests, all passing** (tokenization,
+back-off prediction, deterministic generation, serialize round-trip,
+synthetic determinism/seed-variance, and an end-to-end train→held-out eval
+asserting >0.6 next-token accuracy on sequences the model never saw verbatim).
+`npm run typecheck:src` ✅ (source stays green). `npm run build` ✅.
+
+**Pre-existing failures (NOT caused by this change — confirmed by `git stash`):**
+full `npm test` shows **3 failing** (server/app/operator-runtime) that also fail
+on the clean baseline in this cloud env. Root cause is a real latent bug:
+`FileBackgroundTaskStore.reconcileTask` → `readState` → `readJsonFile` throws an
+**uncaught `SyntaxError`** on a malformed/partial JSON state file instead of
+treating it as a missing/corrupt state. Logged to ROADMAP as the next
+reliability fix. My new modules pass in isolation and in the full run.
+
+**New idea:** feed the *real* `TrainingJobPlan` pipeline a pre-flight
+`evaluateGeneralization` gate — before spending an on-device MLX/axolotl run,
+train the cheap in-process `MovementModel` on the reviewed dataset and refuse to
+launch if held-out next-token accuracy is below a floor (dataset too small /
+inconsistent to learn from). Cheap, deterministic, and catches wasted training
+runs early. Also: make `MarkovMovementBackend` the reference implementation of a
+`MovementModelBackend` conformance test suite so a future neural backend can be
+dropped in and validated against the same contract.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
