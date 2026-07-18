@@ -38,8 +38,19 @@ unchecked items are queued. Keep this richer than you found it each run.
     `skills.executable.*`, `push.subscriptions.*`, `trajectories.*`, `replays.*`,
     `cron.runs`/misc — plus a few genuine test-only typings. Map the rest, then
     fix residual test-only typings.
+- [x] **Green, deterministic test suite** — DONE run 9. `npm test` was silently
+      flaky (3–4 nondeterministic failures/run). Root cause was two real
+      launch-script bugs (transposed `shellQuote` corrupting `state.json`; broken
+      `sed` PID substitution) plus real-subprocess races in three tests. Fixed
+      the product bugs, made all state writes atomic, and made the tests
+      deterministic via the `backgroundTaskSpawnProcess` seam. Now 15/15 clean.
 - [ ] Add a `verify` npm script (`typecheck && build && test`) and have the
       engine run it as a pre-push self-check each cycle.
+- [ ] **Launch-script golden/lint test** (run 9 idea): render every
+      `renderLaunchScript` output, run `bash -n` on it, and round-trip a command
+      containing `'`, `"`, `$`, and spaces, asserting the resulting `state.json`
+      parses and preserves the command verbatim. Guards the shell-quoting seam —
+      the most fragile part of the OS-execution layer — against regressions.
 - [x] Interim **source-only typecheck gate** — DONE run 7. `tsconfig.src.json`
       (excludes `**/*.test.ts`) + `typecheck:src` script; passes (exit 0). Next:
       have the engine run it as a per-run pre-push self-check.

@@ -6,6 +6,56 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-18 (run 9) — 🐛 Real bug: corrupt background-task state JSON + flaky-test elimination
+
+**Audited:** Test-suite health on a clean tree. `npm test` was **not green** —
+3–4 tests failed *nondeterministically* every run (`server.test.ts`,
+`app.test.ts`, `operator-runtime.test.ts`), which contradicted the run-8 claim of
+174/174. Root-caused it rather than papering over the flakiness.
+
+**Genuine product bug found & fixed (`src/harness/background-tasks.ts`):** the
+background-task launch script's `shellQuote()` used a **transposed POSIX
+single-quote escape** — `"'"'"'` instead of `'"'"'`. Any task whose `command` or
+`cwd` contained a `'` (e.g. the test's `printf 'line-1\nline-2\n'`) produced
+**malformed `state.json`**, so `getBackgroundTaskExecutionState` /
+`syncBackgroundTask` / recovery threw `SyntaxError` forever. This is a real
+runtime failure, not just a test artifact. Fixed the escape to match the
+(correct) training-runner implementation and documented the hazard.
+
+**Second latent bug (both launch scripts):** the running-state write relied on a
+`sed "s/\"\$\$\"/$$/g"` inside a double-quoted arg whose embedded quotes broke
+substitution, so the intermediate state persisted a **literal `"pid":"$$"`**
+(string) instead of the real PID — corrupting recovery's `isProcessRunning(pid)`
+check. Replaced the fragile `printf|sed` running-state write with a `python3`
+writer (same pattern already used for the completed/failed states) that fills the
+real PID/timestamp and writes **atomically** (`os.replace`). Applied identically
+in `src/training/runner.ts`.
+
+**Reliability hardening:** all launch-script state writes are now atomic
+(temp file + `os.replace`), so a live monitor/reader polling task state can never
+observe a torn/partial JSON file — a real concern for long-running monitors, not
+only tests.
+
+**Test-determinism (test-only):** the three failing tests spawned **real** child
+processes (`sleep 5`, `printf …`, `tail -f`) that wrote execution state
+asynchronously, racing the assertions and the temp-dir teardown. Injected the
+already-existing `backgroundTaskSpawnProcess` seam (added a passthrough to
+`OperatorCliAppOptions`) so those tests use a deterministic no-op spawn; added a
+bounded ENOTEMPTY/EBUSY retry to the operator-runtime `afterEach` cleanup.
+
+**Test results:** `npm test` **15/15 full-suite runs green (174/174)** where it
+was previously 3–4 failing per run; operator-runtime alone 20/20, app.test 15/15.
+`typecheck:src` ✅ (exit 0). Build ✅. Full `tsc` **125 → 125** (no new debt).
+
+**New idea:** add a tiny **launch-script lint/golden test** that renders each
+`renderLaunchScript` output, executes it under `bash -n` (syntax check) *and*
+round-trips a command containing `'`, `"`, `$`, and spaces through it, asserting
+the resulting `state.json` parses and preserves the command verbatim. That would
+have caught both bugs at authoring time and guards the shell-quoting seam — the
+single most fragile part of the OS-execution layer — against future regressions.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

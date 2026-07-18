@@ -366,7 +366,14 @@ describe("BackgroundTaskExecutionService", () => {
     });
     const service = new BackgroundTaskExecutionService(rootDir, () => ({ pid: 1111, unref() {} }));
 
-    await expect(fs.readFile(path.join(rootDir, task.execution.launchScript), "utf8")).resolves.toContain("bash -lc");
+    const script = await fs.readFile(path.join(rootDir, task.execution.launchScript), "utf8");
+    expect(script).toContain("bash -lc");
+    // State must be written atomically (temp + os.replace) so a concurrent
+    // reader polling live task state never observes a torn/partial JSON file,
+    // and the running state must record the real PID, not the literal "$$".
+    expect(script).toContain("os.replace(tmp_path, state_path)");
+    expect(script).not.toContain('"pid":"$$"');
+    expect(script).not.toContain('"$$"');
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
   });

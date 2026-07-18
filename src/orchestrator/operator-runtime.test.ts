@@ -30,8 +30,28 @@ function buildHookCaptureCommand(outputFile: string): string {
   return `node -e ${JSON.stringify(script)}`;
 }
 
+async function removeDirWithRetry(dir: string): Promise<void> {
+  // Detached background-task processes keep writing state files (and short-lived
+  // `.tmp.<pid>` files) into the temp dir after the test body finishes, so a
+  // single recursive rm can race with a concurrent create and throw ENOTEMPTY.
+  // Retry a few times to let those writes settle before giving up.
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    try {
+      await fs.rm(dir, { recursive: true, force: true });
+      return;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if ((code === "ENOTEMPTY" || code === "EBUSY") && attempt < 9) {
+        await new Promise((resolve) => setTimeout(resolve, 25));
+        continue;
+      }
+      throw error;
+    }
+  }
+}
+
 afterEach(async () => {
-  await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
+  await Promise.all(tempDirs.splice(0).map((dir) => removeDirWithRetry(dir)));
 });
 
 const exportManifest: ReviewedExportManifest = {
@@ -531,6 +551,10 @@ describe("StandaloneOperatorRuntime", () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
       backgroundTaskIsProcessRunning: () => false,
+      // Inject a no-op spawn so no real child process writes execution state
+      // concurrently with the manual writeState/writeOutput calls below — the
+      // assertions drive the execution state deterministically.
+      backgroundTaskSpawnProcess: () => ({ pid: 4242, unref() {} }),
     });
     const session = await runtime.startSession({ title: "Tasks", agentId: "main" });
 
