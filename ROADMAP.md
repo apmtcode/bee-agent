@@ -70,6 +70,22 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Generalization eval harness: measure replay fidelity on held-out but
       related synthetic trajectories.
 
+## Reliability / correctness
+- [x] **Fix background-task launcher escaping** (run 9, 2026-07-18). `shellQuote`
+      in `src/harness/background-tasks.ts` produced a malformed single-quote
+      escape (`"'"'"'` instead of `'"'"'`), corrupting the launch script and
+      `bash -lc` invocation for any command with a quote; the initial state was
+      also written via a fragile `printf | sed` pipeline. Both fixed; python-based
+      initial state writer + regression test that runs the real script in bash.
+- [ ] **Golden launch-script fuzz/lint** (idea from run 9): render
+      `renderLaunchScript` for a fuzzed command corpus (quotes, `$`, backticks,
+      newlines, unicode, `&&`, redirects) and assert the output is valid bash
+      (`bash -n`) and writes JSON-parseable state. Doubles as a sandbox-escape
+      safety check for hostile task titles/commands.
+- [ ] Audit the two `shellQuote` copies (`background-tasks.ts`, `training/
+      runner.ts`) — extract one shared, tested `shellQuote` in `src/shared/` so a
+      fix/regression to one can't diverge from the other again.
+
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in

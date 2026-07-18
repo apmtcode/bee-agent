@@ -6,6 +6,56 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-18 (run 9) — 🐛 Fix background-task launcher: corrupt state JSON on quoted commands
+
+**Audited:** Project health first (the required pre-flight). `npm test` was
+**RED**: 3 failures across `background-tasks`/`operator-runtime`/`server`/`app`
+test files — a regression the previous run's log claimed green. All three traced
+to one root cause in the background-task launch pipeline.
+
+**Root cause (two bugs, one code path — `src/harness/background-tasks.ts`):**
+1. **Malformed `shellQuote`.** It escaped a literal single quote as `"'"'"'`
+   (6 chars, starts with `"`) instead of the correct `'"'"'` (close-quote,
+   double-quoted quote, reopen-quote). So `shellQuote("a'b")` decoded under bash
+   to `a"'b` — a spurious `"`. Any background-task **command, cwd, or state
+   payload containing a single quote** (e.g. the test's `printf 'line-1\n…'`)
+   produced a corrupt launch script: the JSON state file failed to parse on
+   recovery, and — worse in production — the `bash -lc <command>` invocation
+   itself was corrupted for every quoted command. (The sibling `shellQuote` in
+   `src/training/runner.ts` was already correct; only this copy was wrong.)
+2. **Fragile `printf | sed` initial state writer.** The launcher wrote the
+   initial `state.json` by piping a JSON payload through `sed` to inject the pid
+   and timestamp. `sed` mangles `&`, `\`, `/`, and newlines in the payload, and
+   its `"$$"`→pid substitution silently failed (pid stayed the literal `"$$"`).
+
+**Changed (additive, `src/harness/background-tasks.ts`):**
+- Fixed `shellQuote` to the correct `'"'"'` escape (with an explanatory comment).
+- Replaced the `printf | sed` initial-state write with a `python3` writer
+  (`renderInitialStateWriterPython`) that injects pid/timestamp via `argv` —
+  identical in spirit to the existing `renderStateWriterPython` used on
+  completion. Robust for any command/cwd/payload; no shell metacharacter hazard.
+
+**Regression test (`src/harness/background-tasks.test.ts`):** added a
+data-driven test that runs the **real** generated launch script through `bash`
+(via an injected `spawnSync` spawn) for three commands containing single quotes
+and shell/sed metacharacters, then asserts the resulting `state.json` parses and
+round-trips `command`/`taskId`/`pid`/`status`. Verified it **fails (3×) against
+the buggy `shellQuote`** and passes against the fix.
+
+**Test results:** `npm test` **177/177** (was 174; +3 regression cases).
+`typecheck:src` CLEAN (exit 0). `npm run build` ✅.
+
+**New idea (queued to ROADMAP):** a **"golden launch-script" property test / lint**
+— render `renderLaunchScript` for a fuzzed corpus of commands (quotes, `$`,
+backticks, newlines, unicode, `&&`, redirects) and assert the emitted script is
+(a) valid bash (`bash -n`) and (b) writes JSON-parseable state. This class of
+shell-injection/escaping bug is invisible to `tsc` and only shows up when a real
+shell runs the artifact, so it deserves dedicated fuzz coverage. Bonus: the same
+harness doubles as a **safety check** that a hostile task title/command can't
+break out of the single-quote sandbox.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
