@@ -59,16 +59,39 @@ unchecked items are queued. Keep this richer than you found it each run.
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
 (exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
-      objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Inventory what `src/capture` + `src/training` already implement vs. the
+      objective's five pieces — DONE run 9. Gap was: capture→schema→dataset→
+      replay→plan-emission existed, but no actual train/infer. `runner.ts` only
+      emitted Apple-Silicon shell scripts.
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
+      for a real on-device small model — DONE run 9 (`src/training/policy-backend.ts`:
+      `MovementPolicyBackend`/`TrainedMovementPolicy` + deterministic
+      `MarkovMovementBackend`; greedy=repeat, seeded-sample=generalize).
 - [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      round-trips without real OS input. (Partly served by run 9's dataset
+      builder + tests; a reusable generator that emits full `TrajectorySpan`/
+      `ReplayManifest` streams is still open.)
+- [x] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories — DONE run 9 (`evaluateMovementPolicy`:
+      next-token accuracy, mean log-prob, exact-replay-rate).
+- [ ] Behavioral-cloning replay bridge: feed `TrainedMovementPolicy.generate()`
+      back through `ReplayRuntimeService` so a trained policy can *drive* a
+      simulated session (closes capture→train→**act**); upgrade the eval to
+      task-success on held-out goals, not just token overlap.
+- [ ] Make training backend + Markov order selectable in `LocalTrainingJobManifest`
+      so `runner.ts` picks `markov` (cloud/mock) vs a real on-device backend from
+      the same job config.
+
+## Known blockers
+- [ ] **Pre-existing env-dependent test failures** (surfaced run 9, present on
+      HEAD `3c7b7236` independent of that change): 3 tests fail —
+      `server.test.ts` "handles session … orchestration methods" +
+      `app.test.ts` (2). The remote-control health check yields
+      `control.state === "degraded"` in the cloud container where tests assert
+      `"active"` (`server.test.ts:719`). Fix: make the assertion
+      environment-agnostic, or inject a deterministic health probe in tests so
+      the state isn't coupled to the runtime environment.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

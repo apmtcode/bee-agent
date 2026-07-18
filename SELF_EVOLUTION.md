@@ -6,6 +6,63 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-18 (run 9) — 🧠 Local-movement policy backend: train + infer + eval, in-cloud
+
+**Audited:** The local-movement learning subsystem (standing objective #2)
+end-to-end. Existing scaffolding covered capture → schema (`trajectory.ts`) →
+dataset (`exporter.ts`) → replay (`replay.ts`) → *training-plan emission*
+(`runner.ts`). The gap: `runner.ts` only writes Apple-Silicon MLX/axolotl shell
+scripts — **nothing actually post-trains a model or runs inference**, so
+objective #2(c) "post-train a local model to repeat the recorded movements" and
+#2(d) "generalize to new but related movements" were entirely unvalidated in the
+cloud. That is the least-covered part of the whole project.
+
+**Changed (additive, new files only):**
+- **`src/training/policy-backend.ts`** — a pluggable movement-policy backend:
+  - `MovementPolicyBackend` interface (`train()` / `load()`) + `TrainedMovementPolicy`
+    (`generate()` / `scoreSequence()` / `toJSON()`) — the documented seam for a
+    real on-device model (MLX / small transformer) to slot behind, wired later
+    by `runner.ts`.
+  - `MarkovMovementBackend` — the default, **dependency-free, fully
+    deterministic** n-gram model with add-k smoothing. Runs anywhere (no GPU, no
+    OS input), so the whole pipeline is CI-validatable on synthetic streams.
+    Greedy decode (`temperature: 0`) **repeats** recorded movements exactly
+    (#2c); seeded sampling (`temperature > 0`, `createSeededRng` LCG — never
+    `Math.random()`) **generalizes** to new-but-related sequences (#2d).
+  - `extractMovementTokens` / `buildMovementDataset` — turn `ReplayManifest`
+    action events into the movement vocabulary/dataset (bridges the existing
+    replay pipeline into training input).
+  - `evaluateMovementPolicy` — the **generalization eval harness** (roadmap
+    item): next-token accuracy, mean log-prob, and exact-replay-rate on held-out
+    trajectories.
+- **`src/index.ts`** — exported the new surface (8 types + 7 values).
+
+**Test results:** new `src/training/policy-backend.test.ts` ✅ **14/14**
+(repeat, partial-continuation, seeded generalization, seed-determinism,
+serialize round-trip, learned-vs-unseen scoring, eval fidelity, empty-set
+guards). `npm run build` ✅. `npm run typecheck:src` ✅ **clean (exit 0)**.
+
+**⚠️ Known blocker (pre-existing, NOT from this change):** 3 tests fail on the
+clean tree at HEAD (`3c7b7236`) — verified by stashing this change and running
+the suite: `server.test.ts` (1) + `app.test.ts` (2). Root cause is
+environment-dependent: the remote-control health check resolves
+`control.state === "degraded"` in this cloud container where the test asserts
+`"active"` (`server.test.ts:719`). Run 8 reported these green, so the assertion
+is coupled to a runtime/health signal that differs across environments. Out of
+scope for this movement-subsystem increment; logged to ROADMAP for a dedicated
+run (make the health-state assertion environment-agnostic, or inject a
+deterministic health probe in tests).
+
+**New idea:** add a **behavioral-cloning replay bridge** — a thin adapter that
+feeds a `TrainedMovementPolicy`'s `generate()` output back through the existing
+`ReplayRuntimeService`/replay engine so a trained policy can *drive* a
+(simulated) session, not just emit token lists. That closes the loop
+capture→train→**act**, and gives the generalization eval a stronger metric:
+task-success on held-out goals rather than token overlap. Second idea: make the
+Markov backend order/backend selectable per training job in the
+`LocalTrainingJobManifest` so `runner.ts` can pick `markov` (cloud/mock) vs a
+real on-device backend from the same job config.
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
