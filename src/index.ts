@@ -400,6 +400,31 @@ export type {
   LocalTrainingRuntime,
   TrainingJobPlan,
 } from "./training/runner.js";
+export {
+  DEFAULT_MOVEMENT_PATTERNS,
+  EXACT_MATCH_THRESHOLD,
+  MovementPolicyRunner,
+  NearestNeighborPolicyBackend,
+  buildPolicyExamples,
+  buildPolicyExamplesFromTrajectory,
+  evaluateMovementPolicy,
+  generateSyntheticTrajectories,
+  observationFeatureVector,
+} from "./training/movement-policy.js";
+export type {
+  MovementActionLabel,
+  MovementObservationInput,
+  MovementPolicyBackend,
+  MovementPolicyModel,
+  MovementPolicyModelSnapshot,
+  MovementPolicyPrediction,
+  MovementPolicyRunnerOptions,
+  MovementPredictionSource,
+  PolicyEvaluation,
+  PolicyTrainingExample,
+  SyntheticMovementPattern,
+  SyntheticTrajectoryOptions,
+} from "./training/movement-policy.js";
 export type {
   ExportedMemoryReference,
   ExportedPromotedSkill,

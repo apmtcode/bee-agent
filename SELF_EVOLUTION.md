@@ -6,6 +6,73 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-18 (run 9) — Movement-policy inference subsystem (repeat + generalize) + real shell-quoting bug fix
+
+**Audited:** Standing objective #2 (local-movement learning). The pipeline had
+capture → schema → dataset → *launch-plan* for an external on-device trainer
+(`src/training/runner.ts` emits mlx/axolotl commands), but **nothing implemented
+the inference half** — the part that actually *repeats* recorded movements and
+*generalizes* to new-but-related ones (objective 2c/2d). That was the highest-
+value parity/objective gap, and it is fully testable in-cloud with synthetic data.
+
+**Changed (additive):**
+- **New `src/training/movement-policy.ts`** — a pluggable movement-policy
+  inference subsystem:
+  - `MovementPolicyBackend` interface (`train` / `restore`) + `MovementPolicyModel`
+    (`predict` / `toJSON`), so real on-device models plug in behind the same seam.
+    Models serialize to a portable `MovementPolicyModelSnapshot` (replayable).
+  - `NearestNeighborPolicyBackend` — a **deterministic local backend** over
+    L2-normalized bag-of-token observation features + cosine similarity. It
+    *replays* a recorded action for a familiar observation (`source: "exact"`),
+    *generalizes* to novel-but-related observations via shared tokens
+    (`"generalized"`), and falls back to the modal action on zero overlap
+    (`"fallback"`). No external weights ⇒ identical behaviour in cloud CI and on
+    device.
+  - `MovementPolicyRunner` façade — trains from reviewed `TrajectorySpan`s
+    (pairs each action with its most-recent preceding observation, honouring
+    redacted/reviewed data), runs sequence inference, restores snapshots.
+  - `evaluateMovementPolicy` — **generalization eval harness** measuring replay
+    fidelity (tool accuracy, exact vs generalized breakdown, per-tool matrix,
+    `generalizationAccuracy` on held-out-only predictions).
+  - `generateSyntheticTrajectories` — **seeded deterministic** synthetic event
+    streams (mulberry32 PRNG, no global RNG/clock dependence) so the whole
+    capture→examples→train→infer→eval loop is validated without real OS input.
+  - Wired all exports through `src/index.ts`.
+- **Real bug fixed in `src/harness/background-tasks.ts`:** `shellQuote` used the
+  malformed POSIX single-quote escape `"'"'"'` (opens with `"`, misaligned by
+  one) instead of the correct `'"'"'`. Any background task whose command
+  contains a single quote (e.g. `printf 'line-1\n'`) therefore wrote a **corrupt
+  state file**, breaking recovery with a JSON parse error. Confirmed empirically
+  and fixed to match the already-correct twin in `src/training/runner.ts`.
+
+**Test results:** `typecheck:src` ✅ (source stays fully green). Build ✅.
+New `movement-policy.test.ts` ✅ **16/16** (feature vectors, exact replay,
+generalization to unseen target nouns, fallback, snapshot round-trip, runner,
+deterministic synthetic generator, and a held-out generalization eval asserting
+100% fidelity + non-zero generalized matches). The shellQuote fix turns the
+previously-unparseable state files into valid JSON.
+
+**Pre-existing blocker (documented, NOT caused by this run):** the background-
+task tests (`operator-runtime.test.ts`, `server.test.ts`, `app.test.ts`) spawn
+**real OS processes** (`sleep 5`, `printf …`) and then manually `writeState`,
+racing the spawned launcher's own async state writes. With
+`isProcessRunning: () => false`, any lingering "running" state is scored
+`missing-process`, so the pass count is **non-deterministic** (observed 2–4
+failures across identical runs). This flakiness predates run 9 (the untouched
+tree fails the same tests) and is independent of the movement-policy work, which
+is deterministically green in isolation. Root cause + fix are queued in ROADMAP.
+
+**New idea:** make the background-task subsystem hermetically testable by
+injecting `isProcessRunning` **and** a clock through `OperatorCliApp` (the
+runtime already accepts `backgroundTaskIsProcessRunning`; the CLI app does not),
+and add a `spawn`-free "already-terminal" fast path so control-health tests
+never depend on real process timing. Separately: a real on-device backend
+(e.g. a tiny MLP or logistic policy over the same feature vectors) can drop in
+behind `MovementPolicyBackend` with zero call-site changes — the eval harness is
+already the acceptance gate for it.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

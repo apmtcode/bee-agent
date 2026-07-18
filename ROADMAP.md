@@ -62,13 +62,36 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
-      deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+- [x] Pluggable local-model backend interface + deterministic backend —
+      DONE run 9. `src/training/movement-policy.ts`: `MovementPolicyBackend`
+      seam, `NearestNeighborPolicyBackend` (deterministic, no external weights),
+      serializable `MovementPolicyModelSnapshot`. Real on-device model drops in
+      behind the same interface.
+- [x] Synthetic event-stream generator — DONE run 9. `generateSyntheticTrajectories`
+      (seeded mulberry32, deterministic) validates capture→examples→train→infer
+      without real OS input.
+- [x] Generalization eval harness — DONE run 9. `evaluateMovementPolicy` measures
+      replay fidelity (tool accuracy, exact/generalized split, per-tool matrix,
+      held-out `generalizationAccuracy`).
+- [ ] **Inference → replay/execution bridge**: connect `MovementPolicyRunner`
+      predictions back into `ReplayRuntimeService` so a trained policy can drive
+      the existing replay engine (device/browser adapters) on-device.
+- [ ] Real on-device backend behind `MovementPolicyBackend` (tiny MLP / logistic
+      policy over the same feature vectors); the eval harness is its acceptance gate.
+
+## Reliability / test hermeticity
+- [x] Fix `shellQuote` in `src/harness/background-tasks.ts` — DONE run 9. It used
+      the malformed POSIX escape `"'"'"'` (vs correct `'"'"'` in runner.ts), so
+      any background-task command containing a single quote wrote corrupt JSON
+      state and broke recovery.
+- [ ] **HIGH: de-flake the background-task tests.** `operator-runtime.test.ts`,
+      `server.test.ts`, `app.test.ts` spawn **real** processes (`sleep`, `printf`)
+      and manually `writeState`, racing the launcher's async state writes — pass
+      count is non-deterministic (2–4 failures across identical runs). Fix:
+      thread an injectable `isProcessRunning` + clock through `OperatorCliApp`
+      (the runtime already accepts `backgroundTaskIsProcessRunning`; the CLI app
+      does not), and add a spawn-free "already-terminal" fast path so control-
+      health assertions never depend on wall-clock process timing.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
