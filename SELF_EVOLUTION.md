@@ -6,6 +6,55 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-18 (run 9) — 🐛 Correctness: `shellQuote` corruption + non-atomic state writes; suite de-flaked
+
+**Audited:** Project health first. `npm test` was *not* green as the last log
+claimed — 3–4 background-task tests failed every run, non-deterministically. Ran
+the offenders in isolation and instrumented `readJsonFile` to dump the offending
+file: the launch-script state writer was producing **unparseable JSON**.
+
+**Root cause (real product bug, not a test bug):** `shellQuote()` in
+`src/harness/background-tasks.ts` escaped an embedded single quote as `"'"'"'`
+(opening with a double quote) instead of the canonical POSIX sequence `'\''`.
+Every background-task command containing a `'` — e.g. `printf 'x'`, `git commit
+-m 'msg'`, extremely common — was mangled (`printf 'x'` → `printf "'x"'`),
+corrupting the on-disk state file and the launch script itself. On a real user
+machine this silently breaks any single-quoted background/monitor command.
+
+**Changed (additive, in `src/harness/background-tasks.ts`):**
+1. **Fixed `shellQuote`** to emit `'\''`. Now round-trips arbitrary commands
+   (quotes, newlines, `$`) through `printf '%s' | sed` intact.
+2. **Made both launch-script state writes atomic.** The initial `running` write
+   used a bare `> statePath` redirect (truncate-then-write) and the terminal
+   Python writer used `write_text` — both let a concurrent reader (recovery /
+   sync / status poll) observe a torn half-written file. Now each renders to a
+   per-process temp file and `mv -f` / `os.replace()`s it into place (atomic
+   rename on POSIX). Defends real deployments, not just the test.
+3. **De-flaked the suite hermetically.** The three background-task tests spawned
+   *real* bash launch scripts whose async state writes raced with their explicit
+   `writeState()` calls. Injected the already-supported
+   `backgroundTaskSpawnProcess` stub (and threaded a matching pair of options
+   through `OperatorCliApp`, a genuine testability seam) so no real process
+   launches; seeded output/state deterministically where a test asserts on a
+   *running* task (`watch-active`).
+
+**Tests:** new deterministic regression test asserts the rendered launch script
+writes state atomically (temp + `mv`/`os.replace`, never `> statePath`). Full
+suite **175/175**, stable across ~45 consecutive runs (was 3–4 failing every
+run). `typecheck:src` ✅ (exit 0). Build ✅. Full `tsc` count unchanged at 125
+(all test-file debt; no regression). One unrelated websocket-pong timing test
+(`gateway-transport`) flaked ~1/45 — pre-existing, tracked below.
+
+**New idea:** add a tiny `shellQuote` unit test matrix (quotes, spaces, `$`,
+newlines, backticks) *plus* a property-style round-trip check that
+`bash -c "printf '%s' <shellQuote(x)>"` re-emits `x` exactly — cheap insurance
+that this class of shell-injection/corruption bug can't regress. Longer term,
+consider dropping the shell/sed state-templating entirely in favor of having the
+launch script shell out to `node`/`python` with the payload passed via a file or
+env var (no quoting minefield at all).
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

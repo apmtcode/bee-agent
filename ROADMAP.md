@@ -8,6 +8,24 @@ unchecked items are queued. Keep this richer than you found it each run.
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`
       (2026-06-22).
+- [x] **Fix `shellQuote` corruption + make launch-script state writes atomic**
+      (run 9, 2026-07-18). `shellQuote` escaped `'` as `"'"'"'` not `'\''`,
+      corrupting any single-quoted background/monitor command; both state writes
+      were non-atomic. Suite went from 3–4 flaky failures/run to a stable
+      175/175.
+- [x] **De-flake background-task tests** (run 9) by injecting
+      `backgroundTaskSpawnProcess` stubs (threaded through `OperatorCliApp`) so no
+      real bash launch script races the tests' explicit `writeState()` calls.
+- [ ] **`shellQuote` round-trip test matrix** (run 9 idea): unit-test
+      quotes/spaces/`$`/newlines/backticks and a `bash -c "printf '%s' <quoted>"`
+      re-emit check so shell-corruption bugs can't regress.
+- [ ] **Investigate rare `gateway-transport` flake** — "replays only missed
+      events after reconnect cursor and reports healthy status after pong" failed
+      ~1/45 runs (run 9). A websocket pong/heartbeat *timing* race, independent of
+      the background-task fixes; likely needs fake timers or an awaited pong.
+- [ ] Longer term: drop the shell/sed state-templating for the launch script and
+      pass the payload to `node`/`python` via a file/env var — removes the
+      quoting minefield entirely.
 - [ ] **Pay down typecheck debt** (surfaced by the `typecheck` script). Full
       `tsc --noEmit` count was **397** on 2026-06-22; now **125**. 🎯 ALL source
       (`src/**` non-test) files typecheck clean since run 7; remaining 125 errors

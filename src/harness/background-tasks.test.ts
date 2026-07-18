@@ -370,4 +370,29 @@ describe("BackgroundTaskExecutionService", () => {
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
   });
+
+  it("renders a launch script that writes the state file atomically", async () => {
+    const rootDir = await makeTempDir();
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"), () => ({ pid: 1111, unref() {} }));
+    const task = await store.start({
+      title: "Collect logs",
+      command: "printf 'done'",
+      cwd: rootDir,
+    });
+
+    const script = await fs.readFile(path.join(rootDir, task.execution.launchScript), "utf8");
+    const quotedStatePath = `'${task.execution.stateFile}'`;
+
+    // The initial state must be rendered to a temp file and renamed into place,
+    // never truncate-written directly (a `> statePath` redirect lets a
+    // concurrent reader observe a half-written, unparseable file).
+    expect(script).toContain(`> "$state_tmp"`);
+    expect(script).toContain(`mv -f "$state_tmp" ${quotedStatePath}`);
+    expect(script).not.toContain(`> ${quotedStatePath}`);
+    expect(script).not.toContain(`>${quotedStatePath}`);
+
+    // The terminal-state Python writer must also rename atomically.
+    expect(script).toContain("os.replace(tmp_path, state_path)");
+    expect(script).not.toContain("state_path.write_text(");
+  });
 });

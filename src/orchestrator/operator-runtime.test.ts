@@ -528,9 +528,15 @@ describe("StandaloneOperatorRuntime", () => {
   });
 
   it("starts, syncs, recovers, lists, and cancels background tasks", async () => {
+    // Inject a no-op spawn so no real OS process launches: the default spawn
+    // runs the bash launch script, whose asynchronous state writes race with
+    // this test's manual writeState() calls and made the recovery assertions
+    // flaky. The test drives state transitions explicitly via writeState.
+    let nextPid = 1000;
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
       backgroundTaskIsProcessRunning: () => false,
+      backgroundTaskSpawnProcess: () => ({ pid: (nextPid += 1), unref() {} }),
     });
     const session = await runtime.startSession({ title: "Tasks", agentId: "main" });
 
