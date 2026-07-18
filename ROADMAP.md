@@ -4,6 +4,16 @@ Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
 ## Foundations / DX
+- [ ] **🔴 BLOCKER (surfaced run 9): background-task launch-script writes malformed
+      state JSON.** `operator-runtime.test.ts`, `app.test.ts`, `server.test.ts`
+      all fail: `BackgroundTaskExecutionService.readState` → `SyntaxError` parsing
+      a state file written by `renderLaunchScript` (`printf … | sed … > state.json`)
+      in `src/harness/background-tasks.ts`. Deterministic on this platform (not a
+      race; `python3` present). Run 8 was 174/174, so it regressed with the
+      execution environment, not the source. **Fix:** stop building JSON with
+      `printf|sed`; write it from a single `python3 -c`/`node -e` that takes argv
+      and does `json.dumps` + atomic `os.replace`. Apply to *both*
+      `background-tasks.ts` and `training/runner.ts` launch renderers.
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`
@@ -62,13 +72,23 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      for a real on-device small model — DONE run 9 (`src/training/movement-model.ts`:
+      `MovementModelBackend` interface + `MarkovMovementBackend` mock +
+      `MovementModelRegistry`).
+- [x] Synthetic event-stream generator to validate capture→dataset→replay
+      round-trips without real OS input — DONE run 9
+      (`generateSyntheticMovementDataset`, deterministic mulberry32).
+- [x] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories — DONE run 9 (`evaluateMovementModel`).
+- [ ] **Register a real on-device backend** against `MovementModelBackend`
+      (e.g. an MLX/llama.cpp small-model adapter) and wire the existing
+      `LocalAppleSiliconTrainingRunner` launch plan to produce a model the
+      registry can load for inference — closing the mock→real seam.
+- [ ] Wire `trajectoriesToMovementDataset` into the reviewed-export/training
+      flow so `LocalTrainingExporter` datasets can drive `MovementModelTrainer`
+      end-to-end.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

@@ -6,6 +6,67 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-18 (run 9) — Pluggable movement-model backend (train → repeat → generalize)
+
+**Audited:** The local-movement learning subsystem (standing objective #2). The
+existing `src/training/` code (`runner.ts`, `execution-service.ts`, `exporter.ts`)
+only *builds launch plans/scripts* for an on-device MLX/Axolotl run — there was
+**no in-repo, runnable model** that actually learns from recorded movements,
+repeats them, or generalizes. That is objective #2(c)+(d) and the roadmap's
+"pluggable local-model backend + deterministic mock" item — the biggest missing
+core piece, and the one that most needs a cloud-runnable mock.
+
+**Changed (additive) — new `src/training/movement-model.ts` (+ test):**
+- **`MovementModelBackend` interface** — the pluggable seam: `train(dataset)` →
+  opaque model, `predictNext(model, context)` → ranked `MovementPrediction`,
+  `generate(model, seed)` → continuation. A real on-device small-model backend
+  slots in here later without touching call sites.
+- **`MarkovMovementBackend`** — deterministic, dependency-free reference/mock
+  backend: an order-k **backoff Markov model** over movement tokens. High-order
+  context **repeats** recorded chains exactly (memorization); unseen prefixes
+  **back off** to the longest known suffix and still predict a plausible next
+  movement (**generalization**). Fully deterministic (argmax with a real-token >
+  end-marker > lexicographic tie-break), so tests are reproducible.
+- **Tokenization** — `tokenizeTrajectoryAction` / `trajectoriesToMovementDataset`
+  reduce recorded `TrajectorySpan` actions to canonical tokens (`tap:submit`,
+  `swipe:up`, …) sorted by ts, so the capture pipeline feeds the trainer directly.
+- **`MovementModelRegistry`** + `createDefaultMovementModelRegistry()` (ships the
+  mock under `markov-mock`).
+- **`evaluateMovementModel`** — generalization eval harness: held-out next-token
+  fidelity incl. the terminal stop decision (roadmap item).
+- **`generateSyntheticMovementDataset`** — deterministic (mulberry32, no
+  `Math.random`) synthetic event-stream generator with a shared closing motif, so
+  capture→dataset→train→replay round-trips are validated without real OS input
+  (roadmap item). Exported from the barrel.
+
+**Test results:** new `movement-model.test.ts` **14/14 ✅** (repeat, generalize,
+backoff, tokenization, dataset build, eval accuracy, synthetic determinism,
+registry). `npm run typecheck:src` ✅ (source stays 100% clean). `npm run build`
+✅. **Full `npm test`: 185/188 — 3 pre-existing failures, NOT caused by this
+change** (verified: they fail identically with this run's work `git stash`ed).
+
+**⚠️ Pre-existing blocker surfaced (new — highest-priority next item):**
+`operator-runtime.test.ts`, `app.test.ts`, `server.test.ts` all fail on the same
+root cause — `BackgroundTaskExecutionService.readState` hits a `SyntaxError`
+parsing a background-task **state file written by the launch shell script**
+(`renderLaunchScript` in `src/harness/background-tasks.ts`, the
+`printf … | sed … > state.json` line). Deterministic on this platform (not a
+race — fails identically across 3 runs; `python3` present). Run 8 recorded
+174/174, so this regressed with the execution *environment*, not the source. The
+sed transform is correct for a simple command (verified by hand) but malforms for
+the test's launched commands — the state JSON is only ~partially valid (parse
+fails at position ~311). Isolated to the subprocess launcher subsystem; left for
+a dedicated run rather than expanding this focused diff.
+
+**New idea:** replace the fragile `printf | sed`-built JSON in *both* launch-script
+renderers (`background-tasks.ts` and `training/runner.ts`) with a single
+`python3 -c` (or `node -e`) invocation that receives values as argv and emits
+JSON via `json.dumps` + an atomic `os.replace` — eliminating shell-quoting/escape
+hazards *and* the torn-read window in one move. This is very likely the fix for
+the blocker above and removes a whole class of latent state-file corruption.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
