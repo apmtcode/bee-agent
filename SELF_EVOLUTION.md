@@ -6,6 +6,50 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-18 (run 9) — 🩹 Test suite made deterministic: killed the background-task subprocess flakes
+
+**Audited:** Project health / the engine's own verification gate. On a fresh
+`npm install` the suite was **non-deterministic** — 2–4 failures per run, varying
+run-to-run (`174 passed`, then `2 failed`, then `4 failed`…). A flaky suite
+silently defeats the required per-run gate ("Do NOT push if tests fail"), so this
+was the highest-value fix available: without a trustworthy green signal the engine
+can't safely verify anything it builds.
+
+**Root cause (one, shared across 4 tests):** several integration tests start
+**real** background OS processes (`sleep 5`, `printf …`, `tail -f app.log`) via the
+default `spawn`, then assert on control/health state. The background-task launch
+script writes the execution-**state file** asynchronously (running → succeeded),
+racing the health check that reads it (`server.ts` reads `state.status ===
+"running" && !isProcessRunning(pid)` → `missing-process` → degraded). Depending on
+scheduling a task showed `active`, `degraded`, or no-state — nondeterministically.
+`tail -f` also **leaked** a real never-exiting process per run.
+
+**Changed (test-only + one additive plumbing seam; no product behaviour change):**
+- `src/cli/app.ts`: exposed the runtime's already-existing injection seam through
+  `OperatorCliAppOptions` — added optional `backgroundTaskSpawnProcess` /
+  `backgroundTaskIsProcessRunning`, forwarded into `StandaloneOperatorRuntime`
+  (spread only when provided, so production stays on real `spawn` + PID liveness).
+- Added a deterministic **`noopBackgroundSpawn`** helper to the three affected test
+  files (`control-plane/server.test.ts`, `cli/app.test.ts`,
+  `orchestrator/operator-runtime.test.ts`): hands out synthetic pids, launches no
+  real process → no async state-file writes, no leaked processes.
+- Injected it (with `isProcessRunning: () => false` where tests assert
+  missing-process degradation, `() => true` for the CLI task-lifecycle test whose
+  task must stay running/stoppable) into the 5 flaky runtimes/apps, and seeded the
+  one captured-output assertion (`printf ok`) via explicit `writeOutput` — mirroring
+  the pattern the monitor half of that same test already used.
+
+**Test results:** **5× consecutive `npm test` → 174/174** (was 2–4 flaky
+failures/run). `typecheck:src` ✅ 0. Full `tsc` **125 → 125** (no new debt). Build ✅.
+
+**New idea:** add a `test:flake` script (`vitest run --repeat 5` or a loop) and run
+it as the engine's pre-push self-check, so a newly-introduced nondeterministic test
+is caught the run it lands instead of silently eroding the gate. Longer term: a lint
+that flags real `spawn`/`exec`/`sleep`/`tail -f` inside `*.test.ts` and points at the
+`backgroundTaskSpawnProcess` seam, so hermeticity is enforced at authoring time.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

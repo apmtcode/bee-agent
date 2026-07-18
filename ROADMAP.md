@@ -38,6 +38,18 @@ unchecked items are queued. Keep this richer than you found it each run.
     `skills.executable.*`, `push.subscriptions.*`, `trajectories.*`, `replays.*`,
     `cron.runs`/misc — plus a few genuine test-only typings. Map the rest, then
     fix residual test-only typings.
+- [x] **Test-suite determinism** (2026-07-18, run 9): the suite was flaky
+      (2–4 failures/run) because 4 integration tests spawned real background OS
+      processes (`sleep`/`printf`/`tail -f`) and raced the async state-file
+      health check. Exposed the runtime's `backgroundTaskSpawnProcess` /
+      `backgroundTaskIsProcessRunning` injection seam through
+      `OperatorCliAppOptions` and injected a `noopBackgroundSpawn` (synthetic
+      pids, no real process, no leak) into the affected tests → 5×174/174 green.
+- [ ] Add a `test:flake` script (`vitest run --repeat 5`) + run it as the
+      engine's pre-push self-check, so a newly-flaky test is caught the run it
+      lands (would have caught the run-9 flakes at authoring time).
+- [ ] Hermeticity lint: flag real `spawn`/`exec`/`sleep`/`tail -f` inside
+      `*.test.ts` and point at the `backgroundTaskSpawnProcess` seam.
 - [ ] Add a `verify` npm script (`typecheck && build && test`) and have the
       engine run it as a pre-push self-check each cycle.
 - [x] Interim **source-only typecheck gate** — DONE run 7. `tsconfig.src.json`

@@ -15,6 +15,17 @@ async function makeTempDir(): Promise<string> {
   return dir;
 }
 
+// Deterministic, hermetic background-task spawn for tests: hands out synthetic
+// pids and never launches a real OS process, so no launch script runs, no
+// execution-state file is written asynchronously, and long-lived commands (e.g.
+// `tail -f`) never leak real processes. Paired with an
+// `isProcessRunning: () => false` stub this removes the subprocess timing races
+// that made background-task tests flaky in sandboxed CI.
+let nextFakeBackgroundPid = 60000;
+function noopBackgroundSpawn(): { pid: number; unref(): void } {
+  return { pid: (nextFakeBackgroundPid += 1), unref() {} };
+}
+
 function buildHookCaptureCommand(outputFile: string): string {
   const script = [
     "import fs from 'node:fs';",
@@ -531,6 +542,7 @@ describe("StandaloneOperatorRuntime", () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
       backgroundTaskIsProcessRunning: () => false,
+      backgroundTaskSpawnProcess: noopBackgroundSpawn,
     });
     const session = await runtime.startSession({ title: "Tasks", agentId: "main" });
 
