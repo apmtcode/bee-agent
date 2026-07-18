@@ -6,6 +6,65 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-18 (run 9) — Movement policy backend (repeat + generalise) + de-flaked background-task launcher
+
+**Audited:** The local-movement learning subsystem (standing objective #2). The
+existing `src/capture` + `src/training` code covers capture → schema → replay →
+a training-*plan* builder (`LocalAppleSiliconTrainingRunner` emits mlx/axolotl
+shell commands), but there was **no inference/policy backend** — nothing that
+actually *learns from recorded trajectories and predicts the next movement*, i.e.
+objective #2(c) "repeat recorded movements" and #2(d) "generalise to new but
+related movements". Runs 2–8 were all typecheck-debt paydown; this run advances
+the core capability instead.
+
+**Changed (additive):**
+- **New `src/training/policy-backend.ts`** — a pluggable `MovementPolicyBackend`
+  interface (`fit` / `predict` / `rollout` / `info` / `snapshot`) plus a
+  deterministic, dependency-free default `MarkovMovementBackend`: a variable-order
+  Markov model with Katz-style backoff over trajectory action sequences.
+  - `predict` returns the most-frequent continuation of the longest matching
+    action context → **recall** (repeats a recorded move); when the full context
+    is unseen it **backs off** to shorter prefixes → **generalises** to related
+    sequences; finally falls back to the unigram **prior**. Ties break
+    lexicographically so it's fully reproducible.
+  - Learns only **review-redacted** actions when a trajectory has a review (raw
+    unreviewed tokens never enter the model — verified by test).
+  - `snapshot()` / `restoreMarkovMovementBackend()` give a serialisable "model
+    file" seam so a real on-device small model can later implement the same
+    contract without touching callers (the pluggable-backend ROADMAP item).
+- **New `src/capture/synthetic.ts`** — `generateSyntheticMovementTrajectories`,
+  a deterministic simulated event-stream generator (injectable step clock, no
+  wall clock / randomness) so the whole pipeline is validated without real OS
+  input, as the objective requires in the cloud.
+- **Root-cause reliability fix in `src/harness/background-tasks.ts`:** the task
+  launch script built the initial `state.json` by `sed`-substituting a pre-rendered
+  JSON blob. For any command containing quotes/newlines (e.g. `printf "a\nb\n"`)
+  this produced **invalid JSON**, which then crashed the Python completion writer
+  and left a corrupt state file — a flaky, timing/date-sensitive failure (and a
+  JSON-injection footgun). Replaced it with a base64-encoded template decoded by
+  Python (`renderInitialStateWriterPython`), robust to any command text.
+- **De-flaked the affected tests** by injecting a no-op launcher stub
+  (`backgroundTaskSpawnProcess`) into the three server-side breaker/drift runtimes,
+  the operator-runtime background-task test, and the one app.test remote-status
+  test — so *derived* state (degraded/failed) comes only from the tests' explicit
+  `writeState()` calls, never a racing detached process. Added an additive
+  `backgroundTaskSpawnProcess` / `backgroundTaskIsProcessRunning` passthrough to
+  `OperatorCliAppOptions` for that last one (production default unchanged).
+
+**Test results:** build ✅, `typecheck:src` ✅ (new modules clean). Full suite
+**187/187** (was 174/174 before this run's +13 policy tests). Critically, the
+suite went from **3–4 failing tests on ~every run** (pre-existing launcher race,
+surfaced by today's date) to **0 failures across 12+ consecutive full runs**.
+The launcher fix is a genuine reliability win beyond the new feature.
+
+**New idea:** add a **generalisation eval harness** that trains the backend on a
+set of synthetic programs, holds out a *related* program (shared prefixes, novel
+tail), and measures next-move top-1 accuracy vs. a shuffled baseline — turning
+"does it generalise?" into a tracked metric. Longer term, wire the backend into
+the exporter/replay path so a reviewed export can ship a pre-fit snapshot, and
+expose `movement.predict` / `movement.rollout` as control-plane RPCs so the agent
+can consult the learned policy at runtime.
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

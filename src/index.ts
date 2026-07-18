@@ -423,6 +423,26 @@ export type {
   SftTrainingConfig,
 } from "./training/job-manifest.js";
 export {
+  MarkovMovementBackend,
+  restoreMarkovMovementBackend,
+} from "./training/policy-backend.js";
+export type {
+  MarkovMovementBackendOptions,
+  MovementContext,
+  MovementPolicyBackend,
+  MovementPolicyBackendInfo,
+  MovementPolicySnapshot,
+  MovementPrediction,
+  MovementPredictionSource,
+} from "./training/policy-backend.js";
+export {
+  generateSyntheticMovementTrajectories,
+} from "./capture/synthetic.js";
+export type {
+  MovementProgram,
+  SyntheticMovementOptions,
+} from "./capture/synthetic.js";
+export {
   FileTrainingJobStore,
 } from "./training/job-store.js";
 export type {

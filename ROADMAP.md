@@ -62,15 +62,38 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      for a real on-device small model. **DONE run 9** —
+      `src/training/policy-backend.ts`: `MovementPolicyBackend` interface +
+      deterministic `MarkovMovementBackend` (variable-order + backoff) that
+      recalls recorded moves and generalises via backoff; `snapshot()` /
+      `restoreMarkovMovementBackend()` is the on-device model-file seam.
+- [x] Synthetic event-stream generator to validate capture→dataset→replay
+      round-trips without real OS input. **DONE run 9** —
+      `src/capture/synthetic.ts` `generateSyntheticMovementTrajectories`
+      (injectable step clock, no wall clock/randomness).
+- [ ] Generalization eval harness: train on synthetic programs, hold out a
+      *related* program (shared prefix, novel tail), measure next-move top-1
+      accuracy vs. a shuffled baseline. (Scaffolding now exists: the backend +
+      the synthetic generator.)
+- [ ] Wire the policy backend into the export/replay path: ship a pre-fit
+      snapshot inside a reviewed export, and expose `movement.predict` /
+      `movement.rollout` as control-plane RPCs so the agent can consult the
+      learned policy at runtime.
 
 ## Innovation backlog
+- [ ] **Apply the base64-template launcher fix to `src/training/runner.ts`**
+      too — its `renderLaunchScript` still uses the same fragile
+      `sed`-into-JSON substitution that run 9 replaced in
+      `background-tasks.ts`. Training commands happen to be quote/newline-free
+      today so its tests pass, but it's the identical latent
+      invalid-JSON/injection bug. Port `renderInitialStateWriterPython`.
+- [ ] Flaky-test guard: the background-task tests race a real detached launcher
+      against explicit `writeState()`. Run 9 stubbed the launcher per-test via
+      `backgroundTaskSpawnProcess`; consider a shared test helper (or a default
+      no-op spawn in a test setup file) so future background-task tests are
+      deterministic by construction instead of remembering the stub.
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in
       project health over time.
