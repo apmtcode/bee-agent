@@ -6,6 +6,70 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-18 (run 9) — Movement subsystem: pluggable local-model backend + in-process learn→infer loop
+
+**Audited:** `src/training/` + `src/capture/` against movement-subsystem
+objective #2 (capture → schema → dataset → replay → **train/infer**). Found the
+first four pieces exist (recorder/adapters, trajectory schema, reviewed-export
+dataset, replay manifest) but the **train/infer loop was untestable in the
+cloud**: `LocalAppleSiliconTrainingRunner` only emits mlx/axolotl *command
+plans* that require a real Apple-Silicon machine, so objective #2(c) "repeat the
+recorded movements" and #2(d) "generalize to new-but-related movements" had **no
+in-process implementation and zero tests**.
+
+**Changed (additive) — new `src/training/movement-backend.ts`:**
+- `MovementModelBackend` interface: a backend-agnostic `train(dataset) →
+  TrainedMovementModel` / `infer(model, context) → MovementPrediction` contract.
+  A real on-device small model implements the same seam; the Apple-Silicon
+  command-plan runner is unchanged and complementary (offline plan vs. in-process
+  learn/infer).
+- `MockMovementBackend`: a **deterministic** reference backend — a stupid-backoff
+  n-gram over event tokens. Training records action frequencies at every context
+  length 0..N; inference tries the longest token suffix and backs off to shorter
+  ones (finally the unconditional prior). The backoff is exactly what lets it
+  **generalize** to a context whose full prefix was never seen. Ties break by
+  action-key sort ⇒ byte-identical model for identical input (no clock/RNG).
+- `buildMovementDataset` / `buildMovementDatasetFromTrajectories`: turn a reviewed
+  `ReplayManifest` (or raw `TrajectorySpan[]`) timeline into a supervised
+  next-action dataset with a bounded sliding context window and a sorted
+  vocabulary (the embedding seam for a real backend). Default tokenizer is coarse
+  on context (`obs:<source>`, `act:<tool>`) but keeps full action summaries so
+  replays stay faithful.
+- `rolloutMovements`: autoregressive rollout that feeds each predicted action
+  back in — how a trained model repeats a recorded sequence (2c) and attempts a
+  related-but-new one off a novel seed (2d); with a `stopOnRepeat` loop guard.
+- `evaluateMovementFidelity`: held-out accuracy + average backoff length — the
+  seed of the generalization eval harness. Exported all of the above from
+  `src/index.ts`.
+
+**Test results:** new `movement-backend.test.ts` — **13/13 pass**, driven purely
+by *synthetic* trajectory streams (no OS input): exact reproduction (2c),
+generalization via backoff on a held-out related trajectory (2d), unconditional
+fallback, empty-model safety, determinism, tie-breaking, rollout, and fidelity
+scoring. `typecheck:src` ✅ CLEAN (exit 0). Build ✅ (5 files, 544 kB).
+
+**Pre-existing blocker (NOT caused by this run):** the full `vitest run` is red
+on **2 test files** — `src/cli/app.test.ts` and `src/control-plane/server.test.ts`
+— and these fail **identically on the clean tree** (verified via `git stash`).
+Root cause: `FileBackgroundTaskStore.reconcile*` calls
+`executionService.isProcessRunning(state.pid)`; the app test seeds a "running"
+background task whose fixture PID is not alive in a fresh cloud container, so
+recovery marks it `missing-process` → platform `control=degraded`, and the
+assertion `toContain("control=active")` fails. Environmental/timing, not a code
+regression. Logged a ROADMAP item to make the liveness check injectable so these
+tests become hermetic (mirroring the run-1 `configHome` fix).
+
+**New idea:** a *replay-diff fidelity metric* richer than exact-match accuracy —
+align the model's rolled-out action sequence against the recorded one with an
+edit-distance (Levenshtein over action keys) so partial-credit generalization is
+measurable, and expose it alongside `evaluateMovementFidelity` as the backbone of
+the generalization eval harness. Second idea: a `train→infer` smoke path wired
+into `LocalTrainingExecutionService` that, when the backend is the mock, runs the
+whole loop in-process and asserts non-degenerate fidelity — a cloud-runnable
+integration test for the movement pipeline end to end.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

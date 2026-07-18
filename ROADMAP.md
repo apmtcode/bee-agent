@@ -59,16 +59,24 @@ unchecked items are queued. Keep this richer than you found it each run.
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
 (exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
+- [x] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+      — DONE run 9. First four exist; the **train/infer** loop was the gap (runner
+      only emitted mlx/axolotl command plans, unrunnable + untested in cloud).
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      for a real on-device small model — DONE run 9 (`src/training/movement-backend.ts`:
+      `MovementModelBackend` + `MockMovementBackend` stupid-backoff n-gram).
+- [~] Synthetic event-stream generator to validate capture→dataset→replay
+      round-trips without real OS input — run 9 uses inline synthetic trajectory
+      streams in `movement-backend.test.ts`; still worth a reusable generator
+      module (parametrized app/gesture/session mixes) shared across capture +
+      training tests.
+- [~] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories — run 9 shipped `evaluateMovementFidelity`
+      (exact-match accuracy + avg backoff length) + a held-out generalization
+      test. Next: edit-distance (Levenshtein over action keys) for partial credit,
+      and a train→infer smoke path wired through `LocalTrainingExecutionService`.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
@@ -84,3 +92,14 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
       count to a baseline file and fail if a module regresses above it. Lets the
       engine pay debt down module-by-module without one green-gate blocking
       progress, and prevents backsliding while the total is still > 0.
+- [ ] **Make `isProcessRunning` injectable for hermetic tests** (surfaced run 9).
+      `FileBackgroundTaskStore` recovery calls `executionService.isProcessRunning(pid)`;
+      `app.test.ts` + `server.test.ts` seed "running" tasks whose fixture PID is
+      dead in a fresh cloud container, so recovery flags `missing-process` →
+      `control=degraded` and two tests fail non-deterministically. Thread an
+      injectable liveness predicate (default = real `process.kill(pid, 0)`) so
+      tests can force "alive", mirroring the run-1 `configHome` hermeticity fix.
+- [ ] **Replay-diff fidelity metric** (movement subsystem): align a model's
+      rolled-out action sequence against the recorded one via edit distance for
+      partial-credit generalization scoring, exposed alongside
+      `evaluateMovementFidelity`.
