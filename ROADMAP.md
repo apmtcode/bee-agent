@@ -70,6 +70,25 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Generalization eval harness: measure replay fidelity on held-out but
       related synthetic trajectories.
 
+## Reliability / correctness
+- [x] **Fix corrupt background-task/training state files** (2026-07-18, run 9).
+      `renderLaunchScript` embedded JSON in shell + `sed`-substituted `"$$"`;
+      bare quotes broke the substitution and any command with quotes/newlines
+      produced invalid JSON → `readState` crash + control drift. Now terminal
+      state is written via `python3`/argv, atomically; background-tasks writes
+      no initial state file (record `processId` + `reconcileMissingState` cover
+      liveness). Suite 171→174, deterministic (6/6).
+- [ ] **Shell-quoting regression test for launch scripts**: generate a script
+      for a pathological command (embedded quotes/newlines/`$`/backticks),
+      execute it, assert the emitted state file parses. Catches shell-quoting
+      breakage as a test failure instead of an env-dependent flake.
+- [ ] **Node-side terminal-state reaper**: write completion/failure state from
+      the Node process on child exit rather than embedding a `python3` heredoc
+      in generated bash — removes the interpreter dependency and the remaining
+      shell-quoting surface entirely.
+- [ ] Audit remaining subprocess tests (`app.test`) for the same real-spawn
+      race and inject a no-op `backgroundTaskSpawnProcess` for determinism.
+
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in

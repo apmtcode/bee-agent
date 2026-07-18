@@ -166,26 +166,21 @@ function renderLaunchScript(execution: LocalTrainingExecution, plan: TrainingJob
   const quotedLogFile = shellQuote(execution.logFile);
   const quotedWorkingDirectory = shellQuote(execution.workingDirectory);
   const quotedCommand = `${shellQuote(plan.command[0] ?? "")}${plan.command.slice(1).map((arg) => ` ${shellQuote(arg)}`).join("")}`;
-  const quotedStatePayload = shellQuote(
-    JSON.stringify({
-      version: 1,
-      jobId: plan.jobId,
-      status: "running",
-      pid: "$$",
-      startedAt: "__OPENCLAW_STARTED_AT__",
-      updatedAt: "__OPENCLAW_STARTED_AT__",
-      logFile: execution.logFile,
-      workingDirectory: execution.workingDirectory,
-      command: plan.command,
-    }),
-  );
+  const quotedJobId = shellQuote(plan.jobId);
+  const quotedLogFileValue = shellQuote(execution.logFile);
+  const quotedWorkingDirectoryValue = shellQuote(execution.workingDirectory);
+  const quotedCommandJson = shellQuote(JSON.stringify(plan.command));
 
   return [
     "#!/usr/bin/env bash",
     "set -euo pipefail",
     `mkdir -p ${shellQuote(execution.artifactDir)} $(dirname ${quotedLogFile}) $(dirname ${quotedStatePath})`,
     "started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-    `printf '%s' ${quotedStatePayload} | sed "s/__OPENCLAW_STARTED_AT__/$started_at/g; s/\"\$\$\"/$$/g" > ${quotedStatePath}`,
+    // Build the initial "running" state with python so field values are
+    // JSON-encoded safely (command is an array) and written atomically.
+    `python3 - ${quotedStatePath} $$ "$started_at" ${quotedLogFileValue} ${quotedWorkingDirectoryValue} ${quotedCommandJson} ${quotedJobId} <<'PY'`,
+    ...renderInitialStateWriterPython(),
+    "PY",
     `printf '%s\n' "starting ${plan.mode} training for ${plan.jobId}" >> ${quotedLogFile}`,
     `if ${quotedCommand} >> ${quotedLogFile} 2>&1; then`,
     "  completed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
@@ -204,6 +199,29 @@ function renderLaunchScript(execution: LocalTrainingExecution, plan: TrainingJob
   ].join("\n");
 }
 
+function renderInitialStateWriterPython(): string[] {
+  return [
+    "import json",
+    "import pathlib",
+    "import sys",
+    "state_path = pathlib.Path(sys.argv[1])",
+    "state = {",
+    "    'version': 1,",
+    "    'jobId': sys.argv[7],",
+    "    'status': 'running',",
+    "    'pid': int(sys.argv[2]),",
+    "    'startedAt': sys.argv[3],",
+    "    'updatedAt': sys.argv[3],",
+    "    'logFile': sys.argv[4],",
+    "    'workingDirectory': sys.argv[5],",
+    "    'command': json.loads(sys.argv[6]),",
+    "}",
+    "tmp_path = state_path.with_name(state_path.name + '.tmp')",
+    "tmp_path.write_text(json.dumps(state, indent=2) + '\\n')",
+    "tmp_path.replace(state_path)",
+  ];
+}
+
 function renderStateWriterPython(status: TrainingExecutionState["status"]): string[] {
   return [
     "import json",
@@ -220,7 +238,9 @@ function renderStateWriterPython(status: TrainingExecutionState["status"]): stri
     "state['completedAt'] = timestamp",
     "state['exitCode'] = exit_code",
     `state['error'] = None if '${status}' == 'completed' else 'training process exited non-zero'`,
-    "state_path.write_text(json.dumps(state, indent=2) + '\\n')",
+    "tmp_path = state_path.with_name(state_path.name + '.tmp')",
+    "tmp_path.write_text(json.dumps(state, indent=2) + '\\n')",
+    "tmp_path.replace(state_path)",
   ];
 }
 

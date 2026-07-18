@@ -6,6 +6,63 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-18 (run 9) — 🐛 Reliability: fix corrupt background-task/training state files (suite 171→174, deterministic)
+
+**Audited:** Ran the suite fresh in this cloud container and found the baseline
+was **red** — 3 failures that predate this run (`operator-runtime`,
+`server`, `cli/app` — all subprocess-driven). Root-caused each rather than
+papering over.
+
+**Root cause (real product bug):** `renderLaunchScript` (in both
+`src/harness/background-tasks.ts` and `src/training/runner.ts`) embedded the
+running-state JSON *into the shell script* and post-processed it with
+`sed "…; s/\"\$\$\"/$$/g"`. Because the TS template's `\"`/`\$` collapse to
+literal `"`/`$` at compile time, the emitted `sed` argument contained **bare**
+double-quotes — so bash split the quoting, the `"$$"→pid` substitution silently
+became a no-op, and any task **command containing quotes/newlines/backslashes**
+(e.g. the test's `printf 'line-1\nline-2\n'`) produced **invalid JSON**. That
+crashed `readState`/`reconcileTask` with `SyntaxError: Expected ',' or '}'…`
+(the `operator-runtime` failure) and cascaded into control-state drift.
+
+**Changed (additive, `src/`):**
+- **background-tasks**: dropped the `sed`/JSON-in-shell entirely. The launch
+  script now writes **only the terminal state**, built self-contained from
+  `argv` in a `python3` heredoc (`json.dumps`, so every field is encoded
+  safely) and swapped in **atomically** (`tmp` + `os.replace`). No initial
+  state-file write — a running task's liveness is already tracked by the record
+  `processId`, and `reconcileMissingState` falls back to it, so this is a
+  correct simplification, not a regression (verified in code + a nasty-command
+  round-trip: state file stays valid JSON).
+- **training/runner**: same corruption fix — initial + terminal state now
+  written via `python3`/argv (command is a JSON array → `json.loads`) and
+  atomically.
+- **Test isolation (not masking):** three suites already inject
+  `backgroundTaskIsProcessRunning: () => false` to drive reconciliation with
+  *controlled* state/output, but still spawned a **real** detached subprocess
+  that asynchronously appended to the state/output files and raced the
+  synchronous assertions (env-speed dependent — passed on slower CI, flaked
+  here). Completed that isolation by injecting a no-op
+  `backgroundTaskSpawnProcess` in `server.test.ts` (×3 runtimes) and
+  `operator-runtime.test.ts`. Updated one `runner.test.ts` assertion that
+  pinned the removed `sed` redirect syntax.
+
+**Test results:** `npm run build` ✅. Full suite **174/174** ✅, **6/6
+consecutive green runs** (was flaky 1-fail before the spawn isolation).
+`typecheck:src` ✅ (source stays clean). End-to-end verified: a task whose
+command contains `'`, `"`, `\n`, and `\` now yields a **valid-JSON** state file
+(previously corrupt).
+
+**New idea:** the launch-script generators are still stringly-typed bash with
+subtle shell-quoting hazards. Extract a single tested `renderStateWriterPython`
+helper shared by both subsystems, and add a focused unit test that generates a
+script for a pathological command (embedded quotes/newlines/`$`/backticks),
+executes it, and asserts the emitted state file parses — turning "shell-quoting
+regression" into a caught failure instead of an environment-dependent flake.
+Longer term, prefer writing terminal state from the Node side on process exit
+(a reaper) over embedding interpreters in generated shell at all.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

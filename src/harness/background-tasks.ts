@@ -734,37 +734,29 @@ function renderLaunchScript(task: BackgroundTaskRecord): string {
   const quotedOutputFile = shellQuote(task.execution.outputFile);
   const quotedCwd = shellQuote(task.cwd);
   const quotedCommand = shellQuote(task.command);
-  const quotedStatePayload = shellQuote(
-    JSON.stringify({
-      version: 1,
-      taskId: task.id,
-      kind: task.kind,
-      status: "running",
-      pid: "$$",
-      startedAt: "__OPENCLAW_STARTED_AT__",
-      updatedAt: "__OPENCLAW_STARTED_AT__",
-      outputFile: task.execution.outputFile,
-      cwd: task.cwd,
-      command: task.command,
-    }),
-  );
+  const quotedTaskId = shellQuote(task.id);
+  const quotedKind = shellQuote(task.kind);
 
+  // A running task's live status is tracked in the task record (processId set
+  // by markStarted); reconciliation falls back to that pid when no state file
+  // exists (see reconcileMissingState). So this script writes only the terminal
+  // state — built self-contained from argv (no fragile JSON-in-shell payload,
+  // no read-modify-write of a possibly-absent file) and swapped in atomically.
+  const terminalArgs = `${quotedStatePath} $$ ${quotedTaskId} ${quotedKind} ${quotedOutputFile} ${quotedCwd} ${quotedCommand}`;
   return [
     "#!/usr/bin/env bash",
     "set -euo pipefail",
     `mkdir -p $(dirname ${quotedStatePath}) $(dirname ${quotedOutputFile})`,
-    "started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-    `printf '%s' ${quotedStatePayload} | sed "s/__OPENCLAW_STARTED_AT__/$started_at/g; s/\"\$\$\"/$$/g" > ${quotedStatePath}`,
     `printf '%s\n' "starting ${task.kind} ${task.id}" >> ${quotedOutputFile}`,
     `if cd ${quotedCwd} && bash -lc ${quotedCommand} >> ${quotedOutputFile} 2>&1; then`,
     "  completed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-    `  python3 - ${quotedStatePath} $$ "$completed_at" 0 <<'PY'`,
+    `  python3 - ${terminalArgs} "$completed_at" 0 <<'PY'`,
     ...renderStateWriterPython("completed"),
     "PY",
     "else",
     "  exit_code=$?",
     "  completed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-    `  python3 - ${quotedStatePath} $$ "$completed_at" "$exit_code" <<'PY'`,
+    `  python3 - ${terminalArgs} "$completed_at" "$exit_code" <<'PY'`,
     ...renderStateWriterPython("failed"),
     "PY",
     '  exit "$exit_code"',
@@ -774,22 +766,38 @@ function renderLaunchScript(task: BackgroundTaskRecord): string {
 }
 
 function renderStateWriterPython(status: BackgroundTaskExecutionState["status"]): string[] {
+  // argv: statePath pid taskId kind outputFile cwd command timestamp exitCode
   return [
     "import json",
     "import pathlib",
     "import sys",
     "state_path = pathlib.Path(sys.argv[1])",
-    "pid = int(sys.argv[2])",
-    "timestamp = sys.argv[3]",
-    "exit_code = int(sys.argv[4])",
-    "state = json.loads(state_path.read_text())",
-    `state['status'] = '${status}'`,
-    "state['pid'] = pid",
-    "state['updatedAt'] = timestamp",
-    "state['completedAt'] = timestamp",
-    "state['exitCode'] = exit_code",
-    `state['error'] = None if '${status}' == 'completed' else f'background task exited non-zero ({exit_code})'`,
-    "state_path.write_text(json.dumps(state, indent=2) + '\\n')",
+    "timestamp = sys.argv[8]",
+    "exit_code = int(sys.argv[9])",
+    "state = {",
+    "    'version': 1,",
+    "    'taskId': sys.argv[3],",
+    "    'kind': sys.argv[4],",
+    `    'status': '${status}',`,
+    "    'pid': int(sys.argv[2]),",
+    "    'startedAt': timestamp,",
+    "    'updatedAt': timestamp,",
+    "    'completedAt': timestamp,",
+    "    'exitCode': exit_code,",
+    `    'error': None if '${status}' == 'completed' else f'background task exited non-zero ({exit_code})',`,
+    "    'outputFile': sys.argv[5],",
+    "    'cwd': sys.argv[6],",
+    "    'command': sys.argv[7],",
+    "}",
+    "try:",
+    "    prior = json.loads(state_path.read_text())",
+    "    if isinstance(prior.get('startedAt'), str):",
+    "        state['startedAt'] = prior['startedAt']",
+    "except (OSError, ValueError):",
+    "    pass",
+    "tmp_path = state_path.with_name(state_path.name + '.tmp')",
+    "tmp_path.write_text(json.dumps(state, indent=2) + '\\n')",
+    "tmp_path.replace(state_path)",
   ];
 }
 
