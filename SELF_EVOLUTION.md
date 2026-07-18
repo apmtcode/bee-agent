@@ -6,6 +6,83 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-18 (run 9) — Local movement model: pluggable backend that repeats + generalizes
+
+**Audited:** The local-movement learning subsystem (standing objective #2). The
+capture side (`src/capture/`: recorder, device/os/browser adapters, trajectory
+schema, replay manifest) and the training *launch* side (`src/training/runner.ts`)
+were present, but **nothing in the repo could actually train a local model on a
+movement dataset and infer from it** — `runner.ts` only emits shell/python launch
+scripts for external Apple-Silicon runtimes (mlx/axolotl). Objective #2 (c)
+"post-train a local model … to repeat the recorded movements" and (d) "generalize
+to new but related movements" had no in-repo, cloud-testable implementation.
+
+**Changed (additive):** new `src/training/movement-model.ts` +
+`movement-model.test.ts` (16 tests), exported from `src/index.ts`:
+- **Movement-token schema** — `encodeMovementToken`/`parseMovementToken` give a
+  canonical, field-stable, parseable token over normalized movements
+  (`tool|gesture|dir|target`); `movementActionFromTrajectoryAction` lifts captured
+  actions (incl. device-gesture metadata) into it.
+- **Dataset builders** — `buildMovementDatasetFromTrajectories` and
+  `…FromReplays` turn reviewed spans / replay manifests into ordered token
+  sequences (the replayable dataset the objective asks for).
+- **Pluggable `MovementModelBackend` seam** — `train(dataset) →
+  SerializedMovementModel` (plain JSON, persistable) + `load(model) →
+  MovementInferenceSession` (`predictNext`, `generate`). A real on-device small
+  model can implement the same interface later.
+- **`BackoffMarkovMovementBackend`** (default local backend) — deterministic
+  order-k Markov with two-stage generalization: exact-context match at order ≥ 1,
+  then **token-similarity backoff** (`movementSimilarity`) that maps an
+  unseen-but-related context movement to the nearest known one before predicting,
+  then unigram fallback. This is what lets it *repeat* recorded sequences (fidelity
+  1.0 on training data) **and** *generalize* to related-but-unseen movements.
+- **`FrequencyMovementBackend`** — a trivial second backend proving the seam is
+  real (not single-impl).
+- **`evaluateReplayFidelity`** — generalization eval harness: fraction of
+  (context→next) transitions the model reproduces, with a `generalizedMatches`
+  counter for held-out related sequences.
+- **`generateSyntheticMovementSequences`** — deterministic synthetic event-stream
+  generator (self-contained LCG, since `Math.random` is unavailable here) so the
+  capture→dataset→train→replay round-trip is validated in the cloud without real
+  OS input.
+
+**Test results:** `typecheck:src` ✅ (source stays fully green). Build ✅
+(tsdown, 5 files). New movement-model suite ✅ **16/16**.
+
+**⚠️ Pre-existing suite failures (NOT introduced by this run):** full `npm test`
+is **187/190** — the same **3 failures reproduce on clean HEAD** with this run's
+changes stashed, all in modules this run did not touch:
+- `orchestrator/operator-runtime.test.ts` — `recoverBackgroundTasks` throws
+  `SyntaxError` parsing a `state.json`. **Root-caused:** the file is written by the
+  **launch script** (`renderLaunchScript` in `background-tasks.ts`), whose
+  `printf '%s' … | sed …` state templating (a) leaves `"pid":"$$"` unsubstituted
+  and (b) produces **invalid JSON** when the command contains quotes/newlines
+  (e.g. `printf "line-1\nline-2\n"` → `"command":"printf "'line-1…`). Same fragile
+  pattern exists in `runner.ts`.
+- `cli/app.test.ts` & `control-plane/server.test.ts` — expect platform
+  `control=active` but get `control=degraded: automatic retryable failures 2/2
+  background task missing-process` (a *distinct* root cause: a background task with
+  a fixture pid is recovered as `missing-process` in the sandbox and now counts
+  toward the platform breaker's degraded state).
+
+These are two separate pre-existing defects across harness + control-plane;
+fixing them safely is not a focused single-hour diff and would violate the
+"reviewable, additive" guardrail this run, so they are logged to ROADMAP as the
+next high-priority items with the diagnosis above. Because this run's own change
+is isolated and green, it is pushed to the designated feature branch
+`claude/peaceful-dirac-6mvg33` (not `main`).
+
+**New idea:** give `MovementInferenceSession` a `predictTopK(context, k)` +
+temperature-free *beam* `generate` so downstream planners can score alternative
+movement continuations (and so the eval harness can report top-k fidelity, not
+just top-1) — a cheap, backend-agnostic upgrade that makes the generalization
+metric far more informative. Second idea: a `MovementModelRegistry` keyed by
+backend id so the training runner can dispatch to the pluggable backend
+(mock/markov today, on-device model later) via the same manifest that currently
+only targets mlx/axolotl.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

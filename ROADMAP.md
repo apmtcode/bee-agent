@@ -45,6 +45,23 @@ unchecked items are queued. Keep this richer than you found it each run.
       have the engine run it as a per-run pre-push self-check.
 - [ ] Add a minimal CI workflow mirroring `verify` for human-opened PRs.
 
+## 🔴 Pre-existing test failures (top priority — regressed suite: 187/190)
+Diagnosed run 9; both pre-date run 9 and reproduce on clean HEAD.
+- [ ] **Launch-script state JSON is corrupt/fragile.** `renderLaunchScript`
+      (`src/harness/background-tasks.ts`, mirrored in `src/training/runner.ts`)
+      writes the initial `state.json` via `printf '%s' <payload> | sed …`. It
+      leaves `"pid":"$$"` unsubstituted and produces **invalid JSON** whenever the
+      command contains quotes/newlines. Fix: write the initial state with a
+      `python3` argv/heredoc writer (same safe pattern already used for the
+      completion writer) instead of sed string-substitution. Fails
+      `operator-runtime.test.ts`.
+- [ ] **Platform control reports `degraded` instead of `active`.** A background
+      task with a fixture pid is recovered as `missing-process` in the sandbox and
+      counts toward the platform breaker's degraded state (2/2 retryable). Decide
+      whether missing-process recovery should feed the breaker in this scenario, or
+      make the test fixtures inject a live/known pid. Fails `app.test.ts` &
+      `server.test.ts`.
+
 ## Capability parity (audit reference agents → port gaps)
 - [ ] Build a "capability inventory" generator: enumerate bee-agent's exported
       RPC/tool surface (`src/index.ts`) and diff it against `openclaw`,
@@ -59,16 +76,27 @@ unchecked items are queued. Keep this richer than you found it each run.
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
 (exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
+- [x] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+      — DONE run 9: capture/schema/dataset/replay existed; train/infer was
+      external-launch-only. Gap closed by `movement-model.ts`.
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      for a real on-device small model — DONE run 9 (`MovementModelBackend` +
+      `BackoffMarkovMovementBackend` default + `FrequencyMovementBackend`
+      baseline; serialized model is plain JSON).
+- [x] Synthetic event-stream generator to validate capture→dataset→replay
+      round-trips without real OS input — DONE run 9
+      (`generateSyntheticMovementSequences`, deterministic LCG).
+- [x] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories — DONE run 9 (`evaluateReplayFidelity` with
+      `generalizedMatches`). Next: top-k / beam fidelity (see innovation backlog).
+- [ ] **Wire the pluggable backend into the training runner/manifest.** Add a
+      `MovementModelRegistry` keyed by backend id so `LocalTrainingJobManifest`
+      can select `backoff-markov` (in-repo, cloud-runnable) alongside the existing
+      `mlx`/`axolotl` external runtimes.
+- [ ] `predictTopK(context, k)` + beam `generate` on `MovementInferenceSession`,
+      and top-k fidelity in the eval harness.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
