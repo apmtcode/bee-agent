@@ -6,6 +6,63 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-18 (run 9) — 🐛 Fix background-task launcher state corruption + event-bus timestamp collisions; suite deterministic 176/176
+
+**Audited:** Baseline test health. The run-8 "174/174 green" claim **no longer
+held** on this machine: **3 tests failed** and **2 more were flaky under
+full-suite load**. Root-caused each rather than papering over.
+
+**Bug 1 — malformed `state.json` from the background-task launcher**
+(`src/harness/background-tasks.ts`). Two real defects in the generated bash
+launch script:
+- `shellQuote` used the wrong POSIX single-quote escape — it replaced `'` with
+  `"'"'"'` (leading `"`) instead of `'"'"'`. Any command or path containing a
+  single quote (e.g. `printf 'line-1\nline-2\n'`) was corrupted, producing
+  invalid JSON that crashed `readJsonFile` during recovery/reconcile.
+- The initial `"running"` state was written via `printf '%s' <json> | sed
+  's/"$$"/$$/g'`; the unescaped `"` around `$$` broke out of bash's double
+  quotes, so the pid was never substituted (`"pid":"$$"` left as a string).
+
+  **Fix:** replaced the fragile `printf|sed` initial-state writer with a robust
+  python heredoc (mirroring the existing completion-state writer) that
+  `json.loads` a shell-quoted payload and injects a numeric pid + timestamps —
+  no sed, no `"$$"` placeholder, no JSON-in-shell fragility. Fixed the **same
+  latent bug** in `src/training/runner.ts` (identical launcher pattern; its
+  `shellQuote` was already correct but it shared the `sed "$$"` defect).
+
+**Bug 2 — event timestamp collisions drop reconnect replays**
+(`src/kernel/event-bus.ts`). Events are stamped with `Date.now()` (ms
+resolution); two events published in the same tick share a `ts`. Reconnect
+cursors filter `event.ts > afterTs`, so a collision silently dropped the later
+event from replay — a real gateway-reconnect correctness bug that surfaced as a
+flaky `gateway-transport` test under load. **Fix:** the bus now enforces
+strictly-monotonic `ts`, bumping a colliding timestamp by 1ms (no wire-protocol
+change). Added 2 event-bus tests pinning the guarantee.
+
+**Test hermeticity.** The remaining flakes came from tests that drive execution
+state explicitly via `writeState` yet also spawned the **real** launch
+subprocess, racing the two writers. Added a `backgroundTaskSpawnProcess`
+injection seam to `OperatorCliApp` (threads into its runtime) and injected a
+no-op spawn into the state-driven background-task tests in `server.test.ts`,
+`operator-runtime.test.ts`, and `app.test.ts`. Deliberately left the one true
+end-to-end test (`supports background and monitor task commands…`, asserts the
+launched process's real `"ok"` output) on the real spawn.
+
+**Test results:** **174 → 176** tests (added 2 event-bus tests); **all 176 pass,
+verified across 12 consecutive full-suite runs** (was 3 failing + 2 flaky).
+`typecheck:src` ✅ (exit 0). Build ✅. Full `tsc` unchanged at **125** (test-file
+debt only; the new tests add none). Pushed to `main`.
+
+**New idea:** add a **flake sentinel** to the engine's pre-push self-check — run
+`vitest run` N× (e.g. 5) and fail the gate on any nondeterministic result, so
+timing races are caught before they silently rot the baseline (exactly the
+regression this run had to rediscover by hand). Bonus: extract the duplicated
+`renderInitialStateWriterPython`/`renderStateWriterPython` helpers into one
+shared `src/harness/state-writer.ts` so the background-task and training
+launchers can't diverge again.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

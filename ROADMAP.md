@@ -4,6 +4,20 @@ Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
 ## Foundations / DX
+- [x] **Suite determinism restored** (2026-07-18, run 9). Fixed the
+      background-task launcher's `shellQuote` (wrong POSIX single-quote escape)
+      and `sed "$$"` pid substitution — both produced malformed `state.json`;
+      replaced the `printf|sed` initial-state writer with a python heredoc in
+      `background-tasks.ts` + `training/runner.ts`. Fixed event-bus timestamp
+      collisions (`event-bus.ts` now strictly monotonic). Added a
+      `backgroundTaskSpawnProcess` seam to `OperatorCliApp` and made state-driven
+      background-task tests hermetic. 176/176 green over 12 consecutive runs.
+- [ ] **Flake sentinel** in the pre-push self-check: run `vitest run` N× and fail
+      on any nondeterministic result, so timing races are caught before they rot
+      the baseline (run 9 had to rediscover a regression by hand).
+- [ ] Extract a shared `src/harness/state-writer.ts` for the duplicated
+      `renderInitialStateWriterPython`/`renderStateWriterPython` helpers so the
+      background-task and training launchers cannot diverge again.
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`

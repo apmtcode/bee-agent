@@ -10,6 +10,11 @@ import { OperatorCliApp, parseSlashCommand } from "./app.js";
 const tempDirs: string[] = [];
 const execFileAsync = promisify(execFile);
 
+// Hermetic background-task spawn: these tests drive execution state explicitly
+// via writeState, so launching real subprocesses only races with those writes.
+let noopSpawnPid = 40000;
+const noopSpawnProcess = () => ({ pid: (noopSpawnPid += 1), unref() {} });
+
 async function makeTempDir(): Promise<string> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "operator-cli-app-"));
   tempDirs.push(dir);
@@ -801,7 +806,7 @@ describe("OperatorCliApp", () => {
 
   it("supports session lifecycle, transcript, approvals, pairing, config, and prompt commands", async () => {
     const rootDir = await makeTempDir();
-    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25", backgroundTaskSpawnProcess: noopSpawnProcess });
     const firstSession = await app.runtime.startSession({ title: "first", cwd: rootDir, agentId: "operator-cli" });
     const secondSession = await app.runtime.startSession({ title: "second", cwd: rootDir, agentId: "operator-cli" });
 
@@ -1063,6 +1068,8 @@ describe("OperatorCliApp", () => {
 
   it("supports background and monitor task commands plus cron commands", async () => {
     const rootDir = await makeTempDir();
+    // Real spawn on purpose: this test exercises end-to-end launch + output
+    // capture (asserts the "ok" the launched process prints).
     const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
     const session = await app.runtime.startSession({ title: "CLI ops", cwd: rootDir, agentId: "operator-cli" });
 
@@ -1184,7 +1191,7 @@ describe("OperatorCliApp", () => {
     const rootDir = await makeTempDir();
     await fs.mkdir(path.join(rootDir, ".claude"), { recursive: true });
     await fs.writeFile(path.join(rootDir, ".claude", "settings.local.json"), '{"permissionMode":"default"}');
-    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25", backgroundTaskSpawnProcess: noopSpawnProcess });
     const session = await app.runtime.startSession({ title: "policy", cwd: rootDir, agentId: "operator-cli" });
 
     const firstAttempt = await app.dispatchSlashCommand(
@@ -1227,7 +1234,7 @@ describe("OperatorCliApp", () => {
         },
       }),
     );
-    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25", backgroundTaskSpawnProcess: noopSpawnProcess });
     const session = await app.runtime.startSession({ title: "hooks", cwd: rootDir, agentId: "operator-cli" });
 
     const output = await app.dispatchSlashCommand(

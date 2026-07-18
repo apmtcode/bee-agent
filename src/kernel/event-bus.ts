@@ -16,6 +16,7 @@ export class OperatorEventBus<T extends OperatorEvent = OperatorEvent> {
   private readonly listeners = new Set<(event: T) => void>();
   private readonly waiters = new Set<() => void>();
   private closed = false;
+  private lastTs = 0;
 
   constructor(options: { replayLimit?: number } = {}) {
     this.replayLimit = options.replayLimit ?? 0;
@@ -24,6 +25,19 @@ export class OperatorEventBus<T extends OperatorEvent = OperatorEvent> {
   publish(event: T): void {
     if (this.closed) {
       return;
+    }
+    // Enforce strictly-monotonic event timestamps. Callers stamp events with
+    // `Date.now()`, whose millisecond resolution lets two events published in
+    // the same tick share a `ts`. Reconnect cursors filter with `ts > afterTs`,
+    // so a collision would silently drop the later event from replay. Bumping
+    // colliding timestamps by 1ms keeps the cursor exact without changing the
+    // wire protocol.
+    if (typeof event.ts === "number") {
+      const monotonic = event.ts > this.lastTs ? event.ts : this.lastTs + 1;
+      this.lastTs = monotonic;
+      if (monotonic !== event.ts) {
+        event = { ...event, ts: monotonic };
+      }
     }
     if (this.replayLimit > 0) {
       this.replayEvents.push(event);

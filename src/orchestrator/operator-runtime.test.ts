@@ -9,6 +9,11 @@ import type { ReviewedExportManifest } from "../training/export-manifest.js";
 
 const tempDirs: string[] = [];
 
+// Deterministic background-task spawn: tests set execution state via writeState,
+// so a real launch subprocess only races with those writes. See server.test.ts.
+let noopSpawnPid = 40000;
+const noopSpawnProcess = () => ({ pid: (noopSpawnPid += 1), unref() {} });
+
 async function makeTempDir(): Promise<string> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "operator-runtime-"));
   tempDirs.push(dir);
@@ -531,6 +536,7 @@ describe("StandaloneOperatorRuntime", () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
       backgroundTaskIsProcessRunning: () => false,
+      backgroundTaskSpawnProcess: noopSpawnProcess,
     });
     const session = await runtime.startSession({ title: "Tasks", agentId: "main" });
 
