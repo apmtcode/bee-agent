@@ -38,8 +38,9 @@ unchecked items are queued. Keep this richer than you found it each run.
     `skills.executable.*`, `push.subscriptions.*`, `trajectories.*`, `replays.*`,
     `cron.runs`/misc — plus a few genuine test-only typings. Map the rest, then
     fix residual test-only typings.
-- [ ] Add a `verify` npm script (`typecheck && build && test`) and have the
-      engine run it as a pre-push self-check each cycle.
+- [x] Add a `verify` npm script — DONE run 9 (`typecheck:src && build && test`;
+      exit 0). Next: have the engine run `npm run verify` as its pre-push gate
+      each cycle instead of ad-hoc `build`+`test`.
 - [x] Interim **source-only typecheck gate** — DONE run 7. `tsconfig.src.json`
       (excludes `**/*.test.ts`) + `typecheck:src` script; passes (exit 0). Next:
       have the engine run it as a per-run pre-push self-check.
@@ -69,6 +70,21 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
       round-trips without real OS input.
 - [ ] Generalization eval harness: measure replay fidelity on held-out but
       related synthetic trajectories.
+
+## Reliability (test gate must stay deterministically green)
+- [x] Fix `shellQuote` single-quote corruption in `background-tasks.ts` +
+      robust `python3` initial-state writer — DONE run 9. Was writing invalid
+      JSON for any command/path containing `'`.
+- [x] Kill background-task test flakiness — DONE run 9 (mock spawn at 23 hermetic
+      sites so no real detached process races assertions).
+- [x] Monotonic event-bus timestamps — DONE run 9 (same-ms events no longer
+      collide; fixes reconnect-replay `afterTs` drop).
+- [ ] Add a `test:flake` script (repeat the suite N× / `vitest --repeat`) and a
+      "reliability ratchet": the engine requires N consecutive green suite runs
+      before pushing, so timing/order flakes are caught at authoring time.
+- [ ] Audit the other `Date.now()`-stamped ordering keys (run-store, task-store,
+      message-store) for the same same-ms-collision bug class the event bus just
+      fixed; centralize monotonic stamping if they share the pattern.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

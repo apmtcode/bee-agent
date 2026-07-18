@@ -370,4 +370,41 @@ describe("BackgroundTaskExecutionService", () => {
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
   });
+
+  it("runs the real launch script and writes valid state JSON for quote-heavy commands", async () => {
+    const rootDir = await makeTempDir();
+    // No spawn override: this exercises the real detached bash + python state writers.
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"));
+    const task = await store.start({
+      // Single quotes, double quotes, and a real newline previously corrupted the
+      // printf|sed state payload into invalid JSON. The python writer must escape them.
+      command: `printf 'a"b'\\''c\nsecond line\n'`,
+      cwd: rootDir,
+      kind: "task",
+    });
+
+    const statePath = path.join(rootDir, task.execution.stateFile);
+    const deadline = Date.now() + 8000;
+    let state: BackgroundTaskExecutionState | undefined;
+    while (Date.now() < deadline) {
+      try {
+        const raw = await fs.readFile(statePath, "utf8");
+        const parsed = JSON.parse(raw) as BackgroundTaskExecutionState;
+        if (parsed.status === "completed" || parsed.status === "failed") {
+          state = parsed;
+          break;
+        }
+      } catch {
+        // state file not yet written or mid-write; retry
+      }
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+
+    expect(state).toBeDefined();
+    expect(state?.status).toBe("completed");
+    expect(state?.exitCode).toBe(0);
+    expect(typeof state?.pid).toBe("number");
+    expect(state?.command).toBe(task.command);
+    expect(state?.startedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+  });
 });

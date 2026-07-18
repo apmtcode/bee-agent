@@ -6,6 +6,63 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-18 (run 9) — Reliability: fix `shellQuote` JSON corruption + kill test flakiness (suite now deterministically green)
+
+**Audited:** The build/test gate itself. On a fresh `npm install`, the baseline
+suite was **RED** — 3 deterministic failures plus intermittent flakiness — even
+though run 8 recorded 174/174. The engine's own verification gate was unreliable,
+which undermines every future run.
+
+**Root cause found (real bug):** `shellQuote()` in
+`src/harness/background-tasks.ts` escaped a single quote as `"'"'"'` — a spurious
+**leading double quote**. Any command or path containing a `'` (e.g. the test's
+`printf 'line-1\nline-2\n'`) was corrupted, so the background-task launch script
+wrote **invalid JSON** into `state.json`; the reader (`readJsonFile`) then threw
+`SyntaxError`, failing `operator-runtime`, `server`, and `app` tests
+deterministically. Proven empirically: `shellQuote("a'b")` → bash reconstructs
+`a"'b` (CORRUPT); the fix reconstructs `a'b` (OK).
+
+**Changed (all additive/reversible):**
+- **`shellQuote` fixed** to correct POSIX escaping `'\''` (close-quote, escaped
+  quote, reopen) in `background-tasks.ts`; unified `training/runner.ts`'s copy to
+  the same clearer form (its `'"'"'` was already correct, now consistent).
+- **Robust initial-state writer** (`background-tasks.ts`): replaced the fragile
+  `printf '%s' <json> | sed "s/…/g"` pipeline (which also mutated `"$$"` /
+  `__OPENCLAW_STARTED_AT__` — corruptible by user commands) with a `python3`
+  writer that `json.loads` a shell-quoted payload and stamps pid/startedAt from
+  argv, mirroring the existing completion writer. No sed, no placeholder mutation.
+- **Test-isolation fix:** 23 hermetic test sites (`operator-runtime`,
+  `server`, `session-stream`, `gateway-transport`) set
+  `backgroundTaskIsProcessRunning: () => false` but never mocked the spawn, so
+  they launched **real detached bash processes** whose async `state.json` writes
+  raced their assertions. Injected a deterministic no-op `backgroundTaskSpawnProcess`
+  at each.
+- **Event ordering correctness** (`kernel/event-bus.ts`): added a strictly
+  **monotonic timestamp** guard in `publish()` — same-wall-clock-ms events used
+  to share a `ts`, so reconnect/replay filtering (`event.ts > afterTs`) silently
+  dropped one (the `gateway-transport` replay flake). Now every event gets a
+  unique, increasing `ts`.
+- **`verify` npm script** added (`typecheck:src && build && test`) — the canonical
+  pre-push gate the roadmap asked for; the engine can now run one command.
+
+**Tests added:** an end-to-end launch-script test that runs the **real** detached
+script with a single-quote/double-quote/newline command and asserts valid,
+round-tripped state JSON (locks in the `shellQuote` fix); two event-bus tests for
+the monotonic-ts guarantee.
+
+**Test results:** baseline **RED (3 deterministic + flaky)** → **177/177 GREEN**,
+verified deterministic across **6 consecutive full-suite runs** (was 1–2 flaky
+failures per run before). `verify` ✅ (typecheck:src + build + test all pass).
+
+**New idea:** add a `test:flake` script (`vitest run --repeat=10` or a loop) plus a
+"reliability ratchet" the engine runs occasionally — N consecutive suite runs must
+be green before a push — so timing/order-dependent flakes are caught at authoring
+time instead of surfacing as a red baseline a future run has to reverse-engineer.
+Bigger: audit remaining `Date.now()`-stamped ordering keys (run/task/message
+stores) for the same same-ms-collision class of bug the event bus just fixed.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

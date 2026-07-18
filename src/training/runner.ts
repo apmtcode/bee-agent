@@ -225,5 +225,6 @@ function renderStateWriterPython(status: TrainingExecutionState["status"]): stri
 }
 
 function shellQuote(value: string): string {
-  return `'${value.replaceAll(`'`, `'"'"'`)}'`;
+  // POSIX single-quote escaping: close the quote, emit an escaped quote, reopen.
+  return `'${value.split(`'`).join(`'\\''`)}'`;
 }

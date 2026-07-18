@@ -16,6 +16,7 @@ export class OperatorEventBus<T extends OperatorEvent = OperatorEvent> {
   private readonly listeners = new Set<(event: T) => void>();
   private readonly waiters = new Set<() => void>();
   private closed = false;
+  private lastTs = 0;
 
   constructor(options: { replayLimit?: number } = {}) {
     this.replayLimit = options.replayLimit ?? 0;
@@ -24,6 +25,16 @@ export class OperatorEventBus<T extends OperatorEvent = OperatorEvent> {
   publish(event: T): void {
     if (this.closed) {
       return;
+    }
+    // Enforce a strictly-monotonic timestamp so distinct events published within
+    // the same wall-clock millisecond never collide. Reconnect/replay filtering
+    // keys on `event.ts > afterTs`; without this, two same-ms events would share
+    // a timestamp and one would be silently dropped on reconnect.
+    if (typeof event.ts === "number") {
+      if (event.ts <= this.lastTs) {
+        event.ts = this.lastTs + 1;
+      }
+      this.lastTs = event.ts;
     }
     if (this.replayLimit > 0) {
       this.replayEvents.push(event);
