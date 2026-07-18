@@ -6,6 +6,62 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-18 (run 9) — 🐞 Fix `shellQuote` corruption + racy background-task tests; +2 e2e tests
+
+**Audited:** Full test suite health. Found the suite **flaky** in this
+environment (3–4 failures/run, varying) — a regression from the claimed 174/174.
+Two failing patterns: (a) `SyntaxError: Expected ',' or '}' … in JSON at position
+311` when the runtime read a background-task state file, and (b) nondeterministic
+control-plane breaker counts (`failureCount 2` vs `3`, `state degraded` vs
+`paused`).
+
+**Root cause #1 — a real on-device bug (`src/harness/background-tasks.ts`).**
+`shellQuote()` escaped an embedded single quote as `"'"'"'` — an **extra leading
+`"`** vs. the correct POSIX idiom `'"'"'` (`'\''`). Any value containing a `'`
+(e.g. a shell command like `printf 'line-1\nline-2\n'`) was corrupted, producing
+invalid shell **and** a malformed JSON state file. This would have broken *every*
+real background task whose command contained a quote — not just tests. Verified
+byte-for-byte (`printf 'hi'` was rendered as `printf "'hi"'`).
+
+**Root cause #2 — fragile launch-script state writer (same file).** The initial
+"running" state was written with `printf '%s' … | sed "…; s/\"\$\$\"/$$/g" >
+state`. Rendered, the sed became `s/"$$"/$$/g`, whose inner `"` **closed and
+reopened** the bash double-quoted string, so `$$` expanded to the PID and the
+literal `"$$"` pattern was destroyed — `pid` never substituted. Replaced the whole
+`printf|sed|mv` with a **Python atomic writer** (parse payload argv → inject
+pid/timestamps → temp-file + `os.replace`), matching the completion writer; also
+made the **completion** writer atomic (temp + `replace`) so a concurrent reader
+never sees a torn document.
+
+**Test hygiene.** The operator-runtime + control-plane tests were spawning **real
+detached OS processes** whose launch scripts asynchronously overwrote state,
+racing the tests' explicitly-staged `writeState` calls (with
+`isProcessRunning:()=>false`). Injected the existing `backgroundTaskSpawnProcess`
+seam with a no-op fake (`{ pid, unref(){} }`) into the three affected runtimes
+(operator-runtime "starts/syncs/…"; server.test main/drifting/breaker), making
+the staged reconcile/breaker assertions deterministic.
+
+**New coverage.** Added `src/harness/launch-script.integration.test.ts`: it
+renders **and executes** the real launch script (guarded on `bash`+`python3`)
+for a command with single quotes and newlines — the exact corruption case — and
+asserts the state file is valid, atomic JSON with `status:"completed"`, numeric
+`pid`, an intact `command`, and no `.tmp` leftovers; plus a non-zero-exit →
+`failed` case. No test previously executed the launch pipeline end-to-end.
+
+**Test results:** **176/176 passing, deterministic across 5 full runs** (was
+3–4 failing/run). `typecheck:src` ✅ (exit 0). Build ✅. Full `tsc` debt unchanged
+at **125** (new test file is clean).
+
+**New idea:** the `backgroundTaskSpawnProcess` seam is the right hermeticity
+lever, but it's opt-in per test — add a shared test factory (or default the store
+to an inert spawn under `VITEST`) so future background-task tests are hermetic by
+construction. Bigger: a **shell-escaping property test** — fuzz `shellQuote` over
+strings with `'`, `"`, `$`, backticks, newlines, then `printf '%s'` them through a
+real shell and assert the round-trip is identity. That class of quoting bug is
+exactly what static tests miss.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

@@ -81,9 +81,14 @@ const exportManifest: ReviewedExportManifest = {
 describe("OperatorControlPlaneServer", () => {
   it("handles session, transcript, approval, trajectory, memory, and orchestration methods", async () => {
     const rootDir = await makeTempDir();
+    let fakeTaskPid = 90000;
     const runtime = new StandaloneOperatorRuntime({
       rootDir,
       backgroundTaskIsProcessRunning: () => false,
+      // Stub the spawn: no real detached process should run the launch script and
+      // asynchronously write execution state, which would race the reconcile /
+      // breaker logic this test asserts against and make it flaky.
+      backgroundTaskSpawnProcess: () => ({ pid: (fakeTaskPid += 1), unref() {} }),
       delivery: new OperatorDeliveryService(rootDir, {
         sendBrowserPush: async () => {},
       }),
@@ -950,9 +955,13 @@ describe("OperatorControlPlaneServer", () => {
     });
 
     const driftingRootDir = await makeTempDir();
+    let driftingPid = 91000;
     const driftingRuntime = new StandaloneOperatorRuntime({
       rootDir: driftingRootDir,
       backgroundTaskIsProcessRunning: () => false,
+      // Stub the spawn so the launch script never asynchronously writes state and
+      // races the explicit `writeState` staging below.
+      backgroundTaskSpawnProcess: () => ({ pid: (driftingPid += 1), unref() {} }),
     });
     const driftingServer = new OperatorControlPlaneServer({ runtime: driftingRuntime });
     const driftingBootstrap = await driftingServer.handle({
@@ -1016,9 +1025,14 @@ describe("OperatorControlPlaneServer", () => {
     });
 
     const breakerRootDir = await makeTempDir();
+    let breakerPid = 92000;
     const breakerRuntime = new StandaloneOperatorRuntime({
       rootDir: breakerRootDir,
       backgroundTaskIsProcessRunning: () => false,
+      // Stub the spawn so the three tasks' launch scripts never asynchronously
+      // write "running" state and race the manual, staged `writeState` calls the
+      // breaker assertions below depend on (one failure counted at a time).
+      backgroundTaskSpawnProcess: () => ({ pid: (breakerPid += 1), unref() {} }),
     });
     const breakerServer = new OperatorControlPlaneServer({ runtime: breakerRuntime });
     const breakerOne = await breakerServer.handle({

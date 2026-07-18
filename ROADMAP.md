@@ -45,6 +45,24 @@ unchecked items are queued. Keep this richer than you found it each run.
       have the engine run it as a per-run pre-push self-check.
 - [ ] Add a minimal CI workflow mirroring `verify` for human-opened PRs.
 
+## Reliability / correctness
+- [x] **Fix `shellQuote` single-quote escaping** (`src/harness/background-tasks.ts`)
+      — DONE run 9. Used `"'"'"'` (extra leading `"`) instead of the POSIX
+      `'"'"'`; corrupted every background-task command/state payload containing a
+      `'`, producing invalid shell + malformed JSON state files on-device.
+- [x] **Atomic launch-script state writes** — DONE run 9. Replaced the fragile
+      `printf|sed` initial-state writer (whose `s/"$$"/$$/g` broke bash
+      double-quote nesting) with a Python temp-file + `os.replace` writer; made
+      the completion writer atomic too. Added an end-to-end integration test that
+      actually executes the rendered launch script.
+- [ ] **Hermetic background-task tests by construction.** The
+      `backgroundTaskSpawnProcess` seam now stops real detached processes from
+      racing test-driven state, but it's opt-in per test. Add a shared test
+      factory or default the store to an inert spawn under `VITEST`.
+- [ ] **Shell-escaping property test.** Fuzz `shellQuote` over strings with `'`,
+      `"`, `$`, backticks, and newlines, round-trip each through a real shell via
+      `printf '%s'`, and assert identity — catches the class of bug run 9 fixed.
+
 ## Capability parity (audit reference agents → port gaps)
 - [ ] Build a "capability inventory" generator: enumerate bee-agent's exported
       RPC/tool surface (`src/index.ts`) and diff it against `openclaw`,

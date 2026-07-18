@@ -528,9 +528,14 @@ describe("StandaloneOperatorRuntime", () => {
   });
 
   it("starts, syncs, recovers, lists, and cancels background tasks", async () => {
+    // Stub the spawn so no real detached process runs the launch script and
+    // asynchronously overwrites the state file — this test drives every state
+    // transition explicitly via `writeState`, so a live process would race it.
+    let fakePid = 40000;
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
       backgroundTaskIsProcessRunning: () => false,
+      backgroundTaskSpawnProcess: () => ({ pid: (fakePid += 1), unref() {} }),
     });
     const session = await runtime.startSession({ title: "Tasks", agentId: "main" });
 

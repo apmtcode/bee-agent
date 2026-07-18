@@ -734,15 +734,17 @@ function renderLaunchScript(task: BackgroundTaskRecord): string {
   const quotedOutputFile = shellQuote(task.execution.outputFile);
   const quotedCwd = shellQuote(task.cwd);
   const quotedCommand = shellQuote(task.command);
+  // Base state document. `pid`, `startedAt` and `updatedAt` are injected at
+  // runtime by the Python writer below — passing them as argv avoids the fragile
+  // shell `printf | sed` substitution that previously mangled the JSON (the
+  // literal `"$$"` pattern broke bash double-quote nesting, corrupting the
+  // `command` field and leaving `pid` unsubstituted).
   const quotedStatePayload = shellQuote(
     JSON.stringify({
       version: 1,
       taskId: task.id,
       kind: task.kind,
       status: "running",
-      pid: "$$",
-      startedAt: "__OPENCLAW_STARTED_AT__",
-      updatedAt: "__OPENCLAW_STARTED_AT__",
       outputFile: task.execution.outputFile,
       cwd: task.cwd,
       command: task.command,
@@ -754,7 +756,12 @@ function renderLaunchScript(task: BackgroundTaskRecord): string {
     "set -euo pipefail",
     `mkdir -p $(dirname ${quotedStatePath}) $(dirname ${quotedOutputFile})`,
     "started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-    `printf '%s' ${quotedStatePayload} | sed "s/__OPENCLAW_STARTED_AT__/$started_at/g; s/\"\$\$\"/$$/g" > ${quotedStatePath}`,
+    // Write the initial "running" state via Python: it parses the payload,
+    // injects the live pid + timestamps, and writes atomically (temp + rename)
+    // so a concurrent reader never observes a truncated or torn JSON file.
+    `python3 - ${quotedStatePath} $$ "$started_at" ${quotedStatePayload} <<'PY'`,
+    ...renderInitialStateWriterPython(),
+    "PY",
     `printf '%s\n' "starting ${task.kind} ${task.id}" >> ${quotedOutputFile}`,
     `if cd ${quotedCwd} && bash -lc ${quotedCommand} >> ${quotedOutputFile} 2>&1; then`,
     "  completed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
@@ -773,6 +780,25 @@ function renderLaunchScript(task: BackgroundTaskRecord): string {
   ].join("\n");
 }
 
+function renderInitialStateWriterPython(): string[] {
+  return [
+    "import json",
+    "import pathlib",
+    "import sys",
+    "state_path = pathlib.Path(sys.argv[1])",
+    "pid = int(sys.argv[2])",
+    "started_at = sys.argv[3]",
+    "state = json.loads(sys.argv[4])",
+    "state['pid'] = pid",
+    "state['startedAt'] = started_at",
+    "state['updatedAt'] = started_at",
+    // Atomic write: temp file + rename so readers see a complete document only.
+    "tmp_path = state_path.with_name(state_path.name + f'.{pid}.tmp')",
+    "tmp_path.write_text(json.dumps(state, indent=2) + '\\n')",
+    "tmp_path.replace(state_path)",
+  ];
+}
+
 function renderStateWriterPython(status: BackgroundTaskExecutionState["status"]): string[] {
   return [
     "import json",
@@ -789,10 +815,19 @@ function renderStateWriterPython(status: BackgroundTaskExecutionState["status"])
     "state['completedAt'] = timestamp",
     "state['exitCode'] = exit_code",
     `state['error'] = None if '${status}' == 'completed' else f'background task exited non-zero ({exit_code})'`,
-    "state_path.write_text(json.dumps(state, indent=2) + '\\n')",
+    // Write atomically: a concurrent reader must see either the old or the new
+    // full document, never a partially-written file.
+    "tmp_path = state_path.with_name(state_path.name + f'.{pid}.tmp')",
+    "tmp_path.write_text(json.dumps(state, indent=2) + '\\n')",
+    "tmp_path.replace(state_path)",
   ];
 }
 
 function shellQuote(value: string): string {
-  return `'${value.replaceAll(`'`, `"'"'"'`)}'`;
+  // Wrap in single quotes and escape any embedded single quote with the POSIX
+  // idiom `'\''` written as `'"'"'` (close-quote, a double-quoted single quote,
+  // reopen-quote). The previous replacement had an extra leading `"`, which
+  // corrupted every value containing a single quote (e.g. a shell command like
+  // `printf 'hi'`), producing invalid shell and malformed JSON state files.
+  return `'${value.replaceAll(`'`, `'"'"'`)}'`;
 }
