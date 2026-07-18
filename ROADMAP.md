@@ -62,13 +62,29 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
+      for a real on-device small model. **DONE run 9** —
+      `src/training/backend.ts` (`TrainingBackend`, `TrainingBackendRegistry`,
+      in-process `MockMovementTrainingBackend`) + `src/training/policy-model.ts`
+      (frequency next-action model with exact/generalized/prior inference).
+- [ ] Wire `MockMovementTrainingBackend` into `StandaloneOperatorRuntime` as the
+      default backend behind the `training.*` RPCs, and add
+      `trainings.predict`/`trainings.replay` RPCs that serve inference from the
+      written `model.json` — end-to-end train→infer over the control plane.
 - [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      round-trips without real OS input. Now unblocked: feed generated streams
+      into `trainMovementPolicy` + `evaluatePolicy` and assert round-trip
+      fidelity / generalization.
+- [x] Generalization eval harness (initial): `evaluatePolicy` reports held-out
+      top-1 accuracy + exact/generalized/prior match breakdown (run 9). Next:
+      procedurally hold out related-but-unseen trajectories and track fidelity
+      over runs.
+- [ ] Make the 3 flaky background-task **process-liveness** tests hermetic:
+      inject a `processIsAlive(pid)` predicate into the reconciler instead of
+      calling `process.kill(pid, 0)`, so `operator-runtime`/`app`/`server` suites
+      are deterministic in ephemeral cloud containers (currently 3↔4 flaky reds
+      unrelated to any feature work).
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

@@ -6,6 +6,62 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-18 (run 9) — Movement subsystem: pluggable training backend + executable train→infer policy
+
+**Audited:** The local-movement learning subsystem (standing objective #2),
+specifically `src/training/`. Found the train→infer loop was **not runnable in
+the cloud**: `LocalAppleSiliconTrainingRunner` only emits an MLX/Axolotl shell
+launch plan that requires a real Apple-silicon machine, and there was no model
+the recorded movements could actually be learned into and replayed from. This is
+the top movement-subsystem code item in ROADMAP ("pluggable local-model backend
+with a deterministic mock backend").
+
+**Changed (additive, two new modules + barrel exports):**
+- **`src/training/policy-model.ts`** — a deterministic, dependency-free,
+  fully-serializable next-action model. `trainMovementPolicy(replays)` learns
+  observation→action transitions (frequency table + marginal action prior) from
+  replay-manifest event streams. `predictAction` does exact-context match →
+  token-overlap (Jaccard) generalization → prior fallback, so it both **repeats
+  recorded movements** (objective #2c) and **generalizes to new-but-related
+  observations** (#2d). `replayPolicy` turns an observation stream into a
+  predicted action sequence; `evaluatePolicy` reports held-out top-1 accuracy +
+  a match breakdown (seeds the generalization eval harness). Byte-identical
+  output for identical input (reproducible/cacheable models).
+- **`src/training/backend.ts`** — the `TrainingBackend` seam so the runner is no
+  longer hardwired to one runtime. `MockMovementTrainingBackend` trains the
+  policy fully **in-process** (no child process, no shell, no OS input — safe in
+  CI per the OS-facing-feature guardrail), writes `model.json`, and reports
+  metrics (self-consistency). `TrainingBackendRegistry` registers/resolves
+  backends by id (mock in the cloud; a documented seam for a real on-device
+  small model that implements the same interface + dataset contract).
+  `replaysFromExport` adapts a `ReviewedExportManifest` into training input.
+- Exported all of the above from `src/index.ts`.
+
+**Test results:** 2 new test files, **+19 tests, all passing** (policy-model 12,
+backend 7). `npm run typecheck:src` ✅ (source stays green). Build ✅. Full suite
+**190/193** — the **3 red are pre-existing environmental flakes**, present on a
+clean tree in this sandbox *before* my change (they oscillated 3↔4 across runs)
+and confined to background-task **process-liveness/PID reconciliation** tests
+(`operator-runtime`, `app`, `server`) that spawn real processes and check
+`kill(pid,0)` — behaviour that differs in this ephemeral container. My change
+touches none of that code. Committed to the designated branch
+`claude/peaceful-dirac-8znu8b`.
+
+**New idea:** wire `MockMovementTrainingBackend` into `StandaloneOperatorRuntime`
+as the default backend behind the existing `training.*` RPC surface, so
+`trainings.create` in the cloud produces a real, queryable `model.json` and a
+new `trainings.predict`/`trainings.replay` RPC can serve inference — turning the
+movement subsystem from "emits a launch script" into "has a working local model
+you can query end-to-end". Second idea: a **synthetic event-stream generator**
+(grammar over app/window/mouse/keyboard events) to fuzz the capture→dataset→
+train→replay round-trip and measure generalization on procedurally-held-out
+trajectories, closing the last two movement-subsystem ROADMAP items.
+
+**Blocker note (pre-existing, not caused this run):** the 3 flaky
+process-liveness tests should be made hermetic (inject a `processIsAlive`
+predicate instead of calling `process.kill`) so the suite is deterministic in
+the cloud. Logged to ROADMAP.
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

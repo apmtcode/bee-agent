@@ -423,6 +423,40 @@ export type {
   SftTrainingConfig,
 } from "./training/job-manifest.js";
 export {
+  MockMovementTrainingBackend,
+  TrainingBackendRegistry,
+  createDefaultTrainingBackendRegistry,
+  replaysFromExport,
+  MOCK_MOVEMENT_MODEL_FILENAME,
+} from "./training/backend.js";
+export type {
+  TrainingBackend,
+  TrainingBackendDescriptor,
+  TrainingBackendExecutionKind,
+  TrainingBackendMetrics,
+  TrainingBackendRequest,
+  TrainingBackendResult,
+} from "./training/backend.js";
+export {
+  trainMovementPolicy,
+  predictAction,
+  replayPolicy,
+  evaluatePolicy,
+  observationKey,
+} from "./training/policy-model.js";
+export type {
+  MovementActionCandidate,
+  MovementPolicyEvent,
+  MovementPolicyModel,
+  MovementPrediction,
+  MovementPredictionMatch,
+  MovementObservationInput,
+  MovementReplay,
+  MovementTransition,
+  PolicyEvaluation,
+  PredictActionOptions,
+} from "./training/policy-model.js";
+export {
   FileTrainingJobStore,
 } from "./training/job-store.js";
 export type {
