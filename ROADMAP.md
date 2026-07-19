@@ -59,16 +59,38 @@ unchecked items are queued. Keep this richer than you found it each run.
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
 (exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
-      objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
-      deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
+- [x] Inventory what `src/capture` + `src/training` already implement vs. the
+      objective's five pieces (2026-07-19, run 9). Gap found: capture→schema→
+      dataset (a–c) existed; the **model** half (train-to-repeat + generalize)
+      had only a shell-out-to-Apple-Silicon runner, uncrunnable in cloud/CI.
+- [x] Pluggable local-model backend interface **with a deterministic in-process
+      backend** — DONE run 9. `src/training/movement-model.ts`:
+      `MovementModelBackend`/`MovementModel` interface + `MarkovMovementBackend`
+      (variable-order Markov, Katz backoff, kind-level generalization),
+      `createMovementModelBackend(id)` registry seam for a real on-device model.
+      Repeats recorded movements (2c) and generalizes to related ones (2d).
+- [ ] Wire `MarkovMovementBackend` into the training pipeline as a selectable
+      backend (job manifest `runtime: "markov"` → produces a real `.json` model
+      snapshot artifact via `MovementModel.toJSON()`), so `runner.ts` has a
+      cloud-runnable path alongside the mlx/axolotl plans.
 - [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      round-trips without real OS input (feeds the eval harness below).
+- [ ] Generalization eval harness: hold out a related-but-unseen trajectory,
+      measure next-movement top-1 accuracy + rollout edit-distance vs. the
+      held-out sequence, record the score to a metrics file so successive
+      backends are benchmarked identically.
+
+## Test hermeticity (regression — suite went red since 2026-06-23)
+- [ ] **De-flake the 3 non-hermetic integration tests** that spawn real OS
+      subprocesses: `operator-runtime.test.ts` ("starts, syncs, recovers…"),
+      `server.test.ts` ("…orchestration methods"), `app.test.ts` ("session
+      lifecycle…"). They build `StandaloneOperatorRuntime` with no injected
+      `spawnProcess`/`isProcessRunning`, launch a real process, then manually
+      `writeState` — the subprocess's async `run.sh` state-write races the manual
+      write, so `getExecutionState` reads `undefined`/`failed` in the sandbox.
+      Fix: inject deterministic spawn + liveness mocks (constructor already
+      supports them) so the tests never touch real processes. Reproduced on clean
+      HEAD `3c7b7236`; pre-dates run 9's movement-model work.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

@@ -6,6 +6,62 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-19 (run 9) — In-process movement model: repeat + generalize (objective #2c/#2d)
+
+**Audited:** The local-movement learning subsystem (standing objective #2) vs.
+what `src/training/` actually ships. Runs 2–8 all paid down typecheck debt; the
+core train/infer capability was never built. Finding: `src/training/runner.ts`
+only emits a *plan* that shells out to Apple-Silicon Python tooling
+(`mlx_lm.lora` / `axolotl`) — objective #2's pieces (a)–(c) capture→schema→dataset
+exist, but **(c) "train a local model to repeat the recorded movements" and (d)
+"generalize to new but related movements" had no cloud-runnable implementation.**
+The runner path can never execute in CI, so the model half of the objective was
+untested.
+
+**Changed (additive, new module `src/training/movement-model.ts`):** a fully
+deterministic, dependency-free, **in-process** movement model behind a pluggable
+backend interface (`MovementModelBackend` / `MovementModel`), so a real
+on-device small model can be swapped in later without touching callers.
+- **Token schema + dataset builders:** `MovementToken` (`kind`/`target`/`direction`),
+  `MovementDataset`; `buildMovementDatasetFromTrajectories` (reads the device
+  adapter's gesture metadata, ts-ordered) and `buildMovementDatasetFromReplay`
+  (parses replay action summaries back into tokens). Decoupled from every capture
+  surface.
+- **`MarkovMovementBackend`:** a variable-order Markov model with Katz-style
+  backoff. Exact/backoff replay reproduces recorded sequences (**objective 2c**);
+  when no token-level context matches, it backs off to a model over gesture
+  *kinds* and synthesizes the representative movement of the predicted kind — so
+  it performs a **new-but-related** movement (**objective 2d**). Deterministic
+  argmax (lexical tie-break), JSON snapshot round-trip, empty-context cold start,
+  `createMovementModelBackend(id)` registry seam for real backends.
+
+**Test results:** new `movement-model.test.ts` — **14/14 green** (repeat, full-
+sequence rollout, determinism, backoff, kind-generalization, cold start,
+serialization round-trip). `typecheck:src` ✅ CLEAN. `npm run build` ✅.
+
+**⚠️ Pre-existing blocker (NOT introduced by this run — reproduced on a clean
+`git stash` checkout of HEAD `3c7b7236`):** 3 integration tests now fail —
+`operator-runtime.test.ts` ("starts, syncs, recovers…"),
+`server.test.ts` ("…orchestration methods"), `app.test.ts` ("session
+lifecycle…"). Root cause: they construct a real `StandaloneOperatorRuntime` with
+**no injected `spawnProcess`/`isProcessRunning` mock**, launch a real OS
+subprocess, then manually `writeState(...)` — the subprocess's async `run.sh`
+state-write races the manual write, so `getExecutionState` reads `undefined`/
+`failed` non-deterministically in this sandbox. The last green log (174/174) was
+2026-06-23; the suite has since rotted because these tests are non-hermetic. The
+code already supports injecting deterministic spawn/liveness mocks — the tests
+just don't. Fix queued in ROADMAP as its own focused run. This run's own module
+is hermetic and green.
+
+**New idea:** a **generalization eval harness** for the movement model — hold out
+a related-but-unseen trajectory (e.g. same gesture kinds, novel targets), measure
+next-movement top-1 accuracy and rollout edit-distance vs. the held-out sequence,
+and record the score to a metrics file so future backends (Markov → real
+on-device model) are compared on the same benchmark. This turns "does it
+generalize?" into a tracked number instead of a vibe.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
