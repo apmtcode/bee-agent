@@ -59,16 +59,39 @@ unchecked items are queued. Keep this richer than you found it each run.
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
 (exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
-      objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Inventory what `src/capture` + `src/training` already implement vs. the
+      objective's five pieces (2026-07-19, run 9). Findings: capture→schema→
+      dataset→replay covered by `src/capture/`; `src/training/` had exporter +
+      job manifest + plan/launch-script generator, but **no model backend, no
+      inference, nothing cloud-testable** — the train/infer piece was the gap.
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      for a real on-device small model (2026-07-19, run 9). `MovementModelBackend`
+      + `DeterministicMarkovBackend` (n-gram w/ context backoff) +
+      `MovementModelTrainer` in `src/training/movement-model.ts`.
+- [~] Generalization eval harness (2026-07-19, run 9). `evaluateMovementModel`
+      scores held-out steps and counts backed-off (generalized) hits. Next: run it
+      on a **synthetic** held-out split (needs the generator below) to make
+      generalization a tracked cross-run metric.
+- [ ] Synthetic movement-stream generator: parametric task "grammars" emitting
+      related-but-varied trajectories (e.g. open→edit→save with swappable
+      app/target tokens) to validate capture→dataset→replay→train→eval round-trips
+      and benchmark generalization without real OS input.
+- [ ] Real on-device backend implementing `MovementModelBackend` (MLX/GGUF small
+      policy) behind the existing seam; keep the deterministic backend as the CI
+      baseline it must beat.
+- [ ] Persist trained `TrainedMovementModel` as a job artifact and expose a
+      `movement.predict` RPC/tool so the running agent can act on predictions.
+
+## Known failures / reliability
+- [ ] **(HIGH) Background-task state corruption.** 3 tests fail (server.test.ts,
+      app.test.ts, operator-runtime.test.ts) because `reconcileTask` reads a
+      malformed state file (`SyntaxError: … JSON at position 311`) written by a
+      *spawned* launch script's `sed`-based JSON mutation. `writeJsonAtomic` is
+      safe, so the shell state-writer is the culprit; it's flaky (fail-count
+      varied 4↔3). Reproduced on clean tree (pre-dates run 9). Fix the shell
+      state-writer to emit valid JSON atomically (write via a temp file + rename,
+      or a small Python/json writer instead of `sed`), then re-green the suite.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

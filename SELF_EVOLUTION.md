@@ -6,6 +6,64 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-19 (run 9) — Movement model: pluggable backend + inference + generalization eval
+
+**Audited:** The local-movement learning subsystem (standing objective #2) end to
+end. `src/capture/` covers capture → schema → dataset → replay, and `src/training/`
+had exporter → job manifest → **plan/launch-script generator** (`runner.ts`,
+MLX/axolotl on Apple Silicon). But the plan generator only *emits shell commands*:
+there was **no model backend abstraction, no inference/prediction path, and nothing
+cloud-testable** for objective #2(c) "train a local model to repeat movements" and
+#2(d) "generalize to new-but-related movements". That was the biggest gap.
+
+**Changed (additive):** new module `src/training/movement-model.ts` +
+`movement-model.test.ts`, exported from the barrel.
+- **`MovementModelBackend`** — the pluggable seam (`train` + `predict`, JSON-safe
+  serialized model). A real on-device small model (MLX/GGUF policy) implements the
+  same interface later and drops into the trainer with zero call-site changes.
+- **`DeterministicMarkovBackend`** — the reference/mock backend: a small,
+  serializable n-gram model that counts action distributions at every context
+  length 0..N plus an observation-conditioned table and a global prior. `predict`
+  tries the longest context first (`exact` = repeat a learned movement), then backs
+  off to shorter prefixes (`partial` = **generalization** to unseen-but-related
+  contexts), then observation-only, then prior. Ties break lexicographically →
+  fully deterministic, hermetic in cloud/CI.
+- **`buildMovementDataset`** — turns replayable `ExportedReplayManifest` events into
+  supervised `MovementStep`s (sliding-window context → next action), reusing the
+  existing replay schema.
+- **`MovementModelTrainer`** — wires a backend to a `ReviewedExportManifest`
+  (`trainFromExport`) and exposes `predict`.
+- **`evaluateMovementModel`** — generalization eval harness: accuracy on held-out
+  steps + how many correct calls came from a backed-off (generalized) match, with a
+  per-backoff-tier breakdown.
+
+**Test results:** 12 new tests (dataset derivation, exact repeat, generalization via
+backoff, observation/prior fallback, probability-ranked candidates, JSON round-trip,
+foreign-backend rejection, trainer, eval harness) — **all pass**. `npm run build` ✅.
+`npm run typecheck:src` ✅ (source stays fully green). Full `npm test`:
+**183 pass / 3 fail**.
+
+**⚠️ Pre-existing failure (NOT caused by this run — reproduced on the clean tree via
+`git stash`):** 3 tests fail because `FileBackgroundTaskStore.reconcileTask` reads a
+**malformed state file** (`SyntaxError: Expected ',' or '}' … JSON at position 311`)
+that a *spawned* background-task launch script wrote via `sed`-based JSON mutation.
+`writeJsonAtomic` (temp+rename) is safe, so the corruption comes from the shell
+state-writer, and it's flaky (failed-count varied 4↔3 across runs). This is a
+separate background-tasks concurrency bug, out of scope for this focused increment;
+logged to ROADMAP as the next priority. Because the failures are pre-existing and my
+change is additive+green in isolation, I pushed to the designated dev branch
+`claude/peaceful-dirac-sfwapy`.
+
+**New idea:** add a **synthetic movement-stream generator** (parametric task
+"grammars" that emit related-but-varied trajectories, e.g. open→edit→save with
+swappable app/target tokens) and feed it through
+`buildMovementDataset → train → evaluateMovementModel` on a held-out split. That
+turns "does it generalize?" into a tracked metric (generalizedCorrect / total) the
+engine can watch across runs, and gives the future real backend a ready-made
+benchmark to beat the deterministic baseline on.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
