@@ -59,16 +59,42 @@ unchecked items are queued. Keep this richer than you found it each run.
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
 (exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
-      objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
-      deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+- [x] Inventory what `src/capture` + `src/training` already implement vs. the
+      objective's five pieces (2026-07-19, run 9). Pieces (a) capture, (b)
+      schema, dataset/replay export = present; pieces (c) train + (d) generalize
+      were **missing** (runner only emitted a shell plan). Filled below.
+- [x] Pluggable local-model backend interface for the training runner with a
+      deterministic mock backend and a documented seam for a real on-device
+      model (2026-07-19, run 9) — `src/training/movement-model.ts`:
+      `MovementModelBackend`/`MovementPolicy`/`MovementModelRegistry` +
+      deterministic `MarkovMovementBackend` (order-k, stupid-backoff).
+- [x] Synthetic event-stream generator to validate capture→dataset→replay→train
+      round-trips without real OS input (2026-07-19, run 9) —
+      `src/capture/synthetic.ts` (`generateSyntheticTrajectories`,
+      `variantWorkflow`, `DEFAULT_SYNTHETIC_WORKFLOWS`).
+- [x] Generalization eval harness (2026-07-19, run 9) —
+      `evaluateMovementPolicy` (teacher-forced next-token accuracy + exact
+      free-run replay rate) over held-out variant trajectories.
+- [ ] Predictive replay mode: drive `ReplayRuntimeService` from
+      `policy.generate(seed)` (new-but-related movements) behind the existing
+      consent/redaction gate, scoring each run with `evaluateMovementPolicy`.
+- [ ] Persist/rehydrate a trained policy via `MovementPolicy.toJSON()` in the
+      training job store so a locally-trained model survives restarts and can be
+      shipped in a reviewed export.
+- [ ] Wire the movement backend into the training runner as the CI/cloud
+      fallback when no mlx/axolotl runtime is available (real seam already
+      documented in `runner.ts`).
+
+## Known blockers (pre-existing, environment-dependent)
+- [ ] **Background-task state-file JSON corruption in cloud sandbox.**
+      `BackgroundTaskExecutionService.readState` throws
+      `SyntaxError: Expected ',' or '}' … in JSON` because the launch/state-writer
+      shell+python snippet in `src/harness/background-tasks.ts` (via
+      `operator-runtime.ts`) writes a malformed state file in this environment.
+      Fails `operator-runtime.test.ts`, `app.test.ts`, `server.test.ts` (flaky
+      count 2–4 by interleaving). Reproduces on clean HEAD; unrelated to run-9
+      movement modules. Fix: make the state writer emit JSON via a single atomic
+      `writeJsonAtomic` from Node rather than `printf|sed` string-splicing.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

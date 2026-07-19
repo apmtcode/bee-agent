@@ -6,6 +6,67 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-19 (run 9) — Local-movement learning: pluggable model backend + synthetic streams + generalization eval
+
+**Audited:** The movement-learning subsystem (`src/capture/` + `src/training/`)
+against objective #2's five pieces. Pieces (a) capture, (b) schema, and the
+dataset/replay export were already present (recorder, adapters, trajectory
+schema, `LocalTrainingExporter`, `buildReplayManifest`). **Pieces (c) post-train
+a local model and (d) generalize were missing entirely** — `runner.ts` only
+emits an mlx/axolotl *shell plan*; there was no in-process model that actually
+learns from a recorded dataset, so the train→infer→generalize loop was
+un-exercisable in the cloud (no GPU, no `Math.random`/`Date.now`).
+
+**Changed (additive, cloud-safe):**
+- **`src/training/movement-model.ts`** — the pluggable local-model backend.
+  - `MovementModelBackend` interface + `MovementPolicy` (predict / generate /
+    serialize) so a real on-device small model drops in without touching call
+    sites; `MovementModelRegistry` + `createDefaultMovementModelRegistry()`.
+  - `MarkovMovementBackend`: a deterministic order-k Markov model with
+    stupid-backoff over movement *tokens*. High-order contexts **repeat** a
+    recorded run exactly (objective c); backoff to shorter contexts yields
+    plausible continuations for unseen prefixes (**generalize**, objective d).
+    No randomness/clock → identical input ⇒ identical serialized policy.
+  - Dataset extraction: `extractMovementSamplesFromReplays` /
+    `…FromTrajectories` + `encodeActionToken` (normalizes the capture schema's
+    `{tool, summary}` actions into discrete symbols).
+  - `evaluateMovementPolicy` — generalization eval harness: teacher-forced
+    next-token accuracy + free-running exact-replay rate over held-out samples.
+- **`src/capture/synthetic.ts`** — deterministic synthetic movement-stream
+  generator (`generateSyntheticTrajectories`, `DEFAULT_SYNTHETIC_WORKFLOWS`,
+  `variantWorkflow`) so the whole loop validates without real OS input; variants
+  (insert/drop/replace one step) produce held-out-but-related runs for the eval.
+- Barrel-exported both from `src/index.ts`.
+
+**Tests:** `src/training/movement-model.test.ts` (11) +
+`src/capture/synthetic.test.ts` (5) — repeat-exactly, calibrated confidence,
+END emission, determinism, empty-model, metrics, generalization via backoff,
+perfect in-distribution accuracy, replay-manifest extraction, registry
+pluggability. **16/16 green.** `npm run build` ✅. `npm run typecheck:src` ✅
+(exit 0). My modules add **zero** genuine failures (per-file isolation is
+identical with the change reverted).
+
+**⚠ Pre-existing blocker (NOT introduced this run):** the full suite has
+environment-dependent failures in the **background-task shell-out** subsystem —
+`operator-runtime` / `app` / `server` tests fail with
+`SyntaxError: Expected ',' or '}' … in JSON` from
+`BackgroundTaskExecutionService.readState`. The launch/state-writer shell+python
+snippet in `background-tasks.ts` produces a malformed state file in this cloud
+sandbox. This reproduces on **clean HEAD** (stash-verified: 2–4 failures,
+flaky by interleaving) and is unrelated to these pure, additive modules. The
+prior log's "174/174" was a different execution environment. Logged to ROADMAP
+as the next fix. Pushed to the designated feature branch
+`claude/peaceful-dirac-su2d3q` (not main) per the branch requirements.
+
+**New idea:** wire the trained `MovementPolicy` into `ReplayRuntimeService` as a
+*predictive* replay mode — instead of replaying a fixed manifest, drive the
+replay from `policy.generate(seed)` so bee-agent can perform new-but-related
+movements on demand; gate it behind the same consent/redaction path the exporter
+already enforces, and score each generated run with `evaluateMovementPolicy`
+against the nearest recorded trajectory to produce a live confidence signal.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
