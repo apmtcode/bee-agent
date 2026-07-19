@@ -70,6 +70,23 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Generalization eval harness: measure replay fidelity on held-out but
       related synthetic trajectories.
 
+## Reliability / hermetic execution
+- [x] **Hermetic background-task testing seam** (2026-07-19, run 9). Exported
+      `createInertBackgroundSpawn()` (simulated `SpawnBackgroundProcess`), threaded
+      spawn/liveness injection through `OperatorCliApp`, and made
+      `readState` resilient to torn/corrupt state JSON. Restored the green
+      baseline (3 failing → 176/176) after the cloud env began actually running
+      the detached `bash`/`python3` launch script.
+- [ ] **Atomic background-task state writers.** The launch script's initial
+      shell write (`printf | sed > state.json`) and the python completion writer
+      (`pathlib.write_text`) both truncate-then-write, producing the torn files
+      `readState` now tolerates. Write to a temp file + `mv`/`os.replace` so the
+      product never emits a torn state file at the source.
+- [ ] **`OPENCLAW_SIMULATE_BACKGROUND` flag / cloud auto-detect** that defaults
+      the runtime spawner to `createInertBackgroundSpawn()`, so every background
+      task started inside the cloud self-evolution engine stays hermetic without
+      per-call wiring.
+
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in

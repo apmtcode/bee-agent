@@ -108,6 +108,31 @@ export type SpawnBackgroundProcess = (
 
 export type IsProcessRunning = (pid: number) => boolean;
 
+/**
+ * A simulated {@link SpawnBackgroundProcess} that allocates a synthetic pid but
+ * never launches a real OS process. Use it wherever background-task behaviour
+ * must be exercised without touching the host — most importantly in the cloud
+ * self-evolution/CI environment and in unit tests, where launching a real
+ * detached `bash`/`python3` process would (a) race the test's own
+ * `writeState`/`writeOutput` calls over the same `state.json`, and (b) leak
+ * long-lived monitor processes (e.g. `tail -f`) that never exit.
+ *
+ * Callers pair it with a deterministic {@link IsProcessRunning} (commonly
+ * `() => false`) so recovery/reconciliation is fully hermetic.
+ */
+export function createInertBackgroundSpawn(startPid = 2_000_000): SpawnBackgroundProcess {
+  let counter = 0;
+  return () => {
+    counter += 1;
+    return {
+      pid: startPid + counter,
+      unref() {
+        /* no-op: nothing to detach for a simulated process */
+      },
+    };
+  };
+}
+
 export type BackgroundTaskRecoveryReason =
   | "unchanged"
   | "state-running"
@@ -231,10 +256,23 @@ export class BackgroundTaskExecutionService {
   }
 
   async readState(task: BackgroundTaskRecord): Promise<BackgroundTaskExecutionState | undefined> {
-    return await readJsonFile<BackgroundTaskExecutionState | undefined>(
-      path.join(this.rootDir, task.execution.stateFile),
-      undefined,
-    );
+    try {
+      return await readJsonFile<BackgroundTaskExecutionState | undefined>(
+        path.join(this.rootDir, task.execution.stateFile),
+        undefined,
+      );
+    } catch (error) {
+      // The state file is written by an external, detached process that can be
+      // killed mid-write (or be observed while a non-atomic writer is between a
+      // truncate and a flush), leaving a torn/corrupt JSON document. A single
+      // unreadable state file must degrade to "no readable state" — which the
+      // reconciler already handles as missing state — rather than throw and
+      // abort recovery of every other task in the sweep.
+      if (error instanceof SyntaxError) {
+        return undefined;
+      }
+      throw error;
+    }
   }
 
   async writeOutput(task: BackgroundTaskRecord, content: string): Promise<void> {

@@ -6,6 +6,55 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-19 (run 9) — Hermetic background-task testing + torn-state resilience (green baseline restored)
+
+**Audited:** The build/test gate itself. `npm test` came up **3 files / 3 tests
+RED** on a clean checkout (last run logged 174/174), so nothing could be safely
+pushed until the baseline was green again. Root cause is an **environment
+difference, not a code regression**: `FileBackgroundTaskStore.launch()` really
+`spawn()`s a *detached* `bash`+`python3` launch script, and this run's cloud
+container actually has those tools — so the previously-inert child now runs to
+completion and (a) races the tests' own `writeState`/`writeOutput` over the same
+`state.json` (torn read → `SyntaxError` in `readJsonFile` → whole recovery sweep
+aborts), and (b) leaks long-lived `tail -f` monitor processes. The injection
+seam (`backgroundTaskSpawnProcess`) already existed but the tests weren't using
+it, and `OperatorCliApp` didn't even expose it.
+
+**Changed (additive, reversible):**
+- **`src/harness/background-tasks.ts`** — exported `createInertBackgroundSpawn()`,
+  a documented *simulated* `SpawnBackgroundProcess` that allocates synthetic pids
+  and never launches a real OS process (the guardrail-mandated mock for
+  cloud/CI/tests). Made `BackgroundTaskExecutionService.readState()` **resilient
+  to torn/corrupt JSON**: a `SyntaxError` (writer killed mid-flush) now degrades
+  to `undefined` — which the reconciler already handles as missing state —
+  instead of throwing and aborting recovery of every *other* task in the sweep.
+  This is a real reliability fix, independent of the tests.
+- **`src/cli/app.ts`** — threaded `backgroundTaskSpawnProcess` /
+  `backgroundTaskIsProcessRunning` options through `OperatorCliApp` into the
+  runtime, so the CLI app is hermetically testable (and a cloud caller can opt
+  into simulated execution).
+- **Tests** — `operator-runtime`, `server`, and `app` test constructors now
+  inject `createInertBackgroundSpawn()` (the one active-task app test also injects
+  a `() => true` liveness probe so the simulated process is treated as alive
+  through `watch-active`). Added 2 unit tests in `background-tasks.test.ts` for
+  the inert spawn and the torn-state resilience path.
+
+**Test results:** `npm test` **176/176** (was 3 failing; +2 new tests). No leaked
+`tail -f` processes after the run. `npm run build` ✅. `npm run typecheck:src`
+✅ exit 0. Full `tsc` **125** (unchanged, all in test files — no regression).
+
+**New idea:** the launch script's *writers* are still non-atomic — the initial
+`printf | sed > state.json` (shell) and the completion `pathlib.write_text(...)`
+(python) both truncate-then-write, which is what produces torn files in the first
+place. Make both atomic (`… > tmp && mv tmp state.json`; `os.replace`) so the
+product never emits a torn state file, with `readState` resilience as
+defense-in-depth. Bigger idea: honor an `OPENCLAW_SIMULATE_BACKGROUND=1` env flag
+(or auto-detect the cloud engine) that defaults the runtime to
+`createInertBackgroundSpawn()`, so *any* code path that starts a background task
+inside the self-evolution engine stays hermetic without per-call wiring.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   BackgroundTaskExecutionService,
   FileBackgroundTaskStore,
+  createInertBackgroundSpawn,
   type BackgroundTaskExecutionState,
 } from "./background-tasks.js";
 
@@ -369,5 +370,45 @@ describe("BackgroundTaskExecutionService", () => {
     await expect(fs.readFile(path.join(rootDir, task.execution.launchScript), "utf8")).resolves.toContain("bash -lc");
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
+  });
+
+  it("degrades a torn/corrupt state file to missing state instead of throwing", async () => {
+    const rootDir = await makeTempDir();
+    const filePath = path.join(rootDir, "background-tasks.json");
+    const store = new FileBackgroundTaskStore(filePath, createInertBackgroundSpawn(), () => false);
+    const task = await store.start({
+      sessionId: "sess-corrupt",
+      title: "Collect logs",
+      command: "printf 'ok'",
+      cwd: rootDir,
+    });
+
+    // Simulate a writer killed mid-flush: a truncated, unparseable JSON document.
+    const statePath = path.join(rootDir, task.execution.stateFile);
+    await fs.writeFile(statePath, `{"version":1,"taskId":"${task.id}","stat`, "utf8");
+
+    // A torn state file must not throw out of recovery. `readState` swallows the
+    // SyntaxError and reports "no readable state", so reconciliation degrades to
+    // the missing-state path (a running record whose process is gone → failed)
+    // instead of aborting the sweep on one bad file.
+    const recovered = await store.recover(task.id);
+    expect(recovered?.reason).toBe("missing-process");
+    expect(recovered?.task.status).toBe("failed");
+
+    // A direct read of the still-corrupt file likewise degrades to undefined.
+    await expect(store.executionService.readState(task)).resolves.toBeUndefined();
+  });
+});
+
+describe("createInertBackgroundSpawn", () => {
+  it("allocates unique synthetic pids without launching a real process", () => {
+    const spawn = createInertBackgroundSpawn();
+    const options = { cwd: "/tmp", env: {}, stdio: "ignore", detached: true } as const;
+    const first = spawn("launch.sh", [], options);
+    const second = spawn("launch.sh", [], options);
+    expect(typeof first.pid).toBe("number");
+    expect(typeof second.pid).toBe("number");
+    expect(second.pid).not.toBe(first.pid);
+    expect(() => first.unref()).not.toThrow();
   });
 });
