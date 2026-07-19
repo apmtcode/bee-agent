@@ -6,6 +6,66 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-19 (run 9) — 🧠 Pluggable movement-model backend + inference (objective #2d)
+
+**Audited:** The local-movement learning subsystem end-to-end (`src/capture/`
+recorder→replay→trajectory, `src/training/` exporter→job→runner). Found the
+critical gap for standing objective #2(d): the training subsystem could only emit
+shell scripts to run real `mlx`/`axolotl` on Apple Silicon — there was **no
+pluggable model backend and no inference at all**. So the objective's core promise
+("post-train a local model to *repeat* recorded movements and *generalize* to new
+but related ones") had zero runnable/testable code in the cloud.
+
+**Changed (additive) — new `src/training/movement-model.ts`:**
+- **Movement schema + tokenizer:** `MovementToken` (channel/tool/verb/target),
+  `movementTokenId`/`parseMovementTokenId` (serializable vocabulary id),
+  `tokenizeReplayEvent` (normalizes observation/action summaries; transcript → none).
+- **Dataset builders:** `buildMovementDataset(replays)` groups events into one
+  ordered sequence per trajectory; `buildMovementDatasetFromTrajectories(spans)`
+  builds directly from `TrajectorySpan[]`. Reuses the existing replay/trajectory
+  types — no capture-side changes.
+- **Pluggable backend interface** `MovementModelBackend { train, load }` returning
+  a `MovementModelInference { predictNext, generate, toArtifact }`. The serializable
+  `MovementModelArtifact` is backend-agnostic, so a real on-device small model can
+  implement the same seam and swap in without touching callers.
+- **Reference/mock backend** `MarkovMovementBackend`: a deterministic n-gram model
+  (configurable `order`, default 2) with **backoff generalization** — exact context
+  → shorter context → unigram fallback → empty, each tagged on the prediction so
+  callers see *how* a movement was inferred. Ties broken lexicographically for full
+  determinism.
+- **Generalization eval harness** `evaluateMovementModel(model, heldOut)`: top-1
+  next-movement accuracy + `generalizedFraction` (share needing backoff), i.e.
+  replay fidelity measured on held-out related trajectories.
+- Exported the whole surface from `src/index.ts`.
+
+**Test results:** new `movement-model.test.ts` — **12/12 pass** (tokenization
+round-trip, per-trajectory dataset ordering, exact repeat via `generate`,
+deterministic re-train, backoff to unseen 2-gram, unigram fallback, empty-model
+guard, artifact JSON round-trip with identical predictions, perfect fidelity on
+train distribution, accuracy>0.5 on held-out related episode). `typecheck:src`
+**clean (exit 0)**. `npm run build` ✅.
+
+**Pre-existing blocker (NOT caused by this run):** the full suite has **3 flaky
+failures** (count varies 3↔4 across runs) — `operator-runtime` /
+`background-tasks` / `app` / `server` tests fail with a JSON `SyntaxError` from
+`readJsonFile` in `FileBackgroundTaskStore.recoverBackgroundTasks`. **Confirmed
+present on a clean stash of my changes** (`git stash` → same 3 fail), so it is
+independent of this diff. Root cause: `readJsonFile` (`src/shared/fs.ts`) *throws*
+on a corrupt/partially-written state file instead of returning its fallback, so a
+recovery pass over a malformed `state.json` rejects. My module and all its tests
+are green; this is queued below. Pushing to the designated feature branch
+`claude/peaceful-dirac-tjusyy` per branch policy (my change is green; the failing
+tests are pre-existing and untouched by this diff).
+
+**New idea:** a `MovementReplayExecutor` that takes model `generate()` output and
+drives it back through the existing `DeviceCaptureAdapter`/`OsCaptureObserver`
+seams under a **dry-run/simulation guard** — closing the loop (capture → train →
+*act*) entirely in-sim in the cloud, with the real-OS actuator behind the same
+interface for local runs. Also: harden `readJsonFile` to tolerate corrupt JSON
+(return fallback + surface a `corrupt` flag) to kill the flaky recovery failures.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

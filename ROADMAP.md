@@ -62,13 +62,36 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      for a real on-device small model. — DONE run 9 (`src/training/movement-model.ts`:
+      `MovementModelBackend` interface + serializable `MovementModelArtifact` +
+      `MarkovMovementBackend` n-gram reference backend with backoff).
+- [~] Synthetic event-stream generator to validate capture→dataset→replay
+      round-trips without real OS input. — Partial (run 9): the movement-model
+      tests build synthetic replay manifests and validate
+      capture-token→dataset→predict/generate round-trips. Still worth a *shared*
+      generator util (parametric episodes, noise, held-out splits) reused across
+      capture + training tests.
+- [x] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories. — DONE run 9 (`evaluateMovementModel`:
+      top-1 next-movement accuracy + `generalizedFraction`).
+- [ ] `MovementReplayExecutor`: feed model `generate()` output back through the
+      `DeviceCaptureAdapter`/`OsCaptureObserver` seams behind a dry-run/simulation
+      guard, closing capture→train→act in-sim (real-OS actuator behind the same
+      interface for local runs).
+- [ ] Higher-fidelity backends behind `MovementModelBackend`: (a) weighted
+      backoff / smoothing, (b) a small on-device sequence model seam that consumes
+      the same `MovementDataset`.
+
+## Reliability / test health
+- [ ] **Harden `readJsonFile` (`src/shared/fs.ts`)** to tolerate corrupt /
+      partially-written JSON — return the fallback (and optionally a `corrupt`
+      flag) instead of throwing. Fixes the pre-existing flaky suite failures in
+      `operator-runtime`/`background-tasks`/`app`/`server` where
+      `recoverBackgroundTasks` rejects on a malformed `state.json` (surfaced run 9;
+      confirmed independent of that diff via `git stash`). Count varies 3↔4 across
+      runs → the underlying write is racy; investigate the state-writer alongside.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
