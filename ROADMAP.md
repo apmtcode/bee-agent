@@ -62,13 +62,45 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      for a real on-device small model. DONE run 9 —
+      `src/training/model-backend.ts`: `MovementModelBackend` interface +
+      `FrequencyMovementBackend` back-off n-gram mock + dataset builders.
+- [x] Synthetic event-stream generator to validate capture→dataset→replay
+      round-trips without real OS input. DONE run 9 (deterministic generator in
+      `model-backend.test.ts`; promote to an exported util next).
+- [x] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories. DONE run 9 — `evaluateMovementModel`
+      (top-1 accuracy + per-back-off-level breakdown).
+- [ ] Sequence-aware backend: extend context to the last _k_ (observation,
+      action) pairs (true k-gram) with Kneser-Ney back-off, and add
+      `sampleAction()` (draw from the bucket distribution, not argmax) so the
+      replay engine can synthesize plausible *variations*. Use it as the oracle a
+      real on-device model must beat on `evaluateMovementModel`.
+- [ ] Promote the synthetic event-stream generator out of the test file into an
+      exported `src/training/synthetic.ts` util for demos + the eval harness.
+- [ ] Wire `FrequencyMovementBackend` into `ReplayRuntimeService` so a session
+      replay can be *predicted/continued* (not just re-emitted), and expose it as
+      a control-plane `movement.predict` RPC.
+
+## Known bugs
+- [ ] **Background-task launch-script state writer mangles JSON**
+      (`src/harness/background-tasks.ts:757`, root cause confirmed run 9). The
+      initial "running" state is written via
+      `printf '%s' <json-payload> | sed "…; s/\"\$\$\"/$$/g" > state.json`. In
+      `sed` BRE the `$` inside the `"$$"` pattern is an end-of-line anchor, so
+      the `"pid":"$$"` placeholder is never substituted, and pushing the
+      JSON-encoded `command` through the `printf | sed` shell round-trip can
+      leave unescaped quotes → `readState` throws `SyntaxError`. Surfaces only
+      when the launcher actually runs under this shell, so it's
+      environment-dependent; it regressed the previously-green full suite (now 4
+      failing: operator-runtime / server / app background-task recovery tests).
+      **Fix:** stop editing JSON with `sed` — write the initial state the same
+      way the completed/failed paths do, via the embedded Python `json` writer
+      (read placeholder payload, set `pid=os.getpid()` + `startedAt`, dump). Then
+      re-confirm the 4 tests go green. (The identical pattern also exists in
+      `src/training/runner.ts:188` — fix both.)
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

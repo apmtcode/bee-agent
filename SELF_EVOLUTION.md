@@ -6,6 +6,78 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-19 (run 9) — Movement subsystem: in-process pluggable model backend (train → infer → generalize)
+
+**Audited:** Standing objective #2 (local-movement learning) end-to-end. Found
+the train/infer loop had a hole: `src/training/runner.ts` only *emits shell
+commands* to run `mlx`/`axolotl` on a real device — nothing about the actual
+learn-a-policy-and-predict-a-movement step was expressible or testable in the
+cloud. The capture side (recorder, replay, trajectory) and dataset export
+(`exporter.ts`, `replay.ts`) were solid, but there was no code that turns
+reviewed movement events into a model that can *reproduce* recorded actions and
+*generalize* to new-but-related ones (objective #2 parts c & d).
+
+**Changed (additive) — new module `src/training/model-backend.ts`:**
+- **`MovementModelBackend` interface** + `TrainedMovementModel` — the pluggable
+  seam. A real on-device small model just implements `train(dataset) →
+  model.predict(context)`; the shell-out runner stays for actual device runs.
+- **`FrequencyMovementBackend`** — a deterministic, dependency-free back-off
+  n-gram policy (the CI/cloud "mock" backend). It tallies which action followed
+  each context across four buckets (full `obs+prevTool`, observation-only,
+  previous-tool-only, global prior) and predicts by walking from the most
+  specific populated bucket outward. Exact recorded contexts reproduce the
+  recorded action (replay fidelity); novel contexts back off to a weaker but
+  related signal (generalization). Every prediction reports its `basis` and a
+  confidence, and tie-breaks are insertion-order-stable → fully deterministic.
+- **`buildMovementDataset(events)`** and **`buildMovementDatasetFromTrajectories`**
+  — turn a `ReplayTimelineEvent[]` stream / `TrajectorySpan[]` into supervised
+  `(context → nextAction)` examples (observations set rolling context; each
+  action emits one example then becomes the next `previousTool`).
+- **`evaluateMovementModel(model, heldOut)`** — generalization eval harness:
+  top-1 tool accuracy plus a breakdown by back-off level, so exact-replay vs
+  generalization strength read separately.
+- Barrel exports added in `src/index.ts`; new **10-test** suite
+  (`model-backend.test.ts`) with a deterministic **synthetic event-stream
+  generator** covering dataset derivation, exact replay (acc = 1), all three
+  back-off levels, empty-dataset safety, determinism, trajectory-sourced
+  datasets, and above-chance generalization on a held-out related workflow.
+
+**Test results:** `npm run build` ✅. `npm run typecheck:src` ✅ (source stays
+fully green). New suite ✅ **10/10**. Full suite **180/184** — the **4 failures
+are PRE-EXISTING and unrelated** (proven by re-running the failing files against
+a clean `git stash` of this diff: still 4 failed). They live in
+`operator-runtime.test.ts` / `server.test.ts` / `app.test.ts` and all surface as
+a `readJsonFile` `SyntaxError` out of `readState`. **Root cause confirmed** (I
+instrumented `readJsonFile` to dump the raw bytes, then reverted): the offending
+`state.json` has an **unescaped-quote `command` field and an unsubstituted
+`"pid":"$$"`** — e.g. `"command":"printf "'line-1\nline-2\n"'"`. That's the
+fragile shell launch-script state writer at
+`src/harness/background-tasks.ts:757`:
+`printf '%s' <payload> | sed "…; s/\"\$\$\"/$$/g" > state.json`. In `sed` BRE the
+`$` in the `"$$"` pattern is an end-of-line **anchor**, so the pid placeholder is
+never replaced, and the `printf | sed` round-trip through the shell can leave the
+JSON malformed. It only bites when the launcher actually executes under this
+shell/`sed`, which is why it's environment-dependent and regressed the
+previously-logged 174/174. Pre-existing, in a different subsystem, **not caused
+by this run's additive change** — logged to ROADMAP as its own focused fix
+(replace the `sed` pid step with a Python/`json` writer like the complet/fail
+paths already use).
+
+**Push note:** per the designated-branch requirement, pushed to
+`claude/peaceful-dirac-9bigod` (not `main`). This run's change is green in
+isolation (build + source typecheck + its own tests + zero new regressions); the
+red is pre-existing and documented above.
+
+**New idea:** give `FrequencyMovementBackend` a *sequence-aware* successor —
+extend the context to a short window of the last _k_ (observation, action) pairs
+(a true k-gram) with Kneser-Ney-style back-off, and add a `sampleAction()` that
+draws from the bucket distribution instead of argmax so the replay engine can
+generate *plausible variations* (true generalization/exploration) rather than
+only the modal action. This becomes the reference oracle a real on-device model
+must beat on the eval harness.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
