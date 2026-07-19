@@ -38,8 +38,10 @@ unchecked items are queued. Keep this richer than you found it each run.
     `skills.executable.*`, `push.subscriptions.*`, `trajectories.*`, `replays.*`,
     `cron.runs`/misc — plus a few genuine test-only typings. Map the rest, then
     fix residual test-only typings.
-- [ ] Add a `verify` npm script (`typecheck && build && test`) and have the
-      engine run it as a pre-push self-check each cycle.
+- [x] Add a `verify` npm script — DONE run 9. `verify` =
+      `typecheck:src && build && test` (source-only typecheck, since full
+      `typecheck` still carries test-file debt). Passes end-to-end. Next: have
+      the engine run `npm run verify` as its per-run pre-push self-check.
 - [x] Interim **source-only typecheck gate** — DONE run 7. `tsconfig.src.json`
       (excludes `**/*.test.ts`) + `typecheck:src` script; passes (exit 0). Next:
       have the engine run it as a per-run pre-push self-check.
@@ -69,6 +71,23 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
       round-trips without real OS input.
 - [ ] Generalization eval harness: measure replay fidelity on held-out but
       related synthetic trajectories.
+
+## Reliability / test hygiene
+- [x] Hermetic background-task tests — DONE run 9. The 4 tests that spawned real
+      OS processes (`printf`/`sleep`) were timing-flaky; they now inject
+      `createSimulatedBackgroundSpawn()` (`src/testing/background-spawn.ts`) via
+      the new injectable `OperatorCliApp` process-backend seam. Suite went
+      171/174 (env-flaky) → 178/178, stable across repeated runs.
+- [ ] **Atomic state writes in the background-task launcher.** `renderLaunchScript`
+      writes the running-state file with `printf | sed > statefile` (non-atomic
+      truncate+write) and the python state-writer uses `write_text` — a reader
+      (`readState`, recovery, health checks) can observe a torn write and crash
+      on invalid JSON (observed as a real `SyntaxError` this run). Mirror
+      `writeJsonAtomic`: write to `statefile.tmp`, then `mv` / `os.replace`.
+      Closes the production race, not just the test flakiness.
+- [ ] Add a lightweight vitest flake-guard: run the suite twice in CI (or a
+      `test:repeat` script) so timing-dependent regressions surface in one shot
+      instead of on a future container.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

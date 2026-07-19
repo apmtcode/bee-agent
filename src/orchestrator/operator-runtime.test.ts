@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { StandaloneOperatorRuntime } from "./operator-runtime.js";
+import { createSimulatedBackgroundSpawn } from "../testing/background-spawn.js";
 import { resolveOperatorCliExecutionConfig } from "../cli/config.js";
 import { runOperatorHooks } from "../cli/execution-policy.js";
 import type { ReviewedExportManifest } from "../training/export-manifest.js";
@@ -530,6 +531,11 @@ describe("StandaloneOperatorRuntime", () => {
   it("starts, syncs, recovers, lists, and cancels background tasks", async () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
+      // Simulated backend: no real detached process writes state files, so the
+      // synthetic states this test writes are the only source of truth and
+      // reconciliation is deterministic. `() => false` keeps every tracked pid
+      // "dead" so a running-state task reconciles to `missing-process`.
+      backgroundTaskSpawnProcess: createSimulatedBackgroundSpawn().spawn,
       backgroundTaskIsProcessRunning: () => false,
     });
     const session = await runtime.startSession({ title: "Tasks", agentId: "main" });

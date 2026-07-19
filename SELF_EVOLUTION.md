@@ -6,6 +6,65 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-19 (run 9) — Hermetic background-task tests + injectable process backend + `verify` gate
+
+**Audited:** The build/test/typecheck baseline on a fresh container. Found the
+suite was **RED on arrival**: `npm test` reported **3 failing tests** (171/174) —
+`app.test.ts`, `server.test.ts`, `operator-runtime.test.ts` — even though run 8
+recorded 174/174. Working tree was clean, so no code changed: the failures were
+**environment/timing-dependent**, not a regression I introduced.
+
+**Root cause (diagnosed, not guessed):** these tests exercise the background-task
+subsystem by starting **real detached OS processes** (`printf drift`, `sleep 5`).
+The shell launch-script writes execution-state files *asynchronously* (and
+*non-atomically*, via `> statefile`), so the control-plane health checks and
+`reconcileTask` logic **race** the real process settling on disk. Depending on
+machine speed the same task reports `running`, `completed`, or `missing-process`.
+On the old container the timing happened to pass; on this one:
+- a freshly-started `sleep 5` had its `running` state written *before* the health
+  check, and with `isProcessRunning: () => false` injected it was mis-classed
+  `missing-process` → `control=degraded` where the test asserts `control=active`;
+- an isolated `-t` run even crashed `readState` with a **JSON SyntaxError** —
+  proof of a torn read of the non-atomically-written state file.
+
+Repeated full-suite runs also exposed a **4th flaky test** (`supports background
+and monitor task commands…`) that the one-shot baseline masked: its real
+`printf ok` process could vanish before `watch-task`/`monitor-stop`, yielding
+`is not running` / `No active run or background task`.
+
+**Changed (additive, reversible):**
+- **New reusable testing utility** `src/testing/background-spawn.ts` —
+  `createSimulatedBackgroundSpawn()`: an in-memory background-process backend
+  that starts no real process and never touches the filesystem, handing back
+  stable unique pids and a matching `isProcessRunning` (pids it issued are alive;
+  everything else — e.g. a synthetic dead pid `999999` a test writes — is not).
+  `terminate(pid)` lets a test kill a simulated process deterministically.
+- **`OperatorCliApp` process backend is now injectable** — added
+  `backgroundTaskSpawnProcess` / `backgroundTaskIsProcessRunning` to
+  `OperatorCliAppOptions` and threaded them into the internal runtime (was
+  hard-wired to the real OS spawner). A genuine testability/embedding seam;
+  production default unchanged.
+- **Made the 4 background-task tests hermetic** by injecting the simulator
+  (`app.test.ts` ×2, `server.test.ts` ×3 runtimes, `operator-runtime.test.ts`),
+  supplying task output explicitly where the real launcher used to write it.
+- **New unit test** `src/testing/background-spawn.test.ts` (4 cases) covering the
+  simulator's pid uniqueness, liveness, termination, and no-FS contract.
+- **New `verify` npm script** (`typecheck:src && build && test`) — the canonical
+  green gate the roadmap queued; the engine can now run one command pre-push.
+
+**Test results:** `npm run verify` ✅ end-to-end. Tests **171/174 → 178/178**
+(+4 new). Ran the full suite **4×** and the previously-flaky files **6×** — all
+green every time (was intermittently red). `typecheck:src` CLEAN (exit 0).
+Build ✅.
+
+**New idea:** the *real* launch-script state write is still non-atomic
+(`printf | sed > statefile`, and `python3` `write_text`) — a latent production
+race where `readState`/recovery can crash on a torn read (we literally saw the
+JSON SyntaxError). Fix it the same way `writeJsonAtomic` already does for the
+store: have the launcher write to `statefile.tmp` and `mv`/`os.replace` into
+place. That closes the production race too, independent of the now-hermetic
+tests. Queued in ROADMAP.
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
