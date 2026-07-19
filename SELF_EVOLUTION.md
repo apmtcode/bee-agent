@@ -6,6 +6,62 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-19 (run 9) — 🐞 Fix background-task PID substitution + atomic state writes (suite was flaky-red)
+
+**Audited:** Re-ran the full verification gate (the procedure's step 5) from a
+clean install in the cloud sandbox — something prior runs recorded as "174/174"
+but had not re-exercised here. The suite was **RED and flaky** (3–4 failing per
+run, non-deterministic), all in the background-task subsystem: `app.test.ts`,
+`server.test.ts`, `operator-runtime.test.ts`.
+
+**Two genuine production bugs found in `src/harness/background-tasks.ts`
+(`renderLaunchScript`):**
+1. **PID never substituted.** The launch script wrote its initial "running"
+   state via `sed "…; s/\"\$\$\"/$$/g"`. The pattern's literal double quotes
+   *broke out of the surrounding double-quoted shell argument*, so `$$`
+   expanded on **both** sides → the effective program was `s/<PID>/<PID>/g`,
+   which never touched the `"$$"` placeholder. Every launched task recorded
+   `pid: "$$"` (a **string**). `defaultIsProcessRunning("$$")` →
+   `Number.isFinite` false → **every running task was falsely reported
+   "missing-process"** and recovered to `failed`. This silently broke liveness
+   detection, `stop`/`cancel` targeting, and remote control status.
+   (Confirmed by dumping the generated script + the written state file.)
+2. **Non-atomic state writes.** The initial `sed > file` and the completion
+   writer's `state_path.write_text(...)` truncate-in-place, so a concurrent
+   reader (`recoverBackgroundTasks` scans every task) could observe a
+   half-written file → `JSON.parse` SyntaxError rejecting the whole recover.
+
+**Fix (additive):** replaced the fragile `sed` initial write with a python
+writer that receives the real `$$` as an argv (correct numeric pid) and writes
+**atomically** (`tmp = <name>.tmp; write; os.replace`). Extracted a shared
+`PYTHON_ATOMIC_WRITE` snippet and made the completion writer use it too. No new
+dependency — the completion path already required `python3`.
+
+**Test reliability (root-caused, not masked):** several tests both launch *real*
+OS processes **and** hand-write state files, so the real process's async writes
+raced the manual ones. Made them hermetic: (a) added a no-op
+`backgroundTaskSpawnProcess` beside every `backgroundTaskIsProcessRunning:
+() => false` injection (23 sites across operator-runtime/server/session-stream/
+gateway-transport tests); (b) added a `backgroundTaskSpawnProcess` /
+`backgroundTaskIsProcessRunning` **passthrough on `OperatorCliApp`** (production
+default unchanged) so the two flaky `app.test.ts` cases inject deterministic
+fakes (`pid: 4242`; `pid !== 999999` for the dead-process sentinel). Added a
+**regression test** that runs the *real* launch script and asserts the state
+file records a numeric pid and a live process is not marked missing-process.
+
+**Test results:** build ✅. `typecheck:src` ✅ (exit 0). Full `tsc` steady at
+**125** (test-only debt; the fix added none). Tests: **175/175**, and now
+**deterministic — 15/15 consecutive full-suite runs green** (was ~1/4 red).
+
+**New idea:** add a tiny "hermeticity lint" — a test that scans the repo for
+`renderLaunchScript`-style shell templates and asserts state-file writes go
+through an atomic temp+rename, plus a CI guard that runs the suite N× (e.g. 5)
+to catch process-timing flakes before they land. Longer term: make the launch
+script python-optional (a pure-bash atomic writer) so environments without
+`python3` still record correct state.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

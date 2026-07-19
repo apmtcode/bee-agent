@@ -45,6 +45,22 @@ unchecked items are queued. Keep this richer than you found it each run.
       have the engine run it as a per-run pre-push self-check.
 - [ ] Add a minimal CI workflow mirroring `verify` for human-opened PRs.
 
+## Reliability
+- [x] **Fix background-task PID substitution** (run 9). The launch script's
+      `sed` PID replacement had a shell-quoting bug that left `pid: "$$"` (a
+      string) in every task's state file → all running tasks falsely reported
+      "missing-process". Rewrote the initial state write in python (real pid via
+      argv) with an atomic temp+rename; made the completion writer atomic too.
+- [x] **Deterministic background-task tests** (run 9). Removed real-process /
+      manual-state-write races: no-op spawn beside every `isProcessRunning:
+      () => false`, an injection seam on `OperatorCliApp`, and a regression test
+      that exercises the real launch script. Suite is now 15/15 green.
+- [ ] **Suite-flake CI guard**: run the vitest suite N× (e.g. 5) in CI so
+      process-timing flakes are caught before landing, not rediscovered here.
+- [ ] **python-optional launch script**: provide a pure-bash atomic state
+      writer fallback so environments without `python3` still record correct
+      state (today both the initial and completion writers require python3).
+
 ## Capability parity (audit reference agents → port gaps)
 - [ ] Build a "capability inventory" generator: enumerate bee-agent's exported
       RPC/tool surface (`src/index.ts`) and diff it against `openclaw`,

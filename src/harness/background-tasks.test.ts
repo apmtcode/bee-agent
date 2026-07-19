@@ -370,4 +370,65 @@ describe("BackgroundTaskExecutionService", () => {
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
   });
+
+  // Regression: the launch script previously substituted the PID with a broken
+  // `sed` expression whose embedded double quotes broke the surrounding shell
+  // quoting, leaving `pid` as the literal string "$$". That made every launched
+  // task look dead (isProcessRunning("$$") -> false) and any concurrent reader
+  // could observe a half-written state file. This exercises the REAL launch
+  // script (default spawn, no mock) to guard both the numeric PID and the
+  // atomic write.
+  it("launches a real process that records a numeric pid and stays detectable", async () => {
+    const rootDir = await makeTempDir();
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"));
+    const task = await store.start({
+      title: "Long lived",
+      command: "sleep 5",
+      cwd: rootDir,
+      kind: "task",
+    });
+    expect(task.status).toBe("running");
+    expect(Number.isFinite(task.execution.processId)).toBe(true);
+
+    // Wait for the launch script to write the initial "running" state file.
+    const statePath = path.join(rootDir, task.execution.stateFile);
+    let state: BackgroundTaskExecutionState | undefined;
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      try {
+        const raw = await fs.readFile(statePath, "utf8");
+        // Atomic write guarantees we never see a partial document.
+        state = JSON.parse(raw) as BackgroundTaskExecutionState;
+        if (state.status === "running") {
+          break;
+        }
+      } catch {
+        // Not written yet (ENOENT); keep polling.
+      }
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+
+    try {
+      expect(state).toBeDefined();
+      // The core of the bug: pid must be a real number, never the string "$$".
+      expect(typeof state?.pid).toBe("number");
+      expect(Number.isFinite(state?.pid)).toBe(true);
+      expect(state?.pid).toBeGreaterThan(0);
+
+      // A live process must not be reported as missing, and reconciliation must
+      // keep it running rather than failing it as "missing-process".
+      expect(store.executionService.isProcessRunning(state?.pid as number)).toBe(true);
+      const recovered = await store.recover(task.id);
+      expect(recovered?.task.status).toBe("running");
+      expect(recovered?.reason).not.toBe("missing-process");
+    } finally {
+      const pid = task.execution.processId;
+      if (typeof pid === "number") {
+        try {
+          process.kill(process.platform === "win32" ? pid : -pid, "SIGKILL");
+        } catch {
+          // Process already gone.
+        }
+      }
+    }
+  });
 });

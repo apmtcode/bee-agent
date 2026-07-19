@@ -801,7 +801,16 @@ describe("OperatorCliApp", () => {
 
   it("supports session lifecycle, transcript, approvals, pairing, config, and prompt commands", async () => {
     const rootDir = await makeTempDir();
-    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    const app = new OperatorCliApp({
+      rootDir,
+      cwd: rootDir,
+      currentDate: "2026-05-25",
+      // Deterministic background-task seam so status assertions never race a
+      // real OS process's async state writes. pid 999999 is this test's
+      // dead-process sentinel used to drive the "degraded" scenario below.
+      backgroundTaskSpawnProcess: () => ({ pid: 4242, unref() {} }),
+      backgroundTaskIsProcessRunning: (pid) => pid !== 999999,
+    });
     const firstSession = await app.runtime.startSession({ title: "first", cwd: rootDir, agentId: "operator-cli" });
     const secondSession = await app.runtime.startSession({ title: "second", cwd: rootDir, agentId: "operator-cli" });
 
@@ -1063,7 +1072,16 @@ describe("OperatorCliApp", () => {
 
   it("supports background and monitor task commands plus cron commands", async () => {
     const rootDir = await makeTempDir();
-    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    const app = new OperatorCliApp({
+      rootDir,
+      cwd: rootDir,
+      currentDate: "2026-05-25",
+      // Deterministic seam: stub the spawn so no real process races the manual
+      // output/state writes, and keep launched tasks "alive" so the task stays
+      // active for the watch assertions below.
+      backgroundTaskSpawnProcess: () => ({ pid: 4242, unref() {} }),
+      backgroundTaskIsProcessRunning: () => true,
+    });
     const session = await app.runtime.startSession({ title: "CLI ops", cwd: rootDir, agentId: "operator-cli" });
 
     const startOutput = await app.dispatchSlashCommand(
@@ -1078,6 +1096,9 @@ describe("OperatorCliApp", () => {
     if (!task) {
       throw new Error("expected background task");
     }
+    // The stubbed spawn does not run the real command, so drive the output the
+    // view/watch assertions expect (mirrors how the monitor output is written).
+    await app.runtime.backgroundTasks.executionService.writeOutput(task, "ok\n");
 
     const listOutput = await app.dispatchSlashCommand({ kind: "background-list" });
     expect(listOutput).toContain(task.id);
