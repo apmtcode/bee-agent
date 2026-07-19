@@ -231,9 +231,13 @@ export class BackgroundTaskExecutionService {
   }
 
   async readState(task: BackgroundTaskRecord): Promise<BackgroundTaskExecutionState | undefined> {
+    // The launched subprocess writes this file non-atomically, so a concurrent
+    // status/recover read can observe a half-written file. Treat a transient
+    // parse error as "state not readable yet" rather than crashing the caller.
     return await readJsonFile<BackgroundTaskExecutionState | undefined>(
       path.join(this.rootDir, task.execution.stateFile),
       undefined,
+      { tolerateParseErrors: true },
     );
   }
 

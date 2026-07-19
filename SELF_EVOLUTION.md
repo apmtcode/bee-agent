@@ -6,6 +6,69 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-19 (run 9) — Pluggable local-movement model backend + concurrent-write read tolerance
+
+**Audited:** The local-movement learning subsystem (standing objective #2) and
+the current test baseline. Found two gaps:
+1. `src/training/` had an on-device training *runner* (shells out to mlx/axolotl
+   launch scripts) but **no in-process model** that can actually *learn* from
+   recorded movements and *repeat/generalize* them — objective #2(c)/(d) and the
+   top ROADMAP movement item ("pluggable local-model backend with a
+   deterministic mock backend"). Nothing was cloud-testable end-to-end.
+2. The suite was **already red on a clean tree** (3 deterministic-looking
+   failures on `stash`; actually **flaky**, varying 2–4 across runs) — run 8
+   recorded 174/174 on 2026-06-23. Root-caused one class exactly.
+
+**Changed (additive):**
+- **New `src/training/movement-model.ts`** — the pluggable backend seam:
+  - `MovementModelBackend` interface + `MovementModelBackendRegistry` (a real
+    on-device small-model backend can implement the same interface and swap in
+    with zero call-site changes).
+  - `MarkovMovementBackend` — a **deterministic** (no clock, no randomness, no
+    I/O) n-gram policy with Katz-style backoff: it counts token transitions for
+    every context length 0..order, so it **repeats** memorized movement chains
+    exactly (`generate`) and **generalizes** to new-but-related contexts by
+    backing off to a shorter learned context (`predictNext` reports
+    `contextOrder` — full order = memorized, lower = generalized).
+  - Dataset builders from trajectories and replay manifests, pluggable
+    tokenizers (`default` = tool, `detailed` = `tool:<keyword>`), JSON
+    serialization round-trip (`toJSON`/`loadMovementModel`), and
+    `evaluateMovementModel` — the **generalization eval harness** (next-movement
+    accuracy + average matched context order on held-out sequences).
+  - Exported the full surface from `src/index.ts`.
+- **`src/shared/fs.ts`** — `readJsonFile` gained an opt-in
+  `{ tolerateParseErrors }` option. Root cause of one flaky failure: launched
+  background-task/training subprocesses write their execution-state file
+  **non-atomically** (unlike `writeJsonAtomic`), so a concurrent status/recover
+  read observes a half-written file and `readJsonFile` **rethrew the
+  SyntaxError**, crashing the whole call. Volatile execution-state reads
+  (`BackgroundTaskExecutionService.readState`, training `readState`) now pass
+  `tolerateParseErrors: true` → a transient half-written read is treated as
+  "state not readable yet" (fallback), not a crash. Persistent stores/config are
+  unchanged (default still throws on corruption). Refactored the fallback into a
+  `cloneFallback` helper (behaviour identical).
+
+**Test results:** `typecheck:src` ✅ CLEAN. Build ✅ (5 files, 544 kB). New tests:
+**movement-model 13/13 + fs 6/6 = 19/19**, stable across 3 repeat runs. Full
+suite **191/193** best case (was 190/193 baseline pre-run); the fix
+**eliminated the operator-runtime crash-class** and lowered the flaky-failure
+rate. The remaining 2–4 flaky failures are **pre-existing** and unrelated to
+this diff — they live in `cli/app.test.ts`, `control-plane/server.test.ts`, and
+`orchestrator/operator-runtime.test.ts`, which spawn **real short-lived
+subprocesses** (e.g. `printf`) and then assert on live-process/`isProcessRunning`
+timing, so a process that exits before the assertion flips `control=active` →
+`degraded`. The proper fix is to inject a mock/controllable spawner into those
+three tests (queued top of ROADMAP).
+
+**New idea:** a **movement generalization benchmark** baked into CI — a small
+synthetic corpus of parametric movement "programs" (e.g. open→type→submit with
+varied entities) split train/held-out, asserting the Markov backend clears a
+minimum `nextTokenAccuracy` while a *shuffled-token* control model stays near
+chance. This turns "does the model generalize?" into a regression gate and gives
+a fixed yardstick to compare a future real on-device backend against the mock.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

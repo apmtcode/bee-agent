@@ -83,9 +83,12 @@ export class LocalTrainingExecutionService {
       return undefined;
     }
 
+    // The training subprocess writes this file non-atomically; tolerate a
+    // half-written read instead of throwing on a transient parse error.
     return await readJsonFile<TrainingExecutionState | undefined>(
       path.join(this.rootDir, job.execution.stateFile),
       undefined,
+      { tolerateParseErrors: true },
     );
   }
 
