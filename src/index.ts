@@ -394,6 +394,32 @@ export type {
   TrainingExecutionState,
 } from "./training/execution-service.js";
 export {
+  MarkovMovementBackend,
+  MOVEMENT_END,
+  buildMovementDataset,
+  buildMovementSequence,
+  defaultMovementTokenizer,
+  evaluateMovementPolicy,
+  generateSyntheticMovementDataset,
+  movementSequenceFromTrajectory,
+} from "./training/movement-policy.js";
+export type {
+  MovementActionLike,
+  MovementDataset,
+  MovementEvalResult,
+  MovementPolicyBackend,
+  MovementPolicySnapshot,
+  MovementPrediction,
+  MovementPredictionCandidate,
+  MovementPredictionContext,
+  MovementSequence,
+  MovementStep,
+  MovementTokenizer,
+  SyntheticMovementOptions,
+  TrainMovementPolicyOptions,
+  TrainedMovementPolicy,
+} from "./training/movement-policy.js";
+export {
   LocalAppleSiliconTrainingRunner,
 } from "./training/runner.js";
 export type {

@@ -6,6 +6,66 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-19 (run 9) — Movement learning: pluggable inference/generalization backend
+
+**Audited:** Objective #2 (local-movement learning subsystem). The capture →
+export → training-*plan* pipeline is well built (`src/capture/**`,
+`src/training/exporter.ts`, `runner.ts` emits MLX/axolotl launch scripts), but
+parts **(c) train a model to repeat movements** and **(d) generalize to
+new-but-related movements** had **no runnable model** — only on-device job
+*planning*. There was no way, in the cloud, to train on recorded trajectories
+and actually predict/replay a movement.
+
+**Changed (additive, one new module + tests):** `src/training/movement-policy.ts`
+— the inference side of the subsystem, fully deterministic (no fs/clock; only a
+caller-seeded LCG), so it trains + infers in CI without a GPU:
+- **`MovementPolicyBackend`** — the pluggable seam a real on-device small model
+  implements the same way the mock does (`train(dataset) → TrainedMovementPolicy`).
+- **`MarkovMovementBackend`** (`id: "markov-mock"`) — an order-k n-gram with
+  stupid-backoff. It **repeats** recorded movements exactly (`generate()` rolls
+  out to an `END` sentinel) and **generalizes**: for an unseen prefix it backs
+  off to shorter contexts, and for an unseen *goal* it drops the goal label to
+  reuse goal-agnostic statistics. Ranked, deterministic candidates carry
+  `{probability, support, order, goalMatched}`. Tie-break prefers a real step
+  over the stop sentinel so generation doesn't halt early.
+- **Tokenization** (`defaultMovementTokenizer`, `buildMovementSequence`,
+  `movementSequenceFromTrajectory`) consumes the same `{tool, summary}` shape the
+  exporter emits (handles reviewed/redacted actions too).
+- **`generateSyntheticMovementDataset`** — seeded, reproducible goal-labeled
+  movement streams (skeleton + seeded perturbations) to validate the
+  capture→dataset→train→replay round-trip without real OS input.
+- **`evaluateMovementPolicy`** — next-step top-1/top-k fidelity harness on
+  held-out related sequences (the generalization signal). Wired all exports into
+  the `src/index.ts` barrel.
+
+Knocks out three ROADMAP items at once (pluggable backend + mock, synthetic
+generator, eval harness).
+
+**Test results:** new `movement-policy.test.ts` **12/12 ✅** (repeat, backoff,
+goal-transfer, END-termination, seeded reproducibility, held-out generalization
+> 0.6 top-1, snapshot). `npm run build` ✅. `npm run typecheck:src` ✅ (source
+stays clean). Full `npm test` **183/186**; the **3 failures are pre-existing and
+environment-specific — confirmed identical on the base commit `3c7b7236` with my
+changes stashed**, so NOT introduced here.
+
+**⚠️ Pre-existing blocker (new finding, logged to ROADMAP):**
+`operator-runtime.test.ts` "starts, syncs, recovers…" (and the two other reds in
+`app.test.ts`/`server.test.ts` that exercise the same path) fail with
+`SyntaxError: Expected ',' or '}' after property value in JSON at position 311`
+from `readJsonFile` → `BackgroundTaskExecutionService.readState` during
+`recoverBackgroundTasks`. State is written via `writeJsonAtomic` yet reads back
+malformed at a fixed byte offset — smells like a state-file write/serialization
+or atomic-rename issue in this runtime. Out of scope for this run (would blow the
+"one focused change" guardrail); needs a dedicated investigation.
+
+**New idea:** a **`ReplayIntoMovement` bridge** — feed a `ReplayManifest`'s
+`action` events straight through `movementSequenceFromTrajectory` so a trained
+policy can be scored against the *exact* recorded replay timeline, closing the
+loop capture→replay→train→infer end-to-end. Plus: a `beamGenerate(k)` on the
+policy so replay can propose the top-k alternative movements, not just the argmax.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

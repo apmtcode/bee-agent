@@ -62,13 +62,38 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      for a real on-device small model. (2026-07-19, run 9) —
+      `src/training/movement-policy.ts`: `MovementPolicyBackend` seam +
+      `MarkovMovementBackend` mock (n-gram + stupid-backoff) that repeats &
+      generalizes. NB: this is a movement *inference* policy backend, distinct
+      from the MLX/axolotl *job-plan* runner; a future step is letting the runner
+      accept a backend id and hand off to a policy backend for cloud dry-runs.
+- [x] Synthetic event-stream generator to validate capture→dataset→replay
+      round-trips without real OS input. (2026-07-19, run 9) —
+      `generateSyntheticMovementDataset` (seeded LCG, goal skeletons + noise).
+- [x] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories. (2026-07-19, run 9) —
+      `evaluateMovementPolicy` (next-step top-1/top-k on held-out sequences).
+- [ ] **`ReplayIntoMovement` bridge**: feed a `ReplayManifest`'s `action` events
+      through `movementSequenceFromTrajectory` so a trained policy is scored
+      against the exact recorded replay timeline (closes capture→replay→train→
+      infer). Add `beamGenerate(k)` to the policy for top-k alternative movements.
+- [ ] Let `LocalAppleSiliconTrainingRunner` (or a new dispatcher) select a
+      training backend by id, so `markov-mock` gives a real cloud dry-run of the
+      train→infer path while the MLX/axolotl backends stay on-device.
+
+## Known blockers
+- [ ] **Background-task state readback fails in the cloud runtime** (found run 9).
+      `operator-runtime.test.ts` "starts, syncs, recovers…" +
+      `app.test.ts`/`server.test.ts` reds: `readState` → `readJsonFile` throws
+      `SyntaxError: Expected ',' or '}' … at position 311` during
+      `recoverBackgroundTasks`, even though the state was written via
+      `writeJsonAtomic`. Reproduces on base commit `3c7b7236` with no local
+      changes — a pre-existing write/serialize/atomic-rename bug, not test flake.
+      Needs a dedicated run: reproduce by dumping the on-disk state file bytes at
+      the failing offset before parsing.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
