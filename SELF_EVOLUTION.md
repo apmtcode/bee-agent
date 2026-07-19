@@ -6,6 +6,57 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-19 (run 9) — 🐛 Fixed a real background-task corruption bug; hermetic + atomic task lifecycle
+
+**Audited:** The test suite, found **red** on arrival (3 failing tests:
+`operator-runtime`, `control-plane/server`, `cli/app`) despite run 8 logging
+174/174 green — the failures are environment/timing-dependent, not a code
+regression. Traced all three to the same root: those tests exercise the **real**
+background-task subprocess (`startBackgroundTask` spawns a shell that writes
+`state.json`), so assertions race the child's non-atomic state writes. One test
+even uses `command: "tail -f app.log"` and hand-manages state/kill — it was
+*designed* to be hermetic but the spawn-injection seam was never wired in.
+
+**Discovered a genuine production bug while hardening the path:** an end-to-end
+launch-script test surfaced that `shellQuote()` used a **malformed** single-quote
+escape (`"'"'"'`) instead of the canonical `'\''`. Any task command containing a
+single quote — `printf '…'`, `grep 'x'`, `sh -c '…'` — was corrupted (`printf
+'hi'` → `printf "'hi"'`), mangling **both** the executed `bash -lc` command and
+the JSON state payload, so the task wrote invalid `state.json` and then failed at
+the terminal writer's `json.loads`. Single-quoted commands were effectively
+broken in production.
+
+**Changed (additive, `src/harness/background-tasks.ts`):**
+- Fixed `shellQuote` to the canonical `'\''` escape (root-cause bug).
+- Made state writes **atomic**: replaced the fragile `sed`-placeholder initial
+  "running" write (which also never substituted the `pid`) with a python writer
+  that fills pid/startedAt via argv and does temp-file + `os.replace`; the
+  terminal writer now also writes temp + `os.replace`. Concurrent reconcile/sync
+  readers can no longer observe a torn or malformed `state.json`.
+- New `src/harness/background-task-testing.ts` → `createInertBackgroundTaskSpawn()`:
+  a reusable inert `SpawnBackgroundProcess` (fake pid, writes nothing) for
+  hermetic tests/simulations.
+- `src/cli/app.ts`: exposed `backgroundTaskSpawnProcess` /
+  `backgroundTaskIsProcessRunning` on `OperatorCliAppOptions`, forwarded to the
+  internal runtime (testability/DX parity with `StandaloneOperatorRuntime`).
+
+**Tests:** wired the inert spawn into the 3 flaky tests (now deterministic);
+added 2 new tests in `background-tasks.test.ts` — a render-level assertion (atomic
+`os.replace`, canonical quote escape, no `sed`/placeholder) and a real
+end-to-end launch-script execution (skips cleanly if bash/python3 absent).
+**Results:** `npm test` **176/176** (was 3 failing → all green, +2 new),
+`typecheck:src` ✅ clean, `npm run build` ✅.
+
+**New idea:** extract `shellQuote` + `renderLaunchScript` into a small exported
+`src/harness/shell.ts` with a **property/fuzz test** that round-trips adversarial
+strings (single/double quotes, `$`, backticks, `!`, newlines, unicode) through a
+real `printf '%s'` and asserts byte-identity. Shell-escaping bugs are silent and
+catastrophic (this one broke a core feature unnoticed); a golden round-trip test
+is the cheapest durable guard, and an exported contract lets other subsystems
+(capture replay, execution policy) reuse a single audited quoter.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

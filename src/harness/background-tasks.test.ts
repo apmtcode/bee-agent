@@ -370,4 +370,59 @@ describe("BackgroundTaskExecutionService", () => {
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
   });
+
+  it("renders a launch script that writes execution state atomically", async () => {
+    const rootDir = await makeTempDir();
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"), () => ({ pid: 2222, unref() {} }));
+    const task = await store.start({
+      title: "Atomic state",
+      command: "printf 'ok'",
+      cwd: rootDir,
+    });
+    const script = await fs.readFile(path.join(rootDir, task.execution.launchScript), "utf8");
+    // Both the initial "running" state and the terminal state must be written
+    // atomically via a temp sibling + os.replace() so a concurrent reconcile
+    // reader never observes a half-written state.json.
+    expect(script).toContain("os.replace(tmp_path, state_path)");
+    expect(script).toContain("tmp_path = state_path.with_name(state_path.name + '.tmp')");
+    // The fragile sed placeholder substitution (which corrupted quoted commands
+    // and never filled in the pid) must be gone.
+    expect(script).not.toContain("__OPENCLAW_STARTED_AT__");
+    expect(script).not.toContain('s/"$$"/');
+    // Single quotes in the command must use the canonical `'\''` escape, not the
+    // malformed `"'"'"'` sequence that corrupted the shell token.
+    expect(script).toContain(`printf '\\''ok'\\''`);
+    expect(script).not.toContain(`"'"'"'`);
+  });
+
+  it("runs the real launch script and leaves a valid, complete terminal state", async () => {
+    const { spawn } = await import("node:child_process");
+    const rootDir = await makeTempDir();
+    const service = new BackgroundTaskExecutionService(rootDir);
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"), () => ({ pid: 3333, unref() {} }));
+    const task = await store.start({
+      title: "Real run",
+      // Newlines in the command exercise JSON escaping through the shell payload.
+      command: "printf 'line-1\nline-2\n'",
+      cwd: rootDir,
+    });
+    await service.writeArtifacts(task);
+
+    const scriptPath = path.join(rootDir, task.execution.launchScript);
+    const exitCode = await new Promise<number>((resolve, reject) => {
+      const child = spawn(scriptPath, [], { cwd: rootDir, stdio: "ignore" });
+      child.on("error", reject);
+      child.on("close", (code) => resolve(code ?? -1));
+    }).catch((error: NodeJS.ErrnoException) => (error.code === "ENOENT" ? "skip" : Promise.reject(error)));
+
+    // Skip cleanly if bash/python3 are unavailable in this environment.
+    if (exitCode === "skip") {
+      return;
+    }
+
+    expect(exitCode).toBe(0);
+    // The awaited close event guarantees the writer finished; state must parse.
+    const state = await service.readState(task);
+    expect(state).toMatchObject({ taskId: task.id, status: "completed", exitCode: 0 });
+  });
 });

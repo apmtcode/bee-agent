@@ -70,6 +70,24 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Generalization eval harness: measure replay fidelity on held-out but
       related synthetic trajectories.
 
+## Reliability / correctness
+- [x] **Fix `shellQuote` corruption** (2026-07-19, run 9) — malformed `"'"'"'`
+      escape mangled any background-task command containing a single quote,
+      breaking execution + writing invalid `state.json`. Now canonical `'\''`.
+- [x] **Atomic background-task state writes** (2026-07-19, run 9) — launch script
+      writes `state.json` via temp + `os.replace`; replaced fragile `sed`
+      placeholder (never substituted `pid`) with a python argv-based writer.
+- [x] **Hermetic background-task tests** (2026-07-19, run 9) —
+      `createInertBackgroundTaskSpawn()` + `OperatorCliApp` spawn-injection seam;
+      fixed 3 timing-flaky tests, added render + real-e2e coverage.
+- [ ] Extract `shellQuote` + `renderLaunchScript` into an exported
+      `src/harness/shell.ts` with a **property/fuzz round-trip test** (adversarial
+      strings through real `printf '%s'`, assert byte-identity). Lets capture
+      replay / execution-policy reuse one audited quoter.
+- [ ] Audit other shell-command builders in `src/` (execution-policy, worktree,
+      capture adapters) for the same class of quoting bug now that the pattern is
+      known.
+
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in
