@@ -70,6 +70,22 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Generalization eval harness: measure replay fidelity on held-out but
       related synthetic trajectories.
 
+## Reliability / correctness
+- [x] Fix broken `shellQuote` in `src/harness/background-tasks.ts` (used the
+      6-char `"'"'"'` instead of the correct 5-char `'"'"'`), which corrupted
+      `state.json` and broke any background command containing a quote
+      (2026-07-19, run 9). Also rewrote the running-state writer to build JSON in
+      Python from env vars and made all state writes atomic (temp + rename).
+- [ ] Port the same treatment to `src/training/runner.ts` — it still assembles
+      the running-state JSON via `printf` + `sed`-patched pid/timestamps and
+      writes state with a non-atomic `>`. Same class of bug as run 9 (its
+      shellQuote is already correct, so no corruption, but the pid/timestamp
+      sed-substitution is fragile and reads can see partial writes).
+- [ ] Extract a single audited `shellQuote` into `src/shared/shell.ts` with a
+      unit test (quotes/newlines/backslashes/empty) and have both
+      `background-tasks.ts` and `training/runner.ts` import it, so the two copies
+      can never diverge again (the divergence is what hid the run-9 bug).
+
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in

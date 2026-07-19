@@ -370,4 +370,29 @@ describe("BackgroundTaskExecutionService", () => {
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
   });
+
+  it("persists valid JSON state for a command containing quotes and newlines", async () => {
+    const rootDir = await makeTempDir();
+    // Use the default (real) spawn so the launch script actually runs and writes
+    // the execution state itself. The command deliberately contains a single
+    // quote, double quotes, and a literal newline — the exact character class
+    // that previously corrupted state.json when it was assembled by patching a
+    // pre-serialised JSON blob with sed inside the shell.
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"));
+    const command = "echo \"it's ok\"\ntrue";
+    const task = await store.start({ title: "Quoting", command, cwd: rootDir });
+
+    let state = await store.getExecutionState(task.id);
+    for (let i = 0; i < 200 && (!state || state.status === "running"); i += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      state = await store.getExecutionState(task.id);
+    }
+
+    expect(state?.status).toBe("completed");
+    // The command must round-trip exactly through the on-disk JSON.
+    expect(state?.command).toBe(command);
+    // And the file on disk must always be parseable JSON (no partial writes).
+    const raw = await fs.readFile(path.join(rootDir, task.execution.stateFile), "utf8");
+    expect(() => JSON.parse(raw) as unknown).not.toThrow();
+  });
 });

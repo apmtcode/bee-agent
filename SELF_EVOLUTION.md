@@ -6,6 +6,62 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-19 (run 9) — 🐞 Real correctness bug: broken `shellQuote` corrupted background-task state
+
+**Audited:** Started with the required build/test gate and found the suite was
+**red and flaky** — 3–4 failing tests that varied run-to-run
+(`operator-runtime`, `server`, `app`). The symptom was a JSON parse error
+(`readJsonFile` → `SyntaxError: Expected ',' or '}' … position 311`) while
+reading a background task's `state.json`. This was a genuine regression, not
+test-only noise.
+
+**Root cause (single, deep):** `shellQuote()` in `src/harness/background-tasks.ts`
+used the wrong POSIX escape for an embedded single quote — `"'"'"'` (6 chars,
+extra leading `"`) instead of the correct `'"'"'` (5 chars). Every command or
+path containing a `'` was mangled (`it's` → `it"'s`), which (a) produced
+malformed JSON in `state.json` and (b) made the launched command itself
+un-runnable (`bash: unexpected EOF while looking for matching '`). The sibling
+`src/training/runner.ts` already had the **correct** 5-char escape, confirming
+this was a localized typo. Reference: any background task whose command contained
+a quote (e.g. the tests' `printf 'line-1\nline-2\n'`) corrupted its own state
+file; the "flakiness" was just which reader hit the partial/corrupt file first.
+
+**Changed (additive, `src/harness/background-tasks.ts`):**
+1. **Fixed `shellQuote`** to `'"'"'` — the actual correctness fix.
+2. **Rewrote the "running"-state writer** to stop assembling JSON by
+   `printf`-ing a pre-serialised blob and patching it with `sed`
+   (`s/"$$"/$$/g`, which also intermittently failed to substitute the pid).
+   Now every task field is passed via environment variables to a Python writer
+   (`renderRunningStateWriterPython`) that builds the dict and `json.dumps` it —
+   robust escaping for free, matching the completed/failed writers.
+3. **Made all three state writes atomic** (`renderAtomicStateWritePython`: temp
+   file + `Path.replace`), so a concurrent reader
+   (`readState`/`syncBackgroundTask`/`recover*`) can never observe a partial
+   write. This is a real production reliability fix, not just a test artifact.
+
+**Tests:** injected a no-op `backgroundTaskSpawnProcess` into the three unit
+tests that manually drive execution state (`operator-runtime`, `server` ×3
+runtimes) so they no longer race a *real* detached launch script (which also
+leaked a `tail -f`). Added a **regression test** in `background-tasks.test.ts`
+that runs the real launch script with a command containing a single quote,
+double quotes, and a newline, then asserts the persisted `state.json` is valid
+JSON and the command round-trips exactly.
+
+**Test results:** suite **red/flaky (170–172 pass) → 175/175 green**, verified
+stable across 4 full runs + 6 focused reruns of each previously-flaky file.
+Build ✅. `typecheck:src` ✅ (exit 0). Pushed to `claude/peaceful-dirac-1cguxq`.
+
+**New idea:** `src/training/runner.ts` still uses the same fragile
+"printf a JSON blob + sed-patch the pid/timestamps" pattern (though with the
+*correct* shellQuote) and non-atomic `>` state writes. It's the twin of the bug
+just fixed — port the same env-var + Python + atomic-write treatment there next
+run. Bigger idea: a tiny shared `src/shared/shell.ts` exporting one audited
+`shellQuote` (with a unit test covering quotes/newlines/backslashes) so the two
+copies can't drift again — the divergence here is exactly what let one copy be
+wrong for weeks.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
