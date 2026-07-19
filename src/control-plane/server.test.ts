@@ -81,8 +81,12 @@ const exportManifest: ReviewedExportManifest = {
 describe("OperatorControlPlaneServer", () => {
   it("handles session, transcript, approval, trajectory, memory, and orchestration methods", async () => {
     const rootDir = await makeTempDir();
+    let mainMockPid = 30000;
     const runtime = new StandaloneOperatorRuntime({
       rootDir,
+      // Mock the launcher so no real process spawns and writes competing state
+      // files that would race the explicit writeState() calls in this test.
+      backgroundTaskSpawnProcess: () => ({ pid: (mainMockPid += 1), unref() {} }),
       backgroundTaskIsProcessRunning: () => false,
       delivery: new OperatorDeliveryService(rootDir, {
         sendBrowserPush: async () => {},
@@ -950,8 +954,11 @@ describe("OperatorControlPlaneServer", () => {
     });
 
     const driftingRootDir = await makeTempDir();
+    let driftingMockPid = 20000;
     const driftingRuntime = new StandaloneOperatorRuntime({
       rootDir: driftingRootDir,
+      // Mock spawn so the launcher never races the explicit writeState() below.
+      backgroundTaskSpawnProcess: () => ({ pid: (driftingMockPid += 1), unref() {} }),
       backgroundTaskIsProcessRunning: () => false,
     });
     const driftingServer = new OperatorControlPlaneServer({ runtime: driftingRuntime });
@@ -1016,8 +1023,15 @@ describe("OperatorControlPlaneServer", () => {
     });
 
     const breakerRootDir = await makeTempDir();
+    // Deterministic launcher: never spawn a real process (which would race the
+    // explicit writeState() calls below by writing its own "running" state) and
+    // treat every pid as not running so each explicit running-state write is
+    // detected as a "missing-process" breaker failure exactly when the test
+    // triggers it.
+    let breakerPid = 90000;
     const breakerRuntime = new StandaloneOperatorRuntime({
       rootDir: breakerRootDir,
+      backgroundTaskSpawnProcess: () => ({ pid: (breakerPid += 1), unref() {} }),
       backgroundTaskIsProcessRunning: () => false,
     });
     const breakerServer = new OperatorControlPlaneServer({ runtime: breakerRuntime });

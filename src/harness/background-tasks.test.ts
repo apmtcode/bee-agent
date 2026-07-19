@@ -355,6 +355,65 @@ describe("FileBackgroundTaskStore", () => {
   });
 });
 
+async function waitForTerminalState(
+  store: FileBackgroundTaskStore,
+  taskId: string,
+  timeoutMs = 8000,
+): Promise<BackgroundTaskExecutionState> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const state = await store.getExecutionState(taskId);
+    if (state && state.status !== "running") {
+      return state;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  throw new Error(`task ${taskId} did not reach a terminal state within ${timeoutMs}ms`);
+}
+
+describe("BackgroundTaskExecutionService launch pipeline", () => {
+  // Regression: the launcher previously wrote the "running" state via a sed
+  // placeholder substitution that corrupted commands containing quotes/newlines
+  // into invalid JSON, which then crashed every subsequent readState(). The
+  // invariant these cases guard is that the persisted state is always valid JSON
+  // and the command round-trips byte-for-byte — regardless of the command's exit
+  // status, which is orthogonal to state serialization.
+  it.each([
+    ["single quotes + newline", "printf 'line-1\nline-2\n'"],
+    ["double quotes + apostrophe", `echo "it's a \\"quoted\\" run"`],
+    ["mixed quotes and newline", "printf 'a\nb'; echo \"it's ok\""],
+    ["dollars and backticks", "echo \"$HOME and `date`\""],
+  ])("persists valid, uncorrupted state JSON for %s", async (_label, command) => {
+    const rootDir = await makeTempDir();
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"));
+    const task = await store.start({ title: "quote task", command, cwd: rootDir });
+
+    // If the running-state write had produced invalid JSON, the terminal-state
+    // python writer (which json.loads() the running state) would crash and the
+    // task would never reach a terminal state — waitForTerminalState would throw.
+    const state = await waitForTerminalState(store, task.id);
+    expect(["completed", "failed"]).toContain(state.status);
+    // The command must round-trip exactly through the launcher's base64 payload.
+    expect(state.command).toBe(command);
+
+    // The persisted file itself must be parseable JSON, byte-for-byte.
+    const raw = await fs.readFile(path.join(rootDir, task.execution.stateFile), "utf8");
+    expect(() => JSON.parse(raw)).not.toThrow();
+    expect(JSON.parse(raw).command).toBe(command);
+  });
+
+  it("runs a plain command through to completion", async () => {
+    const rootDir = await makeTempDir();
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"));
+    const task = await store.start({ title: "plain", command: "printf done", cwd: rootDir });
+
+    const state = await waitForTerminalState(store, task.id);
+    expect(state.status).toBe("completed");
+    expect(state.exitCode).toBe(0);
+    await expect(store.executionService.readOutput(task)).resolves.toContain("done");
+  });
+});
+
 describe("BackgroundTaskExecutionService", () => {
   it("writes launch artifacts and reads task output", async () => {
     const rootDir = await makeTempDir();

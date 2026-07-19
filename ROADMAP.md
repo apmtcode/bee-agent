@@ -4,6 +4,23 @@ Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
 ## Foundations / DX
+- [x] **Restore a green test gate + fix the background-task launcher** (run 9,
+      2026-07-19). `npm test` was red 8/8 on a fresh checkout: `renderLaunchScript`
+      wrote the "running" execution state via a `sed` substitution whose shell
+      quoting broke on commands with quotes/newlines, emitting invalid JSON that
+      crashed `readState()`. Replaced with a base64 payload + python writer (and
+      base64'd the command for `bash -lc`); de-flaked 5 racy tests with a mock
+      spawn; added end-to-end regression tests. Now 30/30 green.
+- [ ] **No-op-spawn-by-default test runtime.** Many tests inject
+      `backgroundTaskIsProcessRunning: () => false` but keep the real `spawn`, so
+      the launcher races their explicit `writeState()` calls. Add an
+      `OperatorTestRuntime` factory (or shared helper) that defaults to a mock
+      spawn unless a test opts into real execution — kills this race class at the
+      source instead of per-test.
+- [ ] **Deterministic event ordering for gateway replay.** `gateway-transport`
+      replay-after-reconnect keys on `event.ts > lastSeenTs` at `Date.now()` (ms)
+      resolution, so same-millisecond events collide and flake under load. Switch
+      the ordering/cursor key to a monotonic per-session sequence number.
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`

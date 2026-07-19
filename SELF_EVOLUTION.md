@@ -6,6 +6,73 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-19 (run 9) — Fix background-task launcher state corruption + de-flake the test gate
+
+**Audited:** The build/test gate itself. On a fresh checkout `npm test` was **red
+8/8 runs** (2–4 failures each) — the prior run's "174/174" was recorded in a
+different environment. Root-caused the dominant failure: `readState()` threw
+`SyntaxError: Expected ',' or '}' in JSON` when reconciling background tasks.
+
+**Root cause (real latent bug in `src/harness/background-tasks.ts`):**
+`renderLaunchScript` wrote the initial "running" execution state by piping a
+pre-serialized JSON blob through `sed` to substitute `__OPENCLAW_STARTED_AT__`
+and `$$`. The JS template literal collapsed `\"`→`"`, which broke the `sed`
+argument's shell quoting; for any command containing single quotes or newlines
+(e.g. `printf 'line-1\nline-2\n'`) the emitted state file became **invalid JSON**
+(`"command":"printf "'line-1…`). Any subsequent `readState()` then threw, which
+in turn crashed the terminal-state python writer (it `json.loads()` the running
+state) — so the task hung and every reconcile/sync/recover path that touched it
+failed. Surfaced as environment-dependent flakiness because it depended on a
+race with when the real launcher wrote state.
+
+**Changed (additive, in `src/harness/background-tasks.ts`):**
+- Replaced the `sed` placeholder substitution with a **base64-encoded JSON
+  payload** decoded by a new `renderRunningStateWriterPython()` (python3 is
+  already a hard dependency of this script for the completed/failed writers).
+  base64 contains no shell-special characters, so the payload survives transport
+  no matter what the command contains, and the state is reconstructed with
+  `json.loads` → always valid JSON.
+- Also base64-encoded the **command itself** for `bash -lc "$(… | base64 -d)"`
+  so quotes, embedded newlines, `$`, and backticks in a command survive without
+  shell-quoting hazards (the old `bash -lc <shellQuote(cmd)>` mangled real
+  newlines → `unexpected EOF`). `shellQuote` is retained for the path args.
+
+**Test gate de-flaked (test-only, additive):** several tests injected
+`backgroundTaskIsProcessRunning: () => false` but used the **real** `spawn`, so
+the launcher script raced their explicit `writeState()` calls. Injected a
+deterministic **mock spawn** (returns a fake pid, launches nothing, writes no
+competing state) into the 5 offending runtimes: `server.test.ts` main lifecycle
+test + drifting-remote + platform-breaker sections, `operator-runtime.test.ts`
+background-tasks test, and `app.test.ts` main lifecycle test. To enable the app
+case, added optional `backgroundTaskSpawnProcess` / `backgroundTaskIsProcessRunning`
+seams to `OperatorCliAppOptions` (mirrors the existing `configHome` test seam;
+production behaviour unchanged when unset).
+
+**New regression tests (`background-tasks.test.ts`):** run the real launcher
+end-to-end for commands with single quotes, double quotes + apostrophes,
+embedded newlines, and `$`/backticks; assert the persisted state is always
+parseable JSON and the command round-trips byte-for-byte (the corruption guard),
+plus a plain-command case that asserts exit-0 completion + captured output. The
+prior tests all mocked `spawn`, so the launcher was never executed — which is
+exactly why the bug shipped.
+
+**Test results:** `npm test` went from **8/8 red (baseline)** → **30/30 green**
+across repeated runs (177→179 tests, +5 net new). `npm run build` ✅.
+`npm run typecheck:src` ✅ (exit 0). `typecheck:src` stayed clean — the fix is a
+source change to `background-tasks.ts` + an additive options seam in `app.ts`.
+
+**New idea:** the racy tests share one root cause — a real launcher spawned when
+the test only wants to exercise the state machine. Add a **test helper /
+default** so any runtime built for a unit test gets a no-op mock spawn unless it
+opts into real execution (e.g. an `OperatorTestRuntime` factory), eliminating
+this entire class of race at authoring time. Separately, the one non-spawn flake
+seen under heavy load — `gateway-transport.test.ts` event-replay — is a
+millisecond-timestamp collision (`event.ts > lastSeenTs` with `Date.now()`
+resolution); replacing the event ordering key with a **monotonic sequence
+number** would make replay-after-reconnect deterministic regardless of load.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
