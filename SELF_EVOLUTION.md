@@ -6,6 +6,67 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-19 (run 9) — Pluggable in-process movement-model backend (objective #2 c & d)
+
+**Audited:** The local-movement learning subsystem end-to-end (`src/capture/`,
+`src/training/`). Found the five objective pieces present *except* the last:
+capture → schema (`TrajectorySpan`) → dataset (`LocalTrainingExporter`) → replay
+manifest all exist, but **train/infer had no in-process implementation** — the
+runner (`src/training/runner.ts`) only builds shell commands to launch `mlx`/
+`axolotl`. Nothing could actually train a model and *replay*/*generalize*
+movements in the cloud, so objective #2 parts (c) "repeat recorded movements"
+and (d) "generalize to new but related movements" were untested and unreachable.
+
+**Changed (additive):** new `src/training/movement-model.ts` — the pluggable
+local-model seam the ROADMAP asked for:
+- **Tokenizer** `defaultMovementTokenizer` / `tokenizeTrajectory` /
+  `buildMovementDataset`: turn `TrajectorySpan` actions into ordered movement
+  tokens (prefers structured `metadata.gesture`, falls back to a summary slug so
+  semantically-equal movements collide → the basis for generalization). Wraps
+  each sequence in `<start>`/`<end>`.
+- **`MovementModelBackend` interface** + a deterministic, dependency-free
+  **`MarkovMovementBackend`** (order-k with back-off). Training on one trajectory
+  reproduces it exactly (replay, 2c); training on several that share
+  sub-sequences lets `generate` compose novel-but-valid continuations (2d). No
+  GPU/network/`Date`/`Math.random` → identical output every run, so cloud/CI is
+  green.
+- **Registry** `registerMovementBackend`/`createMovementBackend`/
+  `listMovementBackends` — the documented seam to drop in a real on-device small
+  model (MLX/GGUF LoRA) selected by id, nothing else changing.
+- **Serialize/`loadMovementModel`** — deterministic JSON snapshot for
+  persistence + reload-for-inference.
+- **`evaluateMovementModel`** — the generalization eval harness (ROADMAP item):
+  top-1 next-token accuracy on held-out samples + exact-sequence replay match.
+- Exported the whole surface from `src/index.ts`.
+
+**Test results:** new `movement-model.test.ts` — **12/12 passing** (tokenizer,
+replay-exactness, generalization/back-off, serialization round-trip, registry
+including the on-device seam, eval harness). `npm run typecheck:src` ✅ (exit 0,
+source stays clean). `npm run build` ✅.
+
+**Blocker (pre-existing, NOT from this change):** full `npm test` shows **3
+failing / 183 passing**. Verified by stashing my diff and re-running: the same 3
+fail on the clean tree (`operator-runtime.test.ts`, `server.test.ts`,
+`app.test.ts` — all the background-task lifecycle test). Root cause: those tests
+spawn **real `bash`/`date`/`python3` subprocesses** whose launch script writes a
+JSON state file that this sandbox mis-serializes (`SyntaxError: Expected ',' or
+'}'` in `readJsonFile` at `background-tasks.ts:234`). It is an environment/
+subprocess flake, orthogonal to the movement-model work (my 12 tests + the other
+171 pass). Because the failures are pre-existing and unrelated, and my change is
+purely additive and fully green, pushing to the designated feature branch. Fix
+queued in ROADMAP.
+
+**New idea:** now that movements are tokenized and a deterministic model can
+replay/generalize them, add a **closed-loop "replay executor" seam** — a
+`MovementExecutor` interface that maps predicted tokens back to
+`DeviceCaptureInput`-style gestures for a real driver (with a mock that records
+what it *would* dispatch), so capture → train → *act* becomes a full round-trip,
+still fully testable in the cloud via the mock. Also: harden the background-task
+launch-script JSON writer to be sandbox-agnostic (single-quote the sed
+replacement / write state via `python3 -c` instead of `sed`) to clear the flake.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

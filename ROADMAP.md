@@ -62,13 +62,39 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      for a real on-device small model — DONE run 9. `src/training/movement-model.ts`:
+      `MovementModelBackend` interface + deterministic order-k `MarkovMovementBackend`
+      + registry (`create/register/listMovementBackends`) + serialize/`loadMovementModel`.
+- [~] Synthetic event-stream generator to validate capture→dataset→replay
+      round-trips without real OS input. Partial (run 9): the movement-model test
+      has an inline `synthTrajectory` helper driving the full tokenize→train→replay
+      round-trip. Next: promote it to a reusable exported generator in
+      `src/capture/` that emits full `DeviceCaptureInput`/`TrajectorySpan` streams
+      (with observations + timing jitter) for broader tests.
+- [x] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories — DONE run 9 (`evaluateMovementModel`:
+      top-1 next-token accuracy + exact-sequence replay match).
+- [ ] **Closed-loop replay executor seam** (new, run 9): a `MovementExecutor`
+      interface that maps predicted movement tokens back to
+      `DeviceCaptureInput`-style gestures for a real driver, with a mock that
+      records what it *would* dispatch — so capture → train → *act* is a full
+      round-trip, still cloud-testable via the mock.
+- [ ] Wire the movement-model backend into the training runner/execution service
+      so a reviewed export can be trained+evaluated in-process (mock backend) as a
+      dry-run before emitting the on-device mlx/axolotl launch script.
+
+## Known blockers (fix to unlock a fully-green `npm test`)
+- [ ] **Background-task subprocess tests flake in the cloud sandbox** (found run
+      9): `operator-runtime.test.ts`, `server.test.ts`, `app.test.ts` share one
+      failing case that spawns real `bash`/`date`/`python3`; the launch script
+      writes a JSON state file this sandbox mis-serializes (`SyntaxError` in
+      `readJsonFile` at `background-tasks.ts:234`). Pre-existing (fails on clean
+      tree), env-specific. Fix: make the launch-script state writer
+      sandbox-agnostic — write state via `python3 -c`/heredoc instead of a `sed`
+      substitution over a quoted JSON blob, and single-quote replacements. Until
+      then, prior "174/174" green depends on the host environment.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
