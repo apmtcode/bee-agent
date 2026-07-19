@@ -8,6 +8,13 @@ unchecked items are queued. Keep this richer than you found it each run.
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`
       (2026-06-22).
+- [x] **Fix background-task launcher shell-quoting + make its tests hermetic**
+      (2026-07-19, run 9). Corrected `shellQuote`'s POSIX escape (`'"'"'`),
+      replaced the fragile `printf|sed` state writer with `printf`+`python3`, and
+      injected the `backgroundTaskSpawnProcess` seam through `OperatorCliApp` so
+      background-task tests no longer spawn real subprocesses that raced the
+      suite. Suite now deterministically green (175/175). Fixed a latent bug
+      where commands containing `'` executed wrong in production.
 - [ ] **Pay down typecheck debt** (surfaced by the `typecheck` script). Full
       `tsc --noEmit` count was **397** on 2026-06-22; now **125**. 🎯 ALL source
       (`src/**` non-test) files typecheck clean since run 7; remaining 125 errors
@@ -84,3 +91,9 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
       count to a baseline file and fail if a module regresses above it. Lets the
       engine pay debt down module-by-module without one green-gate blocking
       progress, and prevents backsliding while the total is still > 0.
+- [ ] **Test-hermeticity lint**: flag test files that construct
+      `StandaloneOperatorRuntime`/`OperatorCliApp` capable of spawning real
+      background subprocesses without injecting `backgroundTaskSpawnProcess`
+      (and/or that call `date`/`spawn`/network directly), so subprocess-race
+      flakiness is caught at authoring time instead of surfacing as
+      environment-specific red suites (as in run 9).

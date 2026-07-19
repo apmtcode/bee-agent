@@ -1,7 +1,11 @@
+import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
+
+const execFileAsync = promisify(execFile);
 import {
   BackgroundTaskExecutionService,
   FileBackgroundTaskStore,
@@ -369,5 +373,39 @@ describe("BackgroundTaskExecutionService", () => {
     await expect(fs.readFile(path.join(rootDir, task.execution.launchScript), "utf8")).resolves.toContain("bash -lc");
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
+  });
+
+  it("generates a launch script that writes valid state JSON for commands with quotes", async () => {
+    // Regression: a command containing single quotes used to corrupt the
+    // shell-quoted state payload (shellQuote emitted `"'"'"'` instead of the
+    // correct POSIX `'"'"'`), and a fragile printf|sed pipeline mangled it
+    // further, producing invalid JSON that crashed background-task recovery.
+    const rootDir = await makeTempDir();
+    // Single quotes, a double quote, and `$$` (the launcher's pid placeholder)
+    // are all present so the escaping and placeholder handling are exercised.
+    const command = `printf 'it'\\''s a "quoted" $$ test\n'`;
+    const store = new FileBackgroundTaskStore(
+      path.join(rootDir, "background-tasks.json"),
+      () => ({ pid: 1111, unref() {} }),
+    );
+    const task = await store.start({ title: "Quoted command", command, cwd: rootDir });
+
+    // Run the generated launcher for real (bash + python3, as production would).
+    await execFileAsync("bash", [path.join(rootDir, task.execution.launchScript)], { cwd: rootDir });
+
+    const raw = await fs.readFile(path.join(rootDir, task.execution.stateFile), "utf8");
+    const state = JSON.parse(raw) as BackgroundTaskExecutionState;
+    expect(state.status).toBe("completed");
+    expect(state.exitCode).toBe(0);
+    expect(typeof state.pid).toBe("number");
+    // The command round-trips through the shell exactly, un-mangled.
+    expect(state.command).toBe(command);
+    expect(state.taskId).toBe(task.id);
+
+    // The command actually ran: `$$` expands to a pid at runtime, so assert the
+    // quote-bearing literal parts survived rather than the volatile pid.
+    const output = await fs.readFile(path.join(rootDir, task.execution.outputFile), "utf8");
+    expect(output).toContain(`it's a "quoted"`);
+    expect(output).toContain("test");
   });
 });

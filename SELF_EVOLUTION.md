@@ -6,6 +6,65 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-19 (run 9) — Fix background-task launcher shell-quoting corruption + hermetic tests
+
+**Audited:** Repo health via `npm test`. Found the suite was **red in this
+environment**: 3–4 tests failing (the count varied run-to-run — a flakiness
+tell). The commit that added them recorded "174/174", so the failures were
+environment/timing-specific, not a claimed-green regression. Traced the root
+cause instead of papering over it.
+
+**Root cause (real correctness bug):** `renderLaunchScript` in
+`src/harness/background-tasks.ts` generates the `run.sh` a background task runs.
+Two defects corrupted the execution-state JSON it writes:
+1. **`shellQuote` emitted the wrong POSIX single-quote escape** — `"'"'"'`
+   (6 chars) instead of the correct `'"'"'` (5 chars). The stray leading `"`
+   leaked into the surrounding single-quoted span, so **any** value containing a
+   `'` was mangled — not just the JSON state payload but also
+   `bash -lc ${quotedCommand}` and `${quotedCwd}`. A background command with a
+   single quote (e.g. `printf 'x'`) would have executed wrong in production.
+2. A fragile `printf | sed "s/…/…/; s/\"\$\$\"/$$/"` pipeline post-processed the
+   payload to substitute the pid/timestamp; it left `"pid":"$$"` literal and
+   further mangled quoted commands, yielding invalid JSON that threw
+   `SyntaxError` in `readJsonFile` and **crashed background-task recovery**.
+
+**Changed (additive, `src/harness/background-tasks.ts`):**
+- Corrected the `shellQuote` escape sequence to `'"'"'`.
+- Replaced the `printf|sed` pipeline with `printf` (exact shell-quoted payload)
+  followed by a small `python3` patch (`renderInitialStateWriterPython`) that
+  fills in the live pid + timestamps — consistent with the completion-state
+  writers, which already require `python3`. No more sed, no placeholder strings.
+
+**Test hermeticity (root of the flakiness):** the failing tests started **real
+detached subprocesses** (`run.sh` via `spawn`) whose async state writes raced
+the tests' own deterministic `writeState`/assertions — and the shellQuote bug
+had been *hiding* it (the corrupted script never wrote valid state). Made them
+hermetic by injecting the existing `backgroundTaskSpawnProcess` seam (same
+philosophy as run 1's `configHome` fix): threaded it through
+`OperatorCliAppOptions` → `StandaloneOperatorRuntime`, and stubbed the launcher
+in `operator-runtime.test.ts`, `app.test.ts` (2 tests), and `server.test.ts`
+(3 runtimes) so no real subprocess runs. Each stub's `isProcessRunning` matches
+the test's intent (live vs. the sentinel dead-pid `999999`).
+
+**New regression test:** `background-tasks.test.ts` now executes a generated
+`run.sh` for real (bash + python3) with a command containing single quotes,
+double quotes, and `$$`, and asserts the resulting `state.json` is valid JSON
+with the command round-tripped un-mangled. Verified it **fails** against the old
+`shellQuote` and passes with the fix.
+
+**Test results:** `npm test` **175/175 passing** (was 170–171/174 with 3–4
+flaky failures). `npm run build` ✅. `npm run typecheck:src` ✅ (exit 0). Net:
+the suite is deterministically green here for the first time, and a latent
+command-execution corruption bug is fixed.
+
+**New idea (logged to ROADMAP):** A **test-hermeticity lint** — flag test files
+that construct `StandaloneOperatorRuntime`/`OperatorCliApp` which can spawn real
+background subprocesses without injecting `backgroundTaskSpawnProcess`, so
+subprocess-race flakiness is caught at authoring time rather than as
+environment-specific red suites.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
