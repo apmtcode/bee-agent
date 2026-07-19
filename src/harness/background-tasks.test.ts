@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -369,5 +370,43 @@ describe("BackgroundTaskExecutionService", () => {
     await expect(fs.readFile(path.join(rootDir, task.execution.launchScript), "utf8")).resolves.toContain("bash -lc");
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
+  });
+
+  it("launch script writes a valid initial state.json with a numeric pid", async () => {
+    // Regression: the initial state writer previously used a sed program to inject
+    // the shell pid ("$$"). Because `$` is a regex anchor and `$$` expansion inside
+    // a double-quoted sed script is environment-dependent, some shells emitted an
+    // unquoted `"pid":$$`, producing invalid JSON that broke state recovery. The
+    // writer now hands the payload to python via argv. Execute the real script and
+    // assert the resulting state file parses and carries a numeric pid.
+    const rootDir = await makeTempDir();
+    // Inject a no-op spawn so store.start() writes the launch artifacts without
+    // executing them; we run the real script ourselves and await it, avoiding a
+    // write race against the store's own (detached) launch.
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"), () => ({ pid: 4242, unref() {} }));
+    const task = await store.start({
+      title: "Emit state",
+      command: "printf 'ok\\n'",
+      cwd: rootDir,
+      kind: "task",
+    });
+
+    const scriptPath = path.join(rootDir, task.execution.launchScript);
+    const statePath = path.join(rootDir, task.execution.stateFile);
+    await new Promise<void>((resolve, reject) => {
+      // The launch script uses paths relative to the store root, so run it from
+      // there (mirroring BackgroundTaskExecutionService.launch's cwd).
+      const child = spawn("bash", [scriptPath], { cwd: rootDir, stdio: "ignore" });
+      child.on("error", reject);
+      child.on("exit", () => resolve());
+    });
+
+    const raw = await fs.readFile(statePath, "utf8");
+    const parsed = JSON.parse(raw) as { pid: unknown; taskId: unknown; startedAt: unknown };
+    expect(typeof parsed.pid).toBe("number");
+    expect(parsed.pid).toBeGreaterThan(0);
+    expect(parsed.taskId).toBe(task.id);
+    expect(typeof parsed.startedAt).toBe("string");
+    expect(parsed.startedAt).not.toBe("");
   });
 });

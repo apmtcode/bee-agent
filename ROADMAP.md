@@ -6,6 +6,17 @@ unchecked items are queued. Keep this richer than you found it each run.
 ## Foundations / DX
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
+- [x] **Fix launch-script state corruption** (2026-07-19, run 9). Fixed a real
+      `shellQuote` bug (`"'"'"'` → `'\''`) that produced invalid `state.json` for
+      any command with a single quote, and replaced the environment-fragile
+      sed-based pid injection with `printf`-to-file + `python3`. The vitest suite
+      was actually **RED (4 failing)** in the cloud sandbox; now **175 green** and
+      deterministic. Added a launch-script regression test + an injectable
+      background-task spawn seam on `OperatorCliApp`.
+- [ ] **`shellQuote` property test + consolidation**: fuzz values containing
+      `'"$`/spaces/newlines and assert `bash -c "printf %s <quoted>"` round-trips
+      byte-for-byte; then hoist `shellQuote` into `src/shared/` and reuse it
+      wherever shell strings are built (grep for other hand-rolled quoting).
 - [x] Make config loading hermetic in tests via an injectable `configHome`
       (2026-06-22).
 - [ ] **Pay down typecheck debt** (surfaced by the `typecheck` script). Full

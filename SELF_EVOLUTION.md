@@ -6,6 +6,63 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-19 (run 9) — 🐞 Real bug fix: `shellQuote` corruption + fragile launch-state writer (suite was RED in cloud)
+
+**Audited:** Started the required pre-flight (`npm install`/`build`/`test`) and
+found the suite **RED in this cloud sandbox: 4 failing tests** (not the 174/174
+the log claimed — that green was measured on a machine where the failures were
+masked). All four traced to the background-task launch pipeline
+(`src/harness/background-tasks.ts`).
+
+**Root causes found (two genuine, latent, cross-environment bugs):**
+1. **`shellQuote` was wrong.** It escaped an embedded single quote as `"'"'"'`
+   (6 chars) instead of the POSIX `'\''`/`'"'"'` (5). Verified empirically:
+   `shellQuote("a'b")` → `'a"'"'"'b'`, which bash evaluates to **`a"'b`** — a
+   spurious `"` injected for *every* single quote. Any task whose command, cwd,
+   or JSON payload contained a `'` (e.g. `printf 'ok'`) produced **invalid
+   `state.json`**, which then broke `readState`/recovery with a `SyntaxError`.
+2. **Fragile initial-state writer.** `renderLaunchScript` injected the shell pid
+   via `sed "s/…/$$/g"` — but `$` is a regex anchor and `$$` expansion inside a
+   double-quoted sed program is environment-dependent, so some shells emitted an
+   unquoted `"pid":$$`. Replaced the sed hack with the same robust pattern the
+   completion writers already use: `printf` the base JSON to the file, then a
+   tiny `python3` reads the file and patches `pid`/`startedAt`/`updatedAt` from
+   argv. No regex, no `$$`-quoting, no blob-through-argv.
+
+**Why the suite was "green" before:** the buggy `shellQuote` made the launch
+script fail early on *every* machine, so the real background execution was inert
+by breakage — and the logic tests (`operator-runtime`, `server`, `app`) drive
+state manually via `writeState`, so they passed *because* the script never ran.
+Fixing the script made it actually execute and race those tests (and one test
+spawned a real `tail -f` monitor → hang).
+
+**Changed:**
+- `src/harness/background-tasks.ts`: fixed `shellQuote`; replaced the sed-based
+  initial-state injection with `printf`-to-file + a `renderInitialStateWriterPython`
+  helper (mirrors `renderStateWriterPython`).
+- `src/cli/app.ts`: added an **injectable spawn seam** —
+  `OperatorCliAppOptions.backgroundTaskSpawnProcess` /
+  `backgroundTaskIsProcessRunning`, threaded into the runtime (both optional;
+  omitted ⇒ real spawn, production unchanged). A real testability improvement,
+  not just a test crutch.
+- Tests: `background-tasks.test.ts` gains a **new regression test** that executes
+  the real launch script and asserts `state.json` parses with a numeric pid;
+  `operator-runtime`/`server`/`app` tests inject an inert spawn so they drive
+  execution state deterministically instead of racing a real launch.
+
+**Test results:** **RED → GREEN: 174→175 passing** (41 files; +1 regression
+test), verified deterministic across repeated runs (previously-racy suites 2×
+clean). `npm run build` ✅. `npm run typecheck:src` ✅ (source still fully green).
+
+**New idea:** add a tiny **`shellQuote` property test** (fuzz values containing
+`'`, `"`, `$`, spaces, newlines; assert `bash -c "printf %s <quoted>"` round-trips
+byte-for-byte) so this class of shell-escaping bug is caught structurally rather
+than by an integration test that happens to exercise a quoted command. Longer
+term, factor `shellQuote` into `src/shared/` and reuse it wherever the codebase
+builds shell strings — grep for other hand-rolled quoting.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
