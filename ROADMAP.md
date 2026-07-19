@@ -62,15 +62,32 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      for a real on-device small model. **DONE run 9** — `MovementPolicyBackend`
+      seam + deterministic `MarkovMovementBackend` (order-k + backoff) in
+      `src/training/movement-policy.ts`; repeats recorded movements and
+      generalizes to novel contexts.
+- [x] Synthetic event-stream generator to validate capture→dataset→replay
+      round-trips without real OS input. **DONE run 9** —
+      `generateSyntheticMovementDataset` (seeded mulberry32) + `tokenizeTrajectory`
+      / `buildMovementDataset`.
+- [x] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories. **DONE run 9** — `evaluateMovementPolicy`
+      (next-token top-1/top-K accuracy, MRR, greedy-rollout perfect-replay rate).
+- [ ] Wire a `trajectories.trainPolicy` / `policies.predict` control-plane RPC
+      family so the movement model trains + queries through the typed `handle()`
+      surface, and have the exporter emit the tokenized `MovementDataset`
+      alongside the replay manifest for ready-to-consume local training.
+- [ ] Swap the Markov default for a real small on-device model (behind the same
+      `MovementPolicyBackend` seam) with a documented apple-silicon runtime.
 
 ## Innovation backlog
+- [ ] "No-real-spawn in tests" guard: any `new StandaloneOperatorRuntime` in a
+      `*.test.ts` that calls `startBackgroundTask` must inject
+      `backgroundTaskSpawnProcess`, or the test spawns real detached processes
+      that race manual state writes (root cause of run-9 flakiness). Catch at
+      authoring time instead of as intermittent CI failures.
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in
       project health over time.

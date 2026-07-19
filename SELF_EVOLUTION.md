@@ -6,6 +6,75 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-19 (run 9) — 🧠 In-process movement-policy learning + inference, and a real launch-script JSON bug fixed
+
+**Audited:** The local-movement learning subsystem (standing objective #2). The
+capture→trajectory→export→runner pipeline existed, but the runner only emits
+*external* Python training commands (mlx/axolotl launch scripts) — there was **no
+in-process model that actually learns from the dataset, repeats recorded
+movements, or generalizes**. Objective #2 (c)+(d) had zero runnable
+implementation.
+
+**Changed (additive) — new `src/training/movement-policy.ts` (+ 12 tests):**
+- **Pluggable backend seam** `MovementPolicyBackend` → `TrainedMovementPolicy`
+  (predictNext / rollout / toJSON). A real on-device small model drops in behind
+  this interface without touching call sites (test proves the seam with a second
+  trivial backend).
+- **Default `MarkovMovementBackend`** — deterministic order-k n-gram model with
+  stupid-backoff over movement tokens (START/END sentinels). Reproduces recorded
+  sequences exactly (**repeat**, objective #2c) and predicts plausible next moves
+  for *novel* contexts via backoff (**generalize**, objective #2d). No native
+  deps → runs in cloud/CI.
+- **`tokenizeTrajectory` / `buildMovementDataset`** — connect the capture data
+  model to learning; honor the reviewed/redacted view so training never sees
+  unreviewed data.
+- **`evaluateMovementPolicy`** — generalization eval harness: next-token top-1 /
+  top-K accuracy, mean-reciprocal-rank, and greedy-rollout perfect-replay rate on
+  held-out sequences.
+- **`generateSyntheticMovementDataset`** — seeded (mulberry32) synthetic
+  movement-stream generator so capture→dataset→train→replay→generalize is
+  validated without real OS input. Test trains on 45 synthetic sequences and
+  confirms held-out next-move accuracy well above chance.
+- Serialization round-trip (`toJSON`/`deserializeMovementPolicy`) so a trained
+  policy persists across runs. Exported via `src/index.ts`.
+
+**Real bug fixed (correctness/reliability):** the background-task **launch script
+wrote its initial `running` state via `printf … | sed "s/\"$$\"/$$/g"`**. The
+unescaped `"` inside the double-quoted sed expression broke shell quoting, so
+once a task command contained single quotes (e.g. `printf 'line-1\nline-2\n'`)
+the emitted `state.json` was **corrupted** (`"command":"printf "'…"'"`) and
+`"pid":"$$"` was never substituted. `readState` then threw
+`SyntaxError: … JSON at position 311`, cascading into control-plane
+"background-task missing-process" degradation. Diagnosed via a JSON.parse probe
+that dumped the malformed file. **Fix:** write the running state with a `python3`
+writer (matching the existing completed/failed writers) that takes the static
+payload + pid + timestamp as argv — no sed, no quote-breaking. Applied to both
+`src/harness/background-tasks.ts` and the identical latent pattern in
+`src/training/runner.ts`.
+
+**Test flakiness fixed:** three test runtimes spawned *real* detached processes
+whose own state writers raced the tests' manual `writeState`, so recovery /
+circuit-breaker `failureCount` assertions were non-deterministic (2 vs 3). Injected
+the existing `backgroundTaskSpawnProcess` no-op mock in
+`operator-runtime.test.ts` and the three background-task runtimes in
+`server.test.ts`.
+
+**Test results:** typecheck:src ✅ (source stays 0-error). Build ✅. **Full suite
+186/186**, and now **deterministic across 6 consecutive runs** (was flaky 1-of-186
+before; 3 pre-existing failures on a clean checkout were all the one JSON bug).
+Net +12 movement-policy tests; no behavior change to production capture/training
+data formats.
+
+**New idea:** now that a policy is learnable + serializable in-process, wire a
+`trajectories.trainPolicy` / `policies.predict` control-plane RPC family so the
+movement model can be trained and queried through the same typed `handle()`
+surface as everything else — and have the exporter emit the tokenized
+`MovementDataset` alongside the replay manifest so local training has a
+ready-to-consume file. Second idea: a "no-real-spawn in tests" lint/guard — any
+`new StandaloneOperatorRuntime` in a `*.test.ts` that calls `startBackgroundTask`
+must inject `backgroundTaskSpawnProcess`, caught at authoring time instead of as
+CI flake.
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
