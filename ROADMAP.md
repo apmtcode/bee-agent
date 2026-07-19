@@ -4,6 +4,18 @@ Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
 ## Foundations / DX
+- [x] **Green + deterministic test suite** (2026-07-19, run 9). Fixed a real
+      launch-script bug (`renderLaunchScript` wrote invalid, non-atomic state
+      JSON via `printf|sed`; now a `python3` atomic writer) that deterministically
+      corrupted background-task state files, plus a spawn-vs-manual-writeState
+      race in the `server`/`operator-runtime` tests. Suite: 4-failing/flaky →
+      **175/175 stable across 6 runs**. Forwarded `backgroundTaskSpawnProcess`/
+      `backgroundTaskIsProcessRunning` seams through `OperatorCliApp`.
+- [ ] Add a `verify` npm script and run `vitest run` **twice** in the engine's
+      pre-push self-check — flaky tests (like run 9's) survive a single green run.
+- [ ] "Spawn a real process" test lint: flag tests that combine
+      `startBackgroundTask` with manual `writeState` (the race signature fixed in
+      run 9) so the pattern is caught at authoring time.
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`

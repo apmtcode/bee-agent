@@ -528,9 +528,15 @@ describe("StandaloneOperatorRuntime", () => {
   });
 
   it("starts, syncs, recovers, lists, and cancels background tasks", async () => {
+    let fakePid = 4200;
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
       backgroundTaskIsProcessRunning: () => false,
+      // Use a deterministic no-op spawn: this test drives task state directly via
+      // writeState/writeOutput, so a real detached process would only race those
+      // manual writes. The launch path is still exercised (markStarted records the
+      // returned pid); we just don't let the child rewrite the state files.
+      backgroundTaskSpawnProcess: () => ({ pid: ++fakePid, unref() {} }),
     });
     const session = await runtime.startSession({ title: "Tasks", agentId: "main" });
 

@@ -6,6 +6,65 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-19 (run 9) — 🟢 Green + deterministic suite: fix launch-script JSON corruption bug
+
+**Audited:** Baseline test health. The suite was **not green** — 4 tests failed
+(`operator-runtime`, `server`, ×2 `app`) and full-suite runs varied between 3–4
+failures run to run. Root-caused two distinct problems:
+
+1. **Production reliability bug** in `src/harness/background-tasks.ts`
+   (`renderLaunchScript`). The background-task launch script wrote the initial
+   "running" state file via `printf '%s' <payload> | sed "…s/\"\$\$\"/\$\$/g" >
+   state.json`. Two defects:
+   - **Torn/invalid JSON.** The `sed`/shell quoting mangled the JSON `command`
+     field (e.g. `printf 'line-1\n…'` came out as `printf "'line-1\n…"'`),
+     producing an invalid state file — a *deterministic* `SyntaxError: Expected
+     ',' or '}'` when any reader (reconcile/sync/recover) parsed it. Instrumented
+     `readJsonFile` to dump the corrupt bytes and confirmed the exact corruption.
+   - **`pid` never substituted.** `s/"$$"/…/` treats `$` as a regex end-anchor,
+     so the `"pid":"$$"` placeholder was never replaced.
+   - **Non-atomic write.** `> state.json` truncates in place, so a concurrent
+     reader could catch a half-written file.
+
+2. **Test-isolation race.** The `server`/`operator-runtime` tests start real
+   detached child processes (`sleep 5`, `printf …`) but *also* drive task state
+   manually via `writeState`. The real child's async state write races those
+   manual writes — e.g. `breakerTaskThree`'s child wrote its "running" state
+   before the test drove it, inflating the circuit breaker's missing-process
+   `failureCount` from 2→3 (state `degraded`→`paused`) ~⅓ of runs.
+
+**Changed (additive, reversible):**
+- `src/harness/background-tasks.ts`: replaced the fragile `printf|sed` running-
+  state write with a `python3` writer (`renderRunningStateWriterPython`) that
+  injects pid/timestamps and writes **atomically** (`tmp` + `os.replace`),
+  mirroring the existing completed/failed writers. Also made those writers
+  atomic (`tmp` + `os.replace`).
+- `src/cli/app.ts`: forwarded two additive test/embedding seams
+  (`backgroundTaskSpawnProcess`, `backgroundTaskIsProcessRunning`) from
+  `OperatorCliAppOptions` through to the runtime — the same seams the runtime
+  already exposed, now reachable at the app layer. New test covers the forward.
+- Tests: injected a deterministic no-op spawn into the `sleep`-based
+  `server.test.ts` runtimes (main/drifting/breaker) and the
+  `operator-runtime.test.ts` background-task runtime, so state-driven assertions
+  can't be raced by a real child. (The `app.test.ts` background test keeps its
+  real `printf` child — it asserts on real output — and now passes because the
+  corruption is fixed.)
+
+**Test results:** full suite **175/175 passing, deterministic across 6 back-to-
+back runs** (baseline: 170–173/174, 3–4 flaky/failing). Added 1 test
+(`OperatorCliApp forwards injected background-task spawn seams`). Build ✅.
+`typecheck:src` ✅ (still clean).
+
+**New idea:** add a tiny `verify` npm script (`typecheck:src && build && test`)
+and, more importantly, run `vitest run --retry=0` **twice** in the engine's
+pre-push self-check to catch *flaky* (not just failing) tests before they land —
+this run's bugs were invisible to a single green run. Longer term: a
+`--sequence.seed`-pinned CI job + a "spawn a real process" lint that flags tests
+combining `startBackgroundTask` with manual `writeState` (the exact race
+signature fixed here) so the pattern is caught at authoring time.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

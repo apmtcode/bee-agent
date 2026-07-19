@@ -320,6 +320,37 @@ describe("parseSlashCommand", () => {
 });
 
 describe("OperatorCliApp", () => {
+  it("forwards injected background-task spawn seams to the runtime", async () => {
+    const rootDir = await makeTempDir();
+    const launched: string[] = [];
+    const app = new OperatorCliApp({
+      rootDir,
+      cwd: rootDir,
+      currentDate: "2026-05-25",
+      backgroundTaskSpawnProcess: (command) => {
+        launched.push(command);
+        return { pid: 5150, unref() {} };
+      },
+      backgroundTaskIsProcessRunning: () => false,
+    });
+    const session = await app.runtime.startSession({ title: "Spawn seam", cwd: rootDir, agentId: "operator-cli" });
+
+    const startOutput = await app.dispatchSlashCommand(
+      { kind: "background-start", title: "seam", command: "printf ok" },
+      session.id,
+    );
+    expect(startOutput).toContain("Started background task");
+    // The injected spawn ran in place of a real detached process.
+    expect(launched).toHaveLength(1);
+    expect(launched[0]).toContain("run.sh");
+
+    const [task] = await app.runtime.listBackgroundTasks(session.id);
+    if (!task) {
+      throw new Error("expected background task");
+    }
+    expect(task.execution.processId).toBe(5150);
+  });
+
   it("dispatches status and runtime-backed commands", async () => {
     const rootDir = await makeTempDir();
     const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
