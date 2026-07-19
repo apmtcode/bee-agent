@@ -138,6 +138,88 @@ export interface ControlPlaneResultMap {
   "teams.teammates.get": NonNullable<Awaited<ReturnType<StandaloneOperatorRuntime["getTeammate"]>>>;
   "teams.teammates.update": NonNullable<Awaited<ReturnType<StandaloneOperatorRuntime["updateTeammateStatus"]>>>;
   "teams.teammates.message": Awaited<ReturnType<StandaloneOperatorRuntime["sendTeammateMessage"]>>;
+  // --- Subagent orchestration ---
+  "subagents.register": Awaited<ReturnType<StandaloneOperatorRuntime["registerSubagent"]>>;
+  "subagents.spawn": Awaited<ReturnType<StandaloneOperatorRuntime["spawnSubagent"]>>;
+  "subagents.get": NonNullable<Awaited<ReturnType<StandaloneOperatorRuntime["getSubagent"]>>>;
+  "subagents.list": Awaited<ReturnType<StandaloneOperatorRuntime["listSubagents"]>>;
+  "subagents.active": Awaited<ReturnType<StandaloneOperatorRuntime["listActiveSubagents"]>>;
+  "subagents.update": NonNullable<Awaited<ReturnType<StandaloneOperatorRuntime["updateSubagentStatus"]>>>;
+  // --- Memory ---
+  "memory.recall": Awaited<ReturnType<StandaloneOperatorRuntime["recall"]>>;
+  // --- Skills (candidates, promotion, executable) ---
+  "skills.candidates.list": Awaited<ReturnType<StandaloneOperatorRuntime["listSkillCandidates"]>>;
+  "skills.candidates.review": NonNullable<Awaited<ReturnType<StandaloneOperatorRuntime["reviewSkillCandidate"]>>>;
+  "skills.promote": NonNullable<Awaited<ReturnType<StandaloneOperatorRuntime["promoteSkill"]>>>;
+  "skills.list": Awaited<ReturnType<StandaloneOperatorRuntime["listPromotedSkills"]>>;
+  "skills.executable.create": NonNullable<Awaited<ReturnType<StandaloneOperatorRuntime["createExecutableSkillFromPromoted"]>>>;
+  "skills.executable.list": Awaited<ReturnType<StandaloneOperatorRuntime["listExecutableSkills"]>>;
+  "skills.executable.run": NonNullable<Awaited<ReturnType<StandaloneOperatorRuntime["runExecutableSkill"]>>>;
+  "skills.executable.runs": Awaited<ReturnType<StandaloneOperatorRuntime["listExecutableSkillRuns"]>>;
+  // --- Background tasks ---
+  "background.tasks.start": Awaited<ReturnType<StandaloneOperatorRuntime["startBackgroundTask"]>>;
+  "background.tasks.get": NonNullable<Awaited<ReturnType<StandaloneOperatorRuntime["getBackgroundTask"]>>>;
+  "background.tasks.list": Awaited<ReturnType<StandaloneOperatorRuntime["listBackgroundTasks"]>>;
+  "background.tasks.active": NonNullable<Awaited<ReturnType<StandaloneOperatorRuntime["getActiveBackgroundTask"]>>>;
+  "background.tasks.sync": NonNullable<Awaited<ReturnType<StandaloneOperatorRuntime["syncBackgroundTask"]>>>;
+  "background.tasks.cancel": NonNullable<Awaited<ReturnType<StandaloneOperatorRuntime["cancelBackgroundTask"]>>>;
+  "background.tasks.state": NonNullable<Awaited<ReturnType<StandaloneOperatorRuntime["getBackgroundTaskExecutionState"]>>>;
+  "background.tasks.recover": NonNullable<Awaited<ReturnType<StandaloneOperatorRuntime["recoverBackgroundTask"]>>>;
+  "background.tasks.recoverAll": Awaited<ReturnType<StandaloneOperatorRuntime["recoverBackgroundTasks"]>>;
+  "background.tasks.output": NonNullable<Awaited<ReturnType<StandaloneOperatorRuntime["getBackgroundTaskOutput"]>>>;
+  // monitors.active returns a single monitor task selected from the list.
+  "monitors.active": NonNullable<Awaited<ReturnType<StandaloneOperatorRuntime["listBackgroundTasks"]>>[number]>;
+  // --- Training exports + jobs ---
+  "training.exports.create": Awaited<ReturnType<StandaloneOperatorRuntime["createReviewedExport"]>>;
+  "training.jobs.create": Awaited<ReturnType<StandaloneOperatorRuntime["createTrainingJob"]>>;
+  "training.jobs.get": NonNullable<Awaited<ReturnType<StandaloneOperatorRuntime["getTrainingJob"]>>>;
+  "training.jobs.list": Awaited<ReturnType<StandaloneOperatorRuntime["listTrainingJobs"]>>;
+  "training.jobs.update": NonNullable<Awaited<ReturnType<StandaloneOperatorRuntime["updateTrainingJobStatus"]>>>;
+  "training.jobs.prepare": NonNullable<Awaited<ReturnType<StandaloneOperatorRuntime["prepareTrainingJob"]>>>;
+  "training.jobs.start": NonNullable<Awaited<ReturnType<StandaloneOperatorRuntime["startTrainingJob"]>>>;
+  "training.jobs.complete": NonNullable<Awaited<ReturnType<StandaloneOperatorRuntime["completeTrainingJob"]>>>;
+  "training.jobs.fail": NonNullable<Awaited<ReturnType<StandaloneOperatorRuntime["failTrainingJob"]>>>;
+  "training.jobs.sync": NonNullable<Awaited<ReturnType<StandaloneOperatorRuntime["syncTrainingJob"]>>>;
+  "training.jobs.plan": NonNullable<Awaited<ReturnType<StandaloneOperatorRuntime["getTrainingJobPlan"]>>>;
+  "training.jobs.state": NonNullable<Awaited<ReturnType<StandaloneOperatorRuntime["getTrainingJobExecutionState"]>>>;
+  "training.jobs.log": NonNullable<Awaited<ReturnType<StandaloneOperatorRuntime["getTrainingJobLog"]>>>;
+  // training.jobs.script wraps the launch script in { jobId, script }.
+  "training.jobs.script": {
+    jobId: string;
+    script: NonNullable<Awaited<ReturnType<StandaloneOperatorRuntime["getTrainingJobLaunchScript"]>>>;
+  };
+  // --- Trajectories + replays (movement subsystem) ---
+  "trajectories.list": Awaited<ReturnType<StandaloneOperatorRuntime["listTrajectories"]>>;
+  "trajectories.review": NonNullable<Awaited<ReturnType<StandaloneOperatorRuntime["reviewTrajectory"]>>>;
+  "trajectories.reviewed": Awaited<ReturnType<StandaloneOperatorRuntime["listReviewedTrajectories"]>>;
+  "replays.get": NonNullable<Awaited<ReturnType<StandaloneOperatorRuntime["getReplay"]>>>;
+  "replays.list": Awaited<ReturnType<StandaloneOperatorRuntime["listReplays"]>>;
+  // --- Plugins ---
+  "plugins.register": Awaited<ReturnType<StandaloneOperatorRuntime["registerPlugin"]>>;
+  "plugins.get": NonNullable<Awaited<ReturnType<StandaloneOperatorRuntime["getPlugin"]>>>;
+  "plugins.list": Awaited<ReturnType<StandaloneOperatorRuntime["listPlugins"]>>;
+  "plugins.update": NonNullable<Awaited<ReturnType<StandaloneOperatorRuntime["updatePluginEnabled"]>>>;
+  "plugins.activate": { pluginId: string; activated: true };
+  // --- Capture (consents + adapters) ---
+  "capture.consents.create": Awaited<ReturnType<StandaloneOperatorRuntime["createCaptureConsent"]>>;
+  "capture.consents.list": Awaited<ReturnType<StandaloneOperatorRuntime["listActiveCaptureConsents"]>>;
+  "capture.consents.revoke": NonNullable<Awaited<ReturnType<StandaloneOperatorRuntime["revokeCaptureConsent"]>>>;
+  "capture.browser.record": Awaited<ReturnType<StandaloneOperatorRuntime["recordBrowserCapture"]>>;
+  "capture.device.record": Awaited<ReturnType<StandaloneOperatorRuntime["recordDeviceCapture"]>>;
+  "capture.os.observe": Awaited<ReturnType<StandaloneOperatorRuntime["recordOsObservation"]>>;
+  // --- Messages + runs (remaining) ---
+  "messages.get": NonNullable<Awaited<ReturnType<StandaloneOperatorRuntime["getMessage"]>>>;
+  "runs.active": NonNullable<Awaited<ReturnType<StandaloneOperatorRuntime["getActiveRun"]>>>;
+  "runs.update": NonNullable<Awaited<ReturnType<StandaloneOperatorRuntime["updateRunStatus"]>>>;
+  "runs.events": ReturnType<StandaloneOperatorRuntime["events"]["snapshot"]>;
+  // --- Notifications + browser push (composed / store-backed) ---
+  "notifications.send": Awaited<ReturnType<StandaloneOperatorRuntime["sendNotification"]>> &
+    ReturnType<typeof summarizeDeliveryResults>;
+  "push.test": Awaited<ReturnType<StandaloneOperatorRuntime["sendNotification"]>> &
+    ReturnType<typeof summarizeDeliveryResults>;
+  "push.subscriptions.create": Awaited<ReturnType<FilePushStore["upsertSubscription"]>>;
+  "push.subscriptions.list": Awaited<ReturnType<FilePushStore["listSubscriptions"]>>;
+  "push.subscriptions.delete": { deleted: Awaited<ReturnType<FilePushStore["deleteSubscription"]>> };
 }
 
 /** Resolve the typed result for a method, defaulting to `unknown` when unmapped. */

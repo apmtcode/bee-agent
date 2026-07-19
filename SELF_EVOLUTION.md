@@ -6,6 +6,60 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-19 (run 9) — Full RPC result map + fixed a real `shellQuote` corruption bug; typecheck 125→15, suite 174→177 all green
+
+**Audited:** The 125 remaining typecheck errors (all in test files) and, when the
+suite surfaced 3 *failing* tests on this environment, the background-task
+execution subsystem (`src/harness/background-tasks.ts`).
+
+**Changed:**
+1. **`src/control-plane/server.ts` — completed the `ControlPlaneResultMap`.**
+   Added the ~50 remaining runtime-backed RPC families (subagents, memory,
+   skills + executable skills, background.tasks, monitors.active, training
+   exports/jobs, trajectories, replays, plugins, capture consents/adapters,
+   messages.get, runs.active/update/events, notifications.send, push.*), all via
+   `Awaited<ReturnType<StandaloneOperatorRuntime[...]>>` / `NonNullable<>` /
+   composed shapes referencing the source of truth. **Every one of the 117
+   `handle()` switch cases is now typed — 0 unmapped.**
+2. **Fixed a genuine correctness bug in `shellQuote`** (`background-tasks.ts`).
+   The POSIX single-quote escape used the 6-char sequence `"'"'"'` (stray leading
+   `"`) instead of the correct 5-char `'"'"'`. Any background-task command
+   containing a single quote (e.g. `printf 'line-1\nline-2\n'`) was mangled,
+   producing **invalid JSON** in the launch-script-written state file → a hard
+   `SyntaxError` on the next `readState`. Verified the corrected escape round-trips
+   the command faithfully.
+3. **Made the launch script's state writes atomic** (temp file + `mv` / Python
+   `os.replace`), so a concurrent reader (recover/sync/getState) can never observe
+   a partially-written state file — defense-in-depth for the multi-task case.
+4. **Test hermeticity** (mirrors run 1's `configHome` fix): three background-task
+   tests used the *default real* spawner (only `isProcessRunning` was mocked), so
+   real child processes raced the tests' simulated state/output writes — the
+   source of the 3 environment-dependent failures. Added an optional
+   `backgroundTaskSpawnProcess` + `backgroundTaskIsProcessRunning` to
+   `OperatorCliAppOptions` (production default unchanged) and injected inert stubs
+   in the affected tests.
+5. **New guard: `result-map-coverage.test.ts`** (queued ROADMAP item). Scrapes
+   every `case "x.y":` from the switch and every `ControlPlaneResultMap` key from
+   the source, and fails if any dispatched method is unmapped (or the allow-list
+   goes stale). The allow-list is currently **empty** — locking in 100% coverage.
+
+**Test results:** full `tsc` **125 → 15** (the 15 residual are genuine test-only
+typings: `.result` access without an `ok` guard, a `WritableStream` mock shape,
+etc. — no longer any unmapped-RPC `{}` errors). `typecheck:src` still **0**.
+Build ✅. Tests ✅ **177/177** (was 171 pass / 3 fail on this env; +3 new
+coverage tests, 3 pre-existing failures fixed). Confirmed deterministic across
+repeated runs.
+
+**New idea:** the map is now complete, so the next lever is a **typed client
+facade** — `createControlPlaneClient(server)` exposing one inferred method per
+RPC (`client.cronList(params)`), making an unmapped method a *compile* error at
+the call site rather than a silent `unknown`. With coverage at 100% + the guard
+test, generating this facade from the map is now low-risk. Separately: the 15
+residual test typings are a tidy final sweep (add `ok`-guards / fix the stdout
+mock) to reach a fully-green `tsc`.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

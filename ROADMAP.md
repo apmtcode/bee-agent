@@ -25,19 +25,24 @@ unchecked items are queued. Keep this richer than you found it each run.
     status), fixed a real delivery-target bug (`formatDeliveryTargetLabel` covers
     `browser-push`, not just local/webhook), and loosened the status-line
     controller's `stdout` to `NodeJS.WritableStream`.
-  - [ ] Map-coverage test: assert every `case "x.y":` in `handle`'s switch has a
-    `ControlPlaneResultMap` entry or is explicitly allow-listed as `unknown`, so
-    new untyped RPC methods are caught instead of silently `unknown`.
+  - [x] Map-coverage test — DONE run 9 (`result-map-coverage.test.ts`). Scrapes
+    every switch `case` + every `ControlPlaneResultMap` key from source; fails on
+    any unmapped method or stale allow-list entry. Allow-list is **empty** (100%
+    coverage).
 - [ ] Typed client facade `createControlPlaneClient(server)`: one method per
     mapped RPC with inferred params/results, so call sites read
     `client.cronList()` and unmapped methods are a compile error, not `unknown`.
-  - [~] Test files: `server.test.ts` (234→118), `app.test.ts` (41→1),
-    `gateway-transport.test.ts` (4), `session-stream.test.ts` (1),
-    `status-line.test.ts` (1). Most cleared by extending the result map (runs
-    5–8). Remaining server.test.ts errors trace to still-unmapped methods —
-    `skills.executable.*`, `push.subscriptions.*`, `trajectories.*`, `replays.*`,
-    `cron.runs`/misc — plus a few genuine test-only typings. Map the rest, then
-    fix residual test-only typings.
+    Now low-risk: the map is complete (run 9) and the coverage guard prevents
+    drift, so the facade can be generated directly from `ControlPlaneResultMap`.
+  - [x] Result map now covers **all 117** dispatched methods (run 9 mapped the
+    final ~50: subagents, skills, background.tasks, training, trajectories,
+    replays, plugins, capture, push.*, notifications, memory, runs.*).
+  - [ ] Residual 15 test-only typings (no longer unmapped-RPC related): 6×
+    `server.test.ts` `.result` access without an `ok`-guard (~L1040–1056), 2×
+    `run` possibly-undefined (~L1891), `status-line.test.ts` `WritableStream`
+    mock shape (L165), `app.test.ts` `run.metadata` (L729), `gateway-transport`
+    `unknown`/`event.ts` (4), `session-stream` `runId` shape (1). Small final
+    sweep to a fully-green `tsc`.
 - [ ] Add a `verify` npm script (`typecheck && build && test`) and have the
       engine run it as a pre-push self-check each cycle.
 - [x] Interim **source-only typecheck gate** — DONE run 7. `tsconfig.src.json`
@@ -69,6 +74,23 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
       round-trips without real OS input.
 - [ ] Generalization eval harness: measure replay fidelity on held-out but
       related synthetic trajectories.
+
+## Reliability / correctness (background-task subsystem)
+- [x] Fix `shellQuote` POSIX single-quote escaping (`"'"'"'` → `'"'"'`) — DONE
+      run 9. Was corrupting the launch-script state JSON for any command
+      containing a single quote.
+- [x] Make launch-script state writes atomic (temp + rename / `os.replace`) —
+      DONE run 9, so concurrent readers never see a torn state file.
+- [ ] **Launch-script fuzz test**: render + execute the launch script for a
+      matrix of adversarial commands (single/double quotes, `$`, backticks,
+      newlines, `%`, unicode) and assert the resulting state file always parses
+      and round-trips `command`/`cwd` faithfully. Would have caught the run-9
+      `shellQuote` bug directly.
+- [ ] Fix the `$$` PID substitution in the initial running-state write: the sed
+      `s/"$$"/$$/` treats `$` as a regex EOL anchor and never matches, so the
+      initial state records `"pid":"$$"` (a string) instead of the numeric PID.
+      Harmless today (reconcile re-derives liveness) but a latent correctness gap
+      — move the initial write to the same Python writer used on exit.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
