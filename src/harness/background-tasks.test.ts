@@ -370,4 +370,21 @@ describe("BackgroundTaskExecutionService", () => {
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
   });
+
+  it("renders a launch script that writes execution state atomically (temp file + rename)", async () => {
+    const rootDir = await makeTempDir();
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"), () => ({ pid: 2222, unref() {} }));
+    const task = await store.start({ title: "Atomic", command: "printf 'ok'", cwd: rootDir });
+
+    const script = await fs.readFile(path.join(rootDir, task.execution.launchScript), "utf8");
+    const quotedStatePath = script.match(/state_tmp=('[^']*state\.json')\.tmp\.\$\$/)?.[1];
+    expect(quotedStatePath, "launch script should stage state via a sibling temp file").toBeTruthy();
+    // Initial "running" state is renamed into place, never redirected directly.
+    expect(script).toContain(`mv -f "$state_tmp" ${quotedStatePath}`);
+    expect(script).not.toMatch(/> '[^']*state\.json'\s*$/m);
+    // Terminal state (python writer) uses os.replace() via Path.replace, not a
+    // truncating write_text on the live file.
+    expect(script).toContain("tmp_path.replace(state_path)");
+    expect(script).not.toContain("state_path.write_text");
+  });
 });

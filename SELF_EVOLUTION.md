@@ -6,6 +6,63 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-19 (run 9) — Atomic background-task state writes + deterministic launch seam (green suite restored)
+
+**Audited:** The live test suite health. On checkout the suite was **flaky**:
+4→3→1 tests failing across consecutive `npm test` runs (previous run logged
+174/174). Traced all failures to one root cause: three tests
+(`operator-runtime`, `control-plane/server`, `cli/app`) spawn **real** OS
+subprocesses for background tasks, and the spawned launch script writes the
+task's `state.json` **asynchronously and non-atomically**, racing the
+sync/health-check reads under test. Symptoms:
+- `operator-runtime`: torn-read `SyntaxError: Expected ',' or '}'` — the shell
+  `printf > state.json` (truncate+write) and the python completion writer
+  (`state_path.write_text`, also truncate+write) overlap a concurrent `readState`.
+- `server` + `app` remote-status: a just-spawned `sleep 5` task writes a
+  `running` state that the health diagnostic reads (`isProcessRunning:()=>false`)
+  and reports as `background task missing-process` → `control=degraded` instead
+  of `active`. Whether it fired depended purely on subprocess startup speed.
+- `app` monitor block: real `printf` exits before `monitor-stop`, flaking as
+  "background task is not running".
+
+**Changed:**
+1. **Reliability (product) — atomic state writes** in `src/harness/background-tasks.ts`
+   `renderLaunchScript`/`renderStateWriterPython`: the initial `running` state is
+   now staged to `<state>.tmp.$$` and `mv -f`'d into place; the terminal
+   (completed/failed) state is written via a sibling temp file + `Path.replace()`
+   (`os.replace`, atomic on the same fs). A concurrent reader can no longer
+   observe a half-written state file — this was a real crash risk in production
+   `syncBackgroundTask`/`getBackgroundTaskExecutionState`, not just a test issue.
+2. **Testability seam (product)** — `OperatorCliApp` now accepts optional
+   `backgroundTaskSpawnProcess` / `backgroundTaskIsProcessRunning`, forwarded to
+   the runtime, so callers/tests can inject deterministic launch/probe stand-ins
+   (matching the seam the runtime already exposed).
+3. **Deterministic tests** — the three flaky tests now inject the established
+   mock-spawn pattern (`() => ({ pid, unref(){} })`) already used by
+   `background-tasks.test.ts`, so unit tests never depend on real subprocess
+   timing. The `app` monitor test additionally drives the background task's
+   output/state explicitly (mirroring its own monitor block).
+4. **Regression guard** — new `background-tasks.test.ts` case asserts the rendered
+   launch script stages state via a temp file + rename and uses `Path.replace`
+   (never a bare `> state.json` / `write_text` on the live file).
+
+**Test results:** `npm test` **175/175 passed, 5×/5 consecutive runs, zero flakes**
+(was 174 flaky → now 175 stable, +1 new guard test). `npm run build` ✅.
+`npm run typecheck:src` ✅ (source stays green). Full `tsc` debt unchanged at
+**125** (all in test files; this run added no new type errors).
+
+**New idea:** Add a **unit-test hygiene guard** — a tiny test (or lint) that
+scans `src/**/*.test.ts` for real `spawn(`/`child_process` usage or `command:`
+values that shell out, and fails unless the enclosing runtime/app is constructed
+with an injected `backgroundTaskSpawnProcess`. This mechanically prevents the
+"real subprocess in a unit test" class of flake from recurring. Companion idea:
+audit the codebase for any remaining **non-atomic structured writes** (grep for
+`writeFile`/`write_text`/`> *.json`) and route them all through the existing
+`writeJsonAtomic` helper (or its shell equivalent), since the launch script was
+the only structured writer still bypassing it.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

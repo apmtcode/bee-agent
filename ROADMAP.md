@@ -4,6 +4,22 @@ Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
 ## Foundations / DX
+- [x] **Restore a deterministic green test suite** (2026-07-19, run 9). The suite
+      was flaking 1–4 failures/run because three tests spawned real OS
+      subprocesses whose non-atomic `state.json` writes raced the reads under
+      test. Fixed by (a) making the launch script's state writes atomic
+      (temp+rename / `Path.replace`), (b) exposing a `backgroundTaskSpawnProcess`
+      seam on `OperatorCliApp`, and (c) injecting the mock-spawn pattern into the
+      flaky tests. Now 175/175 stable across 5 consecutive runs.
+- [ ] **Unit-test hygiene guard**: a test/lint that fails if a `*.test.ts`
+      constructs a runtime/app that shells out for real without an injected
+      `backgroundTaskSpawnProcess`. Prevents the "real subprocess in a unit test"
+      flake class from recurring (added run 9).
+- [ ] **Atomic-write audit**: grep the tree for non-atomic structured writes
+      (`writeFile`/`write_text`/`> *.json`) and route them through
+      `writeJsonAtomic` (or the shell temp+rename equivalent). The launch script
+      was the last structured writer bypassing it (fixed run 9); confirm nothing
+      else does.
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`
