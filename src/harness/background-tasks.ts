@@ -794,5 +794,11 @@ function renderStateWriterPython(status: BackgroundTaskExecutionState["status"])
 }
 
 function shellQuote(value: string): string {
-  return `'${value.replaceAll(`'`, `"'"'"'`)}'`;
+  // Escape single quotes for POSIX shells: close the quote, emit a
+  // double-quoted single quote, then reopen the quote (`'"'"'`). The prior
+  // sequence (`"'"'"'`) added a stray leading double quote, so any value
+  // containing a `'` (e.g. a command like `printf 'x'`) round-tripped to
+  // corrupt bytes — which broke the running-state JSON payload and produced
+  // unparseable state.json files.
+  return `'${value.replaceAll(`'`, `'"'"'`)}'`;
 }

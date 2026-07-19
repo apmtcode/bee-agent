@@ -4,6 +4,21 @@ Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
 ## Foundations / DX
+- [x] **Fix `shellQuote` single-quote corruption** (2026-07-19, run 9). It
+      escaped `'` with `"'"'"'` (stray leading `"`) instead of `'"'"'`, so any
+      background-task command/cwd containing a `'` produced invalid `state.json`
+      and executed the wrong command. Fixed + real-launch regression test added.
+- [x] **Make the test suite deterministic under cloud load** (2026-07-19, run 9).
+      Real background-task subprocesses raced the assertions (4 tests failing in
+      the sandbox). Added an optional spawn/isProcessRunning passthrough to
+      `OperatorCliAppOptions` and injected no-op spawns into the affected tests.
+- [ ] **Replace `printf|sed`-built running-state JSON with a Python-heredoc
+      writer** (run 9 idea). `renderLaunchScript` builds the running state by
+      sed-substituting placeholders into a shell-quoted JSON blob — the exact
+      fragility that produced the `shellQuote` bug. The completed/failed paths
+      already use a robust `python3` heredoc (`json.dumps`); do the same for the
+      running state, passing `pid`/`started_at`/`command` as argv. Removes shell
+      quoting of JSON entirely.
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`

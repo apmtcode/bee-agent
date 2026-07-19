@@ -84,6 +84,10 @@ describe("OperatorControlPlaneServer", () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir,
       backgroundTaskIsProcessRunning: () => false,
+      // No-op spawn keeps the background task a pure store record: without a
+      // real shell writing a "running" state file, remote diagnostics stay
+      // deterministic (active/running) instead of racing a detached process.
+      backgroundTaskSpawnProcess: () => ({ pid: 424242, unref() {} }),
       delivery: new OperatorDeliveryService(rootDir, {
         sendBrowserPush: async () => {},
       }),
@@ -953,6 +957,9 @@ describe("OperatorControlPlaneServer", () => {
     const driftingRuntime = new StandaloneOperatorRuntime({
       rootDir: driftingRootDir,
       backgroundTaskIsProcessRunning: () => false,
+      // No-op spawn so the manually written "running" state governs the
+      // diagnostic deterministically instead of racing a real detached shell.
+      backgroundTaskSpawnProcess: () => ({ pid: 424242, unref() {} }),
     });
     const driftingServer = new OperatorControlPlaneServer({ runtime: driftingRuntime });
     const driftingBootstrap = await driftingServer.handle({
@@ -1019,6 +1026,9 @@ describe("OperatorControlPlaneServer", () => {
     const breakerRuntime = new StandaloneOperatorRuntime({
       rootDir: breakerRootDir,
       backgroundTaskIsProcessRunning: () => false,
+      // No-op spawn: each breaker task's degraded state is driven by an explicit
+      // writeState below; a real shell would write competing states and race.
+      backgroundTaskSpawnProcess: () => ({ pid: 424242, unref() {} }),
     });
     const breakerServer = new OperatorControlPlaneServer({ runtime: breakerRuntime });
     const breakerOne = await breakerServer.handle({

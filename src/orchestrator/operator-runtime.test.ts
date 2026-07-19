@@ -531,6 +531,9 @@ describe("StandaloneOperatorRuntime", () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
       backgroundTaskIsProcessRunning: () => false,
+      // No-op spawn: the assertions below drive state transitions by writing
+      // state files explicitly, so a real detached shell would only race them.
+      backgroundTaskSpawnProcess: () => ({ pid: 424242, unref() {} }),
     });
     const session = await runtime.startSession({ title: "Tasks", agentId: "main" });
 
@@ -637,6 +640,46 @@ describe("StandaloneOperatorRuntime", () => {
     } finally {
       process.kill = originalKill;
     }
+  });
+
+  it("preserves shell-quoted commands through the real launch script", async () => {
+    // Regression: shellQuote() escaped each single quote with a stray leading
+    // double quote (`"'"'"'` instead of `'"'"'`), so any command containing a
+    // `'` corrupted the running-state JSON payload — state.json became
+    // unparseable and the command executed wrong. Drive the REAL launch script
+    // (bash + python) end to end with a single-quote-bearing command.
+    const runtime = new StandaloneOperatorRuntime({ rootDir: await makeTempDir() });
+    const session = await runtime.startSession({ title: "Quoting", agentId: "main" });
+    const command = "printf 'quoted-value\\n'";
+    const task = await runtime.startBackgroundTask({
+      sessionId: session.id,
+      title: "Quoted command",
+      command,
+      kind: "task",
+    });
+
+    // Wait (bounded) for the detached shell to write its terminal state. Read
+    // the raw state file the launch script produces — NOT sync(), which would
+    // reconcile the near-instant process to "failed" before bash writes the
+    // completed state. Under the old bug this readState() would THROW on the
+    // corrupt JSON, which is itself the regression signal.
+    const service = runtime.backgroundTasks.executionService;
+    let state = await service.readState(task);
+    for (
+      let attempt = 0;
+      attempt < 150 && state?.status !== "completed" && state?.status !== "failed";
+      attempt += 1
+    ) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      state = await service.readState(task);
+    }
+
+    expect(state?.status).toBe("completed");
+    // The command must round-trip byte-for-byte — the corruption mangled quotes.
+    expect(state?.command).toBe(command);
+    expect(state?.exitCode).toBe(0);
+    const output = await runtime.getBackgroundTaskOutput(task.id, 20);
+    expect(output?.output).toContain("quoted-value");
   });
 
   it("tracks runs and subagents", async () => {

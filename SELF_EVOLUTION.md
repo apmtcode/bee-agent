@@ -6,6 +6,61 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-19 (run 9) — Real bug: `shellQuote` corrupted quoted background-task commands; suite made deterministic
+
+**Audited:** Repo health at HEAD. `npm test` was **not green** in this cloud
+sandbox — **4 tests failing** (the prior run recorded 174/174, so this was an
+environment-exposed regression, not test authoring). All failures traced through
+`readJsonFile → BackgroundTaskExecutionService.readState`: a background task's
+`state.json` was **unparseable JSON**.
+
+**Root cause (genuine production bug in `src/harness/background-tasks.ts`):**
+`shellQuote()` escaped each single quote with `"'"'"'` (a stray *leading* double
+quote) instead of the correct POSIX sequence `'"'"'`. Verified by round-tripping
+through a real shell: `printf 'line-1\nline-2\n'` came back as
+`printf "'line-1\nline-2\n"'` — corrupt bytes. Because the launch script builds
+the running-state JSON by `printf ... | sed` over a **shellQuote'd JSON payload**,
+any task whose `command` (or `cwd`) contained a `'` produced invalid `state.json`
+(and also left `"pid":"$$"` unsubstituted) and executed the wrong command. This
+affects **every** real background/monitor task with a quoted command — a broad,
+silent correctness bug.
+
+**Changed:**
+- **Fix (1 line + comment):** `shellQuote` now emits `'"'"'`. Verified the fix
+  round-trips byte-for-byte and that the resulting `state.json` is valid JSON with
+  a numeric `pid` and an intact `command`.
+- **New deterministic regression test** (`operator-runtime.test.ts`,
+  *"preserves shell-quoted commands through the real launch script"*): drives the
+  **real** bash+python launch script with a single-quote command and asserts the
+  raw `state.json` parses, `state.command` round-trips exactly, `exitCode === 0`,
+  and output is correct. Polls `readState()` directly (not `sync()`, which would
+  reconcile the near-instant process to `failed` before bash writes `completed`).
+- **Suite hardened against real-subprocess races (test-only):** added an optional
+  `backgroundTaskSpawnProcess` / `backgroundTaskIsProcessRunning` passthrough to
+  `OperatorCliAppOptions` (additive; production unchanged) and injected a **no-op
+  spawn** into the 3 remaining flaky tests (`operator-runtime`'s background-task
+  test, `server.test`'s orchestration test incl. its drifting/breaker runtimes,
+  and `app.test`'s session-lifecycle + background/monitor tests). Without a real
+  detached shell writing competing state, remote-control diagnostics
+  (`active`/`degraded`/`mixed`) and recover transitions are deterministic — the
+  tests were relying on subprocess timing that doesn't hold under cloud load.
+
+**Test results:** `npm test` **175/175 passing** (was 4 failing; +1 new test),
+**deterministic** across repeated full-suite and heavy-trio runs. Build ✅.
+`typecheck:src` ✅ (source stays green). Full `tsc` unchanged at **125** (all in
+test files; new test code typechecks clean).
+
+**New idea:** the `printf|sed`-builds-JSON approach in `renderLaunchScript` is
+inherently fragile (it already needed the `"$$"`/`__OPENCLAW_STARTED_AT__`
+placeholder sed dance). Replace the running-state write with the same
+**Python-heredoc** writer the completed/failed paths already use — pass `pid`,
+`started_at`, `command` as argv and `json.dumps` them — eliminating shell-quoting
+of JSON entirely. Bigger: add a `verify` script (`typecheck:src && build && test`)
+and have the engine run it as the per-run pre-push gate so a red suite is caught
+before push, not after.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
