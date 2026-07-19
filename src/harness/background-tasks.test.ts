@@ -370,4 +370,33 @@ describe("BackgroundTaskExecutionService", () => {
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
   });
+
+  // Commands that broke the old shellQuote (single quotes transposed) and the
+  // old printf+sed state writer (unescaped quotes/backslashes): each must both
+  // run correctly (exit 0) and be persisted as valid, round-trippable JSON.
+  it.each([
+    ["single-quoted", `printf 'hello world'`],
+    ["embedded double quote + backslash", `printf 'a"b\\nc'`],
+    ["mixed quotes", `sh -c 'echo "it'"'"'s fine"'`],
+  ])("launch script runs and persists valid JSON state for a %s command", async (_label, command) => {
+    const { spawn } = await import("node:child_process");
+    const rootDir = await makeTempDir();
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"), () => ({ pid: 1111, unref() {} }));
+    const task = await store.start({ title: "Tricky", command, cwd: rootDir });
+    const service = new BackgroundTaskExecutionService(rootDir);
+
+    const scriptPath = path.join(rootDir, task.execution.launchScript);
+    await new Promise<void>((resolve, reject) => {
+      const child = spawn("bash", [scriptPath], { cwd: rootDir, stdio: "ignore" });
+      child.on("error", reject);
+      child.on("close", () => resolve());
+    });
+
+    // If the initial "running" state had been invalid JSON, the completion
+    // writer's json.loads() would have crashed and no completed state written.
+    // exitCode 0 confirms the command itself reconstructed correctly in bash.
+    const state = await service.readState(task);
+    expect(state).toMatchObject({ status: "completed", command, exitCode: 0 });
+    expect(typeof state?.pid).toBe("number");
+  });
 });

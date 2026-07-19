@@ -70,7 +70,20 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Generalization eval harness: measure replay fidelity on held-out but
       related synthetic trajectories.
 
+## Reliability (regressions found by running the suite)
+- [x] Fix `shellQuote` (transposed POSIX single-quote escape) and the
+      background-task launch-script initial-state writer (printf+sed → Python
+      `json.dumps`, per-field argv). Restored a red suite to green — run 9.
+- [ ] Audit every other shell-emitting code path (cron launch scripts, any
+      `spawn`/heredoc generation) for the same shell-escaping class of bug now
+      that `shellQuote` is the vetted primitive; route them all through it.
+
 ## Innovation backlog
+- [ ] **Shell-quote round-trip fuzz test**: generate random strings (quotes,
+      backslashes, newlines, `$`, spaces, unicode) and assert
+      `bash -c "printf %s <shellQuote(s)>" === s`. Property-based invariant that
+      catches shell-escaping regressions example tests miss; reusable for any
+      future shell-emitting code. (Idea from run 9.)
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in
       project health over time.

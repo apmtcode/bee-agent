@@ -6,6 +6,48 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-19 (run 9) — Reliability: fix `shellQuote` + background-task launch-state corruption
+
+**Audited:** Project health. `npm test` was **failing** (flaky 2–4 failures per
+full run; deterministic 1 failure in `operator-runtime.test.ts` in isolation) —
+run 8's "174/174" no longer held. Root-caused the failures instead of adding
+new surface.
+
+**Root cause (two nested bugs in `src/harness/background-tasks.ts`):**
+1. **`shellQuote` was broken for any value containing a single quote.** Its
+   escape replacement was `"'"'"'` (double/single quotes transposed) instead of
+   the correct POSIX `'"'"'`. So a command like `printf 'line-1\nline-2\n'`
+   reconstructed in bash as a *different* string — mis-running the command and
+   writing a malformed launch-script `state.json`. Commands without single
+   quotes (`tail -f app.log`) were unaffected, which is why it slipped through.
+2. **The initial-state writer used `printf '%s' <json> | sed`.** It passed
+   pre-serialized JSON through the shell (double-unescaping quotes/backslashes)
+   and its pid substitution `sed "s/\"$$\"/.../"` used an unescaped `$`
+   end-of-line anchor that never matched, leaving a literal `"$$"` pid. Reading
+   that file (`readJsonFile`) threw `SyntaxError`, failing task recovery.
+
+**Changed (additive, `src/harness/background-tasks.ts`):**
+- Fixed `shellQuote`'s replacement to `'"'"'` (verified round-trip through real
+  bash for single/double/mixed-quote values).
+- Rewrote the initial "running" state writer to use Python's `json.dumps`,
+  consistent with the existing completion writer. Each field (taskId, kind,
+  outputFile, cwd, command) is passed as a **separate shell-quoted argv value** —
+  no JSON ever crosses the shell — so `json.dumps` performs all JSON escaping and
+  pid is always a real integer.
+
+**Tests:** added a parametrized regression in `background-tasks.test.ts` that
+*actually spawns* the launch script for single-quoted, double-quote+backslash,
+and mixed-quote commands, and asserts each runs (exit 0) and persists valid,
+round-trippable JSON. Full suite **177/177**, green and stable across repeated
+runs (was flaky before). Build ✅. `typecheck:src` clean ✅.
+
+**New idea:** add a tiny **property/fuzz test for `shellQuote`** — generate
+random strings (quotes, backslashes, newlines, `$`, spaces) and assert
+`bash -c "printf %s <shellQuote(s)>" === s`. Round-trip invariants like this
+catch a whole class of shell-escaping regressions that example-based tests miss,
+and the same harness can guard any future shell-emitting code (e.g. cron launch
+scripts). Queued in ROADMAP innovation backlog.
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
