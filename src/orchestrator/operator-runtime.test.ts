@@ -15,6 +15,15 @@ async function makeTempDir(): Promise<string> {
   return dir;
 }
 
+// Deterministic spawn stub: hands back a synthetic pid without launching a real
+// detached OS process. Tests that drive background-task state manually must not
+// race a real process that writes its own state file concurrently.
+let stubbedPid = 100000;
+function stubBackgroundSpawn(): { pid: number; unref(): void } {
+  stubbedPid += 1;
+  return { pid: stubbedPid, unref() {} };
+}
+
 function buildHookCaptureCommand(outputFile: string): string {
   const script = [
     "import fs from 'node:fs';",
@@ -531,6 +540,7 @@ describe("StandaloneOperatorRuntime", () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
       backgroundTaskIsProcessRunning: () => false,
+      backgroundTaskSpawnProcess: stubBackgroundSpawn,
     });
     const session = await runtime.startSession({ title: "Tasks", agentId: "main" });
 

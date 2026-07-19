@@ -6,6 +6,54 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-19 (run 9) — 🐛 Background-task launch script: valid PID + atomic state writes; 174/174 deterministic
+
+**Audited:** Project health. The suite that run 8 recorded as **174/174** was
+**failing 4 tests** on a clean tree in this container (server.test ×1,
+app.test ×2, operator-runtime.test ×1) — a timing-sensitive regression, not a
+code change. Root-caused it end-to-end.
+
+**Root cause (two real product bugs in `renderLaunchScript`, `src/harness/background-tasks.ts`):**
+1. **PID never substituted.** The running-state was written with
+   `"pid":"$$"` and a `sed "…s/\"\$\$\"/$$/g"` pass meant to swap in the real PID.
+   But in a sed *regex*, `$` is an end-of-line anchor, so the pattern `"$$"` never
+   matched — the state file kept the literal string `"$$"` as its PID. An invalid
+   (non-numeric) PID makes `isProcessRunning` fail, so reconcile flagged every
+   task `missing-process`, cascading into `control=degraded` (server.test) and
+   `"No active run or background task"` (app.test).
+2. **Non-atomic state writes.** Both the running-state (`… > state.json`) and the
+   Python completion writer (`write_text`) truncate-then-write in place, so a
+   concurrent reader could observe an **empty** file (→ `undefined`) or a
+   **half-written** file (→ `SyntaxError: Expected ',' or '}'` torn read).
+
+**Changed (additive):**
+- `src/harness/background-tasks.ts` — running-state now uses a regex-safe
+  `__OPENCLAW_PID__` placeholder substituted via `s/\"__OPENCLAW_PID__\"/$$/g`
+  (emitted with escaped quotes so sed strips the JSON quotes, yielding a bare
+  number). Running-state write is now atomic (`> "$state_tmp"; mv`), and the
+  Python writer writes to a temp path then `Path.replace()` (atomic rename).
+- Verified the generated script produces `"pid":24876` (numeric) and an atomic
+  completed-state. This fix alone turned app.test green.
+- `src/orchestrator/operator-runtime.test.ts`, `src/control-plane/server.test.ts`
+  — the two remaining tests drive background-task state **manually** while a real
+  `sleep 5`/`printf`/`tail -f` process was concurrently writing its own state
+  file. Injected a deterministic `backgroundTaskSpawnProcess` stub (synthetic PID,
+  no real process) so the tests' explicit `writeState`/`sync` calls are
+  authoritative. Test hygiene, not a product change.
+
+**Test results:** **174/174**, green **3×** consecutively (was flaky/failing 4).
+`npm run build` ✅. `npm run typecheck:src` ✅ (exit 0). Full `tsc` test-file debt
+unchanged (125, untouched this run).
+
+**New idea:** add a tiny `renderLaunchScript` unit test that spawns the generated
+script against a temp dir and asserts the on-disk state.json is (a) valid JSON,
+(b) has a numeric PID, and (c) reaches `completed` — locking in both fixes so a
+future edit to the shell/Python heredoc can't silently reintroduce the
+`$`-anchor or torn-write class of bug. Longer term: route the shell/Python state
+writers through a single shared "atomic JSON write" snippet generator so the
+temp+rename discipline lives in exactly one place (mirrors `writeJsonAtomic` in
+`src/shared/fs.ts`).
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

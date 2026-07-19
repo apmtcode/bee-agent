@@ -4,6 +4,15 @@ Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
 ## Foundations / DX
+- [x] **Background-task launch script reliability** (2026-07-19, run 9). Fixed the
+      running-state PID substitution (sed `$`-anchor bug left a literal `"$$"`) and
+      made both the shell and Python state writers atomic (temp + rename). Restored
+      the suite to a deterministic 174/174 (was flaky/failing 4). Follow-ups:
+  - [ ] Add a `renderLaunchScript` integration test: run the generated script
+        against a temp dir, assert `state.json` is valid JSON, has a numeric PID,
+        and reaches `completed`.
+  - [ ] Extract a single "atomic JSON write" snippet generator shared by the shell
+        and Python writers so the temp+rename discipline lives in one place.
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`
