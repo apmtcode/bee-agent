@@ -70,6 +70,22 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Generalization eval harness: measure replay fidelity on held-out but
       related synthetic trajectories.
 
+## Reliability
+- [x] **Atomic + well-formed background-task state writes** (2026-07-19, run 9).
+      Launch script now writes initial state via Python `json.dumps` (was a
+      `printf|sed` pipeline that corrupted JSON for quoted commands and never
+      substituted the pid); all state writes are atomic (temp + `os.replace`);
+      `shellQuote` single-quote escaping fixed to `'"'"'`; `readJsonFile` gained
+      a bounded `parseRetries`. Suite went from red+flaky to 175/175 deterministic
+      across 5 runs. Regression test exercises the real launch script.
+- [ ] **Cross-file flakiness guard** in the pre-push self-check: run the suite
+      twice (or with `--sequence.shuffle`) and fail if results differ. A single
+      green run masked the run-9 flakiness for a full cycle.
+- [ ] Audit the rest of the codebase for other non-atomic file writes that a
+      concurrent reader could observe mid-write (grep for `writeFile` /
+      `write_text` not paired with a temp+rename). `writeOutput` appends directly;
+      confirm partial-line reads are acceptable there.
+
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in

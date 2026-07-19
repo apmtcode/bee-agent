@@ -370,4 +370,37 @@ describe("BackgroundTaskExecutionService", () => {
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
   });
+
+  it("persists a well-formed, atomic state file when the command contains quotes", async () => {
+    // Regression: the launch script used to build the state JSON with a shell
+    // printf|sed pipeline, which corrupted the JSON escaping for any command
+    // containing double quotes (and never substituted the pid placeholder),
+    // producing an unparseable state file. The launch script now writes state
+    // with Python (json.dumps) atomically, so it round-trips regardless of the
+    // command's contents.
+    const rootDir = await makeTempDir();
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"));
+    // Contains both a double quote (stresses JSON escaping of the command in the
+    // state file) and a single quote (stresses shell-quoting of the launch
+    // command). Both used to corrupt the run: the JSON via printf|sed, the shell
+    // via a malformed single-quote escape.
+    const command = `echo "it's ready"`;
+    const task = await store.start({ title: "Quoted command", command, cwd: rootDir });
+    const service = new BackgroundTaskExecutionService(rootDir);
+
+    let state: BackgroundTaskExecutionState | undefined;
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      // readState must never throw a JSON parse error, even mid-run.
+      state = await service.readState(task);
+      if (state?.status === "completed") {
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+
+    expect(state?.status).toBe("completed");
+    expect(state?.command).toBe(command);
+    expect(typeof state?.pid).toBe("number");
+    expect(state?.exitCode).toBe(0);
+  });
 });

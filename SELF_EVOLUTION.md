@@ -6,6 +6,60 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-19 (run 9) — Reliability: atomic + well-formed background-task state writes
+
+**Audited:** Project health via a full `npm install && build && test` on a real
+run. The suite — reported 174/174 in run 8 — was in fact **red and flaky**: 3–4
+tests failed per run (`operator-runtime`, `server`, `app`), all tracing to the
+background-task subsystem (`src/harness/background-tasks.ts`).
+
+**Root causes found (two real product bugs, not test bugs):**
+1. **Corrupt state JSON.** The task launch script built its initial execution
+   state by munging a JS-generated JSON string with a shell `printf | sed`
+   pipeline. This (a) never substituted the `"pid":"$$"` placeholder (sed's `$`
+   anchoring) and (b) **corrupted JSON escaping for any command containing double
+   quotes**, yielding an unparseable `state.json`. `readState` then threw
+   `SyntaxError: … in JSON`, failing recovery. Deterministic for quoted commands.
+2. **Malformed shell single-quote escape.** `shellQuote` escaped `'` as
+   `"'"'"'` (stray leading `"`) instead of the POSIX `'"'"'`, so any command
+   containing a single quote broke under `bash -lc` once the script actually ran.
+   Existing tests never caught this — they all inject a *fake* spawn.
+
+Both were previously masked: a corrupt initial state made the Python completion
+writer's `json.loads` throw under `set -euo pipefail`, so the launch script died
+before it could overwrite test-managed state — hiding a latent race.
+
+**Changed (additive, in `src/harness/background-tasks.ts` + `src/shared/fs.ts`):**
+- Rewrote the launch script's initial-state write to use **Python `json.dumps`**
+  (same mechanism as the completion writer), passing values as `argv` — JSON is
+  now always well-formed regardless of the command's contents.
+- Made **every** state write atomic (temp file + `os.replace`), including the
+  completion/failure writers, so a concurrent `readState` never sees a partial
+  file.
+- Fixed `shellQuote`'s single-quote escaping to `'"'"'`.
+- Hardened `readJsonFile` with an optional bounded `parseRetries` (used by
+  `readState`, 3 retries) as defense-in-depth against residual partial reads.
+- **Test hygiene:** the three background-task tests that drive execution state by
+  hand (`operator-runtime`, `server` main + drift + breaker runtimes) now inject
+  a deterministic no-op `backgroundTaskSpawnProcess`, matching how they already
+  inject `isProcessRunning`. This removes the launch-script-vs-manual-`writeState`
+  ordering race that the correctness fix had unmasked.
+- Added an **end-to-end regression test** that runs the *real* launch script with
+  a command containing both `'` and `"` (`echo "it's ready"`) and asserts the
+  persisted state is valid JSON, the command round-trips exactly, and the task
+  completes with exit 0.
+
+**Test results:** `npm run build` ✅. `npm run typecheck:src` ✅ (exit 0). Full
+`tsc` debt unchanged at **125** (all pre-existing test-file errors). `npm test`
+**175/175** (was 174 + 1 new regression test) and now **deterministic** — 5
+consecutive full-suite runs green, plus isolated-file reruns.
+
+**New idea (logged to ROADMAP):** Add a tiny **cross-file flakiness guard** to
+the pre-push self-check: run `vitest run` twice (or with `--sequence.shuffle`)
+and fail the push if results differ between runs. A single green run hid this
+flakiness for a full cycle; a second shuffled run would have caught it. Cheap
+insurance for a reliability-focused engine.
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

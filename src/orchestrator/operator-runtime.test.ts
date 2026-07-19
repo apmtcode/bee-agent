@@ -531,6 +531,11 @@ describe("StandaloneOperatorRuntime", () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
       backgroundTaskIsProcessRunning: () => false,
+      // Deterministic launcher: this test drives every task's execution state
+      // and output by hand. A real spawn would run the launch script and write
+      // "running"/"completed" state files asynchronously, racing the manual
+      // writeState calls below.
+      backgroundTaskSpawnProcess: () => ({ pid: 1234, unref: () => {} }),
     });
     const session = await runtime.startSession({ title: "Tasks", agentId: "main" });
 
