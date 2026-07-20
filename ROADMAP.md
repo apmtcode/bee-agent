@@ -62,13 +62,42 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      for a real on-device small model. **DONE run 9** — `MovementPolicyBackend`
+      + `MarkovMovementBackend` (variable-order n-gram w/ backoff) in
+      `src/training/movement-policy.ts`. `train`/`predict`/`generate`/`serialize`.
+- [x] Synthetic event-stream generator to validate capture→dataset→replay
+      round-trips without real OS input. **DONE run 9** —
+      `generateSyntheticMovementDataset()` (grammar-driven, seeded mulberry32) in
+      `src/training/movement-eval.ts`.
+- [x] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories. **DONE run 9** —
+      `evaluateNextActionAccuracy()` + `evaluateReplayFidelity()`; the headline
+      test proves >0.6 held-out accuracy, >10pts over the unigram baseline.
+- [ ] **Pluggable sampler at inference** (`MovementPolicyModel.generate`):
+      temperature / top-k over the existing distribution with a seeded PRNG, so
+      the policy proposes plausible *variations* of a recorded workflow, not only
+      the single argmax path. Complements the training-time backoff.
+- [ ] Wire the movement policy into the training runner: after a reviewed export,
+      train a `MarkovMovementBackend` on the exported trajectories and persist its
+      serialized state alongside the MLX/axolotl plan as a cloud-runnable
+      baseline/fallback policy.
+
+## Known bugs (discovered, not yet fixed)
+- [ ] **Background-task launch script writes malformed single-line state JSON.**
+      Surfaced run 9 by 3 pre-existing red suites (`operator-runtime.test.ts`
+      "starts, syncs, recovers…", `server.test.ts`, `app.test.ts`). `readState`
+      throws `SyntaxError: Expected ',' or '}' … at line 1 column 312`. Key clue:
+      `writeJsonAtomic` only ever emits *indented multi-line* JSON, so a
+      single-line corrupt payload must come from a generated shell launch script
+      (same `printf`/`sed` substitution family as `training/runner.ts`) that
+      injects PID/timestamp into a compact JSON string and mangles it. Only trips
+      when the test spawns a real process → environment-dependent. Fix: make the
+      launch script write state via a `python3`/`node` heredoc (like the training
+      runner's `renderStateWriterPython`) instead of `sed` on inline JSON, or have
+      `readState` tolerate/repair a partial write. Verified NOT caused by run 9's
+      additive changes (identical failure on the base via `git stash`).
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

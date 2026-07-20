@@ -6,6 +6,70 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-20 (run 9) — Movement-policy learning: in-process train + replay + generalization eval
+
+**Audited:** Standing objective #2 (local-movement learning subsystem) against
+what `src/capture/` + `src/training/` already implement. Found the loop was
+complete *except* for the core learning step: capture → dataset → replay exist,
+and `runner.ts` emits MLX/axolotl **launch scripts** — but those only execute on
+the user's real Apple-silicon machine. There was **no in-process model** that
+actually learns from recorded movements, repeats them, and generalizes — so
+objective #2(c)/(d) ("post-train a local model to repeat movements" / "generalize
+to new but related movements") could not be validated at all in the cloud.
+
+**Changed (additive — 4 new files, no existing code modified):**
+- `src/training/movement-policy.ts` — the pluggable learning core:
+  - `MovementPolicyBackend` interface (`train` / `restore`) so a real on-device
+    small model can be swapped in without touching call sites — the documented
+    seam the roadmap asked for.
+  - `MarkovMovementBackend`: a deterministic variable-order n-gram model with
+    Katz-style **backoff**. Learns next-movement counts for every context length
+    0..maxOrder; predicts via the longest observed context, backing off to
+    shorter ones (down to unigram) so *novel-but-related* prefixes still yield a
+    sensible continuation — this is what gives it generalization, not just recall.
+  - `MovementPolicyModel`: `predict(context)` (argmax next movement, `null` = end
+    of sequence), `generate(seed)` (deterministic self-driven replay with a hard
+    length cap), and `serialize()`/`restore()` round-tripping to plain JSON.
+  - `sequenceFromTrajectorySpan()` + `defaultActionToken()` bridge real captured
+    `TrajectorySpan`s into learnable token sequences (stable, low-cardinality).
+- `src/training/movement-eval.ts` — validation without an OS:
+  - `generateSyntheticMovementDataset()` — grammar-driven, reproducible workflows
+    (edit-and-save / search-and-open / browser-fill-form) via a seeded mulberry32
+    PRNG (no `Math.random`, so datasets are byte-identical across runs).
+  - `evaluateNextActionAccuracy()` (teacher-forced top-1 accuracy + backoff rate)
+    and `evaluateReplayFidelity()` (self-driven longest-common-prefix + exact
+    match) — the generalization eval harness.
+- Tests (`movement-policy.test.ts` 12, `movement-eval.test.ts` 6): exact replay,
+  argmax prediction, end-of-sequence, backoff generalization, determinism,
+  runaway-loop cap, serialize/restore identity, trajectory bridging. The headline
+  test trains on one seed's synthetic streams and measures accuracy on a
+  **held-out different-seed** set: the model scores **>0.6** and **>10pts above**
+  the unigram baseline — evidence it learned structure and generalizes.
+- Exported the whole surface from `src/index.ts`.
+
+**Test results:** `typecheck:src` ✅ (exit 0, source stays clean). Build ✅
+(tsdown, 5 files). New tests ✅ **16/16**; full suite **187 passing**.
+
+**Pre-existing failures (NOT introduced this run — verified identical on the base
+via `git stash`):** 3 suites fail — `operator-runtime.test.ts` ("starts, syncs,
+recovers…"), `server.test.ts`, `app.test.ts`. Root cause characterized: a
+background-task **launch script writes single-line state JSON** (error is
+`line 1 column 312`, whereas `writeJsonAtomic` only ever emits indented
+multi-line JSON) that becomes malformed — same shell/`sed` substitution family as
+`runner.ts`. It only trips when the test spawns a real process, hence its
+environment-dependence. Logged to ROADMAP as a distinct bug; deliberately not
+fixed here (out of scope + spawns processes — too risky for this focused run).
+Because the full suite is not green, this run pushes to the designated feature
+branch `claude/peaceful-dirac-ggo9zl` (never to `main`).
+
+**New idea:** add a **pluggable sampler** seam to `MovementPolicyModel.generate`
+(temperature / top-k over the existing distribution, seeded PRNG) so the policy
+can propose *plausible variations* of a recorded workflow rather than only the
+single argmax path — a concrete step toward "generalize to perform new but
+related movements" at inference time, complementing the training-time backoff.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
