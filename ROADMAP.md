@@ -4,6 +4,12 @@ Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
 ## Foundations / DX
+- [x] **Green the test suite** (2026-07-20, run 9) — HEAD had 3 hard failures
+      from a background-task launch script that wrote **corrupt/unparseable**
+      `state.json` for any command containing quotes (fragile `printf | sed`
+      writer) and via non-atomic writes. Replaced with a base64 + atomic Python
+      writer; added a regression test proven to fail against the old code. Suite
+      now 175/175, stable across 10 full runs.
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`
@@ -71,6 +77,16 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
       related synthetic trajectories.
 
 ## Innovation backlog
+- [ ] **Property-based fuzz test for the launch-script generator**
+      (surfaced run 9): feed randomized command strings (quotes, `$`, backticks,
+      newlines, unicode) through `renderLaunchScript` + a real bash/python run
+      and assert `state.json` always round-trips. Would catch the whole class of
+      shell-quoting-corruption bugs generically instead of via hand-picked
+      commands. Same technique applies to the output-file writer.
+- [ ] Pre-push suite-health gate in the engine: run the full `npm test` as a
+      pre-push self-check every cycle (not just `typecheck:src`). Run 9 found
+      HEAD shipped with 3 hard test failures — the engine should never push over
+      a red suite, and should treat a red HEAD as the first thing to fix.
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in
       project health over time.

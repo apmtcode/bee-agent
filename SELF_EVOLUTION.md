@@ -6,6 +6,63 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-20 (run 9) — Fixed corrupting background-task state writer; suite green
+
+**Audited:** Test-suite health first (per the procedure's verification gate).
+The committed `main`/branch HEAD was **not green**: `npm test` reported **3
+failing tests** (deterministic when run whole) — `operator-runtime`,
+`server`, and `cli/app` all crashing in background-task recovery with
+`SyntaxError: Expected ',' or '}' after property value in JSON at position 311`.
+Instrumented `readJsonFile` to dump the offending file and traced it to the
+generated background-task **launch script**.
+
+**Root cause (a real product bug, not just a test flake):** The launch script
+wrote the initial "running" `state.json` via
+`printf '%s' <payload> | sed "…s/\"$$\"/$$/g" > state.json`. This is fragile on
+two axes:
+1. **Quote corruption** — the JSON payload is shell-quoted, then re-processed by
+   `sed`. Any command containing single or double quotes (e.g.
+   `printf 'line-1\nline-2\n'`, `git commit -m 'msg'`, `bash -lc '…'`) had its
+   quotes leak through the `sed` substitution, emitting **unparseable JSON**
+   (`"command":"printf "'line-1…'"`). The `"$$"`→pid substitution also silently
+   failed, leaving `"pid":"$$"`.
+2. **Non-atomic writes** — both the `> state.json` redirect and the Python
+   completion writer's `write_text` truncate-in-place, so a concurrent reader
+   (recovery/sync) could observe a torn file.
+
+Any real background task whose command contained a quote would therefore write a
+`state.json` that could **never** be parsed again — breaking recovery, sync, and
+monitoring for that task. The tests merely surfaced it.
+
+**Changed (additive, in `src/harness/background-tasks.ts`):**
+- Replaced the `printf | sed` running-state writer with a **base64 + Python**
+  writer (`renderRunningStateWriterPython`): the payload is base64-encoded in
+  TS and reconstituted via `json.loads(base64.b64decode(...))`, so no command
+  content ever passes through shell/sed quoting. pid and timestamps are supplied
+  as argv, not string-substituted.
+- Made **both** the running- and terminal-state Python writers **atomic**
+  (`write_text` to `state.json.tmp` then `os.replace`), eliminating torn reads.
+- Tests: injected a deterministic no-op `backgroundTaskSpawnProcess` into the
+  runtime/server tests that start real tasks, so `tail -f`/`sleep`-style
+  commands no longer launch real detached processes that asynchronously rewrite
+  `state.json` under the recovery assertions.
+- Added a **regression test** that runs the real launch script with a command
+  containing single quotes, double quotes and `$HOME`, and asserts `state.json`
+  is valid, parseable JSON with the command preserved verbatim. Verified it
+  **fails against the old writer and passes with the fix.**
+
+**Test results:** `npm test` **175/175 passing** (was 171/174 with 3 hard
+failures; +1 new regression test), **stable across 10 consecutive full runs**.
+`npm run build` ✅. `npm run typecheck:src` ✅ (exit 0). Pushed to `main`.
+
+**New idea (logged to ROADMAP):** Property-based fuzz test for the launch-script
+generator — feed randomized command strings (quotes, `$`, backticks, newlines,
+unicode) through `renderLaunchScript` + a real bash/python run and assert the
+resulting `state.json` always round-trips. Would have caught this class of bug
+generically instead of relying on a hand-picked command.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

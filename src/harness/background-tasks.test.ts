@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -369,5 +370,42 @@ describe("BackgroundTaskExecutionService", () => {
     await expect(fs.readFile(path.join(rootDir, task.execution.launchScript), "utf8")).resolves.toContain("bash -lc");
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
+  });
+
+  it("emits valid, parseable JSON state for commands containing quotes and $ metacharacters", async () => {
+    const rootDir = await makeTempDir();
+    // Real spawn so the generated launch script actually runs (bash + python3).
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"), (command, args, options) =>
+      spawn(command, args, options),
+    );
+    // Single quotes, double quotes and a `$` previously corrupted state.json via
+    // the old `printf | sed` writer, producing unparseable JSON.
+    const tricky = `echo 'single' "double" $HOME done`;
+    const task = await store.start({ title: "Tricky command", command: tricky, cwd: rootDir });
+
+    const statePath = path.join(rootDir, task.execution.stateFile);
+    let parsed: BackgroundTaskExecutionState | undefined;
+    for (let attempt = 0; attempt < 200; attempt += 1) {
+      try {
+        const raw = await fs.readFile(statePath, "utf8");
+        // Must always parse — atomic writes guarantee no torn reads.
+        const candidate = JSON.parse(raw) as BackgroundTaskExecutionState;
+        parsed = candidate;
+        if (candidate.status !== "running") {
+          break;
+        }
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+          throw error;
+        }
+      }
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+
+    expect(parsed).toBeDefined();
+    expect(parsed?.command).toBe(tricky);
+    expect(parsed?.taskId).toBe(task.id);
+    expect(typeof parsed?.pid).toBe("number");
+    expect(["running", "completed", "failed"]).toContain(parsed?.status);
   });
 });
