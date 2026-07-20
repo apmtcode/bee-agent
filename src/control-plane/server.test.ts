@@ -12,6 +12,15 @@ import type { ReviewedExportManifest } from "../training/export-manifest.js";
 
 const tempDirs: string[] = [];
 
+// Deterministic background-task launcher for tests: returns a fake pid without
+// spawning a real OS process. The real launcher spawns a detached shell that
+// writes the task's execution-state file asynchronously (~100ms later); tests
+// that assert on control/diagnostics state would then race that write and flake
+// (e.g. a freshly started task intermittently reported as "missing-process").
+// Pairing this with `backgroundTaskIsProcessRunning: () => false` makes the
+// task's liveness fully controlled by explicit `writeState` calls in the test.
+const noopSpawnBackgroundProcess = () => ({ pid: 424242, unref() {} });
+
 async function makeTempDir(): Promise<string> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "control-plane-"));
   tempDirs.push(dir);
@@ -84,6 +93,7 @@ describe("OperatorControlPlaneServer", () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir,
       backgroundTaskIsProcessRunning: () => false,
+      backgroundTaskSpawnProcess: noopSpawnBackgroundProcess,
       delivery: new OperatorDeliveryService(rootDir, {
         sendBrowserPush: async () => {},
       }),
@@ -953,6 +963,7 @@ describe("OperatorControlPlaneServer", () => {
     const driftingRuntime = new StandaloneOperatorRuntime({
       rootDir: driftingRootDir,
       backgroundTaskIsProcessRunning: () => false,
+      backgroundTaskSpawnProcess: noopSpawnBackgroundProcess,
     });
     const driftingServer = new OperatorControlPlaneServer({ runtime: driftingRuntime });
     const driftingBootstrap = await driftingServer.handle({
@@ -1019,6 +1030,7 @@ describe("OperatorControlPlaneServer", () => {
     const breakerRuntime = new StandaloneOperatorRuntime({
       rootDir: breakerRootDir,
       backgroundTaskIsProcessRunning: () => false,
+      backgroundTaskSpawnProcess: noopSpawnBackgroundProcess,
     });
     const breakerServer = new OperatorControlPlaneServer({ runtime: breakerRuntime });
     const breakerOne = await breakerServer.handle({

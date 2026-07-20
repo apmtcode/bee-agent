@@ -6,6 +6,51 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-20 (run 9) — Fix real launch-script JSON-corruption bug + de-flake the whole suite (green again)
+
+**Audited:** Started with the required baseline `npm test` and found the suite was
+**no longer green** — 3 consistently-failing / flaky tests (was "174/174" in the
+run-8 log; a genuine regression surfaced on this machine). Root-caused each one.
+
+**Two distinct bugs, both fixed:**
+
+1. **Real product bug — background-task launch script wrote invalid JSON**
+   (`src/harness/background-tasks.ts`). `renderLaunchScript` wrote the initial
+   `"running"` execution-state file via a `printf '%s' <json> | sed "…s/\"$$\"/$$/g" > state`
+   pipeline. The `sed` program was inside a **double-quoted** shell string that
+   itself contained double quotes (`sed "s/…/g; s/"$$"/$$/g"`), so the quoting
+   broke: `"$$"` was never substituted (state kept a literal `"pid":"$$"`) and
+   command strings containing quotes corrupted the file — captured a real
+   `Expected ',' or '}' … at position 311` parse failure. This deterministically
+   broke `operator-runtime.test.ts` (`recoverBackgroundTasks`) and was the hidden
+   race behind the server/app flakiness. **Fix:** write the initial running state
+   with a small **Python** writer (`renderRunningStateWriterPython`) that
+   `json.loads` the base payload and fills in `pid`/timestamps — same clean
+   mechanism the completed/failed writers already use. No more shell-quoted JSON.
+
+2. **Test flakiness — race on a real spawned process** (`src/control-plane/server.test.ts`).
+   Three runtimes set `backgroundTaskIsProcessRunning: () => false` but let the
+   **real** launcher spawn a detached `sleep 5`, whose async state-file write
+   (~100ms later) then read as "missing-process" → control `degraded`. The tests
+   passed only when they won the race and read before the write. **Fix:** added a
+   deterministic `noopSpawnBackgroundProcess` (fake pid, no real process) and wired
+   it into all three runtimes via the existing `backgroundTaskSpawnProcess` seam,
+   so task liveness is fully controlled by explicit `writeState` — no wall-clock race.
+
+**Test results:** `operator-runtime.test.ts` fixed; `server.test.ts` **10/10**
+consecutive green (was ~40% flaky alone); full `npm test` **174/174** stable
+across 4 runs. `typecheck:src` ✅ exit 0. Build ✅. Full `tsc` total unchanged at
+**125** (no new debt). Diff is 2 files, +38/−4.
+
+**New idea:** add a tiny **`verify` script** (`typecheck:src && build && test`) —
+already queued — and, more novel, a **flake-detector** the engine runs each cycle:
+`vitest run --repeat=3` (or a small N-times loop) on the changed test files so
+timing/ordering regressions like this one are caught *at authoring time* instead
+of silently degrading the "green" baseline between runs. Root cause here was a
+suite that reported green once but wasn't stable; repeat-runs would have flagged it.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

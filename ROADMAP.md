@@ -40,6 +40,13 @@ unchecked items are queued. Keep this richer than you found it each run.
     fix residual test-only typings.
 - [ ] Add a `verify` npm script (`typecheck && build && test`) and have the
       engine run it as a pre-push self-check each cycle.
+- [ ] **Flake-detector self-check** (run 9): the run-8 log recorded "174/174"
+      but the suite was actually flaky/broken on a fresh checkout — a green
+      report that wasn't stable. Have the engine run changed test files N times
+      (`vitest run` in a loop, or `--repeat`) before declaring green, so timing/
+      ordering regressions are caught at authoring time. Run 9 fixed the two
+      concrete offenders (launch-script JSON corruption + a real-`sleep 5` spawn
+      race in `server.test.ts`, now deterministic via `backgroundTaskSpawnProcess`).
 - [x] Interim **source-only typecheck gate** — DONE run 7. `tsconfig.src.json`
       (excludes `**/*.test.ts`) + `typecheck:src` script; passes (exit 0). Next:
       have the engine run it as a per-run pre-push self-check.
