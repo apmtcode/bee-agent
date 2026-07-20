@@ -6,6 +6,62 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-20 (run 9) — Pluggable movement-model backend + deterministic learner
+
+**Audited:** Standing objective #2 (local-movement learning), parts (c) train a
+local model to *repeat* recorded movements and (d) *generalize* to related ones.
+The existing `src/training/` scaffolding (`runner.ts`, `job-store.ts`,
+`exporter.ts`) only *emits launch scripts* for real MLX/axolotl training that can
+never run in the cloud — so the train→infer half of the objective had **no
+executable, testable implementation** and no pluggable backend seam. That was the
+biggest gap between the subsystem's stated goal and its actual code.
+
+**Changed (additive, new files only):**
+- `src/training/movement-model.ts` — the backend-agnostic layer:
+  - Deterministic tokenization: `slugifyMovement`, `movementActionToken`
+    (`tool:summary-slug`), and `tokenizeTrajectory` (prefers reviewed/redacted
+    actions, orders by ts).
+  - `buildMovementDataset(spans)` → `{vocabulary, samples}` with BOS/EOS
+    sentinels, reward-weighted samples, and too-short-trajectory skipping.
+  - The **pluggable seam**: `MovementModelBackend` (`train`/`load`) and
+    `MovementModel` (`predictNext`/`generate`/`serialize`) interfaces, plus a
+    `MovementBackendRegistry` for config-driven backend selection. A real
+    on-device small model implements the same interface without touching call
+    sites.
+- `src/training/markov-movement-backend.ts` — `MarkovMovementBackend`, a
+  deterministic in-process backend (variable-order Markov with **stupid
+  backoff**). Backoff is what delivers part (d): an unseen prefix still yields a
+  sensible continuation from the longest observed suffix. Fully deterministic
+  (argmax + lexicographic tie-break), so tests are stable and the same reviewed
+  dataset always trains the same policy. Serializes to JSON and round-trips.
+- `src/training/movement-model.test.ts` — 11 tests covering tokenization,
+  dataset assembly, **cold-start replay** of a recorded sequence (part c),
+  next-action prediction, **backoff generalization** to an unseen bigram
+  (part d), serialize/load fidelity, empty-model safety, and the registry.
+- Exported the new surface from `src/index.ts`.
+
+**Test results:** `npm run typecheck:src` ✅ (exit 0, all source typechecks
+clean). `npm run build` ✅ (tsdown, 5 files, 546 kB). New module: **11/11** ✅.
+Full suite **182/185 passing** (was 171/174 on clean HEAD — my change adds 11
+passing tests and breaks nothing). The **3 failing tests are pre-existing and
+flaky** — they fail identically on clean HEAD *without* my changes, and the
+count varies run-to-run (3 vs 4 failures) because they assert on timing-sensitive
+background-task liveness (`control=degraded … background task missing-process`).
+They live in `operator-runtime.test.ts`, `server.test.ts`, `app.test.ts` — all
+untouched by this run. Pushing to the designated feature branch (not `main`)
+since my additive change is green and the pre-existing flakiness is out of scope.
+
+**New idea (logged to ROADMAP):** A **generalization eval harness** built on this
+backend — hold out a related synthetic trajectory, measure next-action top-1
+accuracy and full-rollout edit-distance vs the held-out sequence, and track it as
+a scalar "movement generalization score" per run so the subsystem's learning
+quality is measured, not asserted. Second idea: **stabilize the 3 flaky
+background-task tests** (inject a clock / fake the liveness probe) so the suite is
+a reliable green gate instead of a probabilistic one — currently the engine
+cannot use `npm test` as a clean pre-push signal.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

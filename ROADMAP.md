@@ -62,13 +62,28 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
+      for a real on-device small model. **DONE run 9** —
+      `src/training/movement-model.ts` (`MovementModelBackend`/`MovementModel`
+      interfaces, `MovementBackendRegistry`, tokenization + `buildMovementDataset`)
+      and `src/training/markov-movement-backend.ts` (deterministic variable-order
+      Markov + stupid-backoff backend). 11 tests: cold-start replay + backoff
+      generalization + serialize/load round-trip.
 - [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
+      round-trips without real OS input. (Next: a `MovementScenario` generator
+      that emits trajectory spans from parametrized grammars — vary lengths,
+      inject a shared suffix — to feed the movement model without hand-writing
+      spans in each test.)
 - [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      related synthetic trajectories. (Now buildable on run 9's backend: hold out
+      a related trajectory, score next-action top-1 accuracy + full-rollout
+      edit-distance, emit a scalar "movement generalization score" per run.)
+- [ ] Wire the movement model into the training pipeline: have
+      `LocalTrainingExporter`/`LocalTrainingExecutionService` produce a
+      `MovementDataset` and train the registry-selected backend as the
+      cloud-runnable path, with MLX/axolotl as the on-device path behind the same
+      registry id.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
@@ -80,6 +95,13 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Barrel-collision lint: scan `src/index.ts` re-exports for names exported
       from more than one module and flag them, so duplicate-identifier debt is
       caught at authoring time instead of accumulating silently.
+- [ ] **Stabilize the 3 flaky background-task tests** (`operator-runtime.test.ts`,
+      `server.test.ts`, `app.test.ts`). They assert on timing-sensitive
+      background-process liveness (`control=degraded … background task
+      missing-process`) and fail 3-or-4-at-a-time nondeterministically on clean
+      HEAD, so the engine cannot use `npm test` as a reliable pre-push gate.
+      Inject a clock / fake the liveness probe so the assertions are
+      deterministic. (Surfaced run 9.)
 - [ ] Per-module typecheck ratchet: record each module's current `tsc` error
       count to a baseline file and fail if a module regresses above it. Lets the
       engine pay debt down module-by-module without one green-gate blocking
