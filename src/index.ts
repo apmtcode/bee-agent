@@ -400,6 +400,36 @@ export type {
   LocalTrainingRuntime,
   TrainingJobPlan,
 } from "./training/runner.js";
+export {
+  DEFAULT_MODEL_BACKEND,
+  MOVEMENT_END_TOKEN,
+  MOVEMENT_START_TOKEN,
+  createModelBackend,
+  defaultModelBackend,
+  listModelBackends,
+  movementDatasetFromReplays,
+  movementDatasetFromTrajectories,
+  movementSequenceFromReplay,
+  movementSequenceFromTrajectory,
+  registerModelBackend,
+  tokenizeMovementAction,
+} from "./training/model-backend.js";
+export type {
+  LocalModelBackend,
+  ModelBackendFactory,
+  MovementDataset,
+  MovementGenerateParams,
+  MovementPrediction,
+  MovementSequence,
+  MovementTokenizeOptions,
+  MovementTrainingConfig,
+  TrainedMovementModel,
+} from "./training/model-backend.js";
+// Side-effect import registers the built-in "markov" backend on load.
+export {
+  MarkovMovementBackend,
+  createMarkovBackend,
+} from "./training/backends/markov-backend.js";
 export type {
   ExportedMemoryReference,
   ExportedPromotedSkill,

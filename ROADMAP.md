@@ -4,6 +4,17 @@ Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
 ## Foundations / DX
+- [ ] 🔴 **TOP PRIORITY (run 10): fix pre-existing background-task recovery
+      failure.** Discovered run 9. `operator-runtime.test.ts > "starts, syncs,
+      recovers, …"` fails deterministically:
+      `SyntaxError: Expected ',' or '}' … in JSON at position 311` from
+      `readJsonFile` ← `BackgroundTaskExecutionService.readState` ←
+      `FileBackgroundTaskStore.reconcileTask`. Cascades into `app.test.ts` ×2 +
+      `server.test.ts` ×1 (4 failed total; 182/186 pass otherwise). Run 8 logged
+      174/174 on this same tree, so a background-task state file is being written
+      or read corrupt — suspect a `writeJsonAtomic` temp-path collision when
+      tasks reconcile concurrently. This is the only thing blocking the all-green
+      gate; a focused diff + regression test should clear all 4.
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`
@@ -62,13 +73,23 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
+      for a real on-device small model. **DONE run 9** — `LocalModelBackend`
+      interface + registry in `src/training/model-backend.ts`; deterministic
+      back-off n-gram `MarkovMovementBackend` in
+      `src/training/backends/markov-backend.ts` (replay fidelity 2c +
+      back-off generalization 2d); capture→dataset builders bridge trajectories
+      and replay manifests into `MovementDataset`. 12 tests.
 - [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
+      round-trips without real OS input. (Partly enabled by run 9's dataset
+      builders — next: a generator that emits parametric OS-event streams so
+      round-trips don't need hand-written fixtures.)
 - [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      related synthetic trajectories. **Now buildable on run 9's backend** —
+      train `MarkovMovementBackend` on N-1 sequences, score exact-match replay +
+      held-out-prefix prediction; becomes the regression metric any real
+      on-device `LocalModelBackend` must beat.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

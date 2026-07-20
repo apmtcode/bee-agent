@@ -6,6 +6,66 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-20 (run 9) — Pluggable local-model backend + deterministic markov mock (movement subsystem 2c/2d)
+
+**Audited:** `src/training/` against standing objective #2 parts (c) post-train a
+local model to repeat recorded movements and (d) generalize to new-but-related
+movements. Finding: the training subsystem could only *plan/launch* a real
+Apple-Silicon MLX/axolotl job (`runner.ts` emits a shell launch script) — there
+was **no in-process, trainable/inferable model backend**, so the "train → infer →
+generalize" loop could never be exercised in the cloud/CI against synthetic data.
+This was the top queued movement-subsystem item ("pluggable local-model backend
+interface … with a deterministic mock backend").
+
+**Changed (additive, new files only + barrel exports):**
+- `src/training/model-backend.ts` — the pluggable seam:
+  - `LocalModelBackend` interface (`train` async, `predict`/`generate` sync) so a
+    real on-device model can spawn a process while the mock resolves in-process.
+  - Movement token/dataset types + builders that bridge **capture → dataset**:
+    `tokenizeMovementAction`, `movementSequenceFromTrajectory`,
+    `movementDatasetFromTrajectories`, `movementSequenceFromReplay`,
+    `movementDatasetFromReplays` (respect review redactions, sort by ts, drop
+    empties, optional summary-slug granularity).
+  - A backend **registry** (`registerModelBackend`/`createModelBackend`/
+    `listModelBackends`/`defaultModelBackend`, `DEFAULT_MODEL_BACKEND="markov"`).
+- `src/training/backends/markov-backend.ts` — `MarkovMovementBackend`, a
+  deterministic back-off n-gram over action tokens (no clocks/randomness, no
+  native deps). Highest-order context reproduces trained sequences exactly (2c);
+  an unseen high-order context backs off to the longest observed shorter context
+  (2d). JSON-serializable weights. Self-registers under `"markov"` on import
+  (no eval cycle — `model-backend.ts` does not import it back).
+- `src/index.ts` — exported the new surface + the backend (side-effect registers
+  the built-in on load).
+- `src/training/model-backend.test.ts` — 12 tests: tokenization/dataset builders,
+  registry, replay fidelity, unigram back-off generalization, end-boundary
+  termination, JSON round-trip, cross-run determinism.
+
+**Test results:** `typecheck:src` CLEAN (exit 0). `npm run build` ✅.
+New suite ✅ **12/12**. Full suite: **182 passed / 4 failed (186)**; the same
+**4 failures exist on a clean tree** (verified via `git stash -u`:
+170 passed / 4 failed / 174) and are entirely pre-existing, in an unrelated
+subsystem — my change adds only passing tests. Pushed to the designated feature
+branch `claude/peaceful-dirac-8tafzn`.
+
+**⚠️ Pre-existing failure discovered (logged to ROADMAP, top priority):**
+`operator-runtime.test.ts > "starts, syncs, recovers, …"` (and its cascade into
+`app.test.ts` ×2 and `server.test.ts` ×1) fails deterministically with
+`SyntaxError: Expected ',' or '}' … in JSON at position 311` inside
+`readJsonFile` ← `BackgroundTaskExecutionService.readState` ←
+`FileBackgroundTaskStore.reconcileTask`. Run 8 logged 174/174 green on this same
+committed tree, so a background-task state file is being written/read corrupt —
+smells like a `writeJsonAtomic` temp-path collision when multiple tasks reconcile
+concurrently. Not touched this run (out of scope, different subsystem, needs its
+own focused diff) but it now blocks the all-green gate and should be run 10's
+target.
+
+**New idea (logged to ROADMAP):** a *generalization eval harness* built on this
+backend — hold out related synthetic trajectories, train on the rest, and score
+replay fidelity (exact-match rate) + generalization (does back-off predict a
+plausible next movement on held-out prefixes?). This turns objective #2d from
+"implemented" into "measured", and gives future runs a regression metric for any
+real on-device backend that implements `LocalModelBackend`.
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
