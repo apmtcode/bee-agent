@@ -70,6 +70,23 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Generalization eval harness: measure replay fidelity on held-out but
       related synthetic trajectories.
 
+## Test reliability
+- [x] **De-flake the background-task tests** (2026-07-20, run 9) — three files
+      oscillated between 174/174 and 2–4 failures because tests spawned real
+      processes whose detached launch scripts wrote `state.json` non-atomically
+      (torn reads + state/timing races). Fixed by exposing
+      `backgroundTaskSpawnProcess` / `backgroundTaskIsProcessRunning` on
+      `OperatorCliApp` and injecting a deterministic no-op spawn
+      (`src/harness/background-tasks.testkit.ts`). Now 174/174 across 6 runs.
+- [ ] **Atomic launch-script state write** (surfaced run 9). Make
+      `renderLaunchScript` write `state.json` via `state.json.tmp` + `rename`
+      instead of `printf … | sed … > state.json`, so a *live* operator reading a
+      task's state mid-write (e.g. `/background-sync`) can never hit a torn read —
+      the production analogue of the test flake just fixed.
+- [ ] **Flake sentinel**: a CI/dev script that runs `vitest run` N times and
+      fails if the pass-count varies, catching determinism regressions
+      mechanically instead of by a lucky local run.
+
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in

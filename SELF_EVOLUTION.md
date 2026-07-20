@@ -6,6 +6,59 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-20 (run 9) — 🩺 Killed the flaky background-task tests (deterministic spawn seam)
+
+**Audited:** Test-suite *reliability* — the pre-push green gate itself. `npm test`
+was non-deterministic: repeated runs oscillated between 174/174 and 2–4 failures
+across three files (`cli/app.test.ts`, `control-plane/server.test.ts`,
+`orchestrator/operator-runtime.test.ts`). A flaky gate silently defeats the
+engine's own "do not push if tests fail" rule.
+
+**Root cause (one bug, three symptoms):** several background-task tests spawned
+*real* OS processes (`sleep 5`, `printf ok`, `tail -f`, `printf drift`) and then
+immediately inspected task health. The production launch script
+(`renderLaunchScript`, `src/harness/background-tasks.ts:757`) writes `state.json`
+via a **non-atomic** shell redirect (`printf … | sed … > state.json`) from a
+detached process. That produced:
+  1. **Torn reads** — `readJsonFile` observed a half-written `state.json` →
+     `SyntaxError: Expected ',' or '}'` (operator-runtime.test.ts:603).
+  2. **State-exists timing** — whether the launch script had written the running
+     state yet flipped derived remote health between `active` and
+     `degraded/missing-process` (server.test.ts:719, app.test.ts:906).
+  3. **Process-exit race** — a `printf` task could complete before `task-stop`
+     was dispatched → "task is not running" (app.test.ts:1108).
+
+**Changed (additive):**
+- **`src/cli/app.ts`** — exposed two pass-through options on
+  `OperatorCliAppOptions` (`backgroundTaskSpawnProcess`,
+  `backgroundTaskIsProcessRunning`) and forwarded them to the runtime. The
+  runtime already accepted these seams; the CLI app hid them, forcing its tests
+  onto real process timing. Genuine testability/DX improvement, no behavior
+  change in production (defaults unchanged).
+- **`src/harness/background-tasks.testkit.ts`** (new, test-support; not imported
+  by `src/index.ts`, verified absent from `dist/`) — `createDeterministicBackgroundSpawn(pid?)`
+  returns a spawn that hands back a stable fake pid and runs nothing, so tests
+  that set up state explicitly via `writeState(...)` are race-free.
+- **Tests** — injected the deterministic spawn (+ a pinned `isProcessRunning`)
+  into the four affected runtimes/app instances; converted the background/monitor
+  test to write its own `output`/`state` (mirroring how it already handled the
+  monitor) instead of depending on a real `printf`.
+
+**Test results:** `npm test` **174/174, 6 consecutive clean runs** (was
+2–4 flaky failures). `app.test.ts` 8/8 clean in isolation. `typecheck:src` ✅
+(exit 0). Full `tsc` **125 → 125** (no regression; testkit typechecks clean).
+Build ✅.
+
+**New idea (queued in ROADMAP):** make the *production* launch script write
+`state.json` **atomically** (write to `state.json.tmp` then `rename`) so a real
+detached launch script can never expose a torn read to a concurrent reader — the
+same class of bug could bite a live operator running `/background-sync` while a
+task is mid-write, not just tests. Bonus: a tiny "flake sentinel" that runs the
+suite N times in CI and fails if pass-counts differ, so determinism regressions
+are caught mechanically rather than by a lucky local run.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
