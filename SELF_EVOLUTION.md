@@ -6,6 +6,77 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-20 (run 9) — 🎯 Closed the movement train→infer loop in-process (objective #2)
+
+**Audited:** The local-movement learning subsystem (standing objective #2)
+against what actually exists. `src/capture/` has capture→schema→dataset→replay;
+`src/training/` has an exporter, job store, execution service, and a `runner.ts`
+— but the runner **only emits a shell launch script** for a real on-device
+mlx/axolotl run. There was **no in-process, cloud-testable code that actually
+learns from the recorded movements and infers the next one** — i.e. objective
+2(c) "repeat recorded movements" and 2(d) "generalize to new-but-related
+movements" had zero executable implementation. That is the biggest parity gap in
+the subsystem, and it's the piece that can be validated on simulated streams.
+
+**Changed (additive — two new modules + barrel exports, no existing code touched):**
+- **`src/training/movement-model.ts`** — the missing seam:
+  - `MovementModelBackend` **pluggable interface** + `TrainedMovementModel`
+    (predict/generate/score/serialize), so a real neural backend can be dropped
+    in later without changing call sites (roadmap item ticked).
+  - `DeterministicMarkovMovementBackend` — a real, dependency-free
+    **variable-order Markov model with Katz-style backoff**. It genuinely trains
+    on a `MovementDataset` and: (2c) *reproduces* a recorded sequence verbatim via
+    greedy generation, and (2d) *generalizes* — an unseen high-order context backs
+    off to a seen lower-order context and still predicts the right next movement.
+  - An **EOS sentinel** (`MOVEMENT_EOS`) appended per sequence at train time so
+    the model learns *when to stop* instead of looping on a unigram fallback.
+  - Deterministic tie-breaking (count desc, then lexicographic) → reproducible.
+  - `serialize()`/`deserialize()` → a trained model is a persistable artifact.
+  - Tokenizers from both a `TrajectorySpan` and a replay timeline (the canonical
+    dataset surface), plus `evaluateMovementModel` (mean next-token fidelity over
+    a held-out set) for the generalization eval harness.
+- **`src/training/synthetic-movements.ts`** — seeded (`mulberry32`) synthetic
+  trajectory generator with a small library of task families (`file-save`,
+  `browser-search`), each a movement grammar with bounded random inserts. Lets
+  the whole capture→dataset→replay→train→infer loop be validated with **no real
+  OS input**, exactly as the objective requires in the cloud.
+- **`src/training/movement-model.test.ts`** — 12 tests: tokenization ordering,
+  verbatim repeat, backoff generalization, deterministic tie-break, EOS stop,
+  explicit stopToken, serialize round-trip, and a **comparative generalization
+  eval** (a same-family model reproduces held-out variants with meanFidelity
+  >0.5 and beats a cross-family baseline by >0.3 — learning the shared movement
+  spine transfers to unseen-but-related trajectories).
+
+**Test results:** new suite **12/12 ✅**. `npm run typecheck:src` ✅ (source stays
+green — the new modules typecheck clean). `npm run build` ✅. Full `npm test`:
+**183 passing, 12 of them new.** ⚠️ **3 pre-existing failures** in
+`operator-runtime.test.ts` / `app.test.ts` / `server.test.ts` — verified they
+fail *identically on the clean baseline* (git stash) before my change, so they
+are NOT caused by this work. Root cause is a date/environment-dependent
+malformed-JSON read in the background-tasks state file (`readJsonFile` throws
+"Expected ',' or '}'" at a fixed byte offset; the failing count fluctuates 2–4
+between runs, confirming a timing/date flake, and the last green run was
+2026-06-23). Per the guardrails I did **not** rewrite that working reference
+infra to chase it; logged as a blocker below and pushed to the designated
+feature branch (not `main`).
+
+**New idea:** the Markov backend is the reference/mock backend; the interface is
+now the contract. Next, add an **`OnlineMovementBackend`** that updates counts
+incrementally as new trajectories are recorded (true continual/on-device
+learning) and a **confidence-gated executor** that only auto-performs a predicted
+movement when `predictNext().probability` clears a threshold *and* the backoff
+`order` is high enough (specific context, not a unigram guess) — turning the
+model into a safe autocomplete for real actions with a human-in-the-loop fallback
+below the threshold.
+
+### ⚠️ Known blocker (pre-existing, not from this run)
+`recoverBackgroundTasks` / background-task reconciliation reads a state file that
+is malformed JSON on the current date/environment (`src/shared/fs.ts:17`
+`readJsonFile` → SyntaxError). Affects 3 orchestration tests. Reproduces on the
+clean baseline. Likely the `renderLaunchScript` `sed` substitution of
+`__OPENCLAW_STARTED_AT__`/`$$` producing invalid JSON, or a leftover shared
+state file. Queued in ROADMAP as the next reliability fix.
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

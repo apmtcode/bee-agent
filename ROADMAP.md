@@ -58,17 +58,39 @@ unchecked items are queued. Keep this richer than you found it each run.
 ## Local-movement learning subsystem
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
-(exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
-      objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
-      deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+(exporter, job store/manifest, runner, execution service, **movement-model**,
+**synthetic-movements**). Next increments:
+- [x] Inventory: capture→schema→dataset→replay exist in `src/capture`;
+      `src/training` had export/job/runner but **no in-process learn+infer**.
+      Gap closed run 9 (2026-07-20).
+- [x] Pluggable local-model backend interface (`MovementModelBackend`) with a
+      deterministic reference backend (`DeterministicMarkovMovementBackend`,
+      variable-order Markov + backoff) that trains + infers in-process so
+      cloud/CI tests pass — DONE run 9. Documented seam for a real on-device
+      small model (swap the backend; the trained-model contract is stable).
+- [x] Synthetic event-stream generator (`generateSyntheticTrajectories` +
+      seeded `mulberry32`, task families) to validate capture→dataset→replay→
+      train→infer without real OS input — DONE run 9.
+- [x] Generalization eval harness (`evaluateMovementModel`, mean next-token
+      fidelity over held-out related trajectories) — DONE run 9.
+- [ ] `OnlineMovementBackend`: incrementally update model counts as new
+      trajectories arrive (continual/on-device learning) rather than batch-only.
+- [ ] Confidence-gated movement executor: auto-perform a predicted movement only
+      when `predictNext().probability` ≥ threshold AND backoff `order` is high
+      (specific context), else defer to a human-in-the-loop fallback.
+- [ ] Wire the movement model into the training `execution-service`/`runner` so a
+      reviewed export can produce a trained Markov artifact as the mock/local
+      backend result (bridges the shell-launch runner and the in-process model).
+
+## Reliability
+- [ ] **Pre-existing test flake (found run 9):** background-task recovery reads a
+      malformed state file on the current date/env (`src/shared/fs.ts:17`
+      `readJsonFile` → `SyntaxError: Expected ',' or '}'`), failing 3 orchestration
+      tests (`operator-runtime`, `app`, `server`). Reproduces on clean baseline;
+      last green run was 2026-06-23. Suspect the `renderLaunchScript` `sed`
+      substitution of `__OPENCLAW_STARTED_AT__`/`$$` producing invalid JSON, or a
+      leftover shared state file. Fix additively (harden `readState` to tolerate a
+      partially-written file / fix the substitution) — do NOT rewrite the runner.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
