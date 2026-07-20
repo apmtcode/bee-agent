@@ -6,6 +6,67 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-20 (run 9) — Two real launch-script bugs fixed; racy tests made hermetic (suite RED→GREEN)
+
+**Audited:** Baseline build/test health before adding anything. The previous log
+claimed 174/174, but in this environment the suite was **RED**: 2 failing tests
+(`operator-runtime.test.ts` "starts, syncs, recovers…" and `server.test.ts`
+"handles session, transcript, approval…"). Root-caused both rather than papering
+over them — and found **two genuine production bugs** in the background-task /
+training launch-script generator.
+
+**Bug 1 — corrupt state file for quoted commands (`src/harness/background-tasks.ts`).**
+`shellQuote` escaped an embedded single quote as `"'"'"'` instead of the correct
+`'"'"'`. Any task whose command contains a `'` (e.g. the test's
+`printf 'line-1\nline-2\n'`) produced an **unparseable** `state.json`, so recovery
+threw `SyntaxError: Expected ',' or '}'…` and rejected the whole
+`recoverBackgroundTasks` call. `src/training/runner.ts` already had the correct
+escape — the two copies had silently diverged. Fixed the escape.
+
+**Bug 2 — pid never substituted (both `background-tasks.ts` and `runner.ts`).**
+The launch script's `sed "s/…/$started_at/g; s/\"\$\$\"/$$/g"` unescapes in the JS
+template to `sed "…; s/"$$"/$$/g"`; bash's double-quote parsing turns the middle
+`"` into a quote boundary, so the pid expression degrades to `s/<pid>/<pid>/g` — a
+**no-op**. Every real background-task/training state file therefore recorded
+`"pid": "$$"` (a string), and `isProcessRunning`/`stop` then saw `Number("$$") =
+NaN` — process liveness/termination was quietly broken. Replaced the fragile
+`"$$"` JSON placeholder with a quote-safe token `"__OPENCLAW_PID__"` and a robust
+two-expression sed: `sed -e "s/__OPENCLAW_STARTED_AT__/$started_at/g" -e
+'s/"__OPENCLAW_PID__"/'"$$"'/g'` (verified in isolation → numeric pid, valid JSON).
+
+**Regression test (`background-tasks.test.ts`):** new case runs the *actual emitted*
+launch-script state-init prefix for a single-quoted command and asserts the state
+is valid JSON with a **numeric** pid and a roundtripped command — it fails on
+either bug above.
+
+**Hermeticity fixes (test-only).** The 2 baseline failures were non-hermetic: the
+tests spawn **real** `sleep 5`/`printf` processes (`StandaloneOperatorRuntime` with
+`backgroundTaskIsProcessRunning: () => false` but **no** `backgroundTaskSpawnProcess`
+stub), whose launch scripts race the tests' explicit `writeState` calls — e.g.
+`tail -f app.log` fails and writes its own "failed" state; three `sleep 5` tasks
+write "running" up front and defeat the breaker's mixed→degraded→paused
+progression. Stubbed `backgroundTaskSpawnProcess: () => ({ pid, unref() {} })` in
+the operator-runtime background-tasks test and in the server.test.ts
+remote-control / drift / breaker runtimes so injected state is the sole source of
+truth. No source behaviour changed by these test edits.
+
+**Test results:** suite **172 → 175 passing** (2 real bugs fixed + 1 new
+regression test); **deterministic across 3 consecutive runs**. `typecheck:src` ✅
+(exit 0). Build ✅ (5 files, 531 kB). Full `tsc` unchanged at **125** (test-only
+debt; no new source errors).
+
+**New ideas:**
+1. **Shared launch-script module.** `background-tasks.ts` and `runner.ts` each
+   carry a near-identical `renderLaunchScript` (same `shellQuote`, sed, python
+   state-writer). That duplication is *exactly* what let Bug 1 live in one file
+   while the other was correct. Extract `src/shared/launch-script.ts` so a fix
+   can't diverge — tracked in ROADMAP.
+2. **Hermeticity lint.** Flag any test that overrides `backgroundTaskIsProcessRunning`
+   (or `isProcessRunning`) without also stubbing `backgroundTaskSpawnProcess` — that
+   combination almost always means a real OS process is racing injected state.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

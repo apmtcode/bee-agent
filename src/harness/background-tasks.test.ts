@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -369,5 +370,32 @@ describe("BackgroundTaskExecutionService", () => {
     await expect(fs.readFile(path.join(rootDir, task.execution.launchScript), "utf8")).resolves.toContain("bash -lc");
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
+  });
+
+  it("emits an initial running state that is valid JSON with a numeric pid for single-quoted commands", async () => {
+    const rootDir = await makeTempDir();
+    // No-op spawn: we execute the emitted script's state-init prefix ourselves so
+    // the assertion is deterministic and never races a real background process.
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"), () => ({ pid: 4242, unref() {} }));
+    // Command embeds a literal single quote — this is what previously corrupted the
+    // shell-quoted JSON payload and produced an unparseable state file on recovery.
+    const command = "printf '%s' \"a'b\"";
+    const task = await store.start({ title: "Quoted", command, cwd: rootDir, kind: "task" });
+
+    const script = await fs.readFile(path.join(rootDir, task.execution.launchScript), "utf8");
+    // Run only the prefix that writes the initial "running" state (up to the `if` that
+    // would otherwise execute the command), so we observe exactly what `printf | sed` wrote.
+    const prefix = script.split("\n");
+    const ifIndex = prefix.findIndex((line) => line.startsWith("if "));
+    expect(ifIndex).toBeGreaterThan(0);
+    execFileSync("bash", ["-c", prefix.slice(0, ifIndex).join("\n")], { cwd: rootDir });
+
+    const raw = await fs.readFile(path.join(rootDir, task.execution.stateFile), "utf8");
+    const state = JSON.parse(raw) as BackgroundTaskExecutionState;
+    expect(state.status).toBe("running");
+    expect(typeof state.pid).toBe("number");
+    expect(state.pid).toBeGreaterThan(0);
+    expect(state.command).toBe(command);
+    expect(state.startedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
   });
 });

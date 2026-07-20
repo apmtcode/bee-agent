@@ -70,6 +70,29 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Generalization eval harness: measure replay fidelity on held-out but
       related synthetic trajectories.
 
+## Reliability / correctness (run 9)
+- [x] **Launch-script `shellQuote` bug** — single quotes in a task command produced
+      an unparseable `state.json`, crashing recovery. Fixed in
+      `background-tasks.ts` (run 9); `runner.ts` was already correct.
+- [x] **Launch-script pid substitution no-op** — `sed "…; s/"$$"/$$/g"` degraded to
+      `s/pid/pid/g` so state files stored `"pid": "$$"` (string) → `NaN` in
+      `isProcessRunning`/`stop`. Fixed with a quote-safe `__OPENCLAW_PID__`
+      placeholder + `sed -e … -e …` in BOTH `background-tasks.ts` and `runner.ts`
+      (run 9). Added an executes-the-real-script regression test.
+- [x] **Non-hermetic background-task tests** — operator-runtime + server (remote
+      control / drift / breaker) spawned real `sleep`/`printf`/`tail -f` processes
+      that raced injected `writeState`. Stubbed `backgroundTaskSpawnProcess`
+      (run 9). Suite now deterministic (175/175 over repeated runs).
+- [ ] **Extract shared `src/shared/launch-script.ts`** — `background-tasks.ts` and
+      `runner.ts` duplicate `renderLaunchScript`/`shellQuote`/sed/python-state-writer.
+      This duplication is what let the `shellQuote` bug live in one file while the
+      other was correct. Unify so fixes can't diverge; keep per-caller payload/command
+      differences as parameters.
+- [ ] **Hermeticity lint / test helper** — flag (or provide a factory that defaults)
+      any runtime/store built with `isProcessRunning` overridden but no
+      `spawnProcess` stub, since that pairing races real OS processes against
+      injected state.
+
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in
