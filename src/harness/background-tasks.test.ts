@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -369,5 +370,31 @@ describe("BackgroundTaskExecutionService", () => {
     await expect(fs.readFile(path.join(rootDir, task.execution.launchScript), "utf8")).resolves.toContain("bash -lc");
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
+  });
+
+  it("emits a valid, atomically-written state file for commands containing single quotes", async () => {
+    const rootDir = await makeTempDir();
+    // Mock spawn: writeArtifacts runs, but we execute the generated script
+    // ourselves so we can inspect the state file it produces on disk.
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"), () => ({ pid: 1, unref() {} }));
+    const command = "printf 'has-single-quotes\nand-newlines\n'";
+    const task = await store.start({ title: "Quoted", command, cwd: rootDir, kind: "task" });
+
+    const scriptPath = path.join(rootDir, task.execution.launchScript);
+    const script = await fs.readFile(scriptPath, "utf8");
+    // Atomic initial write (temp + rename) so readers never observe a torn file.
+    expect(script).toContain("mv -f");
+
+    // Run the real launch script; the command completes immediately.
+    execFileSync("bash", [scriptPath], { cwd: rootDir });
+
+    const statePath = path.join(rootDir, task.execution.stateFile);
+    const raw = await fs.readFile(statePath, "utf8");
+    // The bug: a mis-escaped single quote corrupted the JSON. Assert it parses.
+    const state = JSON.parse(raw) as BackgroundTaskExecutionState;
+    expect(state.command).toBe(command); // round-trips exactly, quotes preserved
+    expect(typeof state.pid).toBe("number"); // numeric pid, not the literal "$$"
+    expect(state.status).toBe("completed");
+    expect(state.exitCode).toBe(0);
   });
 });

@@ -3,6 +3,24 @@
 Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
+## Reliability / correctness (background-task subsystem)
+- [x] **Fix `shellQuote` single-quote escaping** in
+      `src/harness/background-tasks.ts` (`"'"'"'` → `'"'"'`) — commands with a
+      `'` corrupted the generated `state.json` → `readState` threw
+      (2026-07-20, run 9). Regression test added.
+- [x] **Atomic state writes** in the launch script (temp + `mv -f` /
+      `os.replace`) and **numeric pid** placeholder (2026-07-20, run 9).
+- [ ] **Make the initial `running` state write conditional** — skip it when
+      `state.json` already exists with a terminal status. Fixes the flaky
+      `operator-runtime.test.ts` "starts, syncs, recovers…" recover race and
+      hardens against a late launch-script write resurrecting a finished task.
+- [ ] **`server.test.ts` "handles session…" (deterministic fail):** remote
+      control resolves `state: "degraded"` where the test expects `"active"`.
+      Investigate the remote-control status derivation (unrelated to bg tasks).
+- [ ] Port the same atomic-write + numeric-pid hardening to
+      `src/training/runner.ts`'s launch script (same pattern; update its
+      script-content tests alongside).
+
 ## Foundations / DX
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.

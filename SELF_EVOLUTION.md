@@ -6,6 +6,67 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-20 (run 9) — 🐞 Real bug: background-task state-file corruption (`shellQuote` + non-atomic writes)
+
+**Audited:** The repo was RED on arrival — 3–4 tests failing at baseline (not
+the 174/174 the run-8 log claimed; those integration tests are
+environment-sensitive and this cloud machine schedules the detached background
+processes differently). Root-caused the dominant failure:
+`operator-runtime.test.ts` crashed with `SyntaxError: Expected ',' or '}' … at
+position 311` while `recoverBackgroundTasks` read a task's `state.json`.
+
+**Root cause (genuine correctness bug, not a test bug):** captured the offending
+file mid-failure — the JSON was corrupt at the `command` field. The
+`shellQuote()` helper in `src/harness/background-tasks.ts` used the **wrong
+POSIX single-quote escape**: `"'"'"'` (6 chars, starts with `"`) instead of the
+correct `'"'"'` (5 chars). Any task whose `command` contains a single quote —
+e.g. the test's `printf 'line-1\nline-2\n'` — was mis-quoted in the generated
+bash launch script, so the emitted `state.json` had unescaped inner quotes →
+invalid JSON → every `readState` on it threw. (The sibling `shellQuote` in
+`src/training/runner.ts` already used the correct sequence, which is how the
+divergence was spotted.)
+
+**Changes (additive, in `src/harness/background-tasks.ts`):**
+1. **Fixed `shellQuote`** single-quote escaping `"'"'"'` → `'"'"'`. This is the
+   actual test-failure fix — verified by a regression test that fails with
+   `char 311` on the old code and passes on the new.
+2. **Atomic state writes.** The launch script wrote state via
+   `printf … > state.json` (truncate-then-write, non-atomic) and the Python
+   completion writer via `write_text` — both expose a torn-read window to a
+   concurrent `readState`. Now both write to a temp file and `mv -f` /
+   `os.replace` into place, so a reader always sees a complete document.
+3. **Numeric pid.** The initial running-state used `pid: "$$"` with a broken
+   `sed "…s/\"$$\"/$$/g"` (the `\"` collapsed to `"` in the JS template literal,
+   leaving `"pid":"$$"` — a *string*, which would break `process.kill(-pid)`
+   during recover). Replaced with a `"__OPENCLAW_PID__"` placeholder stripped by
+   a single-quoted sed expr, so the emitted value is a bare number.
+
+**Test results:** baseline **3–4 failed** → now **1 hard fail + 1 flaky**.
+🎯 **Both `app.test.ts` failures fixed** (they consumed the corrupt state via
+bootstrap/sessions). The operator-runtime crash is gone; that test now *passes
+intermittently* (the remaining flake is the test's own design — a real detached
+process racing its manually-written state; see ROADMAP). New regression test
+added (`background-tasks.test.ts`, 7→8; total **174→175**). `typecheck:src` ✅.
+`npm run build` ✅.
+
+**Remaining pre-existing failures (documented, not introduced this run):**
+- `control-plane/server.test.ts` "handles session…": deterministic — remote
+  control returns `state: "degraded"` where the test expects `"active"`.
+  Unrelated to background tasks; a separate investigation (session remote-control
+  status derivation).
+- `orchestrator/operator-runtime.test.ts` "starts, syncs, recovers…": now flaky.
+  The detached launch script's initial `running` write can land *after* the test
+  has recorded a terminal `failed` state, clobbering it.
+
+**New idea:** make the launch script's **initial `running` write conditional** —
+skip it if `state.json` already exists with a terminal status
+(`completed|failed|cancelled`). This is a real production-robustness win (a
+relaunch/late-write must never resurrect a finished task to `running`) *and*
+deterministically fixes the operator-runtime recover flake, since either write
+ordering then converges on the terminal state. Cheap, guarded, reversible.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
