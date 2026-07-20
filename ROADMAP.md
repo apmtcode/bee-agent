@@ -62,15 +62,38 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      for a real on-device small model. **DONE run 9** —
+      `src/training/movement-model.ts`: `MovementTrainingBackend`/`MovementModel`
+      interfaces + `MarkovMovementBackend` (deterministic order-k Markov with
+      Katz backoff) + `MovementBackendRegistry`. Inference (`predictNext`),
+      rollout (`generate`), and serialization round-trip covered by tests.
+- [x] Synthetic event-stream generator to validate capture→dataset→replay
+      round-trips without real OS input. **DONE run 9** —
+      `src/training/synthetic-movement.ts` (seeded mulberry32 motif+mutations;
+      `synthesizeReplayManifest` drives the full replay→dataset path).
+- [x] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories. **DONE run 9** — `evaluateMovementModel`
+      (next-token accuracy + perplexity on held-out synthetic sequences).
+- [ ] **Movement-model training seam in the runner:** let
+      `LocalAppleSiliconTrainingRunner` optionally accept a
+      `MovementTrainingBackend` so the same reviewed dataset trains in-process
+      (markov/mock) for CI smoke-tests *and* on device via MLX — unifying the two
+      currently-disjoint training paths behind one interface.
+- [ ] Real on-device backend behind `MovementTrainingBackend` (small local model,
+      e.g. an MLX/llama.cpp tokenizer over movement tokens) — the mock proves the
+      seam; wire the real one when running locally.
 
 ## Innovation backlog
+- [ ] **Deterministic harness tests (kill the spawn-race class):** the
+      `operator-runtime`/`app` background-task+cron tests spawn real subprocesses
+      and race the launch script's own state writes against the test's manual
+      `writeState` (3 pre-existing suite failures as of run 9, one distinct
+      root cause each). Inject the already-supported `backgroundTaskSpawnProcess`
+      seam with a mock that drives state only via explicit writes so the suite
+      goes green without depending on cloud subprocess timing. (run 9 fixed the
+      real state-file JSON-corruption bug underneath one of these.)
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in
       project health over time.

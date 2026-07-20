@@ -6,6 +6,77 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-20 (run 9) — 🧠 In-process movement-model backend: capture→train→infer→generalize loop closes; + real state-file corruption fix
+
+**Audited:** The local-movement learning subsystem (`src/capture/` + `src/training/`).
+The pipeline already had capture, an event schema, a replayable dataset
+(`ReplayManifest`), a reviewed exporter, and a training *runner* — but the runner
+only emits **launch plans / bash scripts** for real on-device backends
+(MLX / axolotl) that execute solely on the user's Apple Silicon machine. There
+was **no in-process model layer**: nothing could actually train on a movement
+dataset or perform inference in the cloud/CI, so objective #2 items (c) post-train
+a local model and (d) generalize were unreachable by tests. That was the gap.
+
+**Changed (additive):**
+- **`src/training/movement-model.ts`** — the pluggable model layer:
+  - `MovementToken`/`MovementSequence`/`MovementDataset` types + tokenizer
+    (`tokenizeReplayEvent`: actions→`act:<tool>`, observations→`obs:<source>`,
+    transcript skipped) and dataset builders from replay manifests
+    (`buildMovementDataset`, grouped per trajectory) and from trajectory spans.
+  - `MovementTrainingBackend` / `MovementModel` interfaces — the seam a real
+    on-device small model drops behind without touching call sites.
+  - `MarkovMovementBackend` — a **deterministic order-k Markov model with
+    Katz-style backoff**. Training tallies token transitions at every context
+    length 0..order (sequences wrapped with START/END anchors); inference
+    argmaxes the longest observed context and **backs off to shorter contexts for
+    unseen prefixes** — that backoff is what performs *new-but-related* movements
+    it never saw verbatim (objective (d)). `predictNext`/`generate`/`toJSON`
+    round-trip via `load`.
+  - `MovementBackendRegistry` (+ `createDefaultMovementBackendRegistry`) so the
+    backend is pluggable/id-addressable.
+  - `evaluateMovementModel` — the **generalization eval harness**: next-token
+    accuracy + perplexity on held-out sequences.
+- **`src/training/synthetic-movement.ts`** — a **deterministic (seeded mulberry32)
+  synthetic movement-stream generator**. Emits a canonical motif across many
+  episodes with seeded drop/duplicate/substitute mutations, so tests exercise
+  capture→dataset→train→generalize with reproducible new-but-related variations
+  and **no real OS input** (we run in the cloud). Includes
+  `synthesizeReplayManifest` to drive the full replay→dataset path.
+- **Barrel exports** wired in `src/index.ts`.
+- **Real bug fixed** (`src/harness/background-tasks.ts`): the background-task
+  launch script wrote its initial `running` state via a fragile
+  `printf '%s' '<shell-quoted-json>' | sed …` pipeline. For any `command`
+  containing quotes/newlines (e.g. `printf 'line-1\nline-2\n'`) the shell-quoting
+  mangled the JSON → **corrupt state file → recovery crashes with a JSON parse
+  error**. Replaced with a quoted-heredoc that streams the JSON template
+  literally (no shell expansion can corrupt it) + a python step that fills in the
+  real pid/timestamps, mirroring the existing completed/failed writers. Verified
+  via instrumentation: the corruption is gone.
+
+**Test results:** `typecheck:src` ✅ (all source stays green). Build ✅.
+New movement tests **15/15 ✅**. Full suite **186/189 passing** (was 174 tests;
++15 mine, all green). The **3 remaining failures are pre-existing** (confirmed by
+`git stash` on a clean tree) and have **distinct** root causes in the test-debt
+area the roadmap already tracks: (1) `operator-runtime` background-task recover —
+a spawn/write **race** (the async launch script's `cat > state` clobbers the
+test's manual `writeState` between recover calls); my JSON fix advanced this one
+from a hard parse-crash to the underlying race. (2) `app.test` `control=active`
+string + a task-listing race. (3) `server.test` result-shape drift (10 vs 2
+fields). None are caused by this run's changes. Per the designated-branch rule,
+pushed to `claude/peaceful-dirac-ju8j37`.
+
+**New idea:** make the spawn-dependent harness tests **deterministic** by
+injecting the already-supported `backgroundTaskSpawnProcess` seam with a mock
+that drives state only through explicit writes (no real subprocess) — kills the
+race class in `operator-runtime`/`app` tests and lets the suite go fully green
+without depending on cloud subprocess timing. Second idea: a
+**movement-model training seam in the runner** — have `LocalAppleSiliconTrainingRunner`
+optionally accept a `MovementTrainingBackend` so the same reviewed dataset can be
+trained in-process (mock/markov) for CI smoke-tests *and* handed to MLX on device,
+unifying the two currently-disjoint training paths behind one interface.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
