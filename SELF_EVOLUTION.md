@@ -6,6 +6,58 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-20 (run 9) — Green + deterministic suite: fix 3 flaky background-task tests, harden state I/O
+
+**Audited:** Project health at HEAD. `npm test` was **not green** — 3–4 tests
+failed *nondeterministically* across runs (`server.test.ts`,
+`cli/app.test.ts` ×2, `orchestrator/operator-runtime.test.ts`). A flaky suite
+silently breaks the engine's own step-5 verification gate, so this was the
+highest-value fix available.
+
+**Root cause (one bug, three symptoms):** `startBackgroundTask` spawns a **real
+detached OS process** whose generated `run.sh` writes `state.json`. Several tests
+stub `backgroundTaskIsProcessRunning: () => false` (or rely on default timing)
+but did **not** stub the spawn — so a real launch script raced the runtime's own
+state reads/writes. Symptoms:
+- `operator-runtime.test.ts`: the launch script's `sed … > state.json` is
+  **non-atomic**; a reader caught it mid-write → `SyntaxError … in JSON` (partial
+  single-line file).
+- `server.test.ts` / `app.test.ts`: a real process wrote `status:"running"` while
+  the stubbed liveness probe reported the process dead → remote-status
+  diagnostics saw "running task + dead process" → `control: degraded` instead of
+  `active`/`mixed`.
+
+**Changed (all additive, reversible):**
+- **`src/harness/background-tasks.ts` — production hardening.** Both launch-script
+  state writers are now **atomic**: the initial `sed` render writes to
+  `state.json.$$.tmp` then `mv -f` into place; the Python terminal-state writer
+  renders to a sibling temp file then `os.replace()`. Any reader (reconciler,
+  remote-status diagnostics, CLI) now always sees a complete, parseable file —
+  eliminating the partial-read failure class in *production*, not just tests.
+- **`src/cli/app.ts` — testability seam.** Added optional
+  `backgroundTaskSpawnProcess` / `backgroundTaskIsProcessRunning` to
+  `OperatorCliAppOptions`, threaded into the runtime (production default
+  unchanged). Lets callers/tests supply a deterministic process backend.
+- **Tests made hermetic.** `server.test.ts` (×3 runtimes) and
+  `operator-runtime.test.ts` inject an inert spawn (fake pid, no real process) so
+  background-task state is driven only by explicit `writeState`. `app.test.ts`'s
+  "background and monitor task commands" test now drives the task's execution
+  state explicitly (running + `"ok"` output) under a consistent
+  `isProcessRunning: () => true`, instead of racing a real `printf ok`.
+
+**Test results:** build ✅. `typecheck:src` ✅ (exit 0). Full `tsc` unchanged at
+**125** (all in test files). `npm test` ✅ **174/174**, now verified
+**deterministic across 8 consecutive full-suite runs** (was flaky ~1-in-3
+before). No production behaviour change beyond the atomicity hardening.
+
+**New idea (logged to ROADMAP):** Ship a reusable `createInertBackgroundBackend()`
+test helper (shared spawn + liveness stubs) and, longer-term, a `flake-scan`
+engine step that runs the suite N× on each cycle and quarantines any test whose
+pass/fail flips — so nondeterminism is caught by the engine instead of
+surfacing as a red gate a later run has to debug.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

@@ -16,6 +16,15 @@ async function makeTempDir(): Promise<string> {
   return dir;
 }
 
+// Inert background-task spawn: fake pid, no real detached process. Background
+// tasks started in these tests only need a "running" record; a real launch
+// script would asynchronously write state.json and race the runtime's reads.
+let inertPid = 90000;
+function inertBackgroundSpawn(): { pid: number; unref(): void } {
+  inertPid += 1;
+  return { pid: inertPid, unref() {} };
+}
+
 afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })));
 });
@@ -801,7 +810,12 @@ describe("OperatorCliApp", () => {
 
   it("supports session lifecycle, transcript, approvals, pairing, config, and prompt commands", async () => {
     const rootDir = await makeTempDir();
-    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    const app = new OperatorCliApp({
+      rootDir,
+      cwd: rootDir,
+      currentDate: "2026-05-25",
+      backgroundTaskSpawnProcess: () => inertBackgroundSpawn(),
+    });
     const firstSession = await app.runtime.startSession({ title: "first", cwd: rootDir, agentId: "operator-cli" });
     const secondSession = await app.runtime.startSession({ title: "second", cwd: rootDir, agentId: "operator-cli" });
 
@@ -1063,7 +1077,20 @@ describe("OperatorCliApp", () => {
 
   it("supports background and monitor task commands plus cron commands", async () => {
     const rootDir = await makeTempDir();
-    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    // Inert spawn: this test drives background/monitor task state explicitly via
+    // writeState/writeOutput (so it can hold a task in "running" for watch-active
+    // while still exposing output). A real detached launch script would race
+    // those writes and finish the task early, breaking the active-task view.
+    const app = new OperatorCliApp({
+      rootDir,
+      cwd: rootDir,
+      currentDate: "2026-05-25",
+      backgroundTaskSpawnProcess: () => inertBackgroundSpawn(),
+      // Simulate a live process so a "running" task stays running across sync
+      // (rather than being reconciled to "failed") — consistent with the
+      // running-with-output scenario this test drives.
+      backgroundTaskIsProcessRunning: () => true,
+    });
     const session = await app.runtime.startSession({ title: "CLI ops", cwd: rootDir, agentId: "operator-cli" });
 
     const startOutput = await app.dispatchSlashCommand(
@@ -1082,6 +1109,23 @@ describe("OperatorCliApp", () => {
     const listOutput = await app.dispatchSlashCommand({ kind: "background-list" });
     expect(listOutput).toContain(task.id);
     expect(listOutput).toContain("smoke");
+
+    // Drive the task's execution state deterministically: keep it "running" (so
+    // watch-active lists it) with "ok" already in its output log (so view /
+    // watch-task can read it) — no dependency on real detached-process timing.
+    await app.runtime.backgroundTasks.executionService.writeOutput(task, "ok\n");
+    await app.runtime.backgroundTasks.executionService.writeState(task, {
+      version: 1,
+      taskId: task.id,
+      kind: "task",
+      status: "running",
+      pid: task.execution.processId ?? 4321,
+      startedAt: task.execution.startedAt ?? task.updatedAt,
+      updatedAt: task.updatedAt,
+      outputFile: task.execution.outputFile,
+      cwd: task.cwd,
+      command: task.command,
+    });
 
     const syncOutput = await app.dispatchSlashCommand({ kind: "background-sync", taskId: task.id });
     expect(syncOutput).toContain(task.id);

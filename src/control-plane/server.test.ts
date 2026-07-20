@@ -18,6 +18,15 @@ async function makeTempDir(): Promise<string> {
   return dir;
 }
 
+// Inert background-task spawn: fake pid, no real detached process. Keeps
+// background-task state fully test-controlled (via writeState) instead of
+// racing with a real launch script's asynchronous state writes.
+let inertPid = 90000;
+function inertBackgroundSpawn(): { pid: number; unref(): void } {
+  inertPid += 1;
+  return { pid: inertPid, unref() {} };
+}
+
 afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })));
 });
@@ -84,6 +93,7 @@ describe("OperatorControlPlaneServer", () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir,
       backgroundTaskIsProcessRunning: () => false,
+      backgroundTaskSpawnProcess: () => inertBackgroundSpawn(),
       delivery: new OperatorDeliveryService(rootDir, {
         sendBrowserPush: async () => {},
       }),
@@ -953,6 +963,7 @@ describe("OperatorControlPlaneServer", () => {
     const driftingRuntime = new StandaloneOperatorRuntime({
       rootDir: driftingRootDir,
       backgroundTaskIsProcessRunning: () => false,
+      backgroundTaskSpawnProcess: () => inertBackgroundSpawn(),
     });
     const driftingServer = new OperatorControlPlaneServer({ runtime: driftingRuntime });
     const driftingBootstrap = await driftingServer.handle({
@@ -1019,6 +1030,7 @@ describe("OperatorControlPlaneServer", () => {
     const breakerRuntime = new StandaloneOperatorRuntime({
       rootDir: breakerRootDir,
       backgroundTaskIsProcessRunning: () => false,
+      backgroundTaskSpawnProcess: () => inertBackgroundSpawn(),
     });
     const breakerServer = new OperatorControlPlaneServer({ runtime: breakerRuntime });
     const breakerOne = await breakerServer.handle({

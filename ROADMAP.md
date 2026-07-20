@@ -4,6 +4,12 @@ Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
 ## Foundations / DX
+- [x] **Green + deterministic test suite** (2026-07-20, run 9). Fixed 3 flaky
+      background-task tests (real detached processes racing runtime state I/O);
+      made launch-script `state.json` writes atomic in production
+      (`src/harness/background-tasks.ts`) and added a spawn/liveness testability
+      seam to `OperatorCliApp`. Suite now passes 174/174 across ≥8 consecutive
+      full runs.
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`
@@ -71,6 +77,14 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
       related synthetic trajectories.
 
 ## Innovation backlog
+- [ ] **Flake-scan engine step**: run the suite N× (e.g. 3–5) per cycle and flag
+      any test whose pass/fail flips, so nondeterminism is caught by the engine
+      instead of surfacing as a red gate a later run must debug. Pairs well with
+      the self-check telemetry item below (record flake rate over time).
+- [ ] **Reusable `createInertBackgroundBackend()` test helper**: a shared
+      spawn + liveness stub (currently duplicated inline in `app.test.ts`,
+      `server.test.ts`, `operator-runtime.test.ts`) so future background-task
+      tests are hermetic by default and can't reintroduce the real-process race.
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in
       project health over time.

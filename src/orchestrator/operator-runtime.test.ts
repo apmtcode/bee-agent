@@ -15,6 +15,16 @@ async function makeTempDir(): Promise<string> {
   return dir;
 }
 
+// An inert background-task spawn: returns a fake pid and never launches a real
+// OS process, so no detached launch script races with the runtime's state
+// reads/writes. Tests that assert on background-task state control it explicitly
+// via `writeState`, so real process output/state files would only add flakiness.
+let inertPid = 90000;
+function inertBackgroundSpawn(): { pid: number; unref(): void } {
+  inertPid += 1;
+  return { pid: inertPid, unref() {} };
+}
+
 function buildHookCaptureCommand(outputFile: string): string {
   const script = [
     "import fs from 'node:fs';",
@@ -531,6 +541,7 @@ describe("StandaloneOperatorRuntime", () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
       backgroundTaskIsProcessRunning: () => false,
+      backgroundTaskSpawnProcess: () => inertBackgroundSpawn(),
     });
     const session = await runtime.startSession({ title: "Tasks", agentId: "main" });
 
