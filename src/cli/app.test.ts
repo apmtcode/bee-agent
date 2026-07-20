@@ -10,6 +10,22 @@ import { OperatorCliApp, parseSlashCommand } from "./app.js";
 const tempDirs: string[] = [];
 const execFileAsync = promisify(execFile);
 
+// Deterministic background-task seams so command tests never spawn a real OS
+// process (whose non-atomic launch-script state write races test readers and
+// makes background-task assertions host-timing dependent).
+const fakeBackgroundTaskSpawn = () => ({ pid: 424242, unref() {} });
+const backgroundTaskTestSeams = {
+  backgroundTaskSpawnProcess: fakeBackgroundTaskSpawn,
+  backgroundTaskIsProcessRunning: () => false,
+};
+// Same fake spawner, but the fake process is modeled as still alive — for tests
+// that exercise a freshly started task as the session's *active* task before
+// stopping it explicitly.
+const backgroundTaskAliveSeams = {
+  backgroundTaskSpawnProcess: fakeBackgroundTaskSpawn,
+  backgroundTaskIsProcessRunning: () => true,
+};
+
 async function makeTempDir(): Promise<string> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "operator-cli-app-"));
   tempDirs.push(dir);
@@ -801,7 +817,7 @@ describe("OperatorCliApp", () => {
 
   it("supports session lifecycle, transcript, approvals, pairing, config, and prompt commands", async () => {
     const rootDir = await makeTempDir();
-    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25", ...backgroundTaskTestSeams });
     const firstSession = await app.runtime.startSession({ title: "first", cwd: rootDir, agentId: "operator-cli" });
     const secondSession = await app.runtime.startSession({ title: "second", cwd: rootDir, agentId: "operator-cli" });
 
@@ -1063,7 +1079,7 @@ describe("OperatorCliApp", () => {
 
   it("supports background and monitor task commands plus cron commands", async () => {
     const rootDir = await makeTempDir();
-    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25", ...backgroundTaskAliveSeams });
     const session = await app.runtime.startSession({ title: "CLI ops", cwd: rootDir, agentId: "operator-cli" });
 
     const startOutput = await app.dispatchSlashCommand(

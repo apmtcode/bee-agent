@@ -6,6 +6,66 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-20 (run 9) — 🎯 Suite green in-cloud + pluggable movement-model backend (repeat + generalize)
+
+**Audited:** The actual `npm test` result in this cloud sandbox (prior logs
+recorded 174/174 on a *dev machine*). Found the suite was **red here: 4 failing
+tests** — `operator-runtime.test.ts` (1), `app.test.ts` (2),
+`server.test.ts` (1). Root cause (one, shared): these tests inject a fake
+`backgroundTaskIsProcessRunning` but **not** a fake spawner, so
+`startBackgroundTask` spawned a *real* detached bash launch script. That script
+writes its state file **non-atomically** (`sed … > state.json`), which races the
+test's readers (partial-JSON parse errors) and, because the tiny process exits
+immediately in the sandbox, surfaces as `missing-process` → `control=degraded`.
+Pure host-timing dependence — the exact kind of non-hermeticity run 1 fixed for
+config. The `spawnProcess` seam already existed on the runtime; the tests just
+weren't using it, and `app`/`server` didn't expose it.
+
+**Changed (two focused, additive tranches):**
+1. **Test hermeticity (unblocks a green push for every future run):**
+   - `src/cli/app.ts`: threaded the existing background-task seams
+     (`backgroundTaskSpawnProcess` / `backgroundTaskIsProcessRunning`) through
+     `OperatorCliAppOptions` into the runtime it builds (production default:
+     undefined → real `spawn` + live PID probe, unchanged).
+   - The 3 test files: inject a deterministic fake spawner
+     (`() => ({ pid, unref })`) so no real OS process is launched; tests drive
+     execution state purely via the existing `writeState`/`writeOutput` calls.
+     One app test that exercises a freshly-started task as the session's *active*
+     task uses an "alive" probe (`isProcessRunning: () => true`) so
+     `watch-active` still discovers it; the runtime/server missing-process
+     recovery tests keep `() => false`.
+2. **New capability — pluggable movement-model backend** (standing objective #2,
+   parts **c** repeat & **d** generalize), `src/training/movement-model.ts`:
+   - `MovementModelBackend` interface (a real MLX/on-device backend implements
+     the same shape) + `MockMovementModelBackend` — a deterministic, I/O-free
+     reference backend. "Training" builds a frequency table keyed by a
+     token-bag **context signature**; inference **recalls** the top action for a
+     seen context (confidence 1) and **generalizes** to novel contexts by
+     nearest token-overlap (Jaccard ≥ threshold), else falls back to the global
+     prior. No randomness, no GPU, no Python — validates the loop in-cloud.
+   - `buildMovementDataset(replays)` derives supervised (context → next action)
+     pairs from the existing `ReplayManifest` timelines, so it plugs straight
+     into the recorder→replay→exporter pipeline.
+   - Artifact is plain JSON: `serialize()` / `restoreMovementModel()` let a model
+     trained locally be shipped and used for inference elsewhere.
+   - Exported the full surface from `src/index.ts`.
+
+**Test results:** `typecheck:src` ✅ (exit 0). Build ✅ (tsdown, 5 files, 542 kB).
+`npm test` ✅ **183/183** — the 4 pre-existing env failures are fixed and **+9**
+new movement-model tests (dataset derivation, recall, generalization, fallback,
+frequency ranking, deterministic round-trip, empty-dataset safety). Full `tsc`
+debt unchanged at **125** (all in test files; the new module is clean).
+
+**New idea:** Now that a movement model can *predict* the next action, add a
+**generalization eval harness** that trains on N synthetic trajectories and
+measures top-1 action accuracy on *held-out but related* ones (swap coordinates,
+reorder steps, paraphrase observations) — turning "does it generalize?" into a
+tracked metric per backend. Second idea: a `verify` npm script
+(`typecheck:src && build && test`) the engine runs as its pre-push gate, now that
+the suite is actually green here.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

@@ -38,8 +38,10 @@ unchecked items are queued. Keep this richer than you found it each run.
     `skills.executable.*`, `push.subscriptions.*`, `trajectories.*`, `replays.*`,
     `cron.runs`/misc — plus a few genuine test-only typings. Map the rest, then
     fix residual test-only typings.
-- [ ] Add a `verify` npm script (`typecheck && build && test`) and have the
-      engine run it as a pre-push self-check each cycle.
+- [ ] Add a `verify` npm script (`typecheck:src && build && test`) and have the
+      engine run it as a pre-push self-check each cycle. NOTE: the suite is now
+      actually green in-cloud (run 9 fixed 4 pre-existing env-flaky tests), so a
+      `verify` gate is finally meaningful here.
 - [x] Interim **source-only typecheck gate** — DONE run 7. `tsconfig.src.json`
       (excludes `**/*.test.ts`) + `typecheck:src` script; passes (exit 0). Next:
       have the engine run it as a per-run pre-push self-check.
@@ -62,13 +64,25 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
+      for a real on-device small model. DONE run 9 — `src/training/movement-model.ts`:
+      `MovementModelBackend` interface + `MockMovementModelBackend` (frequency
+      table, recall + Jaccard generalization + global-prior fallback),
+      `buildMovementDataset(replays)`, and a JSON `serialize()`/`restoreMovementModel()`
+      round-trip. 9 tests.
 - [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      round-trips without real OS input. (Partly served now: `buildMovementDataset`
+      consumes `ReplayManifest`s; still want a generator that emits raw device
+      events → recorder → replay to exercise the *front* of the pipeline.)
+- [ ] Generalization eval harness: train on N synthetic trajectories, measure
+      top-1 next-action accuracy on held-out **but related** ones (perturb
+      coordinates, reorder steps, paraphrase observations). Now unblocked by the
+      run-9 `predict()` surface — turns "does it generalize?" into a tracked
+      per-backend metric.
+- [ ] Real on-device backend implementing `MovementModelBackend` (MLX LoRA on
+      Apple silicon) behind the same interface the mock validates; keep the mock
+      as the CI default via a backend registry.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
