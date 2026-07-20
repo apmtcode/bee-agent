@@ -62,13 +62,36 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      for a real on-device small model. **DONE run 9** — `MovementModelBackend`
+      interface + `NgramMovementBackend` (variable-order Markov, back-off
+      generalization, serialize/restore) in `src/training/model-backend.ts`.
+- [x] Synthetic event-stream generator to validate capture→dataset→replay
+      round-trips without real OS input. **DONE run 9** —
+      `src/training/synthetic-movements.ts` (seeded LCG, intent grammar,
+      held-out generator).
+- [x] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories. **DONE run 9** —
+      `evaluateReplayFidelity()` (exact + tool accuracy); held-out synthetic set
+      scores ≥95% in tests.
+- [ ] Wire `NgramMovementBackend` in as the training runner's **cloud/CI default
+      backend** behind the same interface the MLX path uses: when no
+      Apple-Silicon runtime is present, train the in-process n-gram policy,
+      persist a `policy.json` artifact, and record a `ReplayFidelityReport` in
+      the execution state — so every reviewed export yields a working, evaluated
+      policy instead of only a launch script.
+
+## Known pre-existing failures (not introduced by a self-evolve run)
+- [ ] **Time/pid-dependent remote-control tests fail on fresh hosts** (surfaced
+      run 9; reproduces on a clean checkout). `control-plane/server.test.ts`,
+      `cli/app.test.ts`, `orchestrator/operator-runtime.test.ts` expect remote
+      control `state: "active"` but get `"degraded"`/`"missing-process"` because
+      `deriveRemoteDiagnostics` keys off live process/heartbeat state
+      (`isProcessRunning(pid)`, gateway staleness) the fixtures can't satisfy in
+      the cloud. Fix by injecting a clock/`isProcessRunning` seam into the
+      diagnostics path so tests are hermetic (mirror the `configHome` pattern from
+      run 1). Until then the full-suite green gate is blocked by these 3.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

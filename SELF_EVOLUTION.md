@@ -6,6 +6,64 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-20 (run 9) — 🧠 In-process movement-learning backend: learn + generalize from recorded movements
+
+**Audited:** Standing objective #2(c)/(d) — "post-train a local model on the
+recorded dataset to *repeat* the movements and *generalize* to new but related
+ones." Inventoried `src/training/`: the runner/execution-service only build a
+plan + bash launch script for a real **external** MLX/axolotl run (Apple-Silicon
+only, never executes in the cloud), and the exporter emits a reviewed dataset —
+but there was **no in-process model** that actually learns a policy from the
+data or does inference. Objectives 2(c)/2(d) had zero concrete, cloud-testable
+implementation; everything deferred to a tool that only runs on the user's Mac.
+
+**Changed (additive, new files only):**
+- `src/training/model-backend.ts` — a **pluggable local-model backend seam**:
+  - `MovementModelBackend` interface (`train(dataset, opts) → TrainedMovementPolicy`)
+    and `TrainedMovementPolicy` (`predict(history)`, `stats`, `serialize()`), so
+    the real on-device MLX/axolotl path and cloud mocks share one contract.
+  - `NgramMovementBackend` — a **deterministic variable-order Markov policy** that
+    genuinely learns `(context → next-action)` transitions at orders `0..N` and
+    **generalizes via back-off**: it tries the longest context, then shorter ones,
+    finally the global prior — so novel-but-related histories still resolve to the
+    right action. Ties break lexicographically → fully reproducible. Includes
+    `serialize()`/`restore()` for persistence.
+  - `evaluateReplayFidelity(policy, sequences)` — the **generalization eval
+    harness**: walks held-out sequences and measures exact/tool replay accuracy.
+  - `movementDatasetFromReplays()` / `movementSequenceFromReplayEvents()` — bridge
+    the existing `ReplayManifest` timeline events straight into a training dataset.
+- `src/training/synthetic-movements.ts` — a **seeded synthetic event-stream
+  generator** (deterministic LCG, no `Date.now`/`Math.random`) producing
+  structured obs→action streams from an intent grammar, plus
+  `generateHeldOutMovements()` for held-out generalization sets. Validates the
+  capture→dataset→train→infer loop with no real OS input.
+- `src/training/model-backend.test.ts` — 11 tests: in-distribution replay = 100%,
+  known-observation prediction, **back-off generalization** to unseen contexts,
+  global-prior fallback, undefined when no actions seen, serialize/restore
+  determinism, stats, and a synthetic **held-out generalization ≥95% accuracy**
+  test. Wired all public types/functions through `src/index.ts`.
+
+**Test results:** new suite ✅ **11/11**. `npm run build` ✅. `typecheck:src`
+✅ (exit 0 — source stays clean). Full suite: **182 passed, 3 failed** — the 3
+failures are **pre-existing and unrelated** (reproduced identically on a clean
+`git stash` of my changes): `control-plane/server.test.ts`, `cli/app.test.ts`,
+`orchestrator/operator-runtime.test.ts`. Root cause is environment/time/pid
+dependence in the **remote-control diagnostics** path — `deriveRemoteControlStatus`
+resolves to `degraded` (expected `active`) because `deriveRemoteDiagnostics`
+keys off live process/heartbeat state (`isProcessRunning(pid)`, gateway
+staleness) that the fixtures can't satisfy on a fresh cloud host. Not introduced
+this run; logged as a blocker below. Per the explicit branch requirements,
+pushing the green additive increment to `claude/peaceful-dirac-x2cfkt`.
+
+**New idea:** Close the loop by making `NgramMovementBackend` the **default
+cloud/CI backend of the training runner** behind the same interface the MLX path
+uses — so `LocalAppleSiliconTrainingRunner` can, when no Apple-Silicon runtime is
+present, fall back to training the in-process n-gram policy and emitting a real
+`policy.json` artifact + a `ReplayFidelityReport` in the execution state. That
+turns the training pipeline from "write a script for someone else to run" into
+"actually produce a working, evaluated policy every run," and gives every
+reviewed export an immediate fidelity number.
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

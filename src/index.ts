@@ -431,3 +431,31 @@ export type {
   FailTrainingJobParams,
   TrainingJobStoreShape,
 } from "./training/job-store.js";
+export {
+  NgramMovementBackend,
+  evaluateReplayFidelity,
+  movementDatasetFromReplays,
+  movementSequenceFromReplayEvents,
+  movementTokenOf,
+} from "./training/model-backend.js";
+export type {
+  MovementDataset,
+  MovementEvent,
+  MovementModelBackend,
+  MovementPolicyStats,
+  MovementPrediction,
+  MovementSequence,
+  ReplayFidelityReport,
+  SerializedMovementPolicy,
+  TrainMovementOptions,
+  TrainedMovementPolicy,
+} from "./training/model-backend.js";
+export {
+  DEFAULT_SYNTHETIC_INTENTS,
+  generateHeldOutMovements,
+  generateSyntheticMovementDataset,
+} from "./training/synthetic-movements.js";
+export type {
+  SyntheticIntent,
+  SyntheticMovementOptions,
+} from "./training/synthetic-movements.js";
