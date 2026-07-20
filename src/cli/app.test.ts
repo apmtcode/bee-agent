@@ -801,7 +801,20 @@ describe("OperatorCliApp", () => {
 
   it("supports session lifecycle, transcript, approvals, pairing, config, and prompt commands", async () => {
     const rootDir = await makeTempDir();
-    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    // Deterministic background-task liveness: a stub spawn launches nothing (so
+    // no real detached process races the manual writeState fixtures below) and
+    // hands every stub task the sentinel pid 4242. isProcessRunning reports only
+    // that sentinel as alive, so freshly started tasks stay `running`
+    // (control=active), while a fixture that writes a bogus pid (999999) reads as
+    // gone → missing-process → degraded, exactly as the test intends.
+    const LIVE_STUB_PID = 4242;
+    const app = new OperatorCliApp({
+      rootDir,
+      cwd: rootDir,
+      currentDate: "2026-05-25",
+      backgroundTaskSpawnProcess: () => ({ pid: LIVE_STUB_PID, unref: () => {} }),
+      backgroundTaskIsProcessRunning: (pid) => pid === LIVE_STUB_PID,
+    });
     const firstSession = await app.runtime.startSession({ title: "first", cwd: rootDir, agentId: "operator-cli" });
     const secondSession = await app.runtime.startSession({ title: "second", cwd: rootDir, agentId: "operator-cli" });
 
@@ -1063,7 +1076,17 @@ describe("OperatorCliApp", () => {
 
   it("supports background and monitor task commands plus cron commands", async () => {
     const rootDir = await makeTempDir();
-    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    // Stub spawn (fixed live pid) + always-alive probe so task liveness never
+    // depends on a real detached process — otherwise this test flakes under the
+    // parallel suite when the OS is slow to schedule the launch script. Output is
+    // supplied explicitly via writeOutput below instead of a real process.
+    const app = new OperatorCliApp({
+      rootDir,
+      cwd: rootDir,
+      currentDate: "2026-05-25",
+      backgroundTaskSpawnProcess: () => ({ pid: 4242, unref: () => {} }),
+      backgroundTaskIsProcessRunning: () => true,
+    });
     const session = await app.runtime.startSession({ title: "CLI ops", cwd: rootDir, agentId: "operator-cli" });
 
     const startOutput = await app.dispatchSlashCommand(
@@ -1078,6 +1101,7 @@ describe("OperatorCliApp", () => {
     if (!task) {
       throw new Error("expected background task");
     }
+    await app.runtime.backgroundTasks.executionService.writeOutput(task, "ok\n");
 
     const listOutput = await app.dispatchSlashCommand({ kind: "background-list" });
     expect(listOutput).toContain(task.id);

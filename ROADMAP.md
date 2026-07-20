@@ -70,6 +70,29 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Generalization eval harness: measure replay fidelity on held-out but
       related synthetic trajectories.
 
+## Reliability / correctness
+- [x] **Fix broken POSIX `shellQuote` in `background-tasks.ts`** (run 9). It
+      escaped `'` as `"'"'"'` (stray leading `"`) → corrupt state-file JSON for
+      any command containing a single quote → recovery/sync crashed on
+      `JSON.parse`. `training/runner.ts` had the correct form already.
+- [x] **Atomic launch-script state writes** (run 9): write-temp + rename
+      (`mv -f` / `os.replace`) in both `background-tasks.ts` and `runner.ts`, so
+      concurrent readers never see a torn state file.
+- [ ] **Launch-script contract test** (NEW, run 9): render each subsystem's
+      launch script for adversarial commands (single quotes, embedded newlines,
+      `$`, backticks, spaces) and assert the emitted state file round-trips
+      through `JSON.parse`. Catches shell-escaping/state-writer bugs at authoring
+      time.
+- [ ] **Unify the launch-script renderer** (NEW, run 9): `background-tasks.ts`
+      and `training/runner.ts` now carry near-identical `renderLaunchScript` +
+      `shellQuote` + Python state-writer copies (the `shellQuote` divergence was
+      exactly this class of bug). Extract to `src/shared/launch-script.ts`.
+- [ ] **Deterministic-process test seam** (NEW, run 9): several tests launched
+      real detached subprocesses and raced their async state writes. `app.ts`
+      now forwards `backgroundTaskSpawnProcess`/`backgroundTaskIsProcessRunning`;
+      consider a shared `stubBackgroundSpawn()` test helper so future tests opt
+      into determinism by default instead of rediscovering the race.
+
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in

@@ -6,6 +6,64 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-20 (run 9) — 🐞 Fixed a real state-corruption bug + atomic state writes; suite green again
+
+**Audited:** Repo health at HEAD. The tree was **red on arrival** — `npm test`
+reported **3 failed / 171 passed** (run 8 logged 174/174, so this was a
+regression the cloud environment's process-scheduling timing surfaced). All
+three failures traced to the background-task execution subsystem, so I dug into
+the root cause instead of papering over it.
+
+**Root causes found (two genuine bugs, not test artifacts):**
+1. **Broken POSIX shell escaping in `src/harness/background-tasks.ts` →
+   corrupt state files.** `shellQuote()` escaped an embedded single quote as
+   `"'"'"'` (leading `"`) instead of the correct `'"'"'`. For any task whose
+   command contains a `'` (e.g. the test's `printf 'line-1\nline-2\n'`), the
+   launch script wrote **malformed JSON** into the state file — every escaped
+   quote gained a stray `"`. `reconcileTask`/`getBackgroundTaskExecutionState`
+   then crashed with `SyntaxError: Expected ',' or '}'...`. Note `training/
+   runner.ts` already had the *correct* escaping — this was a copy divergence.
+   Verified the fix by reproducing the exact launch-script write and round-trip
+   parsing the output.
+2. **Non-atomic state writes → torn reads.** The launch scripts wrote state via
+   `printf | sed > file` (truncate-then-write) and a Python read-modify-write —
+   both non-atomic. A concurrent reader (`sync`/recovery) could observe a
+   half-written file. Switched both `background-tasks.ts` and `training/
+   runner.ts` to **write-temp + rename** (`mv -f` in shell, `os.replace` in
+   Python), matching the atomic guarantee `writeJsonAtomic` already gives the
+   TS side. Defense-in-depth against the same corruption class.
+
+**Test determinism (DX, additive):** the remaining failures were `control=
+active` vs `degraded:missing-process` flaps — tests that launch **real detached
+subprocesses** and then assert on derived state, racing the process's own async
+state writes (`deriveRemoteDiagnostics` reads the state file; a real "running"
+write + an always-gone `isProcessRunning` stub → `missing-process`). Root fix:
+- `src/cli/app.ts`: added optional, backward-compatible passthrough of
+  `backgroundTaskSpawnProcess` / `backgroundTaskIsProcessRunning` to
+  `OperatorCliApp` (forwarded to the runtime only when provided).
+- Made 3 tests deterministic by injecting a **no-op stub spawn** (launches
+  nothing, hands back a fixed sentinel pid) so state is driven solely by the
+  tests' explicit `writeState`/`writeOutput` fixtures — matching each test's
+  evident intent (they already stubbed `isProcessRunning`). One test's bogus
+  `pid: 999999` "dead process" path is preserved via a sentinel-pid liveness
+  predicate; one converted its two real-process output assertions to
+  `writeOutput`. Updated `runner.test.ts`'s script assertion to the atomic form.
+
+**Test results:** `npm test` **174/174 passing, deterministic across 4 back-to-
+back full runs** (was 3 failing, flaky). `npm run typecheck:src` ✅ (exit 0).
+`npm run build` ✅. Source-only typecheck stayed clean; all changes are additive.
+
+**New idea (logged to ROADMAP):** a **launch-script contract test** — render
+each subsystem's launch script for a battery of adversarial commands (single
+quotes, embedded newlines, `$`, backticks, spaces) and assert the emitted state
+file round-trips through `JSON.parse`. This would have caught the `shellQuote`
+bug at authoring time and guards the shell/Python state-writer seam (which two
+copies now share) against future divergence. Bigger: extract the shared
+launch-script renderer + `shellQuote` into one `src/shared/launch-script.ts` so
+background-tasks and training can't drift again.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
