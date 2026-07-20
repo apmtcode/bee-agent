@@ -4,6 +4,19 @@ Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
 ## Foundations / DX
+- [x] **Test hermeticity: eliminate real-process/real-clock flakiness**
+      (2026-07-20, run 9). Three background-task tests spawned real detached
+      processes (`sleep`/`tail -f`/`printf`) whose `state.json` races the fixture
+      writes; suite went 174→171 purely because the wall clock advanced. Threaded
+      a `backgroundTaskSpawnProcess` seam through `OperatorCliApp` and injected a
+      deterministic inert spawn in all three tests. Suite green + deterministic.
+- [ ] Promote `inertSpawn` to a shared `src/harness/testing.ts`
+      (`createInertBackgroundSpawn()`) — it's currently duplicated in three test
+      files.
+- [ ] **Hermeticity guard** meta-test: scan `src/**/*.test.ts` for runtimes/apps
+      constructed without a spawn override (or code paths using `new Date()` /
+      `Date.now()` without an injectable clock) and flag them, so real-process /
+      real-clock flakiness is caught at authoring time, not when the date rolls.
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`

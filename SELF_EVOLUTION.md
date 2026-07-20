@@ -6,6 +6,60 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-20 (run 9) — 🩹 Fixed clock/real-process test flakiness: suite green + deterministic again
+
+**Audited:** The build/test gate itself. On a fresh checkout `npm test` reported
+**3 failing tests** (171/174) — a regression from run 8's 174/174 — even though no
+code had changed. Root cause was **non-hermetic tests**, surfaced only now because
+the wall clock advanced (2026-06-23 → 2026-07-20) and the CI process-timing
+shifted:
+
+- The three background-task tests (`operator-runtime.test.ts`,
+  `control-plane/server.test.ts`, `cli/app.test.ts`) construct runtimes that
+  **spawn real detached processes** (`sleep 5`, `tail -f app.log`, `printf …`).
+  Only `isProcessRunning` was mocked — never the spawn. The launched process
+  writes its own `state.json` (real pid + `date -u` timestamps) which **races**
+  the tests' fixture writes. The remote-health check
+  (`server.ts:2175` — `state.status === "running" && !isProcessRunning(pid)`) and
+  the recovery reconciler then read whichever write won, so the verdict
+  (`active` vs `degraded: background task missing-process`) depended on process
+  scheduling. It happened to pass on the run-8 machine and fails here.
+
+**Changed (test-only, additive — production spawn path untouched):**
+- `src/cli/app.ts`: threaded optional `backgroundTaskSpawnProcess` /
+  `backgroundTaskIsProcessRunning` from `OperatorCliAppOptions` into the runtime
+  (defaults undefined → real `spawn`/`process.kill`, so production is unchanged).
+  This gives the CLI app the same injectable seam the runtime already exposed.
+- Added a small deterministic `inertSpawn` helper to each of the three test
+  files (returns a synthetic pid, launches nothing) and injected it wherever a
+  runtime/app starts background tasks:
+  - `operator-runtime.test.ts` (the tasks test).
+  - `server.test.ts` (main runtime + the inline `driftingRuntime`/`breakerRuntime`
+    that had the same race, previously masked by the earlier failure).
+  - `app.test.ts` (the session-lifecycle test, and the background/monitor/cron
+    test — the latter also given `isProcessRunning: () => true` so its task stays
+    "running"/active, plus an explicit `writeOutput("ok\n")` standing in for the
+    output the real `printf ok` process would have produced).
+
+  With no real process, the recorded fixtures/records are authoritative → the
+  health and recovery paths are fully deterministic, and no `sleep`/`tail -f`
+  processes leak out of the suite.
+
+**Test results:** `npm test` **174/174**, green **3 runs in a row** (was flaky
+3-fail). `npm run build` ✅. `npm run typecheck:src` ✅ (0 source errors — the
+`app.ts` seam is clean). Full `tsc` unchanged at **125** (test-file debt,
+untouched this run).
+
+**New idea:** the fix duplicated `inertSpawn` across three files. Promote it to a
+shared `src/harness/testing.ts` (`createInertBackgroundSpawn()`), and — bigger —
+add a **hermeticity guard**: a tiny meta-test that scans `src/**/*.test.ts` for
+runtimes/apps constructed *without* a spawn override and flags them, so this
+whole class of "real process / real clock" flakiness is caught at authoring time
+rather than rediscovered when the calendar rolls over. Pairs naturally with the
+queued `verify` script as the canonical pre-push green gate.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

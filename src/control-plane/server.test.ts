@@ -18,6 +18,18 @@ async function makeTempDir(): Promise<string> {
   return dir;
 }
 
+let inertSpawnPid = 50000;
+
+/**
+ * Deterministic, inert background-task spawn: returns a synthetic pid and
+ * launches no real process, so no competing `state.json` is written and the
+ * recorded task record is authoritative. Keeps control-plane health/recovery
+ * assertions hermetic instead of racing a real `sleep`/`printf` process.
+ */
+function inertSpawn(): { pid: number; unref(): void } {
+  return { pid: ++inertSpawnPid, unref() {} };
+}
+
 afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })));
 });
@@ -83,6 +95,7 @@ describe("OperatorControlPlaneServer", () => {
     const rootDir = await makeTempDir();
     const runtime = new StandaloneOperatorRuntime({
       rootDir,
+      backgroundTaskSpawnProcess: inertSpawn,
       backgroundTaskIsProcessRunning: () => false,
       delivery: new OperatorDeliveryService(rootDir, {
         sendBrowserPush: async () => {},
@@ -952,6 +965,7 @@ describe("OperatorControlPlaneServer", () => {
     const driftingRootDir = await makeTempDir();
     const driftingRuntime = new StandaloneOperatorRuntime({
       rootDir: driftingRootDir,
+      backgroundTaskSpawnProcess: inertSpawn,
       backgroundTaskIsProcessRunning: () => false,
     });
     const driftingServer = new OperatorControlPlaneServer({ runtime: driftingRuntime });
@@ -1018,6 +1032,7 @@ describe("OperatorControlPlaneServer", () => {
     const breakerRootDir = await makeTempDir();
     const breakerRuntime = new StandaloneOperatorRuntime({
       rootDir: breakerRootDir,
+      backgroundTaskSpawnProcess: inertSpawn,
       backgroundTaskIsProcessRunning: () => false,
     });
     const breakerServer = new OperatorControlPlaneServer({ runtime: breakerRuntime });

@@ -15,6 +15,18 @@ async function makeTempDir(): Promise<string> {
   return dir;
 }
 
+let inertSpawnPid = 40000;
+
+/**
+ * A deterministic, inert background-task spawn: it returns a synthetic pid and
+ * launches no real process, so it never writes a competing `state.json`. This
+ * keeps the test's own fixture state/records authoritative and makes the suite
+ * hermetic (no detached `sleep`/`tail -f` processes leaking out of the run).
+ */
+function inertSpawn(): { pid: number; unref(): void } {
+  return { pid: ++inertSpawnPid, unref() {} };
+}
+
 function buildHookCaptureCommand(outputFile: string): string {
   const script = [
     "import fs from 'node:fs';",
@@ -530,6 +542,7 @@ describe("StandaloneOperatorRuntime", () => {
   it("starts, syncs, recovers, lists, and cancels background tasks", async () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
+      backgroundTaskSpawnProcess: inertSpawn,
       backgroundTaskIsProcessRunning: () => false,
     });
     const session = await runtime.startSession({ title: "Tasks", agentId: "main" });
