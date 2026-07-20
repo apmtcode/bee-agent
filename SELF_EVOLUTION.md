@@ -6,6 +6,71 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-20 (run 9) — Movement-policy inference engine (2c/2d) + fixed a real shell-quoting corruption bug; suite fully green
+
+**Audited:** The movement-learning subsystem (`src/capture` + `src/training`)
+against objective #2's five pieces. Found the pipeline covers capture → schema →
+dataset (exporter) → a training-*launch-script* runner, but had **no
+inference/policy layer** — objectives 2(c) "repeat the recorded movements" and
+2(d) "generalize to new-but-related movements" were unbuilt, and the "pluggable
+model backend" requirement was unrealized. Also discovered the full test suite
+was **not green on this environment** (3–4 flaky failures), contradicting the
+prior "174/174" note.
+
+**Changed — new capability (`src/training/policy.ts`, standing objective #2c/#2d):**
+- `MovementPolicyBackend` — a **pluggable** backend interface (`fit` + `predict`).
+  Real on-device backends fine-tune; the shipped `RetrievalMovementBackend` is a
+  deterministic mock that runs in the cloud/CI with no OS or model dependency.
+- `RetrievalMovementBackend` **reproduces** recorded movements verbatim on an
+  exact goal match (2c) and **generalizes** to related goals by substituting the
+  changed entity token(s) into the nearest-neighbour trajectory's steps (2d) —
+  e.g. trained on "open the settings panel" → predicts "click profile" for
+  "open the profile panel".
+- Dataset adapters `buildMovementExamplesFromTrajectories` /
+  `buildMovementExamplesFromManifest` bridge raw `TrajectorySpan[]` and the
+  exporter's `ReviewedExportManifest` into training examples.
+- `evaluateMovementPolicy` — a generalization eval harness (exact-sequence match,
+  per-step tool accuracy, generalized rate) on held-out trajectories.
+- `MovementPolicyEngine` ties a backend to the dataset sources (fit-from-*,
+  predict, rollout). All exported from `src/index.ts`. **12 new tests.**
+
+**Changed — real bug fixes surfaced while getting the suite green
+(`src/harness/background-tasks.ts`):**
+- **Root-cause fix:** `shellQuote` escaped a single quote as `"'"'"'` (malformed
+  — starts with `"`, so it never closes the single-quote context) instead of the
+  correct POSIX `'"'"'`. Any background-task `command` containing a `'` (e.g.
+  `printf 'line-1\nline-2\n'`) produced a **corrupt state file** with unescaped
+  `"` — breaking JSON parse on recovery. This is a genuine on-device bug, not
+  just a test artifact. (Verified by dumping the corrupt file: the `command`
+  field was `printf "'line-1\n..."'`.)
+- **Robustness:** made the launch script's state writes **atomic** (write to
+  `${state}.tmp.$$` then `mv`; python uses `os.replace`), matching
+  `writeJsonAtomic`, so a concurrent reader can never observe a torn write.
+
+**Changed — test hermeticity (`src/cli/app.ts` + 3 test files):**
+- Added `backgroundTaskSpawnProcess` / `backgroundTaskIsProcessRunning` options
+  to `OperatorCliApp` (forwarded to its runtime) — a small additive testability
+  seam the app lacked.
+- The three "kitchen-sink" tests spawned **real detached `bash`** (incl.
+  `sleep 5`, `tail -f` that block/leak) and raced their own `writeState` calls.
+  Injected a deterministic no-op `mockSpawn` so state files are governed solely
+  by explicit writes. The one test that legitimately asserts on live task state
+  uses `isProcessRunning: () => true` to keep the mocked task running.
+
+**Test results:** `typecheck:src` ✅ (source stays clean). Build ✅.
+Tests **186/186**, and now **deterministic — 5/5 consecutive full-suite runs
+green** (was 3–4 flaky failures before this run). Net +12 tests.
+
+**New idea:** `src/training/runner.ts` has the *same* non-atomic `printf|sed >
+state` + `write_text` pattern (its `shellQuote` is already correct). Port the
+atomic-write fix there too for on-device MLX/axolotl runs. Bigger idea: promote
+`MovementPolicyBackend` to a first-class RPC (`policy.fit`/`policy.predict`) and
+add an **on-device SFT backend** that loads the adapter the runner trains, so the
+mock and the real model are swappable behind the same seam the engine already
+uses — closing the capture→train→infer loop end to end.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

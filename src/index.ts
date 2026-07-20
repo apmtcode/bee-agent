@@ -423,6 +423,23 @@ export type {
   SftTrainingConfig,
 } from "./training/job-manifest.js";
 export {
+  MovementPolicyEngine,
+  RetrievalMovementBackend,
+  buildMovementExamplesFromManifest,
+  buildMovementExamplesFromTrajectories,
+  evaluateMovementPolicy,
+  tokenizeMovementText,
+} from "./training/policy.js";
+export type {
+  MovementPolicyBackend,
+  MovementPolicyEvaluation,
+  MovementPrediction,
+  MovementPredictionRequest,
+  MovementStep,
+  MovementSubstitution,
+  MovementTrainingExample,
+} from "./training/policy.js";
+export {
   FileTrainingJobStore,
 } from "./training/job-store.js";
 export type {

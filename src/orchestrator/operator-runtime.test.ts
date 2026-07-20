@@ -15,6 +15,18 @@ async function makeTempDir(): Promise<string> {
   return dir;
 }
 
+let mockSpawnPid = 40000;
+
+/**
+ * Deterministic spawn that never runs the launch script, so background-task
+ * state files are governed solely by explicit `writeState` calls in the test.
+ * Prevents real detached `bash`/`tail -f` processes from racing the assertions.
+ */
+function mockSpawn(): { pid: number; unref(): void } {
+  mockSpawnPid += 1;
+  return { pid: mockSpawnPid, unref() {} };
+}
+
 function buildHookCaptureCommand(outputFile: string): string {
   const script = [
     "import fs from 'node:fs';",
@@ -530,6 +542,7 @@ describe("StandaloneOperatorRuntime", () => {
   it("starts, syncs, recovers, lists, and cancels background tasks", async () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
+      backgroundTaskSpawnProcess: mockSpawn,
       backgroundTaskIsProcessRunning: () => false,
     });
     const session = await runtime.startSession({ title: "Tasks", agentId: "main" });

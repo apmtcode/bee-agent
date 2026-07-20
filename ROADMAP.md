@@ -62,13 +62,36 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
-      deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
+- [x] Pluggable local-model backend interface — DONE run 9
+      (`src/training/policy.ts`). `MovementPolicyBackend` (fit + predict) with a
+      deterministic `RetrievalMovementBackend` mock. Real on-device backend is a
+      documented seam behind the same interface.
+- [x] Inference/policy layer (objective 2c/2d) — DONE run 9. Reproduces recorded
+      movements on exact match; generalizes to related goals via entity
+      substitution over the nearest-neighbour trajectory. `MovementPolicyEngine`
+      fits from raw trajectories or the exported manifest.
+- [x] Generalization eval harness — DONE run 9 (`evaluateMovementPolicy`:
+      exact-sequence match, per-step tool accuracy, generalized rate).
+- [ ] On-device SFT backend implementing `MovementPolicyBackend`: load the
+      adapter `LocalAppleSiliconTrainingRunner` trains and serve `predict`, so the
+      mock and the real model are swappable behind the same seam.
+- [ ] Promote the policy to first-class RPCs (`policy.fit`/`policy.predict`) on
+      the control plane + a CLI command to roll out a movement for a goal.
 - [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      round-trips without real OS input (the policy tests use hand-built
+      trajectories; a generator would stress longer/branching sequences).
+
+## Reliability
+- [x] Fix `background-tasks.ts` `shellQuote` single-quote escaping bug — DONE
+      run 9. Was `"'"'"'` (malformed); now the correct POSIX `'"'"'`. Commands
+      containing `'` were producing corrupt state files.
+- [x] Atomic launch-script state writes in `background-tasks.ts` — DONE run 9
+      (temp + `mv` / `os.replace`), preventing torn reads on recovery.
+- [x] Hermetic background-task tests — DONE run 9. Added a spawn-injection seam to
+      `OperatorCliApp` and a `mockSpawn` to the three kitchen-sink tests so they
+      no longer spawn real `bash`/`sleep`/`tail -f`. Suite is now deterministic.
+- [ ] Port the same atomic-write fix to `src/training/runner.ts` (identical
+      non-atomic `printf|sed > state` + `write_text` pattern for MLX/axolotl).
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
