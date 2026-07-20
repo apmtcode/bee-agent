@@ -6,6 +6,66 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-20 (run 9) — 🧠 In-process movement model: train → infer → generalize loop closes in the cloud
+
+**Audited:** The local-movement learning subsystem's training path
+(`src/training/runner.ts`, `execution-service.ts`, `exporter.ts`) against
+standing objective #2 (c/d: *repeat* recorded movements and *generalize* to new
+ones). Finding: the runner only emits **Apple-Silicon shell plans** (mlx/axolotl)
+for real on-device training — so the actual learn/repeat/generalize behavior
+could **never be exercised or tested in the cloud**. There was no in-process
+model backend and no inference path at all. That is the heart of the objective,
+and it was untested.
+
+**Changed (additive):** new `src/training/movement-model.ts` (+ 11-test suite),
+closing the loop entirely in-process:
+- **Pluggable seam** — `MovementModelBackend` interface (`train(dataset) →
+  TrainedMovementModel`). A real on-device small-model backend swaps in behind
+  this without touching callers, the dataset adapter, or the eval harness.
+- **Deterministic mock backend** — `MarkovMovementBackend`: an order-k Markov
+  transition model over movement tokens with **stupid-backoff** (longest n-gram
+  down to a single prior token; never the empty/unigram context, giving a clean
+  generation terminator) + a per-token **timing model**. Zero deps, fully
+  reproducible → CI-safe.
+- **Inference** — `predictNext(context)` ranks candidate next tokens by
+  probability; `generate(seed)` rolls out a plausible continuation via a seeded
+  mulberry32 PRNG (advancing `ts` from the learned timing model). *Repeat*: a
+  single-path history replays verbatim. *Generalize*: the model composes learned
+  transitions into sequences it never saw verbatim (test proves an unseen
+  `open→focus→click→submit` path assembled from two disjoint training seqs).
+- **Dataset adapter** — `datasetFromReviewedExport(manifest)` tokenizes the
+  existing `ReviewedExportManifest.replays[].events` (action/observation only;
+  transcript dropped) into training sequences, wiring the new backend to the
+  real reviewed-export pipeline.
+- **Persistence** — `serialize()` / `deserializeMovementModel()` reload a trained
+  model for inference without retraining (fits the repo's file-store pattern).
+- **Generalization eval harness** — `evaluateGeneralization()`: leave-one-out,
+  reports top-1 / top-k next-token accuracy on held-out-but-related sequences.
+- **Synthetic generator** — `synthesizeMovementSequences()`: deterministic
+  grammar-driven event streams to validate round-trips without real OS input.
+- Exported all of the above from `src/index.ts`.
+
+**Test results:** `typecheck:src` ✅ (exit 0). Build ✅ (DTS emitted, exports
+type-clean). New suite ✅ **11/11**. Full suite **181/185**; the **4 failures are
+pre-existing** and identical to the clean base (stash-verified) — date/timing-
+sensitive tests in `app.test.ts`, `server.test.ts`, `operator-runtime.test.ts`
+(they key assertions off today's date, `2026-07-20`). My change is purely
+additive and introduces **zero new failures**. Pushed to the designated feature
+branch `claude/peaceful-dirac-pk1eba` per session branch policy.
+
+**New idea:** now that inference exists, add a **closed-loop replay-fidelity
+guard**: feed a generated rollout back through `buildReplayManifest`/the replay
+engine and score it against the source trajectory (edit-distance over the action
+token stream + timing MAE), exposing a single "movement fidelity" metric per
+model version. That metric becomes the acceptance gate a real on-device backend
+must beat the mock on — turning "generalizes to related movements" from a claim
+into a tracked, regression-guarded number.
+
+**Follow-up debt to clear:** the 3 pre-existing date-sensitive test failures
+should be de-flaked (inject a fixed clock) — logged in ROADMAP.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

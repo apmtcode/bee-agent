@@ -44,6 +44,10 @@ unchecked items are queued. Keep this richer than you found it each run.
       (excludes `**/*.test.ts`) + `typecheck:src` script; passes (exit 0). Next:
       have the engine run it as a per-run pre-push self-check.
 - [ ] Add a minimal CI workflow mirroring `verify` for human-opened PRs.
+- [ ] **De-flake 3 date-sensitive tests** (surfaced run 9): `app.test.ts`,
+      `server.test.ts`, `operator-runtime.test.ts` each have one test that keys
+      assertions off the real current date and fail on 2026-07-20. Inject a fixed
+      clock / freeze time so the full suite is green regardless of run date.
 
 ## Capability parity (audit reference agents → port gaps)
 - [ ] Build a "capability inventory" generator: enumerate bee-agent's exported
@@ -62,13 +66,25 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
-      deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+- [x] **Pluggable local-model backend interface + deterministic mock** — DONE
+      run 9. `src/training/movement-model.ts`: `MovementModelBackend` seam +
+      `MarkovMovementBackend` (order-k Markov w/ backoff + timing model). Closes
+      the in-process train→infer→generalize loop; CI-safe, seeded, zero-dep. A
+      real on-device backend slots in behind the same interface.
+- [x] **Synthetic event-stream generator** — DONE run 9.
+      `synthesizeMovementSequences()` (deterministic grammar-driven streams).
+- [x] **Generalization eval harness** — DONE run 9. `evaluateGeneralization()`
+      (leave-one-out top-1/top-k next-token accuracy on held-out sequences).
+- [ ] **Inference wiring into the runtime/RPC surface**: expose `predictNext` /
+      `generate` (and model persistence) through the control-plane so a trained
+      movement model can drive suggested next actions in a live session.
+- [ ] **Closed-loop replay-fidelity guard** (run-9 idea): feed a generated
+      rollout back through `buildReplayManifest`/the replay engine and score it
+      vs. the source trajectory (token edit-distance + timing MAE) → one
+      "movement fidelity" metric per model version, used as the acceptance gate a
+      real on-device backend must beat the mock on.
+- [ ] Real on-device small-model backend implementing `MovementModelBackend`
+      (behind the existing seam); keep the mock as the deterministic CI baseline.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
