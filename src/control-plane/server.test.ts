@@ -18,6 +18,14 @@ async function makeTempDir(): Promise<string> {
   return dir;
 }
 
+// A background-task spawn stub that never launches a real process, so no launch
+// script runs and no execution `state.json` is written. Tests that model a task
+// as "running" without a live OS process (paired with `isProcessRunning: () =>
+// false`) use this to keep control-plane diagnostics deterministic — otherwise a
+// real subprocess's transient "running" state races assertions into "degraded".
+let noopSpawnPid = 100000;
+const noopSpawnProcess = () => ({ pid: (noopSpawnPid += 1), unref: () => {} });
+
 afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })));
 });
@@ -83,6 +91,7 @@ describe("OperatorControlPlaneServer", () => {
     const rootDir = await makeTempDir();
     const runtime = new StandaloneOperatorRuntime({
       rootDir,
+      backgroundTaskSpawnProcess: noopSpawnProcess,
       backgroundTaskIsProcessRunning: () => false,
       delivery: new OperatorDeliveryService(rootDir, {
         sendBrowserPush: async () => {},
@@ -952,6 +961,7 @@ describe("OperatorControlPlaneServer", () => {
     const driftingRootDir = await makeTempDir();
     const driftingRuntime = new StandaloneOperatorRuntime({
       rootDir: driftingRootDir,
+      backgroundTaskSpawnProcess: noopSpawnProcess,
       backgroundTaskIsProcessRunning: () => false,
     });
     const driftingServer = new OperatorControlPlaneServer({ runtime: driftingRuntime });
@@ -1018,6 +1028,7 @@ describe("OperatorControlPlaneServer", () => {
     const breakerRootDir = await makeTempDir();
     const breakerRuntime = new StandaloneOperatorRuntime({
       rootDir: breakerRootDir,
+      backgroundTaskSpawnProcess: noopSpawnProcess,
       backgroundTaskIsProcessRunning: () => false,
     });
     const breakerServer = new OperatorControlPlaneServer({ runtime: breakerRuntime });

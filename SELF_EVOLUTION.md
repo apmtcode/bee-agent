@@ -6,6 +6,64 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-20 (run 9) — 🐛 Fix background-task launch-script JSON corruption + de-flake control-plane tests
+
+**Audited:** Started with a health check (`npm install && npm test`). The suite
+was **NOT** green in this environment — **3 tests failed** despite run 8 logging
+174/174. Two distinct root causes, both around the background-task subsystem;
+neither was a test bug alone.
+
+**Root cause 1 — genuine product bug in `src/harness/background-tasks.ts`
+(`renderLaunchScript`).** The initial `running` `state.json` was built by a shell
+`printf '%s' <json> | sed "s/…/$started_at/; s/\"\$\$\"/$$/"` pipeline. For any
+command containing a single quote or newline (e.g. `printf 'line-1\nline-2\n'`)
+the pipeline emitted **invalid JSON** — raw newlines inside the string, mangled
+quotes, and the `$$` PID placeholder left unsubstituted. When
+`recoverBackgroundTasks`/`reconcileTask` later read that file, `readJsonFile`
+threw `SyntaxError: Expected ',' or '}'` and the whole recovery path crashed.
+This is a real reliability defect for any real task whose command has quotes or
+newlines, not just a test artifact.
+- **Fix (additive):** write the initial state with **Python** (`json.dumps`),
+  passing `$$` as an argv so the shell expands it — identical in spirit to the
+  `completed`/`failed` writers already in the file (`renderStateWriterPython`).
+  Command/id/path fields are embedded via `JSON.stringify` (a valid JSON string
+  literal is also a valid Python string literal), so arbitrary command text can
+  never break the JSON nor the surrounding Python.
+- **Regression test** (`background-tasks.test.ts`): renders the real launch
+  script for a command with an embedded quote **and** newline, executes it with
+  `bash`, and asserts the resulting `state.json` parses and preserves the command
+  verbatim. Verified it **fails on the old `printf|sed` writer** and passes on the
+  fix.
+
+**Root cause 2 — real subprocesses leaking into "mocked" tests.** Several
+control-plane/app/runtime tests set `backgroundTaskIsProcessRunning: () => false`
+and drive execution state by hand (`writeState`), but used the **default real
+spawn** — so the real launch script asynchronously wrote a transient `running`
+state that raced the assertions, flipping remote control to `degraded`, inflating
+platform-breaker `failureCount`/`threshold` (2→3), and re-failing an
+already-failed task in `recoverBackgroundTasks`. Same class as the run-1
+config-home hermeticity fix.
+- **Product seam:** added optional `backgroundTaskSpawnProcess` /
+  `backgroundTaskIsProcessRunning` to `OperatorCliAppOptions` and threaded them
+  into the app's runtime (production defaults unchanged) — the app's background
+  backend is now injectable, mirroring the runtime's existing options.
+- Injected a deterministic no-op spawn into the affected runtimes/apps in
+  `server.test.ts` (main + drifting + breaker), `app.test.ts` (lifecycle), and
+  `operator-runtime.test.ts` (background-task test).
+
+**Test results:** **3 failing → 0.** Full suite **174 → 175** (added the
+regression test). Verified **stable across 5× (targeted) and 3× (full-suite)**
+repeats — the flakiness is gone, not just reshuffled. `npm run build` ✅.
+`npm run typecheck:src` ✅ (source stays green after the `app.ts` seam).
+
+**New idea:** add a tiny test-lint guard that flags any `StandaloneOperatorRuntime`
+/`OperatorCliApp` constructed with `backgroundTaskIsProcessRunning` but **without**
+`backgroundTaskSpawnProcess` — that exact mismatch is what re-introduces
+real-subprocess races into otherwise-deterministic tests. More broadly: a
+"no unmanaged real subprocess in unit tests" convention (default the test spawn
+to a no-op unless a test opts into the real launcher), so future capability work
+doesn't rediscover this footgun.
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

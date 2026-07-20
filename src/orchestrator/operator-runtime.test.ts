@@ -15,6 +15,12 @@ async function makeTempDir(): Promise<string> {
   return dir;
 }
 
+// A background-task spawn stub that never launches a real process. Tests that
+// drive execution state by hand (writeState/writeOutput) use this so a real
+// launch script cannot asynchronously overwrite that state and race assertions.
+let noopSpawnPid = 300000;
+const noopSpawnProcess = () => ({ pid: (noopSpawnPid += 1), unref: () => {} });
+
 function buildHookCaptureCommand(outputFile: string): string {
   const script = [
     "import fs from 'node:fs';",
@@ -530,6 +536,7 @@ describe("StandaloneOperatorRuntime", () => {
   it("starts, syncs, recovers, lists, and cancels background tasks", async () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
+      backgroundTaskSpawnProcess: noopSpawnProcess,
       backgroundTaskIsProcessRunning: () => false,
     });
     const session = await runtime.startSession({ title: "Tasks", agentId: "main" });

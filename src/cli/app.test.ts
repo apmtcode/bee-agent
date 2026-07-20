@@ -16,6 +16,13 @@ async function makeTempDir(): Promise<string> {
   return dir;
 }
 
+// A background-task spawn stub that never launches a real process, so no launch
+// script writes an execution `state.json`. Tests that drive task/control state
+// explicitly (via writeState) use this to stay deterministic — a real subprocess
+// would otherwise write a transient "running" state and race the assertions.
+let noopSpawnPid = 200000;
+const noopSpawnProcess = () => ({ pid: (noopSpawnPid += 1), unref: () => {} });
+
 afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })));
 });
@@ -801,7 +808,13 @@ describe("OperatorCliApp", () => {
 
   it("supports session lifecycle, transcript, approvals, pairing, config, and prompt commands", async () => {
     const rootDir = await makeTempDir();
-    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    const app = new OperatorCliApp({
+      rootDir,
+      cwd: rootDir,
+      currentDate: "2026-05-25",
+      backgroundTaskSpawnProcess: noopSpawnProcess,
+      backgroundTaskIsProcessRunning: () => false,
+    });
     const firstSession = await app.runtime.startSession({ title: "first", cwd: rootDir, agentId: "operator-cli" });
     const secondSession = await app.runtime.startSession({ title: "second", cwd: rootDir, agentId: "operator-cli" });
 

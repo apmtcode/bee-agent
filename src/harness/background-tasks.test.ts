@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -352,6 +353,45 @@ describe("FileBackgroundTaskStore", () => {
       expect.objectContaining({ task: expect.objectContaining({ id: missing.id }), reason: "missing-process" }),
     ]);
     await expect(reloaded.get(other.id)).resolves.toMatchObject({ id: other.id, status: "running" });
+  });
+});
+
+describe("launch script state writer", () => {
+  // Regression: the initial "running" state used to be built by a printf|sed
+  // pipeline that emitted invalid JSON whenever the command contained quotes or
+  // newlines (the `$$` placeholder was also left unsubstituted). Executing the
+  // real generated script for such a command must still produce parseable JSON
+  // with the command preserved verbatim.
+  it("writes valid JSON state for commands containing quotes and newlines", async () => {
+    const rootDir = await makeTempDir();
+    // Command string with an embedded single quote AND a literal newline — the
+    // exact shapes that broke the old printf|sed initial-state writer.
+    const command = "printf 'alpha\nbeta'\n# it's fine";
+    const store = new FileBackgroundTaskStore(
+      path.join(rootDir, "background-tasks.json"),
+      // Mock spawn so start() writes the launch script but does not run it; we
+      // execute the generated script ourselves below and await its exit.
+      () => ({ pid: 4242, unref() {} }),
+    );
+    const task = await store.start({ title: "tricky", command, cwd: rootDir, kind: "task" });
+
+    const scriptPath = path.join(rootDir, task.execution.launchScript);
+    const exitCode = await new Promise<number>((resolve, reject) => {
+      const child = spawn("bash", [scriptPath], { cwd: rootDir, stdio: "ignore" });
+      child.on("error", reject);
+      child.on("exit", (code) => resolve(code ?? -1));
+    });
+    expect(exitCode).toBe(0);
+
+    const statePath = path.join(rootDir, task.execution.stateFile);
+    const raw = await fs.readFile(statePath, "utf8");
+    // Must be parseable JSON — the old writer produced a syntax error here.
+    const state = JSON.parse(raw) as BackgroundTaskExecutionState;
+    expect(state.taskId).toBe(task.id);
+    expect(state.command).toBe(command);
+    expect(state.status).toBe("completed");
+    expect(state.exitCode).toBe(0);
+    expect(typeof state.pid).toBe("number");
   });
 });
 

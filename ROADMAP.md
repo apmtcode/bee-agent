@@ -3,6 +3,25 @@
 Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
+## Reliability / correctness
+- [x] Fix background-task launch-script initial-state JSON corruption
+      (2026-07-20, run 9): the `printf|sed` writer emitted invalid JSON for
+      commands with quotes/newlines and left `$$` unsubstituted, crashing task
+      recovery. Now written with Python (`json.dumps`), with a regression test
+      that executes the real script.
+- [x] De-flake background-task tests (2026-07-20, run 9): real launch scripts
+      were racing `writeState`-driven tests into wrong states. Added an
+      injectable `backgroundTaskSpawnProcess` seam to `OperatorCliApp` and used
+      deterministic no-op spawns in the affected tests.
+- [ ] Test-lint guard: flag any `StandaloneOperatorRuntime`/`OperatorCliApp`
+      constructed with `backgroundTaskIsProcessRunning` but no
+      `backgroundTaskSpawnProcess` (the mismatch that re-introduces real-subprocess
+      races). Longer term: default unit-test spawn to a no-op unless a test opts
+      into the real launcher.
+- [ ] Make the Python state writers write **atomically** (temp file + rename)
+      like `writeJsonAtomic`, so a reader can never observe a half-written
+      `state.json` under load.
+
 ## Foundations / DX
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
