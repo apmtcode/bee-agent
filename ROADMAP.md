@@ -70,6 +70,18 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Generalization eval harness: measure replay fidelity on held-out but
       related synthetic trajectories.
 
+## Reliability / correctness
+- [x] Fix background-task `shellQuote` bug (2026-07-20, run 9): single quotes in a
+      task command/cwd corrupted the on-disk `state.json`, crashing every later
+      sync/recover. One-line fix + real-launch-script regression test.
+- [ ] **Extract a single `shellQuote` into `src/shared/shell.ts`** with a unit
+      test (single quotes, `$`, newlines) and import it from both
+      `harness/background-tasks.ts` and `training/runner.ts`. Motivated by run 9:
+      the two hand-copied copies had diverged (one correct, one buggy).
+- [ ] Test-hermeticity guard: flag tests that build a runtime which starts
+      background tasks without injecting `backgroundTaskSpawnProcess`, so
+      real-subprocess races (fixed in run 9) can't reappear.
+
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in

@@ -6,6 +6,60 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-20 (run 9) — 🐛 Fix real background-task shell-quoting bug (corrupt state.json) + de-race 4 tests
+
+**Audited:** The actual `npm test` baseline (not just typecheck). Found the suite
+was **RED**: 3–4 tests failing on this machine, all around background tasks. The
+first failure was a runtime `SyntaxError: Expected ',' or '}' after property
+value in JSON` thrown from `readState` while reconciling a task — i.e. the launch
+script wrote a **corrupt `state.json`**. This is a genuine product bug, not test
+debt.
+
+**Root cause (real bug, `src/harness/background-tasks.ts`):** `shellQuote()`
+escaped single quotes as `` "'"'"' `` (6 chars) instead of the correct
+`` '"'"' `` (the standard close-quote / `"'"` / reopen-quote sequence, 5 chars).
+The sibling copy in `src/training/runner.ts` was already correct — the two had
+silently diverged. Effect: **any background task whose `command` or `cwd`
+contains a single quote** (extremely common — e.g. `printf 'line-1\nline-2\n'`)
+produced malformed JSON on disk, so every later `sync`/`recover`/status read of
+that task crashed. Reproduced end-to-end by running the generated script:
+`{"command":"printf "'line-1...` (invalid) → after fix
+`{"command":"printf 'line-1...` (valid, `pid` substituted).
+
+**Changed:**
+- **One-line fix** to `shellQuote` in `background-tasks.ts` (`` "'"'"' `` →
+  `` '"'"' ``). Both `shellQuote` copies now match.
+- **New integration regression test** (`background-tasks.test.ts`): executes the
+  *real* generated launch script (`bash run.sh`) for a command containing single
+  quotes + a newline and asserts the resulting `state.json` is valid JSON with a
+  numeric `pid`. This directly guards the escaping seam.
+- Fixing the corrupt JSON **un-masked pre-existing test races**: 4 tests spawned
+  *real detached processes* that raced their own manual `writeState`
+  (`printf`/`sleep 5`), so persisted-state assertions were timing-dependent
+  (previously they only "passed" because the corrupt JSON or lucky process
+  timing hid it). Added an **injectable `backgroundTaskSpawnProcess` seam** to
+  `OperatorCliApp` (additive, threads into the runtime; production default = real
+  `spawn`) and injected a deterministic mock spawn into the 4 tests
+  (operator-runtime ×1, app ×2, server ×1) — matching the pattern already used in
+  `background-tasks.test.ts`'s unit tests. Where a test asserted live output/state
+  (the `watch-active` flow, the platform-breaker `mixed`→`degraded`→`paused`
+  progression), simulated the process's on-disk effects explicitly instead of
+  relying on a real subprocess.
+
+**Test results:** **174 → 175** tests, **all green across 3 consecutive runs**
+(race eliminated). Build ✅. `typecheck:src` ✅ (source stays clean; the new app
+option uses `ConstructorParameters<typeof StandaloneOperatorRuntime>[0][…]` so it
+can't drift from the runtime signature).
+
+**New idea:** the divergence that caused this bug (two hand-copied `shellQuote`s,
+one correct, one not) is exactly the failure mode to design out. Extract a single
+`shellQuote`/`shQuote` into `src/shared/shell.ts` with a focused unit test
+covering single quotes, `$`, and newlines, and have both `background-tasks.ts`
+and `runner.ts` import it — so the escaping has one authoritative implementation
+that can't silently rot. Bigger: a lightweight "test hermeticity" lint that flags
+tests constructing a runtime that starts background tasks **without** injecting
+`backgroundTaskSpawnProcess`, so real-subprocess races can't sneak back in.
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

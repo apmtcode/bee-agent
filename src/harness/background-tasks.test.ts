@@ -1,3 +1,4 @@
+import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -369,5 +370,41 @@ describe("BackgroundTaskExecutionService", () => {
     await expect(fs.readFile(path.join(rootDir, task.execution.launchScript), "utf8")).resolves.toContain("bash -lc");
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
+  });
+
+  it("generates a launch script whose state.json is valid JSON when the command contains single quotes", async () => {
+    const rootDir = await makeTempDir();
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"), () => ({ pid: 2222, unref() {} }));
+    // A command containing single quotes (and an embedded newline) must survive
+    // shell single-quote escaping and the sed pid substitution without corrupting
+    // the JSON state payload the launch script writes.
+    const task = await store.start({
+      title: "Print with quotes",
+      command: "printf 'it'\\''s a '\\''quoted'\\'' line\\n'",
+      cwd: rootDir,
+    });
+
+    const scriptPath = path.join(rootDir, task.execution.launchScript);
+    const statePath = path.join(rootDir, task.execution.stateFile);
+
+    await new Promise<void>((resolve, reject) => {
+      execFile("bash", [scriptPath], { cwd: rootDir }, (error) => {
+        // The task command may exit non-zero; we only care that state.json is written.
+        if (error && !("code" in error)) {
+          reject(error);
+          return;
+        }
+        resolve();
+      });
+    });
+
+    const raw = await fs.readFile(statePath, "utf8");
+    const parsed = JSON.parse(raw) as BackgroundTaskExecutionState;
+    expect(parsed.taskId).toBe(task.id);
+    expect(parsed.command).toBe(task.command);
+    // The literal "$$" placeholder must have been replaced by a numeric pid.
+    expect(typeof parsed.pid).toBe("number");
+    expect(parsed.pid).toBeGreaterThan(0);
+    expect(["completed", "failed"]).toContain(parsed.status);
   });
 });
