@@ -15,6 +15,16 @@ async function makeTempDir(): Promise<string> {
   return dir;
 }
 
+// Deterministic, inert background-task spawn for tests that drive execution
+// state by hand via `writeState`/`writeOutput`. The production spawn launches a
+// real detached shell that asynchronously writes the state file, racing against
+// the test's own writes; this no-op spawn keeps the state fully test-controlled.
+let inertSpawnPid = 313131;
+function inertBackgroundSpawn(): { pid: number; unref(): void } {
+  inertSpawnPid += 1;
+  return { pid: inertSpawnPid, unref() {} };
+}
+
 function buildHookCaptureCommand(outputFile: string): string {
   const script = [
     "import fs from 'node:fs';",
@@ -531,6 +541,7 @@ describe("StandaloneOperatorRuntime", () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
       backgroundTaskIsProcessRunning: () => false,
+      backgroundTaskSpawnProcess: inertBackgroundSpawn,
     });
     const session = await runtime.startSession({ title: "Tasks", agentId: "main" });
 

@@ -4,6 +4,17 @@ Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
 ## Foundations / DX
+- [x] **Robust background-task state persistence** (2026-07-20, run 9) — replaced
+      the shell `printf | sed` JSON templating in `renderLaunchScript` (which
+      corrupted `state.json` for any command containing quotes/backslashes/newlines
+      and often failed to substitute the `$$` pid) with a `json.dumps` python
+      writer that takes every value via argv. Fixed 3 red tests + made the
+      state-reconciliation suite deterministic via an injected inert spawn.
+- [ ] **Drop the `python3` runtime dependency in the background-task launch
+      script** (new, run 9). The start + completion state writers shell out to
+      `python3`; recovery silently breaks on hosts without it (Windows, minimal
+      containers). Replace with a bundled Node state writer or parent-owned state
+      transitions — bee-agent already requires Node.
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`

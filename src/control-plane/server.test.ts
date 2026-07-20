@@ -22,6 +22,17 @@ afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })));
 });
 
+// Deterministic, inert background-task spawn for tests that drive execution
+// state by hand via `writeState`. The production spawn launches a real detached
+// shell that asynchronously writes the state file; in a unit test that races
+// against the test's own `writeState` calls, making assertions non-deterministic.
+// Injecting this no-op spawn keeps the state file fully test-controlled.
+let inertSpawnPid = 424242;
+function inertBackgroundSpawn(): { pid: number; unref(): void } {
+  inertSpawnPid += 1;
+  return { pid: inertSpawnPid, unref() {} };
+}
+
 const exportManifest: ReviewedExportManifest = {
   version: 1,
   createdAt: "2026-01-01T00:00:00.000Z",
@@ -953,6 +964,7 @@ describe("OperatorControlPlaneServer", () => {
     const driftingRuntime = new StandaloneOperatorRuntime({
       rootDir: driftingRootDir,
       backgroundTaskIsProcessRunning: () => false,
+      backgroundTaskSpawnProcess: inertBackgroundSpawn,
     });
     const driftingServer = new OperatorControlPlaneServer({ runtime: driftingRuntime });
     const driftingBootstrap = await driftingServer.handle({
@@ -1019,6 +1031,7 @@ describe("OperatorControlPlaneServer", () => {
     const breakerRuntime = new StandaloneOperatorRuntime({
       rootDir: breakerRootDir,
       backgroundTaskIsProcessRunning: () => false,
+      backgroundTaskSpawnProcess: inertBackgroundSpawn,
     });
     const breakerServer = new OperatorControlPlaneServer({ runtime: breakerRuntime });
     const breakerOne = await breakerServer.handle({

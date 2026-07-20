@@ -6,6 +6,58 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-20 (run 9) — 🐞 Reliability: robust background-task state persistence (fix corrupt state JSON + flaky tests)
+
+**Audited:** Project health via `npm test`. Found the suite was **red in this
+cloud environment** — 3 tests failing (server.test 1, app.test 2, and
+operator-runtime 1 under load), all with the same root cause. Prior runs recorded
+174/174, so this was an environment-sensitive latent bug, not a regression from a
+prior run.
+
+**Root cause (real product bug in `src/harness/background-tasks.ts`):**
+`renderLaunchScript` wrote the initial `state.json` for a background task by
+**hand-templating JSON in shell** — `printf '%s' <json> | sed
+"s/…/…/; s/\"\$\$\"/$$/g"`. Two defects:
+- Any task **command containing quotes, backslashes, or newlines** corrupted the
+  JSON (the command is interpolated into the payload, then mangled by the
+  single-quote shell-escaping + `sed` pass). e.g. `printf 'line-1\nline-2\n'`
+  produced `"command":"printf "'line-1\nline-2\n"'"` → `readJsonFile` threw
+  `SyntaxError` at recovery time. Reproduced deterministically.
+- The `s/"$$"/$$/g` sed used `$` (regex end-of-line) in the pattern, so the pid
+  placeholder was frequently **never substituted** (state file kept `"pid":"$$"`).
+
+**Fix (additive, robust):** replaced the `printf | sed` templating with the same
+**`json.dumps` python path already used for the completion state** — a new
+`renderStartStateWriterPython()`. Every dynamic value (taskId, kind, outputFile,
+cwd, command, pid, timestamp) is passed as an **argv element**, which bash
+preserves byte-for-byte, so `json.dumps` always emits valid JSON regardless of the
+command's contents. Removed the fragile `printf`/`sed` line and the `$$` regex
+entirely. Verified end-to-end with the **real** spawn on a command containing
+`"`, `'`, and newlines → state file parses cleanly as `completed`.
+
+**Test flakiness (test-quality fix):** the state-reconciliation unit tests
+(`server.test.ts` drift/breaker scenarios, `operator-runtime.test.ts`
+start/sync/recover) launch a **real detached shell** via the default spawn, then
+drive execution state by hand with `writeState`. The detached process's async
+state writes race the test's writes → non-deterministic. Injected a deterministic
+**inert spawn** (`backgroundTaskSpawnProcess: inertBackgroundSpawn` — the option
+already existed but no test used it) so the state file is fully test-controlled.
+
+**Test results:** `npm test` **174/174**, now **deterministic across 6 full-suite
+runs** (was 1–3 failing per run before). Real-spawn integration check ✅. Build ✅.
+`typecheck:src` ✅ (exit 0).
+
+**New idea:** the launch script still shells out to **`python3`** for both the
+start and completion state writers — a hard runtime dependency that will silently
+break background-task recovery on hosts without python (Windows, minimal
+containers). Replace the two python heredocs with a tiny bundled **Node** state
+writer (`node -e` or a committed `state-writer.mjs`) invoked from the script, or
+have the parent Node process poll+own the state transitions. Bee-agent already
+requires Node, so this removes the python dependency and makes the recovery path
+portable. Logged to ROADMAP.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
