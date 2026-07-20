@@ -6,6 +6,61 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-20 (run 9) — Movement-model backend: in-process train/repeat/generalize (objective #2c/#2d)
+
+**Audited:** The local-movement learning subsystem (standing objective #2). The
+capture→schema→dataset→replay pieces exist (`src/capture/*`, `src/training/
+exporter.ts`, `replay.ts`), and `src/training/runner.ts` emits an *external*
+Apple-Silicon shell plan (mlx_lm/axolotl). **Gap:** there is no *in-process*
+model that actually learns from a dataset and infers — so objective #2's "(c)
+post-train a local model to repeat the recorded movements" and "(d) generalize
+to related movements" had no runnable, cloud-testable implementation, and the
+roadmap's "pluggable local-model backend with a deterministic mock", "synthetic
+event-stream generator", and "generalization eval harness" were all unstarted.
+
+**Changed (additive) — new `src/training/movement-model.ts` (+ test):**
+- **Pluggable backend seam** `MovementModelBackend` (`train` → JSON
+  `MovementModelArtifact`; `createInference` → `MovementModelInference` with
+  `predictNext`/`generate`). A real on-device small model drops in behind the
+  same interface later (the existing runner is the training seam).
+- **Deterministic mock backend** `MarkovMovementBackend` — an n-gram model with
+  Katz-style **backoff** (context 0..order-1), argmax with lexicographic
+  tie-break, so the same dataset always yields the same artifact/predictions
+  (cloud/CI-safe). Artifacts are plain JSON → trivial persistence.
+- **Repetition (2c):** `generate([])` reproduces the most-likely recorded
+  movement and stops at `<eos>` (no looping). **Generalization (2d):** a novel
+  prefix backs off to the shared learned continuation (tested: two skills share
+  a middle motif; the model completes an unseen opener onto it).
+- **Tokenizers** bridge capture → dataset: `replayEventsToTokens`,
+  `replayManifestToSequence`, `trajectoryToMovementSequence` (ts-ordered,
+  optional observation context), `datasetFromReplayManifests`.
+- **Synthetic event-stream generator** `generateSyntheticMovementDataset`
+  (seeded mulberry32 PRNG, motif-based → learnable structure) and a
+  **generalization eval harness** `evaluateNextTokenFidelity` (teacher-forced
+  next-token accuracy on held-out sequences). All exported via `src/index.ts`.
+
+**Test results:** new suite **11/11 green**; `npm run build` ✅;
+`npm run typecheck:src` ✅ (source stays fully green). Held-out synthetic
+fidelity >0.6 as asserted. **Pre-existing flakiness (NOT introduced here):** 4
+tests fail on the *clean* tree too (`app.test.ts` ×2, `server.test.ts` ×1,
+`operator-runtime.test.ts` ×1) — root cause is the shell/`sed`/`date`/`python3`
+training state-writer in `runner.ts` producing malformed JSON in this
+environment (`SyntaxError: Expected ',' or '}' … position 311` from
+`readJsonFile`). Verified by stashing this run's changes and re-running: the same
+4 fail without my diff. Logged as a roadmap blocker; out of scope for this
+additive increment (would mean editing a working subsystem I did not build).
+
+**New idea:** add a **movement-model training backend that reuses the reviewed
+export → dataset path**: wire `datasetFromReplayManifests` into
+`LocalTrainingExporter`/`runner` so a reviewed export can emit *both* the
+external Apple-Silicon plan *and* an in-process `MovementModelArtifact` baseline
+— giving every export an immediately-runnable model to smoke-test replay fidelity
+before the heavy on-device run. Bigger: an **argument-slot tokenizer** (canonical
+verb + typed slot, e.g. `tap(<target>)`) so generalization transfers across
+targets, not just across shared literal suffixes.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
