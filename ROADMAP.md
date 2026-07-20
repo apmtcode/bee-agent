@@ -62,13 +62,45 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
+      for a real on-device small model. **DONE run 9** —
+      `src/training/movement-backend.ts`: `MovementTrainingBackend` interface +
+      `MarkovMovementBackend` (order-N, reward-weighted, stupid-backoff, JSON
+      model) that replays exactly and generalizes; dataset builders from
+      trajectories + replays; 12/12 tests.
 - [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      round-trips without real OS input. (Partially seeded: the movement
+      dataset builders + backend tests now generate/consume synthetic movement
+      sequences; still want an OS-level synthetic *event* stream feeding the
+      recorder/adapters end-to-end.)
+- [~] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories. **Seeded run 9** — `evaluateMovementModel`
+      reports `exactReplayRate` + top-1 `nextTokenAccuracy` on any held-out
+      dataset. Next: a train/held-out split generator over related synthetic
+      trajectories + a regression threshold.
+- [ ] Add a `temperature`/sampling seam to `MovementTrainingBackend` (inject a
+      seeded PRNG) so it can emit *diverse* generalized movements for RL
+      exploration while tests stay deterministic; plus
+      `serializeMovementModel`/`loadMovementModel` to persist a trained mock
+      model beside the runner's artifacts.
+- [ ] Wire `MarkovMovementBackend` into `LocalTrainingExecutionService` as the
+      in-process fallback backend when no real on-device runtime is available,
+      so `runs.start` produces a usable model in the cloud instead of only a
+      launch plan.
+
+## Known failing tests (pre-existing — investigate)
+- [ ] **3 tests fail on a clean tree** (surfaced run 9; reproduce on HEAD via
+      `git stash` + re-run): `src/cli/app.test.ts`,
+      `src/control-plane/server.test.ts`, and
+      `src/orchestrator/operator-runtime.test.ts` (recover-background-tasks).
+      Symptom: `SyntaxError` in `readJsonFile` parsing a background-task **state
+      file** (malformed JSON, ~position 311) inside
+      `FileBackgroundTaskStore.reconcileTask` → `recoverBySession`. Run 8 logged
+      174/174 green, so this regressed with tests/code added since (likely the
+      parallel local self-evolve run). Suspect a concurrent-write / reconcile
+      path writing a partial or non-atomic state file. Priority: this blocks the
+      full-suite green gate and the `verify` script goal.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

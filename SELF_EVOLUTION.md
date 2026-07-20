@@ -6,6 +6,63 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-20 (run 9) — Movement subsystem: pluggable local-model backend + in-process train/infer
+
+**Audited:** `src/training/` against standing objective #2(c)/(d) ("post-train a
+local model on that dataset to repeat the recorded movements, and generalize to
+new but related movements … make the model backend pluggable"). Found the
+runner (`runner.ts`) only *prepares an external launch* (mlx/axolotl command +
+bash launch script) that runs solely on a real machine — there was **no
+in-process backend** that actually trains on the reviewed dataset or does
+inference, so the train→replay→generalize loop couldn't be exercised or
+regression-tested in the cloud at all. This was the top queued movement-subsystem
+item on the roadmap.
+
+**Changed (additive):** new `src/training/movement-backend.ts`:
+- **`MovementTrainingBackend` interface** — the pluggable seam: `train(dataset,
+  config) → MovementModel`, `predict(model, context) → ranked candidates`,
+  `generate(model, opts) → sequence`. A real on-device small-model backend
+  implements the same contract and drops in wherever the mock is used.
+- **`MarkovMovementBackend`** — deterministic reference/mock backend (no OS, no
+  subprocess, cloud/CI-safe). Order-N n-gram with reward weighting and
+  **stupid-backoff**: an appended `MOVEMENT_END_TOKEN` teaches termination, so
+  greedy `generate()` **reproduces a recorded movement exactly (replay)**, while
+  backoff to the longest seen context suffix lets it **continue a novel-but-
+  related movement (generalization)**. Model is plain JSON (round-trips).
+- **Dataset builders** `buildMovementDatasetFromTrajectories` (ts-sorted actions,
+  `approvedOnly` + custom-tokenizer knobs; coarse tokenizer ⇒ more
+  generalization, fine ⇒ exact replay) and `buildMovementDatasetFromReplays`.
+- **`evaluateMovementModel`** — seeds the roadmap's generalization eval harness:
+  reports `exactReplayRate` + top-1 `nextTokenAccuracy` on any (held-out) dataset.
+- Exported the surface from `src/index.ts`.
+
+**Tests:** new `movement-backend.test.ts` — **12/12 pass**, covering exact replay,
+generalization via backoff, reward weighting (opt-in/out), JSON round-trip,
+empty/OOV handling, cyclic-transition halting, both dataset builders, and eval
+(perfect on train, imperfect on held-out). `npm run build` ✅. `typecheck:src`
+✅ (source stays green). Full suite **183 passed / 3 failed**.
+
+**⚠️ Pre-existing blocker (NOT this run's regression):** 3 tests fail on a
+**clean tree** too (verified via `git stash` + re-run on HEAD): `app.test.ts`,
+`control-plane/server.test.ts`, and `operator-runtime.test.ts`
+(recover-background-tasks). Root symptom is a `SyntaxError` in
+`readJsonFile` reading a background-task **state file** (malformed JSON ~pos 311)
+during `FileBackgroundTaskStore.reconcileTask`. Run 8 recorded 174/174 green, so
+this arrived with tests added since (likely the parallel local self-evolve run).
+Logged to ROADMAP as a priority investigation. Because these are pre-existing and
+orthogonal — and my change is green in isolation — I pushed the additive feature
+to the designated branch `claude/peaceful-dirac-5ot0x0` (a feature branch, not
+main), per the Git Development Branch Requirements.
+
+**New idea:** add a **`temperature`/sampling seam** to the backend contract
+(currently greedy-deterministic) plus a seeded PRNG passed in by the caller, so
+the same interface can produce *diverse* generalized movements for exploration
+(RL rollouts) while tests stay deterministic by injecting a fixed seed — and a
+`serializeMovementModel`/`loadMovementModel` pair so a trained mock model can be
+persisted next to the runner's artifacts and diffed against a real backend's.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
