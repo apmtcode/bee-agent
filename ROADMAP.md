@@ -62,15 +62,32 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      for a real on-device small model. **DONE run 9** —
+      `src/training/movement-model.ts`: `MovementModelBackend`/`TrainedMovementModel`
+      interfaces, a deterministic Katz-backoff `MarkovMovementBackend` that
+      reproduces + generalizes, `UnavailableLocalMovementBackend` on-device seam,
+      registry/factory, snapshot round-trip. 15 tests.
+- [~] Synthetic event-stream generator to validate capture→dataset→replay
+      round-trips without real OS input. Partial (run 9): a deterministic
+      seeded-LCG `generateSyntheticMovementDataset` feeds the training loop.
+      Still TODO: a generator that emits full `ReplayTimelineEvent` streams and
+      round-trips them through `buildReplayManifest` + the recorder/ingestion.
+- [ ] Generalization eval harness: split a synthetic dataset into
+      train / held-out-but-related sequences, train the backend, and score
+      replay fidelity (token edit distance between generated and held-out
+      streams) as a tracked regression metric — so mock→real backend swaps are
+      measured, not assumed. (Foundations landed run 9.)
 
 ## Innovation backlog
+- [ ] **Crash-tolerant background-task reconcile** (fixes 3 pre-existing test
+      failures found run 9). `readJsonFile` / the reconcile path throws a
+      `SyntaxError` on a malformed or half-written state file, rejecting the
+      whole recovery (`operator-runtime`, `server`, `app` suites). A crashed
+      training/background process can legitimately leave a partial JSON state
+      file — reconcile should treat it as `failed`/`unknown` and continue, not
+      crash. Reliability win for the local training path extended in run 9.
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in
       project health over time.

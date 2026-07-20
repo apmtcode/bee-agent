@@ -6,6 +6,66 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-20 (run 9) — Movement subsystem: pluggable local-model backend + train→infer→generalize loop
+
+**Audited:** `src/training/` (runner, execution-service, exporter) and
+`src/capture/` (trajectory, replay) against standing objective #2 parts (c)
+"post-train a local model … to repeat recorded movements" and (d) "generalize to
+new but related movements". **Gap found:** the training subsystem only *emits
+launch scripts* for on-device tools (`mlx_lm.lora`, `axolotl.cli.train`) — there
+was **no in-process model at all**, so the core learn→replay→generalize loop
+could not be exercised or tested in the cloud, and there was no backend seam to
+plug a real on-device model into. This is the roadmap's queued
+"pluggable local-model backend … with a deterministic mock backend" item.
+
+**Changed (additive, new module `src/training/movement-model.ts`):**
+- **Movement schema + tokenizers:** `MovementToken` (`tool` + normalized
+  `action` bucket), `MovementSequence`, `MovementDataset`; `movementToken`,
+  `bucketizeSummary`, `tokenizeTrajectory`, `tokenizeReplayManifest`,
+  `datasetFromTrajectories` — turn the existing `TrajectorySpan` / `ReplayManifest`
+  action streams into learnable sequences (no new capture types invented).
+- **`MovementModelBackend` interface** (`train` + `restore`) and
+  **`TrainedMovementModel`** (`predictNext` / `generate` / `snapshot`) — the
+  backend-agnostic seam.
+- **`MarkovMovementBackend`** — a deterministic Katz-style back-off n-gram model
+  that genuinely learns: it **reproduces** recorded sequences via argmax decoding
+  (exact replay, terminates at a learned END sentinel) and **generalizes** to
+  unseen contexts by backing off to shorter n-grams (verified: a never-seen head
+  followed by a known bigram still predicts the correct continuation at a lower
+  `backoffOrder`). Snapshot/restore round-trips losslessly.
+- **`UnavailableLocalMovementBackend`** — documented on-device seam
+  (`mlx-lora`, `axolotl-rl`) that fails loudly in the cloud instead of silently
+  degrading; plus `defaultMovementBackendRegistry()` / `createMovementBackend()`.
+- **`generateSyntheticMovementDataset({seed})`** — deterministic (seeded LCG, no
+  `Math.random`/`Date`) synthetic motif dataset to validate the loop in CI
+  without real OS capture. Barrel-exported all of the above from `src/index.ts`.
+
+**Test results:** new `movement-model.test.ts` **15/15 passing** (reproduction,
+back-off generalization, snapshot round-trip, tokenization, registry, synthetic
+determinism). `npm run build` ✅. `typecheck:src` ✅ (exit 0). Full `npm test`:
+**186 passing / 3 failing** — the **3 failures are pre-existing** (verified by
+`git stash` → same 3 fail on the clean baseline) and **unrelated** to this
+change: `operator-runtime`/`server`/`app` background-task reconcile chokes on a
+malformed/partial JSON state file (`readJsonFile` in `src/shared/fs.ts` throws a
+`SyntaxError` instead of tolerating a half-written state file). Logged to
+ROADMAP. My diff is additive and green in isolation; per the designated-branch
+policy this run pushes to `claude/peaceful-dirac-j68bnd`.
+
+**New idea (logged to ROADMAP):** make background-task reconcile crash-tolerant —
+`readJsonFile` (or the reconcile path) should treat a malformed/partial state
+file as `status: failed`/`unknown` rather than throwing, since a crashed
+training or background process can leave a half-flushed JSON state file on disk.
+This is both the fix for the pre-existing failures and a real reliability win for
+the local training path this run just extended.
+
+**Second idea:** a **generalization eval harness** — split a synthetic dataset
+into train/held-out-but-related sequences, train the backend, and score replay
+fidelity (edit distance between generated and held-out token streams) as a
+regression metric, so future backend swaps (mock → real) are measured, not
+assumed.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
