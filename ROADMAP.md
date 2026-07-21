@@ -3,6 +3,27 @@
 Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
+## 🔴 Pre-existing test failures (TOP PRIORITY — fix next run)
+Verified failing on a clean `HEAD` checkout (run 9, wall-clock 2026-07-21);
+unrelated to the movement-policy change. Suite flakes **3↔4 red** across repeated
+runs on clean HEAD (the 4th is a background-task race).
+- [ ] **Time-bomb fixtures** — `control-plane/server.test.ts` +
+      `cli/app.test.ts`: remote-control heartbeat-staleness returns
+      `state:"degraded"` vs expected `"active"` because fixtures use `2026-01-01`
+      timestamps and "now" is months later. Fix: thread an injectable clock /
+      `now` into the remote-control status builder and pin it in the tests.
+- [ ] **Shell state-writer fragility** — `orchestrator/operator-runtime.test.ts`:
+      the background-task launch script hand-builds `state.json` with
+      `printf`/`sed`, so a `command` containing quotes/newlines corrupts the JSON
+      and `readState` throws `SyntaxError` (also leaves `pid:"$$"` unsubstituted).
+      Fix: emit the running-state JSON via a `python3` `json.dumps` writer, matching
+      the completion/failure path in `renderLaunchScript`.
+- [ ] **Flaky background-task test** — `cli/app.test.ts > supports background and
+      monitor task commands plus cron commands` intermittently fails (3↔4 total
+      red) on clean HEAD; a timing/race in real background-process spawning.
+      Fix: make the test wait on a deterministic state transition instead of
+      racing the spawned process, or fake the executor.
+
 ## Foundations / DX
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
@@ -59,16 +80,28 @@ unchecked items are queued. Keep this richer than you found it each run.
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
 (exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
-      objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Inventory what `src/capture` + `src/training` already implement vs. the
+      objective's five pieces (run 9). Capture/schema/dataset/replay were done;
+      the train→repeat→generalize pieces (2c+2d) had no in-process code.
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      for a real on-device small model — DONE run 9 (`MovementPolicyBackend` +
+      `MarkovMovementBackend` + `ConstantMovementBackend`).
+- [x] Synthetic event-stream generator to validate capture→dataset→replay
+      round-trips without real OS input — DONE run 9
+      (`generateSyntheticMovementDataset` + `splitMovementDataset`, seeded LCG).
+- [x] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories — DONE run 9 (`evaluateMovementPolicy` +
+      `measureReplayFidelity`; held-out accuracy > chance and > 1.5× baseline).
+- [ ] Wire a real on-device small-model backend (MLX/gguf policy head) behind
+      `MovementPolicyBackend`, reusing the runner's launch-plan machinery.
+- [ ] `movement.eval` RPC/CLI: train a backend on a session's reviewed
+      trajectories, report held-out next-action accuracy + replay fidelity as a
+      per-run tracked metric.
+- [ ] Curriculum sampler: weight retraining toward the transitions the current
+      policy predicts worst, so each retrain targets its weakest generalization.
+- [ ] Bridge captured device/os token streams into the movement dataset in the
+      exporter (reuse `datasetFromTrajectories` / `tokenizeReplayManifest`).
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

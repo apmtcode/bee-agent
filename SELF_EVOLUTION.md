@@ -6,6 +6,81 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-21 (run 9) — 🧠 In-process movement-policy learning: train → repeat → generalize (objective #2c+d)
+
+**Audited:** The movement-learning subsystem (standing objective #2), which had
+not advanced since run 2 — runs 3–8 were all typecheck debt. Inventoried what
+`src/capture/**` + `src/training/**` already implement against the objective's
+five pieces: capture pipeline ✅ (recorder, device/os/browser adapters, consent),
+event schema ✅ (`TrajectorySpan`, `ReplayTimelineEvent`), dataset/export ✅
+(`LocalTrainingExporter`, reviewed-export manifest), replay ✅
+(`buildReplayManifest`). **Gap found (highest value):** the "train a local model
+to *repeat* the recorded movements and *generalize* to new but related
+movements" pieces (objective 2c + 2d) had **no code at all** — the training
+`runner.ts` only emits *external* mlx/axolotl launch plans that can never run in
+the cloud, so there was nothing to validate the learn→infer loop end to end.
+
+**Changed (additive, two new source modules + tests):**
+- **`src/training/movement-policy.ts`** — a pluggable local-model seam
+  (`MovementPolicyBackend`: `train` / `predictNext` / `generate`) with a default
+  in-process **`MarkovMovementBackend`** (order-k Markov + stupid-backoff, fully
+  deterministic — no Date/Math.random, which the sandbox forbids). Backoff to
+  shorter contexts is what gives *generalization* to novel prefixes built from
+  familiar local transitions. Plus a `ConstantMovementBackend` proving the seam
+  is honoured, tokenizers (`tokenizeAction`/`tokenizeTrajectory`/
+  `tokenizeReplayManifest`, `datasetFromTrajectories`) that turn captured
+  artifacts into token streams, and eval helpers `evaluateMovementPolicy`
+  (teacher-forced next-token accuracy = replay fidelity on train / generalization
+  on held-out) + `measureReplayFidelity` (exact-match rollout reproduction).
+- **`src/training/synthetic-movements.ts`** — deterministic synthetic
+  movement-stream generator (seeded LCG, no global RNG) over a small
+  task-anchored "movement grammar" (`open-and-edit` / `navigate-browser` /
+  `run-command`), plus `splitMovementDataset` for a train / held-out split. This
+  is how the whole loop is validated in the cloud with **no OS access**.
+- Barrel exports in `src/index.ts` (no name collisions).
+
+**Test results:** new `movement-policy.test.ts` — **15/15 pass**. Proves:
+(2c) a recorded sequence is reproduced *exactly* from its seed and the rollout
+stops at the recorded end; (2d) held-out related sequences are predicted at
+~0.36–0.55 accuracy — averaged over 5 seeds, **> chance (~0.05)** and
+**> 1.5× a most-frequent-token baseline**; backoff to shorter contexts for
+unseen prefixes; deterministic across identical runs; and the backend seam is
+pluggable. `npm run build` ✅. `typecheck:src` ✅ **0 errors** (source stays
+clean). Full `tsc` **125 → 125** (no new debt; the +2 from the new test file
+were fixed by typing the backend through its interface).
+
+**⚠️ Pre-existing failures (NOT caused by this change; my modules touch none of
+these subsystems):** the full suite has **3–4 red** tests that also fail on a
+clean `HEAD` checkout (verified via `git stash` — clean HEAD flakes 3↔4 across
+repeated runs, exactly like the working tree; my 15 new tests pass every run).
+The 4th is a flaky background-task race. Root causes diagnosed:
+- `control-plane/server.test.ts` + `cli/app.test.ts` — **time-bomb fixtures**:
+  a heartbeat-staleness check returns `state:"degraded"` instead of the expected
+  `"active"` because the wall-clock is now `2026-07-21`, months past the
+  `2026-01-01` fixture timestamps. Fix: inject a clock / `now` into the
+  remote-control status builder so tests pin time.
+- `orchestrator/operator-runtime.test.ts` — **shell state-writer fragility**: the
+  background-task launch script assembles `state.json` via `printf`/`sed`; when a
+  task's `command` contains quotes/newlines (e.g. `printf "'line-1\nline-2\n"'`)
+  the shell-built JSON is corrupted (and `pid:"$$"` isn't even substituted), so
+  `readState` throws `SyntaxError`. Fix: have the launch script emit state JSON
+  via a `python3 -c json.dumps` writer (like the completion path already does)
+  instead of hand-building it, so arbitrary command strings are safe.
+These are logged as the **top ROADMAP priority** for the next run. Pushed to the
+designated feature branch `claude/peaceful-dirac-c6zqt7` (not `main`); the new
+work is green in isolation, and the pre-existing red predates this run (run 8
+pushed the same state).
+
+**New idea:** now that the movement policy is real and evaluable, add a
+**generalization eval-harness CLI/RPC** (`movement.eval`) that trains a backend
+on a session's reviewed trajectories and reports held-out next-action accuracy +
+replay fidelity — turning "did local learning improve?" into a tracked metric per
+run. Bigger: a **curriculum sampler** that weights training toward the movement
+transitions the current policy predicts *worst*, so each retrain targets its own
+weakest generalization instead of re-learning what it already knows.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
