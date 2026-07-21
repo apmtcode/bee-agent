@@ -62,13 +62,38 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
+      for a real on-device small model — DONE run 9 (`src/training/movement-backend.ts`:
+      `MovementTrainingBackend`/`TrainedMovementPolicy`, `buildMovementDataset`,
+      `MockMovementTrainingBackend` (n-gram + observation nearest-neighbour),
+      `MovementBackendRegistry`; 13 tests). Real on-device seam remains the
+      `LocalAppleSiliconTrainingRunner` (mlx/axolotl launch scripts).
 - [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      round-trips without real OS input. (Partial: the movement-backend tests
+      hand-build synthetic replays; extract a reusable generator next.)
+- [ ] **Generalization eval harness** (next movement increment): split synthetic
+      trajectories train/held-out, train the mock backend, score replay exact-match
+      rate + next-action top-1 accuracy on held-out. Gives objective #2(d) a
+      measurable number + a backend regression guard.
+- [ ] Wire the movement backend into the training job flow: after a job is
+      "completed", run the mock backend over its reviewed dataset to produce a
+      queryable policy artifact, so `replays`/`generate` are reachable via the
+      control-plane RPC surface (parity with the real-trainer path).
+
+## Known bugs (root-caused, awaiting a focused fix run)
+- [ ] **Background-task launch script corrupts state JSON** (found run 9; causes
+      4 flaky pre-existing test failures in `operator-runtime.test.ts`,
+      `server.test.ts`, `app.test.ts`). The renderer writes the running-state file
+      via `printf '%s' <json-payload> | sed …`, which mangles commands containing
+      single quotes and/or newlines (e.g. `printf 'line-1\nline-2\n'`) and leaves
+      the `"$$"` pid placeholder unsubstituted → invalid JSON that
+      `reconcileTask`'s `readJsonFile` throws on (race: the async spawned process
+      sometimes writes the bad file before `readState`). Fix options: (a) make the
+      background-task execution service take an injectable `spawnProcess` and have
+      these tests inject a no-op (hermeticity, mirrors run 1's `configHome` fix);
+      (b) replace the `sed`-on-JSON approach with a heredoc'd Python/`jq` writer so
+      command quoting cannot corrupt the payload. Prefer doing both.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

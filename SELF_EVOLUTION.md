@@ -6,6 +6,69 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-21 (run 9) — Movement subsystem: pluggable in-process model backend (train + infer + generalize)
+
+**Audited:** `src/training/` against movement-subsystem objective #2(c)/(d) —
+"post-train a local model on that dataset to repeat the recorded movements" and
+"generalize to perform new but related movements", with a **pluggable** backend.
+Found the runner (`LocalAppleSiliconTrainingRunner`) only *emits external launch
+scripts* (mlx / axolotl) — the real on-device seam. There was **no in-process
+backend** that actually learns a policy and performs inference, so none of
+(c)/(d) was verifiable in the cloud. That is the roadmap's top movement item.
+
+**Changed (additive, new files only):**
+- `src/training/movement-backend.ts` — a pluggable backend layer:
+  - `MovementTrainingBackend` interface + `TrainedMovementPolicy` (replay /
+    predictNext / generate / serialize) — one seam both the real trainer and the
+    mock satisfy.
+  - `buildMovementDataset(export)` — distils the reviewed export's replay events
+    into ordered per-trajectory action **sequences** + **observation→action**
+    links (the training-ready schema, decoupled from the export format).
+  - `MockMovementTrainingBackend` (`id: "mock-ngram"`) — a deterministic,
+    dependency-free reference model: learns exact sequences (faithful **replay**),
+    a first-order Markov transition table over tools (rollout / **generate**), a
+    per-tool representative summary, and an observation→action index for
+    **nearest-neighbour generalization** (token-Jaccard) so it can act on
+    new-but-related states it never saw verbatim. All tie-breaks lexical → fully
+    reproducible; serialize/deserialize round-trips.
+  - `MovementBackendRegistry` — resolve a backend by id / register future ones
+    (e.g. a real on-device adapter) without touching call sites.
+- `src/index.ts` — barrel-exported the new surface.
+- Tests `src/training/movement-backend.test.ts` (**13**): dataset distillation,
+  multi-trajectory split, exact replay, unknown-trajectory throw, cold-start
+  generate reproduces the learned sequence, transition continuation, **observation
+  generalization to a held-out related state**, majority-vote transitions,
+  determinism across runs, serialization round-trip + deep-copy isolation,
+  registry resolve/throw/register.
+
+**Test results:** new file **13/13 ✅**. `npm run build` ✅ (dist 546 kB).
+`npm run typecheck:src` ✅ (source stays clean). Full `npm test` **184 passing**
+(174 prior + my 13 − the pre-existing failures below).
+
+**⚠️ Pre-existing failures found & root-caused (NOT caused by this change; red on
+clean HEAD too):** 4 tests across `operator-runtime.test.ts`,
+`background-tasks`-driven `server.test.ts`, and `app.test.ts` fail. Root cause:
+the **background-task launch-script renderer** writes its running-state file via a
+shell `printf '%s' <json> | sed …` pipeline that **mangles commands containing
+single quotes and/or newlines** (e.g. `printf 'line-1\nline-2\n'`) and leaves the
+`"$$"` pid placeholder unsubstituted → invalid JSON, which `reconcileTask`'s
+`readJsonFile` then throws on. It's a flaky race: the async spawned process
+sometimes writes the bad file before `readState` runs. Same class of bug the
+training runner's `renderLaunchScript` could have. Two clean fixes (either would
+work): (a) make the background-task execution service accept an **injectable
+`spawnProcess`** and have these tests inject a no-op (hermeticity, mirrors run 1's
+`configHome` fix); and/or (b) **stop using `sed` on the JSON payload** — write the
+state with a heredoc'd Python/`jq` writer (like the state *writer* already does)
+so command quoting can't corrupt it. Queued in ROADMAP as high priority.
+
+**New idea:** a **generalization eval harness** for the movement policy — split
+synthetic trajectories into train/held-out, train the mock backend, and score
+replay fidelity (exact-match rate) + next-action top-1 accuracy on the held-out
+set. Gives objective #2(d) a measurable number that each run can try to move,
+and doubles as a regression guard on the backend.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
