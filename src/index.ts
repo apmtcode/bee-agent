@@ -431,3 +431,28 @@ export type {
   FailTrainingJobParams,
   TrainingJobStoreShape,
 } from "./training/job-store.js";
+export {
+  NgramMovementPolicyBackend,
+  SEQUENCE_END,
+  SEQUENCE_START,
+  buildMovementDataset,
+  buildSyntheticMovementSequences,
+  deserializeMovementPolicy,
+  evaluateMovementPolicy,
+  rolloutMovementPolicy,
+  tokenizeMovementEvent,
+} from "./training/policy-model.js";
+export type {
+  MovementPolicyBackend,
+  MovementPolicyDataset,
+  MovementPolicyEvaluation,
+  MovementPolicyTrainConfig,
+  MovementPrediction,
+  MovementSequence,
+  MovementTimelineSource,
+  MovementToken,
+  RolloutOptions,
+  SerializedMovementPolicy,
+  SyntheticMovementOptions,
+  TrainedMovementPolicy,
+} from "./training/policy-model.js";

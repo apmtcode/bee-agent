@@ -59,16 +59,37 @@ unchecked items are queued. Keep this richer than you found it each run.
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
 (exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
-      objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Inventory what `src/capture` + `src/training` already implement vs. the
+      objective's five pieces (run 9): capture/schema/dataset/replay existed;
+      **train/infer did not** — runner only emitted mlx/axolotl shell commands.
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      for a real on-device small model — DONE run 9
+      (`src/training/policy-model.ts`: `MovementPolicyBackend` interface +
+      `NgramMovementPolicyBackend` back-off n-gram; MLX/llama.cpp backend slots
+      into the same contract).
+- [x] Synthetic event-stream generator to validate capture→dataset→replay
+      round-trips without real OS input — DONE run 9
+      (`buildSyntheticMovementSequences`, seeded mulberry32).
+- [x] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories — DONE run 9 (`evaluateMovementPolicy`:
+      teacher-forced next-token accuracy + back-off-depth histogram).
+- [ ] `PolicyGuidedReplayAdapter`: drive `replay-service` from
+      `TrainedMovementPolicy` rollouts (generalized movement execution) instead
+      of a fixed recorded manifest, with a divergence guard (abort when
+      `contextOrder` stays 0 for N steps = guessing, not generalizing).
+- [ ] Wire a `MovementPolicyBackend` choice into `runner.ts`/`job-manifest`: an
+      `ngram` local mode that trains via the in-process backend (cloud-runnable)
+      alongside the existing `mlx`/`axolotl` on-device modes.
+
+## Known blockers (full-suite green gate)
+- [ ] **Background-task recovery tests fail on JSON parse** (`operator-runtime`,
+      `server`, `app`): `readJsonFile` throws `SyntaxError: Expected ',' or '}'`
+      at ~position 311 while `FileBackgroundTaskStore.reconcileTask` reads a
+      persisted state file. Confirmed **pre-existing** (fails on clean base,
+      not run 9's diff). Likely an unsubstituted shell placeholder (literal
+      `$$`) leaking into a state fixture/writer → invalid JSON. Fix this to
+      unblock a full-suite green gate (183/186 → 186/186).
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

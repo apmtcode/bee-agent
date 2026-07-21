@@ -6,6 +6,66 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-21 (run 9) — 🧠 Movement policy model: pluggable backend + trainable n-gram + rollout/eval (objective 2c/2d)
+
+**Audited:** The local-movement learning subsystem (standing objective #2) and
+its roadmap's top item — "pluggable local-model backend + deterministic mock
+backend + generalization eval". Traced the existing pipeline end-to-end:
+`src/capture` produces `TrajectorySpan`s → `replay.ts` flattens them to an
+ordered `ReplayTimelineEvent[]` → `training/exporter.ts` packages reviewed
+timelines → `training/runner.ts` **only emits mlx/axolotl shell commands**.
+**Gap found:** pieces (c) "post-train a local model to repeat movements" and (d)
+"generalize to related movements" had *no implementation at all* — nothing
+trains a model or produces predictions, and the mlx/axolotl path cannot run in
+the cloud, so the loop was untestable here.
+
+**Changed (additive, new module `src/training/policy-model.ts`):**
+- **`MovementPolicyBackend` interface** — the pluggable seam. A real on-device
+  model (MLX/llama.cpp) implements the same `train(dataset) → TrainedMovementPolicy`
+  contract and slots in unchanged.
+- **`NgramMovementPolicyBackend`** — a deterministic, dependency-free back-off
+  n-gram that genuinely *trains* (transition counts over movement tokens) and
+  *predicts* in-process, so cloud/CI validates capture→dataset→train→rollout
+  with zero OS/native deps. Additive (Laplace) smoothing optional.
+- **Dataset builder** `buildMovementDataset(replayTimelines)` — groups action
+  events by trajectory, orders by ts, tokenizes each action
+  (`tool::normalized-summary`) into a `MovementSequence`.
+- **`rolloutMovementPolicy`** — greedy forward rollout. Empty prime → *repeats*
+  the learned trajectory (2c); partial/novel prime → *generalizes* via back-off
+  (2d). Back-off depth is surfaced as `contextOrder` on every prediction.
+- **`evaluateMovementPolicy`** — generalization eval harness: teacher-forced
+  next-token accuracy on held-out sequences + a back-off-depth histogram.
+- **`buildSyntheticMovementSequences`** — seeded (mulberry32) synthetic movement
+  stream generator, standing in for live OS capture in tests.
+- **`serialize`/`deserializeMovementPolicy`** — JSON round-trip for persistence.
+- Exported the surface from `src/index.ts`.
+
+**Test results:** new `policy-model.test.ts` — **12/12 pass** (repeat-exact,
+back-off generalization, no-unnecessary-back-off, determinism, eval accuracy +
+histogram sum invariant, serialize round-trip, synthetic determinism/bounds,
+rollout end-token). `typecheck:src` ✅ (source stays green). Build ✅. Full suite
+**183 passing / 3 pre-existing failures** — the 3 failures
+(`operator-runtime`, `server`, `app` background-task recovery) were **confirmed
+pre-existing on the clean base** (`git stash` → same files fail): a
+`SyntaxError: Expected ',' or '}'` in `readJsonFile` while reconciling a
+background-task **state fixture** — malformed JSON in a test fixture / shell
+state writer, entirely outside this run's diff. Logged as a blocker below.
+
+**Known blocker (not introduced this run):** `background-tasks` recovery tests
+fail parsing a state file as JSON. Likely an unsubstituted shell placeholder
+(e.g. a literal `$$`) leaking into a persisted state fixture, producing invalid
+JSON at position ~311. Worth a focused fix next run — it's the last thing
+between the suite and a full green gate.
+
+**New idea:** add a `PolicyGuidedReplayAdapter` that bridges a
+`TrainedMovementPolicy` back into the `replay-service` — instead of replaying a
+*fixed* recorded manifest, drive replay from policy rollouts so bee-agent can
+execute *generalized* movement sequences on novel-but-related tasks. Pair it
+with a divergence guard (abort if the rolled-out action's `contextOrder` drops
+to 0 for N consecutive steps = the model is guessing, not generalizing).
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
