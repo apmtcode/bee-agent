@@ -62,13 +62,41 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      for a real on-device small model — DONE run 9 (`src/training/movement-model.ts`:
+      `MovementModelBackend` + `MovementBackendRegistry` + deterministic
+      `NgramMovementBackend` with stupid back-off; 17 tests). Reproduces recorded
+      movements (2c) and generalizes via back-off (2d).
+- [~] Synthetic event-stream generator to validate capture→dataset→replay
+      round-trips without real OS input. Partial (run 9): the movement-model tests
+      use inline synthetic token streams + `movementDatasetFrom{Replays,Trajectories}`.
+      Next: a reusable, parameterized generator (branching tasks, noise, held-out
+      splits) shared across capture + training tests.
+- [~] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories. Started run 9 (`evaluateMovementModel`:
+      next-token accuracy + mean log-prob). Next: perplexity, edit-distance to
+      target trajectory, and goal-conditioned success rate.
+- [ ] **Goal-conditioned movement head** (run 9 idea): prepend a goal/target token
+      to each training sequence and to the inference seed so the backend can
+      *perform a new related task*, not just continue a prefix — the concrete
+      2c→2d bridge. Measure whether held-out goals steer `generate`.
+- [ ] Persist trained movement models: a `FileMovementModelStore` (save/load
+      `MovementModelSnapshot`, list by dataset/version) so a locally-trained model
+      survives restarts and can be served for inference.
+
+## Known bugs (environment-sensitive)
+- [ ] **Bash state-writer emits malformed JSON** (surfaced run 9). In this cloud
+      sandbox, 4 tests fail deterministically because the background-task /
+      training launch-script state writer (`renderLaunchScript` in
+      `src/training/runner.ts`, and the equivalent in `src/harness/background-tasks.ts`)
+      produces invalid JSON — `readJsonFile` throws `SyntaxError: Expected ',' or
+      '}'` (~pos 311). Likely a `printf`/`sed`/`date` quoting interaction with
+      this shell. Affects `operator-runtime.test.ts`, `app.test.ts` (×2),
+      `server.test.ts` (×1). NOT a TS/type issue. Fix: make the state file be
+      written by a single Python/Node emitter (round-trip-safe JSON) instead of
+      `printf | sed`, or harden the quoting; add a unit test that parses the
+      generated state file.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

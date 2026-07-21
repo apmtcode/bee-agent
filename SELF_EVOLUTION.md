@@ -6,6 +6,69 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-21 (run 9) — 🧠 Local-movement model backend: in-process train/predict/generalize (objective 2c/2d)
+
+**Audited:** The local-movement learning subsystem (`src/capture/` + `src/training/`)
+against standing objective #2. Found the pipeline already captures trajectories,
+exports reviewed datasets, and generates *external* MLX/axolotl training **plans**
+(`runner.ts` emits launch scripts) — but there was **no in-process model backend**:
+nothing that actually learns recorded movement sequences and predicts/reproduces
+them, and nothing pluggable for a real on-device model. This is the top queued
+movement item in ROADMAP ("Pluggable local-model backend interface … with a
+deterministic mock backend").
+
+**Changed (additive) — new `src/training/movement-model.ts`:**
+- `MovementModelBackend` **pluggable interface** (`train` / `restore`) + a
+  `MovementBackendRegistry` (register/get/list/train/restore, dispatches on
+  snapshot backend name). Real on-device trainers drop in behind this seam.
+- `NgramMovementBackend` — a **deterministic n-gram with stupid back-off** (zero
+  native deps, so it validates the capture→dataset→train→infer round-trip in
+  cloud/CI). Exact recorded contexts reproduce recorded movements verbatim
+  (objective **2c**); unseen-but-related prefixes back off to shorter suffixes
+  down to the unigram, so related-novel movements still get a plausible next step
+  (objective **2d**). Deterministic tie-break (count, then lexicographic token).
+- Model API: `predictNext`, `generate` (BOS/EOS-guarded, no infinite loops),
+  `scoreSequence` (mean per-token log-prob), `serialize`/`restore` (plain-JSON
+  snapshot, survives a JSON round-trip).
+- Dataset builders wiring the recording pipeline to the model:
+  `movementDatasetFromReplays`, `movementDatasetFromTrajectories`,
+  `movementTokensFromReplay`, `actionToken`.
+- `evaluateMovementModel` — a **generalization eval harness** (next-token accuracy
+  + mean log-prob on held-out sequences), the first slice of ROADMAP's "measure
+  replay fidelity on held-out but related synthetic trajectories".
+- Exported the full surface from `src/index.ts`.
+
+**Fixed while writing it:** a real infinite-recursion bug in the back-off —
+`probabilityOf` at the unigram level (`k===0`) recursed on `slice(1)` of an empty
+context forever; guarded to stop at the unigram.
+
+**Test results:** new `movement-model.test.ts` — **17/17 pass** (exact
+reproduction, seen-context prediction, back-off generalization, EOS termination,
+determinism, JSON serialize/restore, log-prob ordering, registry pluggability +
+error, dataset builders keep action order / drop empty, eval harness fidelity).
+`typecheck:src` ✅ (source stays fully green). Build ✅ (dist 545 kB).
+
+**⚠️ Pre-existing failures (NOT introduced by this run — verified by `git stash -u`
+on clean HEAD):** 4 tests fail deterministically in THIS sandbox —
+`operator-runtime.test.ts` (background-task recover), `app.test.ts` ×2,
+`server.test.ts` ×1. Root cause: the bash **state-writer** in
+`background-tasks`/`runner` `renderLaunchScript` emits **malformed JSON** here
+(`SyntaxError: Expected ',' or '}'` at ~pos 311 via `readJsonFile`) — a
+`printf`/`sed`/`date` shell-quoting issue that is environment-sensitive (this
+sandbox's shell), not a TS regression. Logged to ROADMAP. Because these predate
+this run and are unrelated to the isolated, green movement-model addition, work
+was pushed to the designated feature branch `claude/peaceful-dirac-0b9pmp`.
+
+**New idea:** give the movement model a *goal-conditioned* head — condition next
+-movement prediction not just on the action prefix but on a target
+observation/goal token (e.g. "reach save-dialog"), so the same backend can be
+asked to *perform a new related task* rather than only continue a prefix. Cheap
+first cut: prepend a goal token to each training sequence and to the seed at
+inference; measure whether held-out goals steer generation. This is the concrete
+bridge from "repeat/continue" (2c) to "perform new but related movements" (2d).
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
