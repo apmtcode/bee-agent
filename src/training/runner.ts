@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { ensureParentDir, readJsonFile, writeJsonAtomic } from "../shared/fs.js";
+import { posixSingleQuote } from "../shared/shell.js";
 import type { TrainingExecutionState } from "./execution-service.js";
 import type {
   LocalTrainingExecution,
@@ -225,5 +226,5 @@ function renderStateWriterPython(status: TrainingExecutionState["status"]): stri
 }
 
 function shellQuote(value: string): string {
-  return `'${value.replaceAll(`'`, `'"'"'`)}'`;
+  return posixSingleQuote(value);
 }

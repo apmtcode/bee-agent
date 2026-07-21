@@ -4,6 +4,20 @@ Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
 ## Foundations / DX
+- [x] **Fix shell-quoting corruption in background-task launcher** (2026-07-21,
+      run 9). `shellQuote` in `background-tasks.ts` used `"'"'"'` instead of the
+      correct `'"'"'`, corrupting `state.json` for any command containing a
+      single quote (3 red tests). Fixed the escape + the broken `sed` pid
+      substitution, extracted a shared tested `posixSingleQuote()` in
+      `src/shared/shell.ts` (both copies now share it), and made the
+      background-task tests hermetic with a stubbed spawner. 174→178 tests green.
+- [ ] **Launcher-script contract test:** render `renderLaunchScript` for a
+      command with single quotes / newlines / `$` / `"`, run it under `bash`,
+      and assert the emitted `state.json` parses + round-trips. Would have caught
+      run 9's bug directly.
+- [ ] **Route all generated shell through `src/shared/shell.ts`:** grep `src/**`
+      for hand-built `printf`/`sed`/`bash -lc` strings and funnel every one
+      through the shared quoter so no third divergent copy can appear.
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`

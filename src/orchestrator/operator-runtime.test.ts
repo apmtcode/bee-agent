@@ -531,6 +531,9 @@ describe("StandaloneOperatorRuntime", () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
       backgroundTaskIsProcessRunning: () => false,
+      // Hermetic spawn: the test drives execution state explicitly via
+      // writeState, so a real child process would only race the state file.
+      backgroundTaskSpawnProcess: () => ({ pid: 4242, unref: () => {} }),
     });
     const session = await runtime.startSession({ title: "Tasks", agentId: "main" });
 

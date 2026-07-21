@@ -6,6 +6,68 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-21 (run 9) — 🐛 Fix shell-quoting bug corrupting background-task state (3 red tests → all green)
+
+**Audited:** Started from the required verification gate and found the suite was
+**not green in this environment**: `npm test` reported **3 failing tests**
+(`operator-runtime.test.ts`, `server.test.ts`, `app.test.ts`) — contradicting
+run 8's "174/174". Root-caused rather than papered over.
+
+**Bug found (real, in source — `src/harness/background-tasks.ts`):** the private
+`shellQuote()` used the replacement `"'"'"'` to escape single quotes, but the
+correct POSIX escape is `'"'"'`. The stray leading `"` injects a spurious
+double-quote. `renderLaunchScript` embeds a JSON state payload into the launcher
+via `printf '%s' <shellQuoted>`; when a task command contained a single quote
+(e.g. the tests' `printf 'line-1\nline-2\n'`), the generated `state.json` became
+**invalid JSON**. The spawned launcher's `python3` state-writer then crashed,
+leaving a corrupt file that `readState`→`JSON.parse` blew up on
+(`SyntaxError … in JSON at position …`). The identical helper in
+`src/training/runner.ts` was already correct — a silent **divergence** between
+two copies, exactly the failure mode the roadmap's barrel-collision idea warns
+about. Verified the fix with a bash `printf` roundtrip harness (BAD → parse
+fail, GOOD → parse ok).
+
+**Second latent bug (same file, same function):** the initial-state `sed` was
+rendered as `sed "…; s/"$$"/$$/g"` — the unescaped `"` closes bash's
+double-quote context, so `$$` expanded to the shell PID *outside* the pattern
+and the intended `"$$"`→PID substitution never happened. The running-state file
+kept `"pid":"$$"` (a string) instead of a numeric pid, violating the
+`BackgroundTaskExecutionState.pid: number` type at runtime. Fixed by splitting
+into a properly single-quoted second `sed` (`s/"$$"/'"$$"'/g`). End-to-end run
+now yields `"pid": <number>` and valid JSON.
+
+**Test hermeticity (root of the flakiness):** the background-task tests drive
+execution state explicitly via `writeState` and set
+`backgroundTaskIsProcessRunning: () => false`, but did **not** stub the spawner —
+so in a cloud box with real `bash`/`python3`, an actual child process wrote the
+state file and *raced* the tests' own writes. Injected a hermetic
+`backgroundTaskSpawnProcess: () => ({ pid: 4242, unref(){} })` at the four
+background-task-exercising runtimes (operator-runtime.test + server.test's main,
+drifting, breaker runtimes). Matches the run-1 "test hermeticity" precedent.
+
+**Divergence-proofing (innovation this run):** extracted the escaper to a single
+tested `posixSingleQuote()` in **new `src/shared/shell.ts`** and pointed both
+`shellQuote` shims at it, so the two copies can never drift again. Added
+**`src/shared/shell.test.ts`** (4 tests): exact-string regression guard
+(`a'b` → `'a'"'"'b'`, which the old buggy impl fails), bash-`printf` roundtrip
+over newline/`$$`/backtick/`"`/backslash samples, and a JSON-payload-survives-
+printf check.
+
+**Test results:** `npm test` **174→178 passing (42 files, +4 new), 0 failing**,
+deterministic across 3 runs. `npm run build` ✅. `npm run typecheck:src` ✅
+(exit 0, source stays green). Full `tsc` test-file debt unchanged (untouched).
+
+**New idea:** add a tiny `verify` script (`typecheck:src && build && test`) and a
+**launcher-script contract test** that renders `renderLaunchScript` for a command
+containing single quotes, newlines, `$`, and `"`, executes it under `bash`, and
+asserts the resulting `state.json` parses and round-trips — turning "generated
+shell script is valid" into a caught regression instead of a runtime surprise.
+Longer term: audit every place that builds shell strings by interpolation and
+route them all through `src/shared/shell.ts` (grep for `printf`, `sed`, `bash -lc`
+in `src/**`).
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
