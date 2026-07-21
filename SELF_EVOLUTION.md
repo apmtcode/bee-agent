@@ -6,6 +6,63 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-21 (run 9) — Movement-model backend (obj #2) + real shellQuote bug fix → suite fully green
+
+**Audited:** The local-movement learning subsystem (standing objective #2) —
+recent runs (5–8) were all typecheck-debt cleanup, so the movement objective was
+starved. Inventoried `src/capture` (recorder/replay/trajectory/device adapters)
+and `src/training` (exporter, job-store, runner). Finding: the training path only
+emits Apple-Silicon MLX/Axolotl *launch plans* — there was **no in-process model
+that actually learns from a movement dataset**, so objective #2(c)/(d)
+(post-train to repeat movements + generalize) was unvalidatable in the cloud.
+
+**Changed (additive):**
+- **New `src/training/movement-model.ts`** — the pluggable model-backend seam the
+  roadmap's top movement item called for:
+  - `MovementModelBackend` / `MovementModelInstance` interfaces + a
+    `MovementBackendRegistry` so a real on-device model (MLX/llama.cpp/ONNX) can
+    drop in later behind a clean interface.
+  - `MarkovMovementBackend` — a deterministic, dependency-free reference backend:
+    an order-k Markov model with **stupid-backoff**. Trains on movement token
+    sequences, **replays** recorded movements exactly via greedy rollout (#2c),
+    and **generalizes** to unseen-but-related prefixes by backing off to shorter
+    contexts (#2d). Fully deterministic (lexicographic argmax tie-break, no
+    clock/RNG) → reproducible in CI. Serializes to a portable JSON artifact.
+  - `evaluateNextTokenAccuracy` — a generalization eval harness (top-1 accuracy +
+    coverage + backoff-rate over held-out sequences).
+  - Dataset adapters (`movementTokensFromActions`, `movementSequencesFromReplay`)
+    bridging the existing reviewed-export/replay format to the tokenizer.
+  - 13 new tests (`movement-model.test.ts`), all green.
+- **Real bug fixed in `src/harness/background-tasks.ts`:** `shellQuote` used the
+  malformed POSIX single-quote escape `"'"'"'` instead of `'"'"'` (the correct
+  form `runner.ts` already uses). Any background-task command/cwd containing a
+  single quote corrupted its own `state.json` (unescaped quotes → invalid JSON),
+  breaking recovery/sync/status. Proven with a repro; fix verified end-to-end.
+- **New hermetic spawn seam:** threaded optional `backgroundTaskSpawnProcess` /
+  `backgroundTaskIsProcessRunning` through `OperatorCliAppOptions` (production
+  behaviour identical when unset). Used it to make the background-task
+  integration tests inject a stub spawner — they previously launched **real
+  detached processes** (`sleep 5`, `tail -f`, `rm -rf build`) that raced their
+  own manual state writes, which is exactly why 3 tests were red in this cloud
+  sandbox. Now deterministic and OS-free (matches the "no real OS in cloud"
+  guardrail).
+
+**Test results:** the shellQuote fix + hermetic seam turned **3 pre-existing
+red integration tests green** and removed their flakiness. Full suite **187/187
+passing, deterministic across 3 consecutive runs** (was 184/187 with 3 failing on
+clean HEAD). `typecheck:src` ✅ (source stays clean). Build ✅. Full `tsc`
+unchanged at **125** (all in test files; the new test file is clean).
+
+**New idea:** now that a movement model can train+infer in-process, wire it into
+the training `execution-service` as a selectable backend (`runtime: "markov"`
+alongside `mlx`/`axolotl`) so `createTrainingJob` can produce a *real trained
+artifact* in the cloud for smoke-testing the whole capture→export→train→replay
+loop end-to-end — then add a "replay fidelity" gate to the reviewed-export flow
+that refuses to promote a dataset whose held-out `evaluateNextTokenAccuracy`
+falls below a threshold.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

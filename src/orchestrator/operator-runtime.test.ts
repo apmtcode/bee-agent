@@ -15,6 +15,14 @@ async function makeTempDir(): Promise<string> {
   return dir;
 }
 
+// Hermetic background-task spawner: returns a fake pid without launching a real
+// detached process, so tests never race the launch script's own state writes.
+let stubPid = 500000;
+function stubSpawnBackgroundProcess(): { pid: number; unref(): void } {
+  stubPid += 1;
+  return { pid: stubPid, unref() {} };
+}
+
 function buildHookCaptureCommand(outputFile: string): string {
   const script = [
     "import fs from 'node:fs';",
@@ -531,6 +539,7 @@ describe("StandaloneOperatorRuntime", () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
       backgroundTaskIsProcessRunning: () => false,
+      backgroundTaskSpawnProcess: stubSpawnBackgroundProcess,
     });
     const session = await runtime.startSession({ title: "Tasks", agentId: "main" });
 

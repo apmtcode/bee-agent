@@ -44,6 +44,15 @@ unchecked items are queued. Keep this richer than you found it each run.
       (excludes `**/*.test.ts`) + `typecheck:src` script; passes (exit 0). Next:
       have the engine run it as a per-run pre-push self-check.
 - [ ] Add a minimal CI workflow mirroring `verify` for human-opened PRs.
+- [x] **Reliability (run 9):** fixed a real `shellQuote` bug in
+      `background-tasks.ts` (malformed single-quote escape corrupted a task's
+      `state.json` whenever its command/cwd held a quote) and added an injectable
+      `backgroundTaskSpawnProcess` seam to `OperatorCliAppOptions`, making the
+      background-task integration tests hermetic (no real detached OS processes).
+      Suite went 184/187-flaky → **187/187 deterministic**.
+- [ ] Audit the remaining launch-script state writers (training `runner.ts`
+      shares the same `printf|sed` state-write pattern) for the same
+      quote/escaping and PID-substitution race classes surfaced in run 9.
 
 ## Capability parity (audit reference agents → port gaps)
 - [ ] Build a "capability inventory" generator: enumerate bee-agent's exported
@@ -62,13 +71,25 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
+      for a real on-device small model. **DONE run 9** —
+      `src/training/movement-model.ts`: `MovementModelBackend`/`Instance`
+      interfaces + `MovementBackendRegistry` (the seam) and `MarkovMovementBackend`
+      (deterministic order-k + stupid-backoff reference impl that trains, replays
+      exactly, and generalizes via backoff). Serializes to a portable artifact.
 - [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      round-trips without real OS input. (Partial: `movement-model.test.ts` uses
+      hand-built synthetic sequences + the replay-manifest adapter; a richer
+      generator that samples realistic gesture/OS-event streams is still open.)
+- [x] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories. **DONE run 9** — `evaluateNextTokenAccuracy`
+      (top-1 accuracy + coverage + backoff-rate over held-out sequences).
+- [ ] Wire the movement model into `training/execution-service` as a selectable
+      `runtime: "markov"` backend so `createTrainingJob` produces a real trained
+      artifact in the cloud, exercising the full capture→export→train→replay loop.
+- [ ] Replay-fidelity promotion gate: refuse to promote a reviewed export whose
+      held-out `evaluateNextTokenAccuracy` falls below a threshold.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
