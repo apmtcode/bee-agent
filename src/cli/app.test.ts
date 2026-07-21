@@ -16,6 +16,14 @@ async function makeTempDir(): Promise<string> {
   return dir;
 }
 
+// Hermetic background-task spawner: yields a synthetic pid without launching a
+// real OS process, so background-task assertions never depend on real process
+// scheduling or launch-script state writes racing the test.
+let mockSpawnPidCounter = 90000;
+function mockBackgroundTaskSpawn(): { pid: number; unref(): void } {
+  return { pid: (mockSpawnPidCounter += 1), unref() {} };
+}
+
 afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })));
 });
@@ -801,7 +809,12 @@ describe("OperatorCliApp", () => {
 
   it("supports session lifecycle, transcript, approvals, pairing, config, and prompt commands", async () => {
     const rootDir = await makeTempDir();
-    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    const app = new OperatorCliApp({
+      rootDir,
+      cwd: rootDir,
+      currentDate: "2026-05-25",
+      backgroundTaskSpawnProcess: mockBackgroundTaskSpawn,
+    });
     const firstSession = await app.runtime.startSession({ title: "first", cwd: rootDir, agentId: "operator-cli" });
     const secondSession = await app.runtime.startSession({ title: "second", cwd: rootDir, agentId: "operator-cli" });
 
@@ -1063,7 +1076,16 @@ describe("OperatorCliApp", () => {
 
   it("supports background and monitor task commands plus cron commands", async () => {
     const rootDir = await makeTempDir();
-    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    const app = new OperatorCliApp({
+      rootDir,
+      cwd: rootDir,
+      currentDate: "2026-05-25",
+      // Hermetic: never launch a real OS process, and treat the synthetic pid as
+      // alive so the task stays "running" deterministically. Output/state are
+      // written explicitly below, exactly as the monitor branch already does.
+      backgroundTaskSpawnProcess: mockBackgroundTaskSpawn,
+      backgroundTaskIsProcessRunning: () => true,
+    });
     const session = await app.runtime.startSession({ title: "CLI ops", cwd: rootDir, agentId: "operator-cli" });
 
     const startOutput = await app.dispatchSlashCommand(
@@ -1078,6 +1100,10 @@ describe("OperatorCliApp", () => {
     if (!task) {
       throw new Error("expected background task");
     }
+    // The mock spawner does not run the launch script, so write the output the
+    // real `printf ok` would have produced. This keeps the view/watch
+    // assertions deterministic instead of racing a detached process.
+    await app.runtime.backgroundTasks.executionService.writeOutput(task, "ok\n");
 
     const listOutput = await app.dispatchSlashCommand({ kind: "background-list" });
     expect(listOutput).toContain(task.id);

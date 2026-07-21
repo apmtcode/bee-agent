@@ -6,6 +6,61 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-21 (run 9) — 🟢 Green the suite: hermetic background-task tests (real OS spawns → injected mock)
+
+**Audited:** The actual `npm test` result on a fresh checkout — **3 test files
+failed** (`app.test.ts`, `server.test.ts`, `operator-runtime.test.ts`), plus a
+4th (`app.test.ts` "background and monitor…") that flaked intermittently under
+full-suite CPU contention. Prior logs recorded 174/174, so this was an
+**environment-surfaced regression**: the tests spawn **real, detached OS
+processes** (`sleep 5`, `tail -f`, `printf`) via the launch script and depend on
+(a) real process liveness timing and (b) the launch script's async state-file
+write not racing the test's own `writeState`. In this cloud sandbox those
+assumptions break — e.g. `operator-runtime.test.ts` failed with a *torn-JSON*
+`SyntaxError` in `readState` (concurrent writer corruption), and
+`server.test.ts` flipped `mixed`→`degraded` because the diagnostic at
+`server.ts:2174` only fires when a **persisted running state file** exists, which
+the real `sleep 5` launch scripts wrote non-deterministically.
+
+**Root cause:** the injectable seam already existed
+(`FileBackgroundTaskStore(filePath, spawnProcess, isProcessRunning)`, surfaced as
+`StandaloneOperatorOptions.backgroundTask{SpawnProcess,IsProcessRunning}`), and
+the harness unit test already used it — but the integration-style tests injected
+only `isProcessRunning`, still letting a real process spawn and write state.
+
+**Changed (additive, test-hermeticity + one small source seam):**
+- `src/cli/app.ts` (source): plumbed `backgroundTaskSpawnProcess` /
+  `backgroundTaskIsProcessRunning` from `OperatorCliAppOptions` into the runtime
+  it constructs (previously they could only be injected on a hand-built runtime,
+  not through the CLI app). Purely additive; production defaults unchanged.
+- Injected a deterministic no-op `mockBackgroundTaskSpawn` (returns a synthetic
+  pid, never launches a process) into every remaining real-spawn test site:
+  `operator-runtime.test.ts` (1), `server.test.ts` (3 runtimes: main + drifting +
+  breaker), `session-stream.test.ts` (1), and both background-task tests in
+  `app.test.ts`. For the `printf ok`/`monitor-ok` integration test, wrote the
+  expected output explicitly (mirroring the monitor branch) + `isProcessRunning:
+  () => true` so it validates the slash-command plumbing without racing a real
+  process.
+
+**Test results:** **3 failing files → 0.** `npm test` **174/174**, run **8×
+consecutively with zero flakes** (5× + 3×). Build ✅. `typecheck:src` ✅ (exit 0).
+Full `tsc` **125 → 125** (no regression from the test edits). All real
+`printf`/`sleep`/`tail -f` OS spawns are now gone from the suite — the only
+remaining process spawning is the harness unit test's already-mocked one.
+
+**New idea:** add a tiny **anti-real-spawn lint/test** — a suite-wide guard that
+fails if any `*.test.ts` constructs a `StandaloneOperatorRuntime`/`OperatorCliApp`
+and calls `startBackgroundTask`/`monitors.start` *without* injecting
+`backgroundTaskSpawnProcess`. This turns "a new test quietly spawns a real
+detached process" (the exact regression fixed here) into an authoring-time error
+rather than an intermittent CI flake rediscovered months later. Bigger: give
+`BackgroundTaskExecutionService` a first-class `InMemorySpawn` test double that
+*simulates* the launch (writes output + terminal state synchronously) so
+integration tests exercise the full state machine deterministically without
+hand-writing state files.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

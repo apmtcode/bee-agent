@@ -14,6 +14,14 @@ async function makeTempDir(): Promise<string> {
   return dir;
 }
 
+// Hermetic background-task spawner: yields a synthetic pid without launching a
+// real OS process, keeping the suite free of orphaned detached processes and
+// launch-script state writes.
+let mockSpawnPidCounter = 90000;
+function mockBackgroundTaskSpawn(): { pid: number; unref(): void } {
+  return { pid: (mockSpawnPidCounter += 1), unref() {} };
+}
+
 afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })));
 });
@@ -278,6 +286,7 @@ describe("OperatorControlPlaneSessionStream", () => {
   it("binds monitor requests and streams monitor events for a bootstrapped session", async () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
+      backgroundTaskSpawnProcess: mockBackgroundTaskSpawn,
       backgroundTaskIsProcessRunning: () => false,
     });
     const server = new OperatorControlPlaneServer({ runtime });

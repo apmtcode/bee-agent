@@ -4,6 +4,12 @@ Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
 ## Foundations / DX
+- [x] **Green the test suite in the cloud sandbox** (2026-07-21, run 9). 3 test
+      files spawned real detached OS processes (`sleep`/`tail -f`/`printf`) and
+      failed/flaked on real-process timing + torn state-file writes. Fixed by
+      injecting a deterministic no-op `backgroundTaskSpawnProcess` at every
+      real-spawn test site and plumbing that option through `OperatorCliApp`.
+      `npm test` now 174/174, stable across 8 consecutive runs.
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`
@@ -84,3 +90,12 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
       count to a baseline file and fail if a module regresses above it. Lets the
       engine pay debt down module-by-module without one green-gate blocking
       progress, and prevents backsliding while the total is still > 0.
+- [ ] **Anti-real-spawn lint** (run 9): a suite-wide guard that fails if any
+      `*.test.ts` starts a background task/monitor without injecting
+      `backgroundTaskSpawnProcess`, so a test quietly spawning a real detached
+      process becomes an authoring-time error instead of an intermittent flake.
+- [ ] **`InMemorySpawn` test double** for `BackgroundTaskExecutionService` that
+      *simulates* the launch (writes output + terminal state synchronously), so
+      integration tests exercise the real state machine deterministically instead
+      of hand-writing state files. Replaces the ad-hoc `mockBackgroundTaskSpawn`
+      duplicated across four test files with one shared, faithful fake.

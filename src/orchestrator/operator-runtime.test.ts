@@ -15,6 +15,15 @@ async function makeTempDir(): Promise<string> {
   return dir;
 }
 
+// Deterministic, hermetic background-task spawner. Returns a synthetic pid and
+// never launches a real OS process, so the launch script never races the test's
+// own state-file writes and process liveness is decided solely by the injected
+// `backgroundTaskIsProcessRunning`.
+let mockSpawnPidCounter = 90000;
+function mockBackgroundTaskSpawn(): { pid: number; unref(): void } {
+  return { pid: (mockSpawnPidCounter += 1), unref() {} };
+}
+
 function buildHookCaptureCommand(outputFile: string): string {
   const script = [
     "import fs from 'node:fs';",
@@ -530,6 +539,7 @@ describe("StandaloneOperatorRuntime", () => {
   it("starts, syncs, recovers, lists, and cancels background tasks", async () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
+      backgroundTaskSpawnProcess: mockBackgroundTaskSpawn,
       backgroundTaskIsProcessRunning: () => false,
     });
     const session = await runtime.startSession({ title: "Tasks", agentId: "main" });
