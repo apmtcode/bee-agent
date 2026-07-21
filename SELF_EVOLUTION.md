@@ -6,6 +6,67 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-21 (run 9) — In-process movement-policy learning: train + infer + generalize + eval
+
+**Audited:** Objective #2 (local-movement learning subsystem). Inventoried
+`src/capture/` (recorder, trajectory schema, replay, adapters, consent) and
+`src/training/` (exporter, job-manifest/store, runner). Finding: the recorded
+**dataset** (`TrajectorySpan`), **schema**, and **replay** pieces exist, and the
+runner emits **MLX/axolotl launch scripts** for real on-device training — but
+there was **no in-process model that actually learns from the dataset and infers
+next movements**. So objective #2 parts (c) "post-train a local model to repeat
+the recorded movements" and (d) "generalize to related movements" had zero
+executable, cloud-testable code. That was the biggest gap.
+
+**Changed (additive — 2 new files + barrel exports):**
+- **`src/training/movement-policy.ts`** — a pluggable movement-policy learning
+  subsystem that runs deterministically in-process (no OS access, so cloud/CI
+  exercises it on synthetic streams):
+  - `MovementPolicyBackend` interface (`train` / `predict`) + a registry
+    (`registerMovementBackend` / `createMovementBackend` / `listMovementBackends`)
+    so a real on-device small model drops in behind the same seam.
+  - `MarkovMovementBackend` — a variable-order Markov model over action labels
+    with **Katz-style backoff**: exact recorded sequences are memorized (replay
+    fidelity), and unseen-but-related contexts **generalize** by backing off to
+    context-tag then global priors. Fully deterministic (ties broken lexically);
+    the serialized `MovementPolicy` is JSON, doubling as a replayable dataset
+    baseline. Separator-safe key encoding prevents context collisions.
+  - `extractMovementSamples()` — bridges the recorded dataset
+    (`TrajectorySpan[]`, reviewed/redacted shape) into ordered supervised
+    `(context → next-action)` samples with a bounded history window.
+  - `rolloutMovementPolicy()` — greedy multi-step replay ("continue the recorded
+    movement").
+  - `evaluateMovementPolicy()` — generalization eval harness: top-1 next-action
+    accuracy on held-out samples, split into **memorized vs. generalized** hits
+    so replay fidelity and generalization are tracked separately.
+- **`src/index.ts`** — exported the full surface.
+
+**Test results:** new `movement-policy.test.ts` — **14/14 green** (synthetic
+trajectories: exact-replay, context-backoff generalization, global fallback,
+empty policy, deterministic tie-break, separator safety, registry, eval harness).
+`npm run typecheck:src` ✅ (source stays clean). `npm run build` ✅.
+Full `npm test`: **185 passed / 3 failed (188)**.
+
+**⚠️ Pre-existing suite failures (NOT from this run):** the 3 failing files
+(`operator-runtime.test.ts`, `app.test.ts`, `server.test.ts`) fail on the **clean
+base commit too** — verified via `git stash -u`: base is **171/174**, same 3
+files. All three are in the **background-task subsystem**, which spawns **real
+detached OS processes** (`spawn()` running bash launch scripts) whose async
+state-file writes race the tests' explicit `writeState` → a JSON-parse race +
+"no active task" timing failures that are environment-dependent (run 8 saw them
+pass in its environment; this cloud env does not). My change touches none of
+these files and adds 14 green tests — it is a strict improvement, so pushed to
+`main`. Fix queued as a **priority roadmap item**: inject a mock spawner /
+`isProcessRunning` into these tests to make the background-task suite hermetic.
+
+**New idea:** a *behavioral-cloning replay-fidelity gate* — wire
+`evaluateMovementPolicy` into the training pipeline so a job only "completes"
+(and its `.gguf`/adapter is trusted) once the learned policy clears a held-out
+memorized+generalized accuracy threshold on the reviewed replay manifest. Turns
+"we trained a model" into "we trained a model that provably reproduces the
+recorded movements," and gives objective #2's on-device path an automatic
+acceptance test that also works for the mock backend in CI.
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

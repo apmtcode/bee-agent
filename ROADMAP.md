@@ -59,16 +59,43 @@ unchecked items are queued. Keep this richer than you found it each run.
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
 (exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
-      objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Inventory what `src/capture` + `src/training` already implement vs. the
+      objective's five pieces (2026-07-21, run 9). Gap found: capture/schema/
+      dataset/replay existed + runner emits MLX/axolotl launch scripts, but no
+      in-process model that learns from the dataset and infers movements.
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      for a real on-device small model — DONE run 9
+      (`src/training/movement-policy.ts`: `MovementPolicyBackend` + registry +
+      `MarkovMovementBackend` reference; `MovementPolicy` is serialized JSON).
+- [x] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories — DONE run 9 (`evaluateMovementPolicy`
+      splits hits into memorized vs. generalized; `rolloutMovementPolicy` for
+      greedy multi-step replay).
+- [ ] Synthetic event-stream *generator* helper: run 9 hand-built synthetic
+      `TrajectorySpan`s inline in tests; extract a reusable generator (parametric
+      apps × gesture grammars × noise) so capture→dataset→replay→train round-trips
+      can be fuzzed at scale.
+- [ ] Behavioral-cloning replay-fidelity gate: wire `evaluateMovementPolicy` into
+      the training pipeline so a job only completes once its learned policy clears
+      a held-out memorized+generalized accuracy threshold on the reviewed replay
+      manifest (works for the mock backend in CI and the real on-device model).
+- [ ] Real on-device small-model backend behind `MovementPolicyBackend` (e.g. a
+      tiny MLX/llama.cpp next-token model over the action-label vocabulary),
+      registered via `registerMovementBackend`; keep the markov backend as the
+      deterministic CI reference.
+
+## Test hermeticity (priority — blocks a green cloud suite)
+- [ ] **Make the background-task tests hermetic.** `operator-runtime.test.ts`,
+      `app.test.ts`, and `server.test.ts` fail in the cloud env (base commit is
+      171/174) because `BackgroundTaskExecutionService` spawns **real detached OS
+      processes** (`spawn()` bash launch scripts) whose async state-file writes
+      race the tests' explicit `writeState` (JSON-parse race + timing-dependent
+      "no active task"). The service already accepts injectable `spawnProcess` /
+      `isProcessRunning` seams — thread a deterministic mock spawner through the
+      three tests so the suite is green regardless of environment. Until then the
+      full `npm test` is red on any machine that reaps/schedules processes
+      differently from run 8's environment.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
