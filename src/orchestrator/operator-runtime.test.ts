@@ -528,8 +528,13 @@ describe("StandaloneOperatorRuntime", () => {
   });
 
   it("starts, syncs, recovers, lists, and cancels background tasks", async () => {
+    let nextPid = 4200;
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
+      // Stub spawn so no real worker process runs. A real worker writes the same
+      // state/output files this test writes by hand, which races and corrupts
+      // the JSON (flaky "Expected ',' or '}'" parse failures in the cloud).
+      backgroundTaskSpawnProcess: () => ({ pid: (nextPid += 1), unref() {} }),
       backgroundTaskIsProcessRunning: () => false,
     });
     const session = await runtime.startSession({ title: "Tasks", agentId: "main" });

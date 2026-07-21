@@ -6,6 +6,15 @@ unchecked items are queued. Keep this richer than you found it each run.
 ## Foundations / DX
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
+- [x] **Make the test suite reproducibly green** (2026-07-21, run 9). Four
+      background-task tests spawned real child processes that raced the runtime
+      on the same state/output JSON files (→ 3–4 nondeterministic failures per
+      run). Added a spawn-injection seam to `OperatorCliApp` and stubbed spawn +
+      liveness in the affected tests. Full suite now 174/174 across repeated runs.
+- [ ] **Test-hermeticity lint:** vitest global-setup that stubs
+      `child_process.spawn` to throw by default, so any test spawning a real OS
+      process fails loudly instead of becoming a latent flake (real-process tests
+      opt in). Prevents regressing the run-9 fix.
 - [x] Make config loading hermetic in tests via an injectable `configHome`
       (2026-06-22).
 - [ ] **Pay down typecheck debt** (surfaced by the `typecheck` script). Full

@@ -16,6 +16,20 @@ async function makeTempDir(): Promise<string> {
   return dir;
 }
 
+/**
+ * Deterministic background-task spawn stub: returns a fake pid without launching
+ * a real worker. A real worker writes the same state/output files the runtime
+ * reads (and tests write by hand), which races and intermittently corrupts the
+ * JSON, and its lifecycle (a `printf` that exits instantly) is nondeterministic
+ * — so a spawned worker leaves tasks flapping between running/missing-process.
+ * Pair with `backgroundTaskIsProcessRunning: () => true` to keep tasks alive and
+ * write any expected output by hand via `executionService.writeOutput`.
+ */
+function stubBackgroundSpawn(): () => { pid: number; unref(): void } {
+  let nextPid = 990000;
+  return () => ({ pid: (nextPid += 1), unref() {} });
+}
+
 afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })));
 });
@@ -801,7 +815,18 @@ describe("OperatorCliApp", () => {
 
   it("supports session lifecycle, transcript, approvals, pairing, config, and prompt commands", async () => {
     const rootDir = await makeTempDir();
-    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    const app = new OperatorCliApp({
+      rootDir,
+      cwd: rootDir,
+      currentDate: "2026-05-25",
+      // Keep spawned tasks deterministic and alive so remote/platform control
+      // status stays "active" instead of flapping to degraded when a real
+      // short-lived worker exits before the status probe runs. The test later
+      // writes a state file with the sentinel pid 999999 and expects sync to
+      // observe it as dead (→ degraded), so treat that one pid as not running.
+      backgroundTaskSpawnProcess: stubBackgroundSpawn(),
+      backgroundTaskIsProcessRunning: (pid) => pid !== 999999,
+    });
     const firstSession = await app.runtime.startSession({ title: "first", cwd: rootDir, agentId: "operator-cli" });
     const secondSession = await app.runtime.startSession({ title: "second", cwd: rootDir, agentId: "operator-cli" });
 
@@ -1063,7 +1088,15 @@ describe("OperatorCliApp", () => {
 
   it("supports background and monitor task commands plus cron commands", async () => {
     const rootDir = await makeTempDir();
-    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    const app = new OperatorCliApp({
+      rootDir,
+      cwd: rootDir,
+      currentDate: "2026-05-25",
+      // Deterministic worker: no real process races on the state/output files,
+      // and the task stays "alive" so watch-active finds it before it is stopped.
+      backgroundTaskSpawnProcess: stubBackgroundSpawn(),
+      backgroundTaskIsProcessRunning: () => true,
+    });
     const session = await app.runtime.startSession({ title: "CLI ops", cwd: rootDir, agentId: "operator-cli" });
 
     const startOutput = await app.dispatchSlashCommand(
@@ -1078,6 +1111,9 @@ describe("OperatorCliApp", () => {
     if (!task) {
       throw new Error("expected background task");
     }
+    // The stubbed worker never runs the command, so write the output the real
+    // `printf ok` would have produced (the view/watch assertions below read it).
+    await app.runtime.backgroundTasks.executionService.writeOutput(task, "ok\n");
 
     const listOutput = await app.dispatchSlashCommand({ kind: "background-list" });
     expect(listOutput).toContain(task.id);

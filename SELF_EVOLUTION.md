@@ -6,6 +6,54 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-21 (run 9) — 🩹 Killed the flaky background-task tests (real-process race → deterministic stubs)
+
+**Audited:** The engine's own verification gate — `npm test`. Discovered the
+suite is **not reproducibly green**: on a fresh cloud run it failed **4/174**,
+and a re-run failed a *different* **3/174**. A green gate is the foundation the
+whole self-evolution procedure (step 5: "do NOT push if tests fail") stands on;
+a flaky gate means the engine can't tell a real regression from noise.
+
+**Root cause (one, shared by all the flaky tests):** four tests
+(`operator-runtime` "starts, syncs, recovers…", `server` "handles session…
+orchestration methods", `app` "session lifecycle…" + "background and monitor…")
+call `startBackgroundTask`, which **spawns a real child process** via a launch
+script. That worker writes the *same* execution-state and output JSON files the
+runtime reads and the tests also write **by hand** — so the two writers race and
+intermittently corrupt the JSON (`SyntaxError: Expected ',' or '}'`). Separately,
+a real `printf`/`sleep` worker's lifetime is nondeterministic in the sandbox, so
+liveness probes flip tasks between `running` and `missing-process`/`degraded`.
+The tests injected `backgroundTaskIsProcessRunning` but **not** a spawn stub, so
+a real process still ran.
+
+**Changed (additive):**
+- **Source seam** `src/cli/app.ts`: `OperatorCliApp` hard-wired
+  `new StandaloneOperatorRuntime({ rootDir })` with no way to inject the spawn /
+  liveness behaviour the runtime already supports. Added optional
+  `backgroundTaskSpawnProcess` + `backgroundTaskIsProcessRunning` to
+  `OperatorCliAppOptions` (typed off `StandaloneOperatorOptions`) and threaded
+  them into the runtime. Production default unchanged (real `spawn`).
+- **Tests** (`operator-runtime.test.ts`, `server.test.ts`, `app.test.ts`): a
+  shared `stubBackgroundSpawn()` returns a fake incrementing pid without
+  launching a worker, so no file race and no real process. Paired with
+  `isProcessRunning: () => true` where the test wants tasks to stay active; the
+  `app` "session lifecycle" test keeps its sentinel `pid 999999 → dead` so its
+  intentional *degraded* assertion still holds; the `app` "background" test now
+  writes the `"ok\n"` output by hand (the stubbed worker never runs `printf`).
+
+**Test results:** the three affected files **50/50** on 3 consecutive runs
+(was 3–4 failing, nondeterministically); **full suite 174/174 on 2 consecutive
+runs**. Build ✅. `typecheck:src` ✅ (exit 0). Full `tsc` steady at **125** (no
+regression; all in test files). 🎯 The suite is now reproducibly green.
+
+**New idea:** add a tiny **test-hermeticity lint** — a vitest global-setup (or a
+meta-test) that stubs `child_process.spawn` to *throw* by default, so any test
+that spawns a real OS process fails loudly at authoring time instead of becoming
+a latent flake. Real-process tests would opt in explicitly. This converts the
+whole class of race-flakiness fixed this run into a caught regression.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
