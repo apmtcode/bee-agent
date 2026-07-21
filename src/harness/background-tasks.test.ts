@@ -353,6 +353,57 @@ describe("FileBackgroundTaskStore", () => {
     ]);
     await expect(reloaded.get(other.id)).resolves.toMatchObject({ id: other.id, status: "running" });
   });
+
+  it("treats a corrupt state file as missing so recovery does not abort the batch", async () => {
+    const rootDir = await makeTempDir();
+    const filePath = path.join(rootDir, "background-tasks.json");
+    const store = new FileBackgroundTaskStore(
+      filePath,
+      () => ({ pid: 6001, unref() {} }),
+      () => false,
+    );
+
+    const corrupt = await store.start({
+      sessionId: "sess-x",
+      title: "Corrupt state",
+      command: "printf 'line-1\nline-2\n'",
+      cwd: rootDir,
+      kind: "task",
+    });
+    const healthy = await store.start({
+      sessionId: "sess-x",
+      title: "Healthy state",
+      command: "tail -f b.log",
+      cwd: rootDir,
+      kind: "monitor",
+    });
+
+    // Simulate a torn/partial write from a crashed launch script.
+    await fs.writeFile(
+      path.join(rootDir, corrupt.execution.stateFile),
+      '{"version":1,"taskId":"x","status":"running","command":"printf "bad}',
+      "utf8",
+    );
+    await store.executionService.writeState(healthy, {
+      version: 1,
+      taskId: healthy.id,
+      kind: "monitor",
+      status: "running",
+      pid: 4444,
+      startedAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      outputFile: healthy.execution.outputFile,
+      cwd: rootDir,
+      command: healthy.command,
+    });
+
+    // A corrupt state file must not throw; the whole batch still reconciles.
+    const recovered = await store.recoverBySession("sess-x");
+    expect(recovered).toHaveLength(2);
+    const byId = new Map(recovered.map((result) => [result.task.id, result]));
+    expect(byId.get(corrupt.id)?.task.status).toBe("failed");
+    expect(byId.get(healthy.id)?.reason).toBe("missing-process");
+  });
 });
 
 describe("BackgroundTaskExecutionService", () => {

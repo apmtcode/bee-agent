@@ -62,13 +62,41 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
+      for a real on-device small model. — DONE run 9 (`src/training/model-backend.ts`):
+      `MovementModelBackend`/`TrainedMovementModel` interfaces + deterministic
+      `MarkovMovementBackend` (n-gram + stupid-backoff → repeat *and* generalize),
+      `deriveMovementDataset`, `scoreReplayFidelity`. 12 tests.
 - [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
+      round-trips without real OS input. (Next: grammar-based movement-sequence
+      generator with controlled noise, feeding the eval below.)
 - [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      related synthetic trajectories. Foundation landed run 9 (`scoreReplayFidelity`
+      teacher-forced accuracy); still need the held-out synthetic dataset + a
+      "backoff beats unigram baseline" assertion.
+- [ ] Wire the movement model into the training runner/execution-service as the
+      default in-process backend, so `LocalAppleSiliconTrainingRunner`'s external
+      MLX/Axolotl path becomes one pluggable backend among several (mock/markov
+      for CI, real small model on-device).
+
+## Reliability / correctness
+- [ ] **Injectable clock for heartbeat-staleness** in the remote-control /
+      platform-breaker path (`server.ts` "gateway heartbeat stale" →
+      `platform-breaker-store.ts` degrade). Currently wall-clock-dependent, which
+      makes `server.test.ts:719` and `app.test.ts:906` fail in fast/slow
+      environments (they expect `control=active` after `resume` but get
+      `degraded`/`quarantined`). Thread a `now()` seam like the config/spawn seams
+      so these tests are time-independent. **Top pre-existing blocker after run 9.**
+- [x] Batch recovery must survive a corrupt state file — DONE run 9
+      (`background-tasks.ts readState` treats a `SyntaxError` as absent state so
+      one torn file can't abort `recoverBySession`).
+- [ ] Fix the launch-script shell-quoting bug that produces the corrupt state in
+      the first place: single quotes in a task `command` get mangled into invalid
+      JSON by the `printf '%s' … | sed` pipeline in `renderLaunchScript`
+      (`background-tasks.ts` + `training/runner.ts` share the pattern). Prefer
+      writing the state payload via a heredoc/`python3 -c` with the command passed
+      as an argv value rather than interpolated into the JSON string.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

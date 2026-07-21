@@ -6,6 +6,72 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-21 (run 9) — 🧠 Movement-model backend: in-process train→infer→generalize + recovery hardening
+
+**Audited:** The local-movement learning subsystem (standing objective #2). The
+capture→dataset→replay pieces exist (`src/capture/*`, `src/training/exporter.ts`),
+and the training `runner.ts` only *emits MLX/Axolotl shell commands* for an
+external on-device trainer — there was **no in-process model backend and no
+inference at all**. Parts (c) "post-train a local model to repeat the recorded
+movements" and (d) "generalize to new but related movements" were unimplemented.
+This was the top movement item in ROADMAP.
+
+**Changed (additive):**
+- **`src/training/model-backend.ts` (new)** — the missing pluggable model layer:
+  - `MovementModelBackend` interface (the swap-in seam for a real on-device
+    small model) + `TrainedMovementModel` (predict/generate/serialize).
+  - `MarkovMovementBackend` — a **deterministic** n-gram model with
+    *stupid-backoff*. Training tallies token counts for every context length
+    `0..order`; inference tries the longest seen context and backs off to shorter
+    suffixes. Full context seen ⇒ **repeats** the recorded movement; only a
+    shorter suffix seen ⇒ **generalizes** to a novel prefix; unigram prior ⇒
+    pure generalization. No external deps, identical output for identical input
+    ⇒ the whole train→infer→generalize loop runs in cloud/CI.
+  - `deriveMovementDataset(manifest)` — turns a `ReviewedExportManifest`'s replay
+    `action` events into per-trajectory token sequences (pluggable tokenizer,
+    default `action:<tool>`).
+  - `scoreReplayFidelity(model, target)` — teacher-forced next-movement accuracy:
+    the seed of the generalization eval harness.
+  - Exported the full surface from `src/index.ts`.
+- **Reliability fix — `src/harness/background-tasks.ts`:** `readState()` rethrew
+  JSON parse errors, so **one corrupt/torn state file aborted recovery of the
+  entire batch** (`recoverBySession`). A crashed launch script *does* leave
+  unparseable state (confirmed by repro: the shell launch-script's single-quote
+  handling mangles the `command` field into invalid JSON). Now a `SyntaxError` is
+  treated as "state absent" → the task reconciles as missing and the batch
+  continues. Added a regression test.
+- **Test hermeticity — `operator-runtime.test.ts`:** the background-task
+  integration test injected `isProcessRunning` but not `spawnProcess`, so it
+  spawned a **real** launch-script subprocess (`tail -f …`) whose async `sed`
+  state-write raced the test's own `writeState` calls — deterministic only in
+  environments lacking bash/sed/python3 (run 8's), flaky here. Injected the
+  existing `backgroundTaskSpawnProcess` no-op seam; now deterministic (3/3 green
+  in isolation).
+
+**Test results:** new `model-backend.test.ts` **12/12**; background-tasks
+resilience **+1**; `operator-runtime.test.ts` **17/17** (was 1 failing in this
+env). Full suite **185 passed / 2 failed (187)** — the run *reduced* this env's
+pre-existing failures 3→2. `typecheck:src` ✅ (exit 0). Build ✅ (545 kB).
+
+**Known pre-existing blocker (documented, NOT mine — proven at pristine HEAD):**
+`server.test.ts:719` and `app.test.ts:906` both fail on `control.state` =
+`degraded`/`quarantined` where they expect `active` after a remote `resume`.
+Root cause is **wall-clock-dependent heartbeat-staleness** in the remote-control /
+platform-breaker path (`server.ts` ~L564 "gateway heartbeat stale" →
+`platform-breaker-store.ts` degrade). Run 8 passed these because its environment's
+timing didn't trip staleness. **Next-run fix:** inject a clock into the
+heartbeat-staleness computation so these tests are time-independent.
+
+**New idea:** now that a real movement model + `scoreReplayFidelity` exist, add a
+**synthetic trajectory generator** (grammar-based movement sequences with
+controlled noise) feeding a **held-out generalization eval**: train on N
+sequences, measure teacher-forced accuracy on unseen-but-related ones, and assert
+backoff actually beats a unigram baseline. That closes the objective-#2 loop
+(capture→schema→dataset→replay→train/infer→**eval**) end-to-end in CI, and gives a
+regression metric for when the pluggable backend is swapped for a real model.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
