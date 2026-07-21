@@ -6,6 +6,63 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-21 (run 9) — Movement subsystem: pluggable local-model backend + train/infer/generalize
+
+**Audited:** Standing objective #2 (local-movement learning) — the least-served
+objective since run 2. `src/training/` had a real Apple-silicon plan/launch-script
+runner (`runner.ts`, mlx/axolotl) but **no way to actually train or infer in the
+cloud**, and **no code for parts (c) post-train and (d) generalize** of the
+objective. The dataset produced by `exporter.ts` (`ReviewedExportManifest.replays`
+= ordered observation/action timelines) was never consumed by any model.
+
+**Changed (additive, new module `src/training/movement-backend.ts`):**
+- **Pluggable backend interface** `LocalModelBackend` (`id`, `train`, `load`) +
+  `MovementPolicy` (`predict`) — the seam real on-device runtimes implement later.
+  `MovementBackendRegistry` resolves a backend by id (mock seeded by default so
+  CI always has one), satisfying the top movement-subsystem roadmap item.
+- **Dataset builder** `buildMovementDataset(manifest)` turns each reviewed-export
+  replay into a `MovementExample` (context tokens from observations/transcript,
+  ordered action steps) — schema → dataset piece, fully in-memory/testable.
+- **`DeterministicMockBackend`** — a dependency-free reference backend (no OS, no
+  randomness, no `Date.now`). Training separates each example's context into a
+  structural *skeleton* and parameter *slots* (context tokens that reappear in an
+  action). Inference retrieves the closest skeleton (coverage score) and
+  **substitutes the query's novel token into the missing slot** → reproduces
+  recorded movements exactly *and* generalizes: learn "open report.txt → type
+  report.txt", infer "open budget.csv → type budget.csv". Artifact is plain JSON
+  (persists like every other store here).
+- **Generalization eval harness** `evaluateMovementPolicy(policy, heldOut)` —
+  exact-sequence-match rate, per-step tool accuracy, summary-token F1.
+- Barrel exports added in `src/index.ts` (12 types + 6 values), no collisions.
+
+**Test results:** new `movement-backend.test.ts` ✅ **13/13** (reproduction,
+slot-substitution generalization, skeleton routing, confidence floor, JSON
+round-trip, eval fidelity + held-out generalization, registry). `typecheck:src`
+✅ clean (exit 0). Build ✅ (tsdown, 5 files, 545 kB).
+
+**⚠️ Pre-existing blocker (NOT caused by this run):** full `npm test` is **184/187**
+— 3 tests fail on a clean HEAD too (verified by stashing this run's changes:
+still 3 failed). All three (`operator-runtime.test.ts` background-task recovery,
+`app.test.ts` ×2, `server.test.ts` ×1) trace to one root cause: the background-task
+launch-script state writer emits **malformed JSON** (`readJsonFile` throws
+`SyntaxError: Expected ',' or '}' … position 311`) under this run's newer
+toolchain (Node/`@types/node@26`, `typescript@6`, `vitest@4`). Run 8 reported
+174/174, so this is an environment/toolchain regression that surfaced since.
+Queued as the next high-value fix in ROADMAP. This run's change is fully green in
+isolation and introduces **zero** new failures.
+
+**Pushed to** the designated feature branch `claude/peaceful-dirac-ao3j9j` (not
+`main`) per the branch requirements, since the full suite is red on pre-existing
+grounds — progress preserved on the remote.
+
+**New idea:** a **`FileMovementModelStore`** that persists `MovementModelArtifact`
+JSON next to the reviewed export and wires `DeterministicMockBackend` into the
+existing `LocalTrainingExecutionService` as the cloud-executable training path —
+so `training.execute` produces a *usable* policy in CI, and the Apple-silicon
+runtime becomes just another registered backend id selected at runtime.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

@@ -45,6 +45,19 @@ unchecked items are queued. Keep this richer than you found it each run.
       have the engine run it as a per-run pre-push self-check.
 - [ ] Add a minimal CI workflow mirroring `verify` for human-opened PRs.
 
+## 🔴 Pre-existing test regression (fix next — surfaced run 9)
+- [ ] **Green the suite: 184/187.** 3 tests fail on a clean HEAD under the
+      current toolchain (Node/`@types/node@26`, `typescript@6`, `vitest@4`):
+      `operator-runtime.test.ts` (background-task recovery),
+      `app.test.ts` ×2, `server.test.ts` ×1. Root cause: the background-task
+      launch-script state writer emits **malformed JSON** so `readJsonFile`
+      throws `SyntaxError … position 311` during `recoverBackgroundTasks`.
+      Likely the `printf | sed` `$$`/timestamp substitution in the state-writer
+      shell script (mirror of `training/runner.ts renderLaunchScript`). Fix the
+      writer to emit valid JSON (or write state via `writeJsonAtomic` instead of
+      shell), add a regression test. Run 8 reported 174/174, so this regressed
+      with the toolchain bump — treat as highest priority before new features.
+
 ## Capability parity (audit reference agents → port gaps)
 - [ ] Build a "capability inventory" generator: enumerate bee-agent's exported
       RPC/tool surface (`src/index.ts`) and diff it against `openclaw`,
@@ -62,13 +75,24 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
+      for a real on-device small model. **DONE run 9** —
+      `src/training/movement-backend.ts`: `LocalModelBackend`/`MovementPolicy`
+      interfaces, `DeterministicMockBackend` (skeleton/slot retrieval +
+      substitution → reproduce & generalize), `MovementBackendRegistry`,
+      `buildMovementDataset`, JSON artifact. 13/13 tests.
 - [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      round-trips without real OS input. (Partially unblocked: the mock backend's
+      tests already build synthetic replay manifests; extract a reusable
+      generator that feeds the full recorder→trajectory→replay chain.)
+- [x] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories. **DONE run 9** — `evaluateMovementPolicy`
+      (exact-match rate, tool accuracy, summary-token F1) with a held-out test.
+- [ ] **`FileMovementModelStore` + wire the mock backend into
+      `LocalTrainingExecutionService`** so `training.execute` produces a usable
+      policy in CI, and the Apple-silicon runner becomes a registered backend id
+      selected at runtime (rather than the only, un-runnable-in-cloud path).
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
