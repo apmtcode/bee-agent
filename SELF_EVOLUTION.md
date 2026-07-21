@@ -6,6 +6,58 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-21 (run 9) — Movement subsystem (c)+(d): in-process trainable model backend
+
+**Audited:** The local-movement learning subsystem (objective #2). The capture →
+schema → dataset → replay pieces exist (`src/capture/*`, `src/training/exporter.ts`),
+but parts **(c) post-train a local model** and **(d) generalize to new movements**
+existed only as a *shell-out plan generator* (`LocalAppleSiliconTrainingRunner`
+emits MLX/Axolotl commands). Nothing could train or run inference in-process, so
+the loop's last two pieces were **untestable in the cloud** — the exact gap the
+objective says to close with code + simulation.
+
+**Changed (additive) — new `src/training/movement-model.ts` (+ test, + exports):**
+- **Pluggable backend interface** `MovementModelBackend` (`train(dataset) → MovementModel`)
+  and `MovementModel` (`predictNext` / `generate` / `serialize`). Real on-device
+  models can implement this without touching any other code — the documented seam
+  the roadmap asked for.
+- **Deterministic in-process backend** `MarkovMovementBackend`: an order-k Markov
+  model with **stupid-backoff** smoothing. Backoff to shorter contexts (down to
+  the unigram) is what gives **generalization** — it predicts sensible next
+  movements for *unseen-but-related* contexts. Learns an internal **EOS sentinel**
+  so `generate()` knows when a recorded workflow ends (stops naturally instead of
+  looping via unigram backoff). Fully serializable (persist/reload a trained model).
+- **Tokenization + dataset adapters**: `movementTokenFromAction` (canonical
+  `tool:gesture:target` tokens from recorded actions),
+  `movementSequenceFromTrajectory`, `movementSequenceFromReplay`,
+  `movementDatasetFromExport` (wires straight into the reviewed-export manifest).
+- **Synthetic event-stream generator** `generateSyntheticMovementDataset`
+  (deterministic mulberry32 PRNG over workflow templates) +
+  `splitMovementDataset` — validates capture→dataset→train→replay round-trips
+  with **no real OS input**, per the cloud constraint.
+- **Generalization eval harness** `evaluateMovementModel`: next-token replay
+  fidelity (top-1 accuracy) on held-out trajectories. A test trains on one split
+  and asserts >0.8 top-1 on the disjoint related split.
+
+**Test results:** new `movement-model.test.ts` **18/18 passing**. Build ✅
+(tsdown, 5 files). `typecheck:src` ✅ (exit 0). Full suite **189/192**; the **3
+failures are PRE-EXISTING and unrelated** — verified they fail identically on the
+clean baseline (`git stash` run). They are **time-dependent**: fixtures written in
+June now read a remote-control heartbeat as `degraded` (not `active`) and a
+background task as stale against the July wall-clock (`Date.now()`), in
+`app.test.ts`, `server.test.ts`, `operator-runtime.test.ts`. Not touched this run
+(fixing them means threading an injectable clock across 3 subsystems — a separate
+focused change, logged to ROADMAP). My contribution is fully green.
+
+**New idea:** an *inverse* metric to complement replay fidelity — a **surprise/OOD
+score**. At inference, if the matched backoff order is 0 (pure unigram) for many
+consecutive steps, the model is off-distribution and should *ask/observe* rather
+than replay. Expose this from `predictNext` (already returns `matchedOrder`) as a
+confidence signal so the replay engine can gate autonomous movement on it — a
+safety seam for the local-execution path.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

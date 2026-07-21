@@ -59,16 +59,36 @@ unchecked items are queued. Keep this richer than you found it each run.
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
 (exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
-      objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
-      deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+- [x] Inventory what `src/capture` + `src/training` already implement vs. the
+      objective's five pieces — DONE run 9. Gap found: (c) train + (d) generalize
+      existed only as an MLX/Axolotl *plan generator*, nothing in-process/testable.
+- [x] Pluggable local-model backend interface for the training runner with a
+      deterministic backend (so cloud/CI tests pass) and a documented seam for a
+      real on-device small model — DONE run 9 (`src/training/movement-model.ts`:
+      `MovementModelBackend` + `MarkovMovementBackend`, order-k backoff, EOS,
+      serializable).
+- [x] Synthetic event-stream generator to validate capture→dataset→replay
+      round-trips without real OS input — DONE run 9
+      (`generateSyntheticMovementDataset` + `splitMovementDataset`).
+- [x] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories — DONE run 9 (`evaluateMovementModel`,
+      top-1 next-token accuracy; test asserts >0.8 on held-out split).
+- [ ] Wire the movement model into the replay engine: an inference-driven replay
+      that predicts + executes the next movement (guarded behind the OS seam), and
+      an OOD/surprise gate (many consecutive `matchedOrder === 0` steps ⇒ pause &
+      observe instead of replaying blindly).
+- [ ] A second backend behind `MovementModelBackend` (e.g. a tiny embedding /
+      neural-count hybrid) to prove the seam holds more than one implementation.
+
+## Known blockers (pre-existing, tracked)
+- [ ] **Time-dependent test failures** (found run 9): 3 tests are wall-clock
+      sensitive and now fail because June fixtures are stale against the current
+      date — a remote-control heartbeat reads `degraded` not `active`, and a
+      background task reads as expired. Files: `src/cli/app.test.ts`,
+      `src/control-plane/server.test.ts`, `src/orchestrator/operator-runtime.test.ts`.
+      Fix: thread an injectable `now()` clock through `deriveRemoteDiagnostics` /
+      gateway health / task staleness and pin it in these tests. Separate focused
+      change — do NOT bundle with a feature run.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
