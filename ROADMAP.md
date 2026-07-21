@@ -62,13 +62,37 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      for a real on-device small model. **(2026-07-21, run 9)** —
+      `src/training/movement-model.ts`: `MovementModelBackend`/`MovementPolicy`/
+      `MovementBackendRegistry` seam + deterministic `NearestNeighborMovementBackend`.
+- [x] Synthetic event-stream generator to validate capture→dataset→replay
+      round-trips without real OS input. **(2026-07-21, run 9)** —
+      `synthesizeMovement`/`synthesizeDemonstration` + `MovementDataset`
+      serialize/parse round-trip.
+- [x] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories. **(2026-07-21, run 9)** —
+      `evaluateMovementPolicy` (mean/max endpoint error + path-shape fidelity).
+- [ ] **Replay executor / actuator adapter** (run 9 idea): mirror of the capture
+      adapters — consume `MovementEvent[]` (recorded or model-predicted) and drive
+      a pluggable actuator (mock in cloud; robotjs/nut.js on device), guarded by
+      the same consent/tier policy. Closes capture→train→predict→**act** and lets
+      the eval measure end-to-end replay against a simulated screen.
+- [ ] Bridge the gesture-summary capture layer (`DeviceCaptureAdapter`) to the
+      numeric `MovementEvent` schema so real recorded sessions become
+      `MovementDataset`s the backend can train on.
+
+## Test health
+- [ ] **Flaky background-task tests** (surfaced run 9): `server.test.ts`,
+      `app.test.ts` (×2), `operator-runtime.test.ts` fail non-deterministically
+      (2→1 across isolated re-runs; present on clean base). Root cause: a
+      `readJsonFile` ENOENT race in `FileBackgroundTaskStore.reconcileTask` →
+      `recoverBySession`, reading a state file while it is concurrently
+      written/removed by real `tail -f`/PID spawning under the sandbox. Fix:
+      treat ENOENT-during-reconcile as "state gone → recover as missing-process"
+      instead of throwing, and/or make the tests inject a deterministic clock/
+      process runner. Blocks a green full-suite gate.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

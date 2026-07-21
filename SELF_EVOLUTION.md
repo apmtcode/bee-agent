@@ -6,6 +6,64 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-21 (run 9) — Movement subsystem: pluggable, generalizing model backend
+
+**Audited:** The local-movement learning subsystem (standing objective #2). The
+capture side (`src/capture/`) already records movements as gesture *summaries*
+(`DeviceCaptureAdapter` → tap/swipe/scroll/type strings) and `src/training/`
+already emits an on-device SFT/RL *launch plan* (`LocalAppleSiliconTrainingRunner`
+→ mlx/axolotl shell command). **Gap:** nothing trainable or generalizing that
+actually runs in the cloud — no numeric event schema, no dataset the model
+consumes, and objective #2 pieces (c) *train a local model to repeat movements*
+and (d) *generalize to new-but-related movements* had zero executable code.
+
+**Changed (additive, new module `src/training/movement-model.ts`):**
+- **Low-level replayable event schema** `MovementEvent` — pointer-move/down/up,
+  scroll, key — with precise numeric coordinates and monotonic timestamps (the
+  gesture-summary layer can't be replayed byte-for-byte; this can).
+- **Dataset format** `MovementDataset` (v1) + `serialize`/`parse` round-trip and
+  a `MovementTask`/`MovementDemonstration` pair (task features → recorded events).
+- **Pluggable backend seam** `MovementModelBackend` + `MovementPolicy` +
+  `MovementBackendRegistry` — a real on-device small model implements the same
+  two-method interface; swap by id.
+- **Deterministic generalizing backend** `NearestNeighborMovementBackend`:
+  training indexes demonstrations; inference selects the most similar
+  same-gesture demo and **retargets** its pointer path onto the requested
+  start/target via an exact 2-D frame transform (along-axis fraction + scaled
+  perpendicular offset). Endpoints reproduced with ~0 error on *unseen* targets
+  while recorded motion *shape* (curvature) transfers — a concrete, verifiable
+  generalization, not a stub. Typed text regenerates from the requested content.
+- **Synthetic event-stream generator** `synthesizeMovement`/`synthesizeDemonstration`
+  (curvature, steps, timing) so datasets/eval sets are built with no OS input —
+  clears a ROADMAP item and lets everything above be tested in the cloud.
+- **Generalization eval harness** `evaluateMovementPolicy` → mean/max endpoint
+  error + a scale-free path-shape-fidelity metric, so replay fidelity on held-out
+  trajectories is measurable across runs.
+- Exported the whole surface from `src/index.ts`.
+
+**Test results:** new `src/training/movement-model.test.ts` — **11/11 pass**
+(reproduces seen movements exactly; generalizes to unseen targets with
+endpoint-error ≈ 0; carries curvature; generalizes typed content; empty-dataset
+fallback; registry pluggability; held-out eval set). `npm run build` ✅.
+`npm run typecheck:src` ✅ (exit 0). Full `vitest run`: my module green; **4
+pre-existing flaky failures remain** in the background-task/cron subsystem
+(`server.test.ts`, `app.test.ts` ×2, `operator-runtime.test.ts`) — confirmed
+present on the clean base via `git stash` and **non-deterministic** (2→1 across
+isolated re-runs). Root cause is a `readJsonFile` ENOENT race in
+`FileBackgroundTaskStore.reconcileTask` during `recoverBySession` (real
+`tail -f`/PID spawning under the sandbox), untouched by this run. Because the
+designated-branch rule (`claude/peaceful-dirac-uuqhf4`) governs where this run
+pushes and the contribution itself is fully green, pushing to the feature branch.
+
+**New idea:** a **replay executor adapter** — the mirror of the capture adapters:
+take a `MovementEvent[]` (whether recorded or model-predicted) and drive a
+pluggable *actuator* (mock in cloud; a real robotjs/nut.js backend on device),
+guarded by the same consent/tier policy as capture. That closes the loop
+capture → dataset → train → predict → **act**, and lets the generalization eval
+measure not just endpoint math but end-to-end replay against a simulated screen.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
