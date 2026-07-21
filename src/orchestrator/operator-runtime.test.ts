@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { StandaloneOperatorRuntime } from "./operator-runtime.js";
+import { createInertSpawn } from "../harness/inert-spawn.js";
 import { resolveOperatorCliExecutionConfig } from "../cli/config.js";
 import { runOperatorHooks } from "../cli/execution-policy.js";
 import type { ReviewedExportManifest } from "../training/export-manifest.js";
@@ -209,6 +210,8 @@ describe("StandaloneOperatorRuntime", () => {
     });
   });
 
+  // Spawns four real `node -e` hook processes serially; under a loaded parallel
+  // suite these cold starts can exceed vitest's 5s default, so give it headroom.
   it("runs configured lifecycle hooks for session and approval events", async () => {
     const rootDir = await makeTempDir();
     const sessionStartFile = path.join(rootDir, "session-start.jsonl");
@@ -293,7 +296,7 @@ describe("StandaloneOperatorRuntime", () => {
         },
       },
     });
-  });
+  }, 30_000);
 
   it("lets PreToolUse deny command execution", async () => {
     const runtime = new StandaloneOperatorRuntime({
@@ -530,6 +533,7 @@ describe("StandaloneOperatorRuntime", () => {
   it("starts, syncs, recovers, lists, and cancels background tasks", async () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
+      backgroundTaskSpawnProcess: createInertSpawn(),
       backgroundTaskIsProcessRunning: () => false,
     });
     const session = await runtime.startSession({ title: "Tasks", agentId: "main" });

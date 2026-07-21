@@ -9,7 +9,7 @@ import { promisify } from "node:util";
 import { subscribeRuntimeEvents } from "../control-plane/subscriptions.js";
 import { OperatorControlPlaneServer } from "../control-plane/server.js";
 import type { DeliveryTarget } from "../control-plane/delivery.js";
-import { StandaloneOperatorRuntime } from "../orchestrator/operator-runtime.js";
+import { StandaloneOperatorRuntime, type StandaloneOperatorOptions } from "../orchestrator/operator-runtime.js";
 import type { TranscriptRecord } from "../harness/transcript-store.js";
 import {
   OperatorCliConfigLoader,
@@ -121,6 +121,15 @@ export type OperatorCliAppOptions = {
   stdin?: NodeJS.ReadableStream;
   stdout?: NodeJS.WritableStream;
   stderr?: NodeJS.WritableStream;
+  /**
+   * Injectable process spawner for background tasks. Defaults to a real
+   * detached `spawn`. Tests pass an inert spawn (see `createInertSpawn`) so the
+   * app never launches real child processes and background-task state is fully
+   * deterministic.
+   */
+  backgroundTaskSpawnProcess?: StandaloneOperatorOptions["backgroundTaskSpawnProcess"];
+  /** Injectable liveness probe for background-task PIDs (see above). */
+  backgroundTaskIsProcessRunning?: StandaloneOperatorOptions["backgroundTaskIsProcessRunning"];
 };
 
 type OperatorCliWorktreeSession = {
@@ -147,7 +156,11 @@ export class OperatorCliApp {
   readonly teams: FileOperatorCliTeamStore;
 
   constructor(private readonly options: OperatorCliAppOptions) {
-    this.runtime = new StandaloneOperatorRuntime({ rootDir: options.rootDir });
+    this.runtime = new StandaloneOperatorRuntime({
+      rootDir: options.rootDir,
+      backgroundTaskSpawnProcess: options.backgroundTaskSpawnProcess,
+      backgroundTaskIsProcessRunning: options.backgroundTaskIsProcessRunning,
+    });
     this.server = new OperatorControlPlaneServer({ runtime: this.runtime });
     this.teams = new FileOperatorCliTeamStore(options.rootDir);
     this.cwd = options.cwd ?? process.cwd();

@@ -6,6 +6,67 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-21 (run 9) — Eliminated background-task test flakiness (red baseline → deterministic)
+
+**Audited:** The verification gate itself (procedure step 5). On a clean
+checkout `npm test` was **non-deterministic**: repeated runs failed 3, then 2,
+then 1 different tests. A flaky test suite silently invalidates every future
+run's "tests pass" claim, so this was the highest-value fix available.
+
+**Root cause (one bug, three symptoms):** Several tests constructed
+`StandaloneOperatorRuntime` / `OperatorCliApp` and called `startBackgroundTask`
+**without injecting a spawn seam**, so the default real `spawn` launched a
+detached bash *launch script*. That script writes the task's state and output
+files asynchronously, racing against:
+1. `operator-runtime.test.ts` — the test's own `writeOutput("line-1\nline-2\n")`
+   (the real process appended `starting task <id>` first → offset-1 line varied).
+2. `server.test.ts` / `app.test.ts` "control=active" assertions — control-health
+   reads the state file; if the launch script had written `status: running` and
+   `isProcessRunning` was mocked `false`, the remote flipped to
+   `degraded: background task missing-process`. Whether it had written yet was
+   pure timing. It also leaked live `sleep 5` processes past suite exit.
+
+The fix pattern already existed in `background-tasks.test.ts`, which injects an
+inert `() => ({ pid, unref })` spawn everywhere — the three failing files simply
+forgot it.
+
+**Changed (additive, reversible):**
+- **New `src/harness/inert-spawn.ts`** — `createInertSpawn(startPid?)` returns a
+  `SpawnBackgroundProcess` that allocates a fake monotonic PID and starts no real
+  process. Documented for both deterministic tests and dry-run execution. Unit
+  test `inert-spawn.test.ts` (3 cases: shape, monotonic PIDs, per-factory
+  counters).
+- **`src/cli/app.ts`** — added `backgroundTaskSpawnProcess` /
+  `backgroundTaskIsProcessRunning` injectable options to `OperatorCliAppOptions`
+  (mirroring the existing `configHome` seam and the runtime's existing seam) and
+  threaded them into the internal `StandaloneOperatorRuntime`. Production default
+  unchanged (real `spawn`).
+- **Tests** — injected `createInertSpawn()` into all 13 runtime constructions in
+  `server.test.ts` and into the two flaky `app.test.ts` / `operator-runtime.ts`
+  cases. For the `printf ok` integration test (which asserts on *real* output) I
+  kept its end-to-end intent by pairing inert spawn with `isProcessRunning: () =>
+  true` and writing the "ok" output explicitly — exactly how the monitor half of
+  that same test already worked.
+- **Separate latent flake fixed:** `runs configured lifecycle hooks…` spawns four
+  real `node -e` hook processes serially and occasionally exceeded vitest's 5 s
+  default under the loaded parallel suite (observed 5705 ms). Gave it a 30 s
+  timeout (reads are already race-free — the runtime `await`s each hook).
+
+**Test results:** `typecheck:src` ✅ exit 0 (source gate still green). `build` ✅.
+Full typecheck debt **unchanged at 125** (no test-file regressions). `npm test`
+**177/177** (was 174 + 3 new), and — the actual deliverable — **8 consecutive
+full-suite runs with zero failures** (previously 1–3 failures per run).
+
+**New idea (logged to ROADMAP):** A **flake sentinel** in the pre-push
+self-check: run the suite N times (e.g. 3×) and fail the push if any run differs,
+so non-determinism is caught the run it's introduced instead of silently eroding
+the verification gate. Cheap insurance now that the suite is green. Second idea:
+a lint that flags any test constructing a runtime/app that calls
+`startBackgroundTask` without an injected spawn seam — encodes today's fix as a
+guardrail so the race can't be reintroduced.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

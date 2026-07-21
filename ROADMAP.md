@@ -4,6 +4,12 @@ Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
 ## Foundations / DX
+- [x] **Make the test suite deterministic** (2026-07-21, run 9). `npm test` was
+      flaky (3→2→1 failures across runs) because tests spawned real detached
+      background-task processes that raced the tests' own file writes. Added
+      `src/harness/inert-spawn.ts` (`createInertSpawn`), an injectable spawn seam
+      on `OperatorCliApp`, and used it across the affected tests; gave the
+      real-`node` lifecycle-hook test a 30 s timeout. 8/8 clean full-suite runs.
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`
@@ -80,6 +86,13 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Barrel-collision lint: scan `src/index.ts` re-exports for names exported
       from more than one module and flag them, so duplicate-identifier debt is
       caught at authoring time instead of accumulating silently.
+- [ ] **Flake sentinel** in the pre-push self-check: run the suite N times (e.g.
+      3×) and refuse the push if results differ between runs, so newly-introduced
+      non-determinism is caught the run it appears rather than eroding the
+      verification gate silently. Cheap now that the suite is green (run 9).
+- [ ] **Spawn-seam lint:** flag any test that constructs a runtime/app and calls
+      `startBackgroundTask` without an injected `backgroundTaskSpawnProcess`, so
+      the real-process race fixed in run 9 cannot be reintroduced.
 - [ ] Per-module typecheck ratchet: record each module's current `tsc` error
       count to a baseline file and fail if a module regresses above it. Lets the
       engine pay debt down module-by-module without one green-gate blocking
