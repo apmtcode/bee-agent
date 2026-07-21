@@ -8,6 +8,16 @@ unchecked items are queued. Keep this richer than you found it each run.
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`
       (2026-06-22).
+- [x] **Fix the launch-script state-recorder corruption bug** (2026-07-21,
+      run 9). `printf|sed` initial-state writers in `background-tasks.ts` +
+      `runner.ts` emitted broken shell (unescaped `"$$"` inside a double-quoted
+      sed arg) + a wrong `shellQuote` POSIX escape — corrupting state JSON on
+      every Linux background-task/training run. Replaced with a `python3` writer;
+      fixed `shellQuote`; added a real-bash regression test.
+- [x] **Make `npm test` deterministic** (2026-07-21, run 9): `fileParallelism:
+      false`, no-op spawn in the breaker test, resilient `fs.rm` cleanup in
+      `operator-runtime.test.ts`. Suite was RED (3 files) every run in the cloud;
+      now green across 7 consecutive full runs.
 - [ ] **Pay down typecheck debt** (surfaced by the `typecheck` script). Full
       `tsc --noEmit` count was **397** on 2026-06-22; now **125**. 🎯 ALL source
       (`src/**` non-test) files typecheck clean since run 7; remaining 125 errors
@@ -62,15 +72,36 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
-      deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
+- [ ] **NEXT: Pluggable local-model backend interface for the training runner
+      with a deterministic mock backend** (so cloud/CI tests pass) and a
+      documented seam for a real on-device small model. Design sketched during
+      run 9's audit — the current `runner.ts` only *generates* mlx/axolotl shell
+      for real hardware; nothing can train+infer in the cloud to validate the
+      capture→dataset→train→infer→generalize loop (objective #2 pieces c & d).
+      Concrete plan: `src/training/movement-model.ts` —
+      (1) `tokenizeReplayEvent(ReplayTimelineEvent) → token` (e.g.
+      `action:<tool>`, `observation:<source>`) + `movementSequenceFromReplay`;
+      (2) `MovementModelBackend` interface (`train(dataset) →
+      TrainedMovementModel`) + a deterministic order-k Markov mock backend with
+      Katz-style backoff (unseen full-order context falls back to shorter
+      context) and stable-argmax generation — replays recorded sequences
+      exactly, generalizes to novel-but-related seeds via backoff;
+      (3) `serialize()`/`load()` so a trained model is a persistable artifact;
+      (4) `trainMovementModelFromExport(ReviewedExportManifest, backend)` bridging
+      the existing dataset format; (5) a fidelity metric
+      (`evaluateReplayFidelity(model, heldOutSequence)` = next-token accuracy).
+      Fully deterministic → no RNG, cloud/CI-safe.
 - [ ] Synthetic event-stream generator to validate capture→dataset→replay
       round-trips without real OS input.
 - [ ] Generalization eval harness: measure replay fidelity on held-out but
       related synthetic trajectories.
 
 ## Innovation backlog
+- [ ] **Launch-script toolchain self-test** (from run 9): the generated launch
+      scripts assume the on-device host has `python3` + bash + GNU `date`. Add a
+      one-time check at task/training start that dry-runs the state-writer against
+      a temp file and raises a clear error if the toolchain is missing — turning a
+      silent corrupt-state failure into an actionable diagnostic.
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in
       project health over time.

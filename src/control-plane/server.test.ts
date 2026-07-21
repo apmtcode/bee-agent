@@ -1019,6 +1019,11 @@ describe("OperatorControlPlaneServer", () => {
     const breakerRuntime = new StandaloneOperatorRuntime({
       rootDir: breakerRootDir,
       backgroundTaskIsProcessRunning: () => false,
+      // Use a no-op spawn so background-task state is driven solely by the
+      // explicit writeState calls below. A real detached process would write
+      // its own "running" state asynchronously and race the breaker probes,
+      // making the failure-count assertions non-deterministic.
+      backgroundTaskSpawnProcess: () => ({ pid: 4242, unref() {} }),
     });
     const breakerServer = new OperatorControlPlaneServer({ runtime: breakerRuntime });
     const breakerOne = await breakerServer.handle({

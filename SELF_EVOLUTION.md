@@ -6,6 +6,66 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-21 (run 9) — 🛠️ Fixed a real Linux-breaking state-recorder bug; suite now deterministically green
+
+**Audited:** The actual test baseline in this cloud container. The prior log
+claimed "174/174 passing", but a fresh `npm test` here was **RED — 3 integration
+test files failed every run** (`app.test.ts`, `server.test.ts`,
+`operator-runtime.test.ts`). Root-caused it instead of assuming flakiness.
+
+**Real bug found (highest value — breaks on-device, not just tests):** the
+background-task launch-script generator (`src/harness/background-tasks.ts`) and
+the training runner (`src/training/runner.ts`) wrote their initial `running`
+state via `printf '%s' <payload> | sed "…; s/\"\$\$\"/$$/g"`. In the *generated
+shell file* the JS template literal collapses `\"`→`"`, so the emitted sed arg
+became `sed "…; s/"$$"/$$/g"` — the inner double-quotes are **unescaped inside
+the shell's own double-quoted argument**, breaking the quoting. Consequences on
+any Linux host: the `"$$"`→pid substitution never runs (state keeps
+`"pid":"$$"`), and — compounded by a second bug — the JSON is corrupt, so
+`readJsonFile`/reconcile **throws on every background-task recovery**. Silent
+data-corruption of the task/training state files, not a test artifact.
+
+- **Bug 2:** `shellQuote` in `background-tasks.ts` escaped `'` as `"'"'"'`
+  instead of the correct POSIX `'"'"'`, corrupting any command containing a
+  single quote (e.g. `printf 'line-1\nline-2\n'`). (`runner.ts`'s copy was
+  already correct.)
+
+**Changed (additive, reversible):**
+- Replaced the fragile `printf|sed` initial-state writer in **both** files with a
+  robust `python3` writer (shell-quoted base payload → `json.loads` → inject
+  `pid`/`startedAt`/`updatedAt` → write with `indent=2`), matching the existing
+  completed/failed writers. Eliminates the entire quoting hazard class.
+- Fixed `shellQuote` in `background-tasks.ts`.
+- **Regression test** (`background-tasks.test.ts`): generates a launch script for
+  a single-quote + newline command, **executes it through real bash**, and
+  asserts the resulting `state.json` is valid JSON with a numeric `pid`, the exact
+  command preserved, and `status: completed`. Previously the launch script was
+  only exercised with a mocked spawn, so the bug hid in every unit run.
+- **Test determinism (races the fix exposed once JSON parsed cleanly):**
+  - Control-plane circuit-breaker test started real `sleep 5` tasks whose async
+    state-writes raced the failure-count probes → gave it a no-op
+    `backgroundTaskSpawnProcess` so state is driven solely by explicit
+    `writeState` (matches the test's clear 1→2→3 seeding intent).
+  - `operator-runtime.test.ts` `afterEach` hit `ENOTEMPTY` from orphan processes
+    during `fs.rm` → aligned it with the resilient `maxRetries/retryDelay` cleanup
+    already used in `app.test.ts`/`server.test.ts`.
+- `vitest.config.ts`: set `fileParallelism: false`. These suites spawn real
+  detached OS processes and make timing-sensitive assertions; running files
+  concurrently raced them across workers.
+
+**Test results:** **174 → 175 tests; deterministically green across 7
+consecutive full runs** (was 3 files failing every run). Build ✅.
+`typecheck:src` ✅ (exit 0). Full `tsc` unchanged at **125** (test-file debt).
+
+**New idea:** the launch-script generators assume the on-device host has
+`python3` + bash + GNU `date`. Add a tiny **launch-script toolchain self-test**
+run once at task/training start: dry-run the generated state-writer against a
+temp file and surface a clear, actionable error if the toolchain is missing —
+turning today's silent corrupt-state failure into a diagnostic. (Logged to
+ROADMAP.)
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

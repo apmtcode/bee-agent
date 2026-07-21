@@ -1,7 +1,11 @@
+import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
+
+const execFileAsync = promisify(execFile);
 import {
   BackgroundTaskExecutionService,
   FileBackgroundTaskStore,
@@ -369,5 +373,27 @@ describe("BackgroundTaskExecutionService", () => {
     await expect(fs.readFile(path.join(rootDir, task.execution.launchScript), "utf8")).resolves.toContain("bash -lc");
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
+  });
+
+  it("generates a launch script whose state writer emits valid JSON with a numeric pid", async () => {
+    const rootDir = await makeTempDir();
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"), () => ({ pid: 2222, unref() {} }));
+    // A command with single quotes and embedded newlines is the exact shape that
+    // broke the previous printf|sed state writer (unescaped quotes corrupted the
+    // JSON and left "pid":"$$" unsubstituted).
+    const trickyCommand = "printf 'line-1\nline-2\n'";
+    const task = await store.start({ title: "Tricky", command: trickyCommand, cwd: rootDir, kind: "task" });
+
+    const scriptPath = path.join(rootDir, task.execution.launchScript);
+    await execFileAsync("bash", [scriptPath], { cwd: rootDir });
+
+    const stateRaw = await fs.readFile(path.join(rootDir, task.execution.stateFile), "utf8");
+    const state = JSON.parse(stateRaw) as BackgroundTaskExecutionState;
+    expect(typeof state.pid).toBe("number");
+    expect(Number.isInteger(state.pid)).toBe(true);
+    expect(state.taskId).toBe(task.id);
+    expect(state.command).toBe(trickyCommand);
+    expect(state.status).toBe("completed");
+    expect(state.exitCode).toBe(0);
   });
 });
