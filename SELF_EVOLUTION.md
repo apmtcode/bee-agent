@@ -6,6 +6,73 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-21 (run 9) — 🧠 Movement-model layer: pluggable backend + deterministic n-gram that repeats AND generalizes
+
+**Audited:** Standing objective #2 (local-movement learning) and the ROADMAP
+item *"Pluggable local-model backend interface for the training runner with a
+deterministic mock backend."* The training subsystem (`src/training/`) only
+emitted **launch plans and shell scripts** for a real Apple-Silicon machine
+(`mlx`/`axolotl`) — there was **no in-process model** that could actually train
+on a movement dataset or do inference in the cloud/CI. Objective 2(c)/(d) —
+"post-train a local model to repeat recorded movements" and "generalize to new
+but related movements" — had no runnable code, only launch scaffolding.
+
+**Changed (additive):** new `src/training/movement-model.ts` closing the loop
+capture → schema → dataset → replay → **train/infer**:
+- **`MovementModelBackend` interface** (+ `MovementModelBackendRegistry`) — the
+  pluggability seam. A real on-device backend (MLX/axolotl) can register under
+  the same interface without touching call sites.
+- **`NgramMovementBackend`** — the default deterministic backend: a Katz-style
+  back-off n-gram over movement tokens. No randomness, no I/O, no network →
+  identical dataset in ⇒ identical model out (verified). This is the on-device
+  stand-in the cloud engine can train and evaluate against.
+  - **Repeat:** a seed that begins a recorded sequence reproduces the recording
+    exactly (higher-order context is preferred when trusted).
+  - **Generalize:** an unseen prefix whose *suffix* was observed still produces
+    the learned continuation via back-off (`predictNext` reports `backoffOrder`).
+  - Termination via an internal end-of-sequence sentinel (`generate()` stops
+    when "the movement ends here" is the strongest continuation) — the sentinel
+    never enters the reported vocabulary nor `predictNext` output.
+  - Full `serialize()`/`deserialize()` round-trip (JSON-safe) so a trained model
+    persists to a reviewed-export artifact.
+- **`buildMovementDataset(replays)`** — bridges the capture/replay layer to the
+  model: each replay's `action` events (timeline-ordered) become one movement
+  sequence; custom tokenizer supported.
+- Barrel exports added in `src/index.ts`.
+
+**Test results:** new `movement-model.test.ts` — **15/15 pass** (repeat,
+generalize-via-backoff, higher-order-preference, determinism, lexical tie-break,
+serialize round-trip, stats, idle-loop halting, empty dataset, order clamp,
+dataset builder incl. end-to-end capture→train→repeat). `npm run typecheck:src`
+✅ CLEAN. `npm run build` ✅. Full suite **186/189** — the **3 failures are
+pre-existing and unrelated** to this change: verified by `git stash` (baseline
+HEAD fails the same 3–4 tests). Root cause diagnosed below.
+
+**Pre-existing failure diagnosed (logged to ROADMAP, not fixed this run to keep
+the diff focused):** `operator-runtime`/`app`/`server` background-task tests fail
+with `SyntaxError: Expected ',' or '}' … in JSON` from `readJsonFile`. Root
+cause: `startBackgroundTask` spawns a **real** bash launch script
+(`renderLaunchScript` in `src/harness/background-tasks.ts`) that writes its state
+file via a **non-atomic** `sed … > statePath` redirect; the recovery reader
+(`reconcileTask` → `readState`) can catch that file mid-write and parse a partial
+document. Timing-dependent (explains why run 8 saw green). Fix options: make the
+shell state write atomic (write temp + `mv`, mirroring `writeJsonAtomic`), or make
+`readState` tolerant of a transient partial read (retry-once / treat parse error
+like ENOENT). Prefer the atomic shell write — it fixes the real defect rather than
+masking it.
+
+**New idea:** a **generalization eval harness** built on this model — split a
+synthetic movement corpus into train/held-out-related sets, train the n-gram, and
+score replay fidelity (exact-match rate + edit distance to the ground-truth
+continuation) on the held-out set. That gives objective #2(d) a *measurable*
+generalization metric instead of a binary "it ran", and becomes the fitness
+signal a future real on-device backend must beat. Second idea: a
+`ReviewedExportManifest` extension that persists the serialized movement model
+alongside the dataset so a locally-trained model is a first-class, replayable
+export artifact.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

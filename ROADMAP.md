@@ -62,13 +62,37 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
+      for a real on-device small model. **DONE run 9** —
+      `src/training/movement-model.ts`: `MovementModelBackend` (+ registry) seam
+      and the default deterministic `NgramMovementBackend` (Katz back-off) that
+      *repeats* recorded movements and *generalizes* novel-but-related prefixes;
+      `buildMovementDataset` bridges replay events; serialize/deserialize
+      round-trips. 15/15 tests.
 - [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
+      round-trips without real OS input. (Partially exercised in
+      `movement-model.test.ts`; extract a reusable deterministic generator next.)
 - [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      related synthetic trajectories. **Now unblocked** — build on
+      `NgramMovementBackend`: train/held-out split, score exact-match rate +
+      edit distance of the predicted continuation vs ground truth. Gives #2(d) a
+      measurable metric and a fitness bar for a future real on-device backend.
+- [ ] Persist the serialized movement model in `ReviewedExportManifest` so a
+      locally-trained model is a first-class, replayable export artifact.
+
+## Reliability (discovered defects)
+- [ ] **Non-atomic background-task state write races the recovery reader**
+      (found run 9). `renderLaunchScript` in `src/harness/background-tasks.ts`
+      writes the execution state file with a non-atomic `sed … > statePath`
+      redirect; `reconcileTask` → `readState` → `readJsonFile` can read it
+      mid-write and throw `SyntaxError: Expected ',' or '}' … in JSON`. This is
+      the root cause of the timing-dependent failures in
+      `operator-runtime.test.ts` / `app.test.ts` / `server.test.ts` (3–4 tests,
+      present on baseline HEAD). Fix: make the shell state write atomic (temp
+      file + `mv`, mirroring `writeJsonAtomic`); optionally harden `readState`
+      to tolerate a transient partial read (retry-once or treat parse error like
+      ENOENT). Prefer the atomic write — fixes the defect rather than masking it.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
