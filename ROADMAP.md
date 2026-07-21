@@ -59,16 +59,50 @@ unchecked items are queued. Keep this richer than you found it each run.
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
 (exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
-      objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
-      deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
+- [x] Inventory what `src/capture` + `src/training` already implement vs. the
+      objective's five pieces (2026-07-21, run 9). Capture→schema→dataset→*plan*
+      existed; the missing piece was a runnable train/infer path — the runner only
+      emitted an mlx/axolotl launch plan.
+- [x] Pluggable local-model backend interface for the training runner with a
+      deterministic mock backend (2026-07-21, run 9) —
+      `src/training/movement-model.ts`: `MovementModelBackend` /
+      `TrainedMovementModel` seam + `DeterministicMarkovBackend` (variable-order
+      Markov w/ stupid backoff: reproduces recorded sequences, generalizes via
+      backoff). `createMovementModelBackend` registry + `loadMovementModel`.
+- [x] Generalization eval harness (2026-07-21, run 9) —
+      `evaluateMovementModel`: next-token top-1 accuracy + generalization rate
+      (share of correct predictions that required context backoff).
 - [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      round-trips without real OS input. (Partial: `movement-model` tests build
+      synthetic token sequences; a richer generator producing full
+      `TrajectoryObservation`/`TrajectoryAction` streams with timing/noise is still
+      open.)
+- [ ] **Cloud-runnable training smoke stage** (new, run 9): after
+      `LocalTrainingExporter` builds a reviewed export, train a
+      `DeterministicMarkovBackend` on the exported action sequences and assert a
+      minimum accuracy / generalization rate — a per-run CI regression gate for the
+      whole export→dataset→train→generalize loop, and a baseline for the real
+      on-device backend to beat.
+- [ ] Wire a real on-device small-model backend behind `MovementModelBackend`
+      (mlx/gguf) reusing `LocalAppleSiliconTrainingRunner`'s plan; keep the
+      deterministic backend as the CI/mock implementation.
+
+## Reliability / test stability
+- [x] Fix deterministic background-task state corruption from shell-quoting a
+      command containing quotes into the launch script (2026-07-21, run 9) —
+      base-state file written from TS + atomic Python fill; completion writer made
+      atomic; `maxRetries` added to the two overlooked process-spawning test
+      cleanups.
+- [ ] **Stabilize the remaining pre-existing flakes** (present on clean HEAD,
+      surfaced this run once the deterministic failure was removed):
+  - [ ] `server.test.ts` circuit-breaker count nondeterminism —
+    `sessions.platformStatus` (~L1118) intermittently reports `failureCount`/
+    `threshold` 3 instead of 2 (`state: paused` vs `degraded`). Likely a
+    double-counted failure or shared breaker state across the sub-steps of that
+    mega-test; isolate the breaker setup or split the assertions.
+  - [ ] Residual FS-timing flakes under full-suite concurrency (detached task
+    processes racing temp-dir teardown). Consider having the runtime reap/await
+    spawned background processes on shutdown so tests don't leave orphans.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

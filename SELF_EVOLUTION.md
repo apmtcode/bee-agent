@@ -6,6 +6,73 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-21 (run 9) — Movement-model backend (train/infer/generalize) + fixed a deterministic background-task corruption bug
+
+**Audited:** Standing objective #2 (local-movement learning). `src/capture/`
+(recorder, replay, trajectory, adapters, consent, ingestion) and `src/training/`
+(exporter, job-store/manifest, runner, execution-service) already cover
+capture → schema → dataset → *plan*. The gap: the training runner
+(`LocalAppleSiliconTrainingRunner`) only **emits an mlx/axolotl launch plan** — it
+cannot actually train or run inference anywhere, so objective #2 pieces (d)
+"post-train a local model" and (e) "generalize" were **unexercisable in the
+cloud**. The roadmap flagged exactly this: a pluggable local-model backend with a
+deterministic mock.
+
+**Changed — new capability (`src/training/movement-model.ts`, additive):**
+- `MovementModelBackend` interface + `TrainedMovementModel` (predict / generate /
+  serialize) — the pluggable seam a real on-device backend implements.
+- `DeterministicMarkovBackend`: a dependency-free variable-order Markov model with
+  **stupid backoff**. Memorises recorded transitions (reproduces a demonstrated
+  movement sequence exactly) and backs off to shorter context suffixes — finally
+  the global next-token distribution — for unseen contexts, which is what lets it
+  **generalize to new-but-related movements**. Fully deterministic (ties broken by
+  first-observed order) so it is assertable in CI.
+- Dataset builders: `buildMovementDataset` (n-gram windowing),
+  `buildMovementSequencesFromTrajectories` / `…FromReplays` (extract token
+  sequences from the existing capture artifacts), pluggable `MovementTokenizer`.
+- `evaluateMovementModel`: next-token top-1 accuracy + a **generalization rate**
+  (share of correct predictions that required backoff) — the eval-harness the
+  roadmap asked for.
+- `createMovementModelBackend` registry + `loadMovementModel` (portable
+  serialize/round-trip). Exported from `src/index.ts`. **19 new tests, all green.**
+
+**Also fixed a real deterministic bug (not just a test artifact):**
+`renderLaunchScript` in `src/harness/background-tasks.ts` hand-built the initial
+state JSON, shell-quoted the whole blob, and rewrote it with
+`printf '%s' '<payload>' | sed "…s/"$$"/$$/g" > state.json`. When `task.command`
+contained a single quote (e.g. `printf 'line-1\nline-2\n'`) the nested quoting +
+mis-quoted `sed` program injected a stray `"` that terminated the JSON string
+early → `SyntaxError … at position 311`, **every run** — corrupting recovered
+state for any realistic quoted command. Replaced the printf/sed dance with a
+TypeScript-written base-state file (`state.json.base`, via `writeJsonAtomic`) that
+the launch script's Python fills with pid/timestamps and writes **atomically**
+(temp + `os.replace`). Command text can no longer corrupt the JSON. Also made the
+completion-state Python writer atomic, and added `maxRetries`/`retryDelay` to the
+`operator-runtime` + `background-tasks` test cleanups (matching the convention the
+6 other process-spawning test files already use) to close an `ENOTEMPTY`
+dir-removal race against the still-writing detached process.
+
+**Test results:** `typecheck:src` ✅ (exit 0). Build ✅. New movement-model suite
+✅ **19/19** (stable across 5 runs). The previously **100%-deterministic**
+`operator-runtime` background-task failure is **eliminated**; the full suite now
+passes 193/193 on most runs. **Remaining pre-existing flakes (NOT introduced by
+this run, present on clean HEAD):** a circuit-breaker count nondeterminism in
+`server.test.ts` (`sessions.platformStatus`, ~line 1118: `failureCount 2 vs 3`)
+and residual FS-timing flakes surfacing only under full-suite concurrency. Clean
+HEAD failed 3–4 tests *every* run; this run cut that to occasional low-rate
+flakes. The remaining offenders are logged to ROADMAP for a dedicated
+stabilization pass.
+
+**New idea:** wire the movement-model backend into the training pipeline as a
+*cloud-runnable smoke stage* — after `LocalTrainingExporter` produces a reviewed
+export, train a `DeterministicMarkovBackend` on the exported action sequences and
+assert a minimum next-token accuracy / generalization rate. That turns the export
+→ dataset → train → generalize loop into a per-run regression gate that runs
+entirely in CI, and gives the real on-device backend a measurable baseline to
+beat before it ships.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

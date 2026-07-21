@@ -162,6 +162,19 @@ export class BackgroundTaskExecutionService {
   async writeArtifacts(task: BackgroundTaskRecord): Promise<void> {
     const launchScriptPath = path.join(this.rootDir, task.execution.launchScript);
     await ensureParentDir(launchScriptPath);
+    // Persist the initial "running" state as JSON from TypeScript rather than
+    // hand-quoting it into the launch script. The launch script only fills in the
+    // runtime pid/timestamps, so a command containing shell metacharacters (e.g.
+    // single quotes) can never corrupt the serialized state.
+    await writeJsonAtomic(path.join(this.rootDir, stateBaseFile(task)), {
+      version: 1,
+      taskId: task.id,
+      kind: task.kind,
+      status: "running",
+      outputFile: task.execution.outputFile,
+      cwd: task.cwd,
+      command: task.command,
+    });
     await fs.writeFile(launchScriptPath, renderLaunchScript(task), {
       encoding: "utf8",
       mode: 0o700,
@@ -729,32 +742,28 @@ function applyExecutionState(task: BackgroundTaskRecord, state: BackgroundTaskEx
   };
 }
 
+function stateBaseFile(task: BackgroundTaskRecord): string {
+  return `${task.execution.stateFile}.base`;
+}
+
 function renderLaunchScript(task: BackgroundTaskRecord): string {
   const quotedStatePath = shellQuote(task.execution.stateFile);
+  const quotedStateBasePath = shellQuote(stateBaseFile(task));
   const quotedOutputFile = shellQuote(task.execution.outputFile);
   const quotedCwd = shellQuote(task.cwd);
   const quotedCommand = shellQuote(task.command);
-  const quotedStatePayload = shellQuote(
-    JSON.stringify({
-      version: 1,
-      taskId: task.id,
-      kind: task.kind,
-      status: "running",
-      pid: "$$",
-      startedAt: "__OPENCLAW_STARTED_AT__",
-      updatedAt: "__OPENCLAW_STARTED_AT__",
-      outputFile: task.execution.outputFile,
-      cwd: task.cwd,
-      command: task.command,
-    }),
-  );
 
   return [
     "#!/usr/bin/env bash",
     "set -euo pipefail",
     `mkdir -p $(dirname ${quotedStatePath}) $(dirname ${quotedOutputFile})`,
     "started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-    `printf '%s' ${quotedStatePayload} | sed "s/__OPENCLAW_STARTED_AT__/$started_at/g; s/\"\$\$\"/$$/g" > ${quotedStatePath}`,
+    // Fill the pid/timestamps into the TypeScript-written base state and write it
+    // atomically. Passing the base state as a file (never as a shell-quoted
+    // string) keeps arbitrary command text from corrupting the JSON.
+    `python3 - ${quotedStatePath} ${quotedStateBasePath} $$ "$started_at" <<'PY'`,
+    ...renderInitialStateWriterPython(),
+    "PY",
     `printf '%s\n' "starting ${task.kind} ${task.id}" >> ${quotedOutputFile}`,
     `if cd ${quotedCwd} && bash -lc ${quotedCommand} >> ${quotedOutputFile} 2>&1; then`,
     "  completed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
@@ -773,6 +782,26 @@ function renderLaunchScript(task: BackgroundTaskRecord): string {
   ].join("\n");
 }
 
+function renderInitialStateWriterPython(): string[] {
+  return [
+    "import json",
+    "import pathlib",
+    "import sys",
+    "state_path = pathlib.Path(sys.argv[1])",
+    "base_path = pathlib.Path(sys.argv[2])",
+    "pid = int(sys.argv[3])",
+    "started_at = sys.argv[4]",
+    "state = json.loads(base_path.read_text())",
+    "state['pid'] = pid",
+    "state['startedAt'] = started_at",
+    "state['updatedAt'] = started_at",
+    // Atomic write so a concurrent reader sees either nothing or the full state.
+    "tmp_path = state_path.with_name(state_path.name + f'.{pid}.init.tmp')",
+    "tmp_path.write_text(json.dumps(state, indent=2) + '\\n')",
+    "tmp_path.replace(state_path)",
+  ];
+}
+
 function renderStateWriterPython(status: BackgroundTaskExecutionState["status"]): string[] {
   return [
     "import json",
@@ -789,7 +818,11 @@ function renderStateWriterPython(status: BackgroundTaskExecutionState["status"])
     "state['completedAt'] = timestamp",
     "state['exitCode'] = exit_code",
     `state['error'] = None if '${status}' == 'completed' else f'background task exited non-zero ({exit_code})'`,
-    "state_path.write_text(json.dumps(state, indent=2) + '\\n')",
+    // Atomic write: serialize to a temp sibling then os.replace() into place so a
+    // concurrent reader sees either the old or new state, never a partial file.
+    "tmp_path = state_path.with_name(state_path.name + f'.{pid}.tmp')",
+    "tmp_path.write_text(json.dumps(state, indent=2) + '\\n')",
+    "tmp_path.replace(state_path)",
   ];
 }
 
