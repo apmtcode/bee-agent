@@ -6,6 +6,53 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-21 (run 9) — Hermetic background-task tests: kill real-subprocess flakiness
+
+**Audited:** The test suite's health after a fresh `npm install` in the cloud
+sandbox. **4 tests were failing deterministically** (they passed at run 8):
+`operator-runtime.test.ts` (JSON `SyntaxError` reading a torn state file),
+`server.test.ts` (control `active`→`degraded`), and two `app.test.ts` cases
+(`control=active` and `watch-active`). Root cause: the background-task launcher
+spawns a **real detached `bash`+`python3` wrapper** that writes execution-state
+files asynchronously and non-atomically (`sed > file`, python `write_text`).
+Those writes race the tests' own `writeState`/reads and depend on `bash`/`date`/
+`python3` timing — at run 8 the wrapper was too slow/broken to interfere; in this
+sandbox it now runs fast enough to corrupt state and flip control health. The
+tests were passing for the wrong reason (a non-functional spawner), not by
+design.
+
+**Changed (additive):**
+- New reusable test seam **`src/harness/background-tasks.testing.ts`** →
+  `createInertBackgroundSpawn(startPid?)`: a side-effect-free
+  `SpawnBackgroundProcess` that never launches a real process and never writes
+  files, plus a paired `isProcessRunning` that reports its handed-out pids as
+  alive while unknown pids (e.g. a hand-written `999999`) read as dead — so both
+  the healthy and the missing-process reconciliation paths stay deterministic.
+  Covered by `background-tasks.testing.test.ts` (**+4 tests**).
+- Plumbed optional `backgroundTaskSpawnProcess` / `backgroundTaskIsProcessRunning`
+  through **`OperatorCliApp`** (`src/cli/app.ts`) so CLI-level tests can inject
+  the seam (the runtime already accepted both).
+- Injected the inert spawner into the 4 flaky suites; rewrote the `app.test.ts`
+  background-task section to record output/state explicitly (mirroring the
+  monitor section already in that test), so `watch-active` no longer depends on a
+  real `printf ok` still being alive.
+
+**Test results:** full `npm test` **178/178 green** (was 174; +4 new). Build ✅.
+`typecheck:src` ✅ (source stays clean). Full `tsc` debt unchanged at **125**
+(all test-only; the new files typecheck clean). No source behavior changed — only
+the test injection seam was added.
+
+**New idea:** the real launch-script path (`renderLaunchScript` +
+`renderStateWriterPython`) now has **no deterministic coverage** at all — the
+inert spawner bypasses it. Add a pure unit test that snapshots the rendered
+bash/python for a fixed task (no execution) so shell-quoting/atomicity
+regressions are caught, and separately make the wrapper's state writes **atomic**
+(write-temp-then-rename inside the script) so a real concurrent reader can never
+observe a torn file — the defect the inert seam sidesteps in tests but production
+still has.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

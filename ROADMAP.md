@@ -8,6 +8,19 @@ unchecked items are queued. Keep this richer than you found it each run.
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`
       (2026-06-22).
+- [x] **Hermetic background-task tests** — DONE run 9. Added
+      `createInertBackgroundSpawn` (`src/harness/background-tasks.testing.ts`) +
+      plumbed spawn/`isProcessRunning` injection through `OperatorCliApp`, so the
+      suite no longer depends on a real detached `bash`/`python3` wrapper (which
+      raced test state and broke 4 tests in-cloud). Suite 174→178 green.
+- [ ] **Atomic launch-script state writes** (surfaced run 9). The real
+      `renderLaunchScript`/`renderStateWriterPython` wrapper writes `state.json`
+      via `sed > file` and python `write_text` — non-atomic, so a concurrent
+      reader can observe a torn file (the exact `SyntaxError` run 9 hit). Make the
+      script write to a temp path then `mv` into place.
+- [ ] **Deterministic coverage for the launch script** (surfaced run 9). The
+      inert spawner bypasses `renderLaunchScript` entirely, leaving it uncovered.
+      Add a pure render/snapshot test (no execution) to guard shell-quoting.
 - [ ] **Pay down typecheck debt** (surfaced by the `typecheck` script). Full
       `tsc --noEmit` count was **397** on 2026-06-22; now **125**. 🎯 ALL source
       (`src/**` non-test) files typecheck clean since run 7; remaining 125 errors
