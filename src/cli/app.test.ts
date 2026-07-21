@@ -800,8 +800,20 @@ describe("OperatorCliApp", () => {
   });
 
   it("supports session lifecycle, transcript, approvals, pairing, config, and prompt commands", async () => {
+    // Hermetic background tasks: a non-spawning stub gives every launched task a
+    // fixed pid (4242) reported as alive, so `control=active` does not depend on
+    // a real `sleep 5` process winning a race. A hand-seeded pid (999999) later
+    // in the test still reads as missing-process → degraded, as intended.
+    const backgroundTaskSpawnProcess = () => ({ pid: 4242, unref() {} });
+    const backgroundTaskIsProcessRunning = (pid: number) => pid === 4242;
     const rootDir = await makeTempDir();
-    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    const app = new OperatorCliApp({
+      rootDir,
+      cwd: rootDir,
+      currentDate: "2026-05-25",
+      backgroundTaskSpawnProcess,
+      backgroundTaskIsProcessRunning,
+    });
     const firstSession = await app.runtime.startSession({ title: "first", cwd: rootDir, agentId: "operator-cli" });
     const secondSession = await app.runtime.startSession({ title: "second", cwd: rootDir, agentId: "operator-cli" });
 

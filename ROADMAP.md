@@ -8,6 +8,22 @@ unchecked items are queued. Keep this richer than you found it each run.
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`
       (2026-06-22).
+- [x] **Fix corrupt background-task state JSON + de-flake the suite** (run 9,
+      2026-07-21). `renderLaunchScript` now writes the initial `running` state via
+      Python `json.dumps` (was a broken `printf|sed` substitution that left
+      `pid:"$$"` and produced invalid JSON for quoted/newline commands). Tests
+      that seed state + drive recovery now inject a non-spawning process stub;
+      `OperatorCliApp` gained optional `backgroundTaskSpawnProcess` /
+      `backgroundTaskIsProcessRunning` hooks. Suite is deterministically 175/175
+      across 6 consecutive full runs.
+- [ ] **Flake detection.** Add a `test:stress` script (run the suite N× and/or
+      `--sequence.shuffle`) as an opt-in flake detector, plus a guard that flags
+      any test constructing a runtime/`OperatorCliApp` and calling
+      `startBackgroundTask` without a spawn override.
+- [ ] **Pure in-process background-task state writer.** Give
+      `BackgroundTaskExecutionService` a pluggable state-writer seam (shell/python
+      vs. an in-process writer) so tests never need a real subprocess and the
+      launcher's shell/python dependency is isolated behind one interface.
 - [ ] **Pay down typecheck debt** (surfaced by the `typecheck` script). Full
       `tsc --noEmit` count was **397** on 2026-06-22; now **125**. 🎯 ALL source
       (`src/**` non-test) files typecheck clean since run 7; remaining 125 errors

@@ -6,6 +6,64 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-21 (run 9) — Fix corrupt background-task state JSON + de-flake the suite (green under load)
+
+**Audited:** The actual `npm test` result on a fresh install. Contrary to the
+"174/174" recorded in prior runs, the suite was **failing 2–3 tests
+non-deterministically** — the count changed between runs. Root-caused two
+distinct defects, one a real production bug.
+
+**Bug 1 — production, in `src/harness/background-tasks.ts` (`renderLaunchScript`):**
+the launcher wrote the initial `running` execution-state file by `JSON.stringify`-ing
+a payload with a `pid: "$$"` placeholder and a `__OPENCLAW_STARTED_AT__` timestamp
+placeholder, then substituting both via `printf '%s' … | sed "…s/\"\$\$\"/$$/g"`.
+This is broken two ways: (a) the `sed` pid substitution silently failed, leaving
+`"pid":"$$"` — a *string* where the schema/readers expect an integer; and (b) any
+task `command` containing double quotes or newlines (round-tripped through
+`shellQuote` + `sed`) produced **invalid JSON**, so every later `readState`
+crashed with `SyntaxError: Expected ',' or '}'…` (surfaced deterministically by
+the operator-runtime recovery test). Fixed by writing the initial state through
+**Python's `json.dumps`** — exactly like the already-correct completion/failure
+writers — passing the base payload as a shell-quoted argv and injecting the real
+`$$` pid + timestamp in Python. No `sed`, no fragile escaping; the command round-
+trips through `json.loads`/`json.dumps` safely. Also hardened `readJsonFile`
+(`src/shared/fs.ts`) to wrap parse errors with the offending file path.
+
+**Bug 2 — test hermeticity / flakiness:** several control-plane and runtime tests
+seed execution state by hand and drive recovery, but constructed the runtime
+*without* a spawn override — so `startBackgroundTask` launched **real detached
+`sleep 5` / `printf` processes** whose asynchronous state writes raced the
+assertions (inflating circuit-breaker failure counts, flipping `control=active`
+→ `mixed`). Made them hermetic by injecting a **non-spawning process stub**
+(fixed pid, no real process): `server.test.ts` (shared `noopSpawnBackgroundProcess`
+on the 3 state-seeding runtimes), `operator-runtime.test.ts` (the bg-task test),
+and `app.test.ts`. For `app.test.ts` this required a small **additive production
+change**: `OperatorCliApp` now accepts optional `backgroundTaskSpawnProcess` /
+`backgroundTaskIsProcessRunning` hooks (threaded to its runtime; undefined in
+production = unchanged behavior). The test injects `pid 4242 + (pid)=>pid===4242`
+so `control=active` is deterministic while the hand-seeded `pid 999999` still
+reads missing-process → degraded.
+
+**New test:** `background-tasks.test.ts` — renders and *actually executes* the
+launch script (bash + python3) for a command with embedded quotes **and** a
+newline, then asserts the state file is valid JSON with an **integer** pid and
+the exact command preserved. This is the regression lock for Bug 1.
+
+**Test results:** `typecheck:src` ✅ (exit 0). Build ✅ (532 kB). `npm test` ✅
+**175/175** (was 172–173/174 flaky) — confirmed stable across **6 consecutive
+full-suite runs** under load. Net: +1 real bug fixed, +1 regression test, suite
+now deterministically green.
+
+**New idea:** add a `test:stress` script that runs the suite N× (e.g. `vitest run
+--retry=0` in a loop, or `--sequence.shuffle`) as an opt-in flake detector, and a
+lint/guard that flags any test constructing `StandaloneOperatorRuntime` /
+`OperatorCliApp` and calling `startBackgroundTask` *without* a spawn override —
+so real-process races can't silently re-enter the suite. Longer term: give
+`BackgroundTaskExecutionService` a pluggable "state writer" (shell/python vs. a
+pure in-process writer) so tests never need a subprocess at all.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

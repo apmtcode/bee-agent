@@ -1,3 +1,4 @@
+import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -369,5 +370,32 @@ describe("BackgroundTaskExecutionService", () => {
     await expect(fs.readFile(path.join(rootDir, task.execution.launchScript), "utf8")).resolves.toContain("bash -lc");
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
+  });
+
+  it("writes a valid JSON state file for commands containing quotes and newlines", async () => {
+    const rootDir = await makeTempDir();
+    // Command with embedded double quotes AND a real newline — this exact shape
+    // used to corrupt the state file (the old printf|sed writer emitted invalid
+    // JSON and left pid as the literal string "$$").
+    const command = 'printf "line-1\nline-2\n" # tag="alpha"';
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"), () => ({
+      pid: 2222,
+      unref() {},
+    }));
+    const task = await store.start({ title: "Quoted command", command, cwd: rootDir });
+
+    // Execute the real launch script (bash + python3) as the runtime would.
+    const scriptPath = path.join(rootDir, task.execution.launchScript);
+    await new Promise<void>((resolve, reject) => {
+      execFile("bash", [scriptPath], { cwd: rootDir }, (error) => (error ? reject(error) : resolve()));
+    });
+
+    const raw = await fs.readFile(path.join(rootDir, task.execution.stateFile), "utf8");
+    const state = JSON.parse(raw) as BackgroundTaskExecutionState & { command: string };
+    expect(typeof state.pid).toBe("number");
+    expect(state.pid).toBeGreaterThan(0);
+    expect(state.command).toBe(command);
+    expect(state.taskId).toBe(task.id);
+    expect(["running", "completed"]).toContain(state.status);
   });
 });
