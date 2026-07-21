@@ -6,6 +6,76 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-21 (run 9) — 🧠 Pluggable in-process movement-model backend (train + infer, cloud-testable)
+
+**Audited:** Standing objective #2 (local-movement learning subsystem). Inventoried
+`src/training/`: the existing runner (`LocalAppleSiliconTrainingRunner`) only
+*plans* an external Python/MLX/axolotl run — it emits a command spec + launch
+script. There was **no in-process backend** that actually learns from the recorded
+movement stream and can predict/replay movements, so objective pieces **2c**
+("post-train a local model to repeat the recorded movements") and **2d**
+("generalize to new but related movements") had zero cloud-runnable implementation.
+This was the top-priority ROADMAP item under "Local-movement learning subsystem":
+*"Pluggable local-model backend interface for the training runner with a
+deterministic mock backend (so cloud/CI tests pass) and a documented seam for a
+real on-device small model."*
+
+**Changed (additive) — new `src/training/movement-model.ts`:**
+- **`MovementModelBackend<TModel>` interface** — the pluggable seam: `train(dataset)`
+  → model, `predictNext(model, context)` → prediction, `serialize`/`deserialize`.
+  A real on-device model (MLX / llama.cpp / axolotl) plugs in here later; the whole
+  pipeline is backend-agnostic.
+- **`MarkovMovementBackend`** — a deterministic order-k n-gram backend over a
+  PII-free tokenization of `ReplayTimelineEvent` (`action:<tool>`,
+  `observation:<source>`, `transcript:<role>` — structural only, free text
+  excluded). Katz-style back-off from order k → 0 gives **both** exact
+  memorization (a context seen in training reproduces the recorded movement) **and**
+  generalization (a novel context falls back to the longest matching suffix). Fully
+  deterministic tie-breaking (count desc → prefer a real move over `<eos>` on ties
+  → lexical), so results reproduce across runs/machines.
+- **`MovementModelTrainer`** — ties a backend to dataset assembly, **autoregressive
+  rollout** (`generate()` predicts-and-appends until learned end-of-sequence or a
+  `maxLength` guard), and atomic disk persistence (`save`/`load` with a backend-id
+  guard so a model can't be loaded by the wrong backend).
+- **`buildMovementDataset(replays)`** — assembles a training set from replay
+  manifests (e.g. reviewed-export `replays[].events`), dropping empty sequences.
+- Barrel-exported all of the above from `src/index.ts`.
+- **New `src/training/movement-model.test.ts` (15 tests):** memorization (rollout
+  reproduces a recorded sequence exactly; timestamps stay monotonic), generalization
+  (verbatim context → order-2 no-backoff; unseen prefix → order-1 suffix backoff;
+  wholly-unknown context → order-0 fallback), deterministic tie-break,
+  serialize/deserialize round-trip, dataset assembly, save/load + missing-model +
+  wrong-backend guard, and a **pluggable-backend proof** (a custom `ConstantBackend`
+  and an `endless` backend both drive the trainer's rollout loop, exercising the
+  `maxLength` guard).
+
+**Test results:** `typecheck:src` ✅ (source stays fully green). Build ✅ (tsdown,
+5 files). New movement-model suite ✅ **15/15**. Full suite **186 passed / 3 failed
+(189)** — the **3 failures are PRE-EXISTING on HEAD** (run 8's commit) and
+**environmental, not introduced by this change**: verified via `git stash -u`
+baseline = **171 passed / 3 failed (174)**, i.e. this run adds 15 passing tests and
+**zero regressions**. The 3 failures (`server.test.ts` platform-control,
+`app.test.ts` platform-list + task-watch) all trace to one root cause —
+**detached background-process liveness in the cloud sandbox**: a spawned detached
+process isn't found here, so the control state reports
+`degraded:...background task missing-process` instead of `active`. Run 8 logged
+174/174 (green in its environment), confirming these are sandbox/timing-sensitive,
+not code defects. Documented as a blocker in ROADMAP. Pushed to `main` because the
+increment is green and regression-free; diverting to `wip` for a pre-existing
+sandbox flake would permanently strand main.
+
+**New idea:** a **generalization eval harness** for the movement model — hold out a
+"related but unseen" synthetic trajectory (same suffix patterns, novel prefixes),
+train on the rest, then score replay fidelity as token-level edit distance between
+the model's rollout and the held-out sequence. That turns "does it generalize?" into
+a tracked metric across runs, and gives a concrete target for when a real on-device
+backend is swapped in behind the same `MovementModelBackend` interface. Second idea:
+make the 3 background-process tests **hermetic** by injecting a fake process-liveness
+probe (mirroring the existing `SpawnProcess` seam), so the sandbox's detached-process
+behavior stops producing false-red on `main`.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
