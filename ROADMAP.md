@@ -62,13 +62,52 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
+      for a real on-device small model. **DONE run 9** — `MovementModelBackend`
+      interface + deterministic `NGramMovementBackend` in
+      `src/training/movement-model.ts`. Trains on the movement dataset, repeats
+      recorded flows (`generateMovementSequence`), and generalizes to unseen
+      targets via an abstract-context→concrete-token backoff layer.
 - [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      round-trips without real OS input. (Run 9 added deterministic
+      `buildMovementDataset` + `splitMovementDataset`; a richer parametric
+      generator — noise, timing jitter, branching flows — is still open.)
+- [x] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories. **DONE run 9** — `evaluateMovementModel`
+      (teacher-forced exact + action-level accuracy + per-layer breakdown) and
+      `splitMovementDataset` (RNG-free train/held-out split).
+- [ ] **Real on-device backend behind the `MovementModelBackend` seam** — wire a
+      small local model (e.g. an MLX/GGUF next-token model over movement tokens)
+      as a second backend; the n-gram backend stays as the cloud/CI mock.
+- [ ] **Movement macro-suggester** (run 9 idea): scan trained trajectories for
+      high-confidence recurring sub-sequences and surface them as one-click
+      replayable macros with a confidence score — capture→train→*offer to
+      automate*, not just predict.
+
+## Known blockers (diagnosed, ready to implement)
+- [ ] **`shellQuote` corrupts background-task state JSON (run 9 diagnosis).**
+      `renderLaunchScript` in `src/harness/background-tasks.ts` escapes single
+      quotes with the 6-char `"'"'"'` instead of the POSIX-safe 5-char `'"'"'`;
+      the stray leading `"` injects a double-quote into every quoted value, so
+      the launch script's JSON state payload becomes invalid for any
+      command/path containing a `'` (e.g. `printf 'x'`). Recovery then throws in
+      `JSON.parse`. **Verified fix:** replacement → `'"'"'`, and change the `sed`
+      `"$$"→pid` step to a `"__OPENCLAW_PID__"` placeholder so `pid` is a JSON
+      number. Do this in a **dedicated run** because it unmasks a *second*
+      pre-existing bug: the detached launch script writes state asynchronously
+      and races/clobbers the test's pre-seeded state in
+      `operator-runtime.test.ts` (fix: write the initial `running` state
+      synchronously in `start()` before spawning, so the script only writes
+      completion state — removes the `printf|sed` templating and the race).
+- [ ] **`server.test.ts` pairing "degraded vs active" (run 9).** Unrelated
+      pre-existing failure: `sessions.remoteControl` returns `control.state:
+      "degraded"` where the test expects `"active"`. Investigate the pairing
+      breaker/health default in this environment.
+- [ ] **Flaky background-task tests.** `app.test.ts` alternates 1↔2 failures
+      run-to-run because it spawns real detached processes and asserts on
+      timing. Inject a mock `SpawnBackgroundProcess` (the seam already exists)
+      so these tests are deterministic in cloud/CI.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

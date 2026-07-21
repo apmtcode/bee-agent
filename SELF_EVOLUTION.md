@@ -6,6 +6,70 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-21 (run 9) — Local-movement model: train → repeat → generalize + eval harness
+
+**Audited:** Standing objective #2 (local-movement learning) and `src/training/`.
+The pipeline had capture → schema → dataset → replay and an *external*-command
+training runner (`LocalAppleSiliconTrainingRunner` emits an `mlx`/`axolotl`
+CLI plan), but **no in-process, cloud-testable train→infer path** — so parts
+(c) "post-train a local model to repeat the recorded movements" and (d)
+"generalize to related movements" of the objective were unimplemented and
+untestable in the cloud. This was the highest-value movement-subsystem gap.
+
+**Changed (additive) — new `src/training/movement-model.ts` (+ tests, + barrel
+exports in `src/index.ts`):** a pluggable local-movement model.
+- **Token schema + dataset builder:** `MovementToken {tool, action, target?}`,
+  `extractMovementTokens(trajectory)` (derives tokens from `TrajectoryAction`
+  gesture/target metadata), `buildMovementDataset(trajectories)`.
+- **Pluggable backend seam:** `MovementModelBackend` interface (async `train` +
+  `predict`) so a real on-device small model can drop in later.
+- **Default deterministic backend `NGramMovementBackend`:** variable-order
+  Markov model with Katz-style backoff. Layers, longest-context-wins: full-token
+  (`exact`/`backoff`) → **abstract-context→concrete-token** (targets ignored in
+  the context key but a real next movement is predicted — this is what
+  generalizes, e.g. "open menu → tap *any new item* → **confirm**") → unigram →
+  none. Fully deterministic (count-desc, key-asc tie-break) so the same dataset
+  always yields the same model/predictions.
+- **Repeat + generalize:** `generateMovementSequence` autoregressively replays a
+  recorded flow (default stops at the first non-full-token step → faithful,
+  terminating replay; `allowGeneralization:true` explores related movements).
+- **Generalization eval harness (ROADMAP item):** `evaluateMovementModel` does
+  teacher-forced next-movement accuracy on held-out sequences (exact +
+  action-level accuracy + per-layer breakdown); `splitMovementDataset` gives a
+  deterministic (RNG-free) train/held-out split.
+
+**Test results:** new `movement-model.test.ts` ✅ **11/11** (repeat, determinism,
+unigram fallback, untrained→"none", abstract-layer generalization to an unseen
+target, held-out eval). `typecheck:src` ✅ (exit 0). Build ✅ (tsdown, 5 files).
+Full suite: **181/185**; the 4 failures are **pre-existing and flaky** (they fail
+on a clean tree too; app.test alternates 1↔2 failures run-to-run) — see blocker
+below. None are in the code this run touched.
+
+**Blocker found + diagnosed (verified fix, deferred to keep this diff focused):**
+the 3 consistently-failing test files (`operator-runtime`, `server`, `app`) are
+pre-existing env-specific failures across *unrelated* subsystems. I fully
+root-caused the biggest one: `renderLaunchScript`'s `shellQuote` in
+`src/harness/background-tasks.ts` uses the **6-char** replacement `"'"'"'` for
+single quotes, but the POSIX-safe idiom is the **5-char** `'"'"'` — the extra
+leading `"` injects a stray double-quote into every quoted value, corrupting the
+launch script's JSON state payload for any command/path containing a `'` (e.g.
+`printf 'line-1\nline-2\n'`), which then fails `JSON.parse` during recovery.
+Verified the one-char fix (+ making the `sed` `"$$"→pid` substitution use a
+`"__OPENCLAW_PID__"` placeholder so `pid` lands as a JSON number) produces a
+valid state file. I **reverted** it this run because it unmasked a *separate*
+pre-existing race (the detached launch script writes state asynchronously and
+clobbers the test's pre-seeded state), and `server.test` fails on an unrelated
+pairing "degraded vs active" issue — fixing all three cleanly is its own focused
+run. Logged to ROADMAP with the exact fix.
+
+**New idea (logged to ROADMAP):** a *movement macro-suggester* — after training,
+scan recorded trajectories for high-confidence recurring sub-sequences (the
+model already ranks next-move probability), and surface them as one-click
+"replayable macros" with a confidence score, closing the loop from
+capture→train→*offer to automate* rather than only predict.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
