@@ -6,6 +6,63 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-21 (run 9) — Fix launch-script `shellQuote` corruption + de-flake the suite
+
+**Audited:** The test suite's own health. On a fresh `npm install`, `npm test`
+was **flaky/failing** (3–4 of 174 varying per run) — a serious problem for an
+engine that gates pushes on green tests. Root-caused every failure:
+
+**Real product bug — `shellQuote` (src/harness/background-tasks.ts).** The
+POSIX single-quote escape was mis-ordered: `'` → `"'"'"'` instead of the correct
+`'\''`. The shell re-interprets `"'"'"'` as `"'"` (a stray double-quoted quote),
+so **every `'` in a single-quoted payload was corrupted**. The launch script
+wraps its running-state JSON through `shellQuote`, so any background-task command
+containing a `'` or newline (e.g. `printf 'line-1\nline-2\n'`) produced **invalid
+JSON on disk**, which crashed `readState`/recovery (`SyntaxError … in JSON`).
+Fixed to `'\''`. Verified: a real launch script for a hostile command now writes
+JSON that round-trips (`printf 'a: '\''x'\'' "y" $HOME\nb\n'`).
+
+**Secondary bug — pid substitution.** The launch script seeded `pid:"$$"` and
+tried `sed "s/\"$$\"/$$/g"`, but bash expands `$$` in the *pattern* too, so it
+never matched and the running state kept `pid` as the string `"$$"` (breaking
+`isProcessRunning` on recovery of a genuinely-running task). Switched to a
+distinct `__OPENCLAW_PID__` placeholder replaced by numeric `$$`, mirroring the
+existing `__OPENCLAW_STARTED_AT__` seam.
+
+**Test hermeticity.** Four tests (operator-runtime, server ×1 giant test with 3
+runtimes, app ×2) spawned **real detached OS processes** and probed **real
+process liveness** — inherently nondeterministic in the cloud (a short `printf`
+races the assertions; a `sleep 5` writes a `running` state that reads back as
+`missing-process` → `degraded`). Injected deterministic mock spawns via the
+existing runtime DI seam; the watch-active test uses a spawn that synchronously
+seeds `output.log` + reports the process alive so the task stays `running`.
+
+**New capability/DX.** Exposed `backgroundTaskSpawnProcess` +
+`backgroundTaskIsProcessRunning` injection on **`OperatorCliApp`** (previously
+only `StandaloneOperatorRuntime` had this seam), so CLI-level tests can be
+hermetic instead of touching the real OS.
+
+**New regression test** (`background-tasks.test.ts`): renders and **actually
+executes** a launch script for a shell-hostile command and asserts the state
+JSON round-trips. The pre-existing tests used a mock spawn that never runs
+`run.sh`, which is exactly why both bugs slipped through. Confirmed it **fails**
+against the old `shellQuote` and **passes** against the fix.
+
+**Test results:** **175/175, stable across 5 consecutive `npm test` runs** (was
+170–172/174, flaky). `typecheck:src` exit 0. Build ✅. Full `tsc` unchanged at
+125 (pre-existing test-file typing debt, untouched).
+
+**New idea:** launch-script rendering (`shellQuote`, sed placeholder rewriting)
+is correctness- and security-sensitive but was untested because the mock spawn
+skips `run.sh`. Add a tiny **property test** that fuzzes commands with quotes,
+newlines, `$`, backticks, and `\` and asserts the rendered running-state JSON
+parses — turning "does the escaping hold" into a machine-checked invariant. Also:
+add the long-queued `verify` script (`typecheck:src && build && test`) and have
+the engine run it as its pre-push gate so a flaky/failing suite is never pushed
+to `main` again.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

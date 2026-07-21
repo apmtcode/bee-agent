@@ -109,6 +109,51 @@ describe("FileBackgroundTaskStore", () => {
     });
   });
 
+  it("renders a launch script whose running-state JSON round-trips for shell-hostile commands", async () => {
+    // Regression guard for the shellQuote bug: single quotes were mis-escaped
+    // (`"'"'"'` instead of `'\''`), corrupting any single-quoted JSON payload —
+    // notably the running state the launch script writes for commands containing
+    // `'` or newlines. The mock spawn (used everywhere else) never executes
+    // run.sh, so the bug was never exercised. Here we run the real script: it
+    // writes the running state via sed, then python3 re-reads it with json.loads
+    // before writing the completed state, so a clean parse below proves the
+    // sed-written running state was itself valid JSON.
+    const rootDir = await makeTempDir();
+    const filePath = path.join(rootDir, "background-tasks.json");
+    let capturedScript: string | undefined;
+    const store = new FileBackgroundTaskStore(
+      filePath,
+      (command) => {
+        capturedScript = command;
+        return { pid: 4242, unref() {} };
+      },
+      () => true,
+    );
+
+    // Single quotes, double quotes, a `$` and embedded newlines — all of which
+    // must survive intact through shellQuote + the sed pipeline.
+    const command = "printf 'a: '\\''x'\\'' \"y\" $HOME\nb\n'";
+    const task = await store.start({ title: "hostile", command, cwd: rootDir, kind: "task" });
+    if (!capturedScript) {
+      throw new Error("expected the launch script path to be captured");
+    }
+
+    const { execFileSync } = await import("node:child_process");
+    // Run the real launch script to completion (synchronous → no race). It first
+    // writes the running state via sed, then python3 re-reads it (json.loads)
+    // and writes the completed state; a malformed running state would crash the
+    // python3 step, so a clean parse below proves both stages produced valid JSON.
+    execFileSync("bash", [capturedScript], { cwd: rootDir });
+
+    const statePath = path.join(rootDir, task.execution.stateFile);
+    const parsed = JSON.parse(await fs.readFile(statePath, "utf8")) as BackgroundTaskExecutionState;
+    expect(parsed.command).toBe(command);
+    expect(typeof parsed.pid).toBe("number");
+    expect(parsed.pid).toBeGreaterThan(0);
+    expect(parsed.status).toBe("completed");
+    expect(parsed.exitCode).toBe(0);
+  });
+
   it("cancels running tasks and records cancelled state", async () => {
     const rootDir = await makeTempDir();
     const filePath = path.join(rootDir, "background-tasks.json");

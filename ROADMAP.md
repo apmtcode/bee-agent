@@ -4,6 +4,11 @@ Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
 ## Foundations / DX
+- [x] **De-flake the test suite** (2026-07-21, run 9). Suite was flaky/failing
+      (170–172/174) on a fresh install; now **175/175 stable across 5 runs**.
+      Root cause: real launch-script `shellQuote` corruption of single-quoted JSON
+      payloads + four tests spawning real detached OS processes. Fixed the bug and
+      made those tests hermetic via injected mock spawns.
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`
@@ -38,8 +43,19 @@ unchecked items are queued. Keep this richer than you found it each run.
     `skills.executable.*`, `push.subscriptions.*`, `trajectories.*`, `replays.*`,
     `cron.runs`/misc — plus a few genuine test-only typings. Map the rest, then
     fix residual test-only typings.
-- [ ] Add a `verify` npm script (`typecheck && build && test`) and have the
-      engine run it as a pre-push self-check each cycle.
+- [ ] Add a `verify` npm script (`typecheck:src && build && test`) and have the
+      engine run it as a pre-push self-check each cycle. **Bumped in priority
+      (run 9):** the suite silently regressed to flaky/failing between runs 8 and
+      9 because nothing gated it; a `verify` gate would have caught it.
+- [ ] **No-real-spawn guard for tests.** Launch-script `run.sh` execution is now
+      hermetic in the 4 tests fixed in run 9, but nothing prevents a *new* test
+      from constructing a runtime/app without injecting a mock spawn and thus
+      touching the real OS. Add a lint/test helper (or a default test-mode spawn)
+      so cloud/CI runs can never race a detached process again.
+- [ ] **Launch-script escaping property test** (run 9 idea): fuzz commands with
+      quotes, newlines, `$`, backticks, `\` and assert the rendered running-state
+      JSON parses — machine-check the `shellQuote`/sed invariant that two bugs
+      hid in.
 - [x] Interim **source-only typecheck gate** — DONE run 7. `tsconfig.src.json`
       (excludes `**/*.test.ts`) + `typecheck:src` script; passes (exit 0). Next:
       have the engine run it as a per-run pre-push self-check.

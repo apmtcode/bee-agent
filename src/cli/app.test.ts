@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { writeFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -801,7 +802,16 @@ describe("OperatorCliApp", () => {
 
   it("supports session lifecycle, transcript, approvals, pairing, config, and prompt commands", async () => {
     const rootDir = await makeTempDir();
-    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    let remoteSpawnPid = 7100;
+    const app = new OperatorCliApp({
+      rootDir,
+      cwd: rootDir,
+      currentDate: "2026-05-25",
+      // No-op spawn keeps remote-task control state hermetic: a real detached
+      // process would write a "running" state file that reads back as
+      // missing-process, flipping remotes from active to degraded.
+      backgroundTaskSpawnProcess: () => ({ pid: remoteSpawnPid++, unref() {} }),
+    });
     const firstSession = await app.runtime.startSession({ title: "first", cwd: rootDir, agentId: "operator-cli" });
     const secondSession = await app.runtime.startSession({ title: "second", cwd: rootDir, agentId: "operator-cli" });
 
@@ -1063,7 +1073,20 @@ describe("OperatorCliApp", () => {
 
   it("supports background and monitor task commands plus cron commands", async () => {
     const rootDir = await makeTempDir();
-    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    let taskSpawnPid = 7200;
+    const app = new OperatorCliApp({
+      rootDir,
+      cwd: rootDir,
+      currentDate: "2026-05-25",
+      // Deterministic spawn: synchronously seed the task's output file (instead
+      // of racing a real detached shell) and report the process as alive, so the
+      // task stays "running" for watch-active while background-view sees output.
+      backgroundTaskSpawnProcess: (launchScriptPath) => {
+        writeFileSync(path.join(path.dirname(launchScriptPath), "output.log"), "starting task\nok\n");
+        return { pid: taskSpawnPid++, unref() {} };
+      },
+      backgroundTaskIsProcessRunning: () => true,
+    });
     const session = await app.runtime.startSession({ title: "CLI ops", cwd: rootDir, agentId: "operator-cli" });
 
     const startOutput = await app.dispatchSlashCommand(
