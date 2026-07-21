@@ -62,13 +62,36 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      for a real on-device small model. **DONE run 9** —
+      `src/training/movement-model.ts`: `MovementModelBackend` interface +
+      registry, deterministic `NGramMovementBackend` reference/mock, tokenizer
+      and dataset builders from `TrajectorySpan`/`ReplayManifest`. Trains and
+      predicts fully in-process (no GPU/OS).
+- [~] Synthetic event-stream generator to validate capture→dataset→replay
+      round-trips without real OS input. **Partial run 9** — a deterministic
+      `syntheticMacro()` trajectory generator lives in the movement-model tests;
+      promote it to a reusable exported helper and extend it to full
+      observation+transcript replay round-trips.
+- [x] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories. **DONE run 9** — `evaluateMovementModel`
+      scores next-token accuracy, exact-replay rate, and replay fidelity;
+      tested on a held-out related macro.
+- [ ] **Closed-loop replay executor** (run 9 idea): drive the replay engine from
+      a trained model's `generate()` output rather than a fixed recorded
+      manifest, then dry-run it against the simulated device adapter — the link
+      between "predict a movement" and "perform a new but related movement".
+
+## Stabilization
+- [ ] **Fix 3 pre-existing test failures** (surfaced run 9, present on clean
+      tree — not a regression): (1) `operator-runtime.test.ts` background-tasks
+      recovery hits a partial-JSON parse race in `readState` (a real spawned
+      process writes state JSON mid-read); (2) `app.test.ts` expects
+      `control=active` but sees a different control status (timing); (3)
+      `server.test.ts` orchestration result-shape assertion (10 keys vs expected
+      2). These gate the eventual `verify` green-gate — fix before wiring
+      `typecheck && build && test` as a hard pre-push check.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

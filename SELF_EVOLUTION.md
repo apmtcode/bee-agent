@@ -6,6 +6,63 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-21 (run 9) — 🧠 Pluggable in-process movement-model backend + generalization eval (objective 2c+2d)
+
+**Audited:** The local-movement learning subsystem (`src/capture/` + `src/training/`)
+against objective #2's five pieces. Found capture→schema→dataset→replay were
+scaffolded and the training `runner.ts` builds real mlx/axolotl *launch plans*,
+but the **train (2c)** and **generalize (2d)** pieces had no in-process,
+testable implementation — nothing could actually learn from recorded movements
+and predict new ones in the cloud (no GPU/OS). This was the biggest parity gap
+in the standing movement objective and a top ROADMAP item.
+
+**Changed (additive, new file `src/training/movement-model.ts`):**
+- **`MovementModelBackend` interface** — the pluggable seam. Real on-device
+  backends (mlx/axolotl) and the reference/mock backend implement the same
+  `train(dataset) → TrainedMovementModel` contract, with a registry
+  (`registerMovementBackend`/`getMovementBackend`/`listMovementBackends`).
+- **`NGramMovementBackend`** — a deterministic n-gram transition model (the
+  reference "small local model"). Learns, for each context of up to `order`
+  tokens, the next-token distribution; **back-off** from order-k down to unigram
+  makes it *generalize*: a novel prefix ending in a familiar suffix still
+  predicts. Fully deterministic (lexical tie-breaks) → reproducible in CI.
+  `predictNext`/`distribution`/`generate`/`serialize`/`restore`.
+- **Tokenizer + dataset builders** — `normalizeMovementToken` (tool + coarse
+  verb, low-cardinality, no raw-content leakage) and
+  `buildMovementDatasetFrom{Trajectories,Replays}` turn the existing
+  `TrajectorySpan`/`ReplayManifest` schemas into token sequences.
+- **`evaluateMovementModel`** — generalization eval harness: teacher-forced
+  next-token accuracy, exact-replay rate, and token-level replay fidelity on a
+  (held-out) reference set.
+- Barrel exports wired in `src/index.ts`.
+
+**Tests (`movement-model.test.ts`, 15 new, all passing):** token normalization,
+dataset construction from trajectories + replays, **exact replay of a recorded
+macro (2c)**, **generalization to a held-out related macro (2d)** and to unseen
+high-order contexts via back-off, deterministic distribution ordering,
+serialize/restore round-trip, and eval-harness scoring. Uses a deterministic
+synthetic `syntheticMacro()` generator — no real OS input.
+
+**Test results:** `typecheck:src` ✅ CLEAN. Build ✅ (tsdown, 5 files). New
+suite ✅ **15/15**. Full suite **186/189** — the **3 failures are pre-existing
+and unrelated** to this change: verified by `git stash` (same 3 fail on the
+clean tree: a background-tasks real-process partial-JSON race in
+`operator-runtime.test.ts`, and two timing/shape assertions in `app.test.ts`
+`control=active` and `server.test.ts` result-shape). They predate run 9 and
+touch no training/movement code. Pushed to the designated branch
+`claude/peaceful-dirac-af45wu` per the branch requirements.
+
+**New idea:** now that a trained `TrainedMovementModel` exists in-process, add a
+**closed-loop replay executor** that drives the existing replay engine from
+model `generate()` output (instead of a fixed recorded manifest), so bee-agent
+can *synthesize* a novel movement plan for a related goal and dry-run it against
+the simulated device adapter — the missing link between "predict a movement" and
+"perform a new but related movement" end-to-end. Also: quantify the 3
+pre-existing test failures as a ROADMAP stabilization item (they gate the
+`verify` green-gate).
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
