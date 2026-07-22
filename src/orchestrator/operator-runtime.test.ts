@@ -9,6 +9,11 @@ import type { ReviewedExportManifest } from "../training/export-manifest.js";
 
 const tempDirs: string[] = [];
 
+// Deterministic spawn stub: prevents launching a real detached process whose
+// asynchronous state-file write would race the manually-driven writeState calls
+// in these bookkeeping tests. The task still records a pid; nothing runs.
+const stubSpawn = () => ({ pid: 4321, unref() {} });
+
 async function makeTempDir(): Promise<string> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "operator-runtime-"));
   tempDirs.push(dir);
@@ -531,6 +536,7 @@ describe("StandaloneOperatorRuntime", () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
       backgroundTaskIsProcessRunning: () => false,
+      backgroundTaskSpawnProcess: stubSpawn,
     });
     const session = await runtime.startSession({ title: "Tasks", agentId: "main" });
 

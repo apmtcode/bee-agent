@@ -70,6 +70,25 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Generalization eval harness: measure replay fidelity on held-out but
       related synthetic trajectories.
 
+## Reliability / correctness
+- [x] Fix corrupt background-task state JSON (2026-07-22, run 9): `shellQuote` in
+      `background-tasks.ts` used a broken single-quote escape → invalid JSON state
+      file for any command containing a `'`. Fixed + added a real-launch-script
+      regression test. Also de-flaked the suite by threading spawn/liveness
+      testability seams into `OperatorCliApp` (was RED 4/174, now 175/175 stable).
+- [ ] **Harden launch-script state writes** (background-tasks.ts + training/
+      runner.ts). Two latent defects found in run 9:
+  - The `pid: "$$"` → real-pid `sed` substitution is broken (sed `$` anchors +
+    quote nesting); masked for completed tasks (python rewrites pid) but a
+    long-running monitor's initial state keeps `pid:"$$"` (a string), breaking
+    liveness probes.
+  - The initial `printf | sed > state` and the python `write_text` are
+    non-atomic (truncate+write) → a concurrent reader can catch a partial file.
+  - Fix: render the initial running-state via an atomic python writer (temp file
+    + `os.replace`) with pid passed as argv, dropping the fragile sed entirely.
+    Extend the run-9 regression test to cover a non-completing (monitor) task so
+    the initial-state pid/atomicity is asserted directly.
+
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in

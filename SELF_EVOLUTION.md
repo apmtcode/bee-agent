@@ -6,6 +6,66 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-22 (run 9) — 🐛 Fix corrupt background-task state JSON + de-flake the suite
+
+**Audited:** Baseline test health before touching anything. The run-8 log claimed
+**174/174**, but the suite was actually **RED — 4 failing tests** across
+`operator-runtime.test.ts`, `app.test.ts`, and `server.test.ts`. All four traced
+to the background-task subsystem. Root-caused two independent defects (captured
+the actual on-disk corrupt state file to confirm, not guessed):
+
+**Bug 1 — real product bug (invalid JSON in launch-script state writes).**
+`shellQuote()` in `src/harness/background-tasks.ts` used a **broken POSIX
+single-quote escape** — it emitted `"'"'"'` (starts with `"`, never closes the
+open `'`) instead of the correct `'"'"'` (which `src/training/runner.ts` already
+had right). Any background-task **command containing a single quote** (e.g.
+`printf 'line-1\nline-2\n'`) therefore produced a **malformed JSON state file**;
+`readState` → `JSON.parse` threw `SyntaxError: Expected ',' or '}'`, crashing task
+recovery/sync. Fixed the escape to match `runner.ts`. This is a genuine runtime
+bug, not a test artifact.
+
+**Bug 2 — test hermeticity (real detached processes racing manual writes).**
+Three tests started background tasks that spawn a **real detached bash launch
+script**, whose asynchronous state/output write raced (and clobbered) the tests'
+own `writeState`/`writeOutput` calls — surfacing as `status: running` where
+`completed` was expected, or spurious `missing-process` recovery. The runtime
+already exposed a `backgroundTaskSpawnProcess` seam but the tests (and
+`OperatorCliApp`) didn't use it.
+
+**Changed (additive, reversible):**
+- `src/harness/background-tasks.ts`: one-line `shellQuote` escape fix.
+- `src/cli/app.ts`: threaded two testability seams into `OperatorCliApp` —
+  `backgroundTaskSpawnProcess` and new `backgroundTaskIsProcessRunning` — through
+  to the runtime (production default unchanged; both optional).
+- `operator-runtime.test.ts`, `server.test.ts`, `app.test.ts`: injected a
+  deterministic `stubSpawn` (+ `isProcessRunning: () => true` for the CLI
+  task/monitor test, whose task is now driven via manual state) so bookkeeping
+  tests don't race a real child. Left the one genuinely end-to-end case honest.
+- `src/harness/background-tasks.test.ts`: **new regression test** that executes
+  the *real* launch script with a metacharacter-heavy command
+  (`printf '%s' "it's a \$HOME test"`) and asserts the state file is valid JSON
+  that round-trips the command + resolves a numeric pid. Restores the coverage
+  that originally caught Bug 1 (the operator-runtime test that surfaced it now
+  stubs spawn). **Verified it fails on the buggy escape** (same position-310 JSON
+  error) and passes on the fix.
+
+**Test results:** build ✅. `typecheck:src` ✅ (exit 0). Full `tsc` **still 125**
+(no regression; all remaining errors pre-existing in test files). Tests
+**174 → 175 passing** (+1 regression test), **stable across 5+ repeat full-suite
+runs** (previously flaky under parallel load).
+
+**New idea:** the launch script has *two more* latent reliability defects in the
+same area — (a) the `pid: "$$"` → real-pid `sed` substitution is broken (sed `$`
+anchors + quote nesting), masked only because a *completed* task's python writer
+overwrites pid with a real number, so a long-running **monitor's** initial state
+keeps `pid:"$$"` (a string) and would defeat liveness probes; and (b) the initial
+`printf … | sed > state` and python `write_text` are **non-atomic** (truncate +
+write), so a reader can still catch a partial file. Fix both by rendering the
+initial state via an atomic python writer (temp file + `os.replace`) with the pid
+passed as an argv, replacing the fragile sed entirely. Queued in ROADMAP.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

@@ -370,4 +370,48 @@ describe("BackgroundTaskExecutionService", () => {
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
   });
+
+  // Regression: the launch script shell-quotes the command into a JSON state
+  // payload. A broken single-quote escape used to emit invalid JSON (unparseable
+  // state file) whenever the command contained a single quote. Execute the real
+  // launch script with a metacharacter-heavy command and assert the state file
+  // is valid JSON that round-trips the command, and that the pid placeholder
+  // resolves to a number.
+  it("writes valid, round-tripping JSON state for commands with shell metacharacters", async () => {
+    const rootDir = await makeTempDir();
+    // Real spawn + real liveness probe: exercises the generated launch script.
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"));
+    const command = `printf '%s' "it's a \\$HOME test"`;
+    const task = await store.start({ title: "quote smoke", command, cwd: rootDir });
+
+    const state = await waitForState(
+      store,
+      task,
+      (candidate) => candidate.status === "completed" || candidate.status === "failed",
+    );
+
+    // Would have thrown inside readState on the pre-fix corrupt JSON.
+    expect(state.status).toBe("completed");
+    expect(state.command).toBe(command);
+    expect(state.taskId).toBe(task.id);
+    expect(typeof state.pid).toBe("number");
+    await expect(store.executionService.readOutput(task)).resolves.toContain("it's a");
+  });
 });
+
+async function waitForState(
+  store: FileBackgroundTaskStore,
+  task: { execution: { stateFile: string } } & Record<string, unknown>,
+  predicate: (state: BackgroundTaskExecutionState) => boolean,
+  timeoutMs = 8000,
+): Promise<BackgroundTaskExecutionState> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const state = await store.executionService.readState(task as never);
+    if (state && predicate(state)) {
+      return state;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  throw new Error("timed out waiting for background task state");
+}
