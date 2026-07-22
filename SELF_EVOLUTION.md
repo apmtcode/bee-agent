@@ -6,6 +6,82 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-22 (run 9) — Movement-model backend (train→predict→generalize) + real shell-quoting bug fixed
+
+**Audited:** The local-movement learning subsystem (standing objective #2). Its
+five pieces — capture (`src/capture/recorder`, adapters), schema
+(`trajectory`/`replay`), dataset (`training/exporter`), replay
+(`capture/replay-service`) — all exist, but pieces **(c) post-train a local
+model** and **(d) generalize** had no in-process, cloud-testable
+implementation: `LocalAppleSiliconTrainingRunner` only emits shell plans for
+real on-device runtimes (mlx/axolotl), which cannot execute in CI.
+
+**Changed — new `src/training/movement-model.ts` (+ test):** the top roadmap
+item under the movement subsystem — a **pluggable local-model backend seam**
+with a deterministic in-process mock:
+- `MovementModelBackend` interface (`train`/`predict`, `MaybePromise` so a real
+  async on-device backend drops into the same seam).
+- `MarkovMovementBackend` — deterministic first-order Markov backend. Trains a
+  serializable JSON `MovementModel` (start/transition/terminal counts + per-token
+  parameter templates); **no RNG, no wall-clock**, so identical dataset →
+  byte-identical model & predictions.
+- Decoding **consumes** transition counts (follows the most-traveled remaining
+  edge and decrements it) rather than plain argmax — this is what lets a
+  first-order chain faithfully reproduce `move→move→tap` instead of looping on a
+  `move→move` tie.
+- **Generalization**, two concrete + tested forms: `targetOverride` retargets a
+  learned gesture sequence to an unseen UI target; `goalCoordinate` linearly
+  interpolates generated coordinates from the learned start toward a new
+  destination the model never trained on (reproduces the *shape* of a movement
+  against a new goal).
+- `deriveMovementSequence`/`buildMovementDataset` bridge captured
+  `TrajectorySpan` actions → movement dataset; `generateSyntheticMovementDataset`
+  is a seeded (LCG, reproducible) synthetic generator that validates the full
+  capture→dataset→train→predict loop with no real OS input.
+- Exported the surface from `src/index.ts`.
+
+**Real bug found & fixed (`src/harness/background-tasks.ts`):** while running
+the suite in the cloud, 3 integration tests failed with a JSON `SyntaxError` in
+`readState`. Root cause (reproduced deterministically): `shellQuote` escaped an
+embedded single quote as **`"'"'"'`** (stray leading `"`) instead of the correct
+POSIX **`'"'"'`**. Any background-task command containing a single quote (e.g.
+`printf 'x'`) therefore produced an **invalid initial `state.json`** in the
+launch script; the Python completion writer then threw on `json.loads` and,
+under `set -euo pipefail`, the script exited non-zero. It read as *flaky*
+because the completion writer sometimes rewrote the file with valid JSON before
+`readState` ran. (`src/training/runner.ts` already had the correct escape — only
+this copy diverged.) Added a deterministic regression test that renders and
+**executes** the launch script for a single-quote command and asserts the state
+file is valid JSON — it fails with the bug reintroduced, passes with the fix.
+
+**Test results:** `typecheck:src` ✅ (source stays 0 errors). Build ✅. New
+modules **18/18** green in isolation and deterministic. Full suite: the
+shellQuote fix removed the JSON-corruption failure mode; **3 pre-existing
+integration tests remain intermittently red** (2–3 per run) — now failing on an
+*assertion* about background-task recovery `reason`, not JSON parsing. These
+spawn **real subprocesses** and assert on real pid liveness, so they are
+timing-sensitive in this container and were already red on the clean tree before
+this run (documented as a blocker below). Pushed to the assigned feature branch
+`claude/peaceful-dirac-ls01z5`.
+
+**Blocker (queued):** the 3 real-subprocess background-task integration tests
+(`operator-runtime` / `app` / `server`) are flaky in the cloud because they
+launch real processes and assert on pid-based recovery reasons. Two candidate
+fixes: (1) make the launch-script state writes **atomic** (temp file +
+`mv`/`os.replace`) to close any residual read/write race; (2) inject a
+deterministic spawn + `isProcessRunning` into these tests so recovery reasons
+don't depend on real OS process lifecycle.
+
+**New idea:** add a **generalization eval harness** on top of the movement
+model — train on synthetic trajectories toward a set of targets, hold out a
+related target/coordinate, and score replay fidelity (token-sequence match +
+coordinate error) of the model's generalized prediction. This turns "does it
+generalize?" into a tracked metric the engine can watch improve over runs, and
+gives the future real on-device backend an apples-to-apples bar to clear against
+the deterministic mock.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

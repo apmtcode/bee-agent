@@ -62,13 +62,36 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
+      for a real on-device small model. **DONE run 9** —
+      `src/training/movement-model.ts`: `MovementModelBackend` seam +
+      deterministic `MarkovMovementBackend` (train→predict, count-consuming
+      decode, `targetOverride`/`goalCoordinate` generalization). 18/18 tests.
+- [x] Synthetic event-stream generator to validate capture→dataset→replay
+      round-trips without real OS input. **DONE run 9** —
+      `generateSyntheticMovementDataset` (seeded LCG, reproducible) +
+      `deriveMovementSequence`/`buildMovementDataset` bridge from `TrajectorySpan`.
 - [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      related synthetic trajectories. Now unblocked by the movement model — score
+      token-sequence match + coordinate error of a generalized prediction against
+      a held-out target/coordinate, and record it as a tracked metric.
+- [ ] Wire the movement model into the training runner/execution path: let
+      `LocalAppleSiliconTrainingRunner` select a backend (mock in cloud, mlx on
+      device) so the same train→predict API drives both.
+
+## Reliability / test health
+- [x] Fix `shellQuote` single-quote escaping in `src/harness/background-tasks.ts`
+      (`"'"'"'` → `'"'"'`) — **DONE run 9**. The stray leading `"` corrupted the
+      launch script's initial `state.json` for any command containing a single
+      quote, crashing `readState`. Added an executing regression test.
+- [ ] **De-flake the 3 real-subprocess background-task integration tests**
+      (`operator-runtime` / `app` / `server`). They launch real processes and
+      assert on pid-based recovery `reason`, so they are timing-sensitive in the
+      cloud (2–3 fail per run; pre-existing before run 9). Fix options: (1) make
+      launch-script state writes atomic (temp + `mv`/`os.replace`); (2) inject a
+      deterministic spawn + `isProcessRunning` so recovery reasons don't depend
+      on real OS process lifecycle.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
