@@ -6,6 +6,52 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-22 (run 9) — Fix corrupt background-task state JSON + de-flake the suite
+
+**Audited:** Ran the suite on a fresh checkout and found **4 failing tests**
+(the log recorded 174/174 at run 8) — a real regression surfaced by the
+environment, not a logged change. Traced all four to the background-task
+execution subsystem (`src/harness/background-tasks.ts`).
+
+**Real bug found + fixed (highest value):** `renderLaunchScript` wrote the
+initial `running` execution state by piping a shell-quoted JSON blob through
+`printf '%s' … | sed …`. Round-tripping JSON through shell quoting is unsafe:
+any task **command containing a single quote** (e.g. `printf 'line-1\nline-2\n'`)
+reconstructs to **invalid JSON**, so the very next `reconcileTask` →
+`readJsonFile` throws `SyntaxError` and background-task recovery crashes.
+Reproduced deterministically by rendering and running the exact script. Replaced
+the `printf|sed` mangling with a **quoted heredoc** (`<<'OPENCLAW_STATE_JSON'`)
+that emits the JSON byte-for-byte with zero shell interpretation, plus a small
+`python3` initializer (`renderInitialStateWriterPython`) that fills `pid` /
+timestamps — mirroring the already-robust completed/failed writers. Verified the
+new script yields valid JSON even for commands containing `'`, `"`, newlines,
+and backslashes.
+
+**Testability feature (additive):** the four failures all stemmed from tests
+launching a **real detached `run.sh`** that raced their explicit
+`writeState`/`writeOutput` calls and the control-health probe (a live `running`
+state + dead pid reads as `missing-process` → `degraded`). Added
+`backgroundTaskSpawnProcess` / `backgroundTaskIsProcessRunning` passthrough
+options to `OperatorCliApp` (forwarded to `StandaloneOperatorRuntime`), then
+injected deterministic spawn stubs:
+- `operator-runtime.test.ts`: no-op spawn (test drives every state by hand).
+- `server.test.ts`: no-op spawn on all three runtimes (main / drifting /
+  breaker) so only explicitly-written states drive control status.
+- `app.test.ts`: no-op spawn + liveness stub honoring the test's sentinel dead
+  pid (`999999`); the background/monitor test runs the launch script
+  **synchronously** (real output) then pins the state to `running`.
+
+**Test results:** full suite **174/174, deterministic across 5 consecutive
+runs** (was 4 flaky failures). `npm run build` ✅. `typecheck:src` ✅ (0). Full
+`tsc` **125** (unchanged — no new debt). Changes are additive and reversible.
+
+**New idea (logged to ROADMAP):** (1) an **anti-flake pre-push guard** — the
+engine should run the suite 2–3× (or vitest `--retry 0 --repeat`) as part of its
+self-check so races that a single green run hides are caught before push. (2) A
+shared `renderJsonHeredoc(delimiter, value)` shell helper to replace every
+ad-hoc shell-JSON construction, so no future launch-script edit can reintroduce
+this class of escaping bug.
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

@@ -70,6 +70,23 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Generalization eval harness: measure replay fidelity on held-out but
       related synthetic trajectories.
 
+## Reliability / test health
+- [x] **Fix corrupt background-task state JSON** (run 9) — `renderLaunchScript`
+      built the initial `running` state via `printf|sed` shell-mangling that
+      produced invalid JSON for commands containing quotes; replaced with a
+      quoted-heredoc emit + `python3` initializer.
+- [x] **De-flake the background-task tests** (run 9) — added
+      `backgroundTaskSpawnProcess`/`backgroundTaskIsProcessRunning` passthrough
+      on `OperatorCliApp` and injected deterministic spawn stubs so no real
+      detached process races explicit state writes. Suite is now deterministic
+      (174/174 × 5 runs).
+- [ ] **Anti-flake pre-push guard** — have the engine run the suite 2–3× (or
+      vitest `--repeat`) in its self-check so races hidden by a single green run
+      are caught before push.
+- [ ] **Shared `renderJsonHeredoc(delimiter, value)` helper** — replace every
+      ad-hoc shell-JSON construction in launch scripts with one audited helper
+      so the quote-escaping bug class can't reappear.
+
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in

@@ -1,4 +1,5 @@
-import { execFile } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
+import { readFileSync, writeFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -801,7 +802,21 @@ describe("OperatorCliApp", () => {
 
   it("supports session lifecycle, transcript, approvals, pairing, config, and prompt commands", async () => {
     const rootDir = await makeTempDir();
-    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    // Deterministic background-task execution: a no-op spawn (no real detached
+    // process) hands out small, live pids, while the liveness probe reports
+    // those as running and the test's sentinel dead pid (999999, written below
+    // to simulate a crashed task) as not running. This test asserts
+    // control=active for freshly started tasks and only expects a failure after
+    // it explicitly writes that sentinel state — a live process would race and
+    // flake those assertions.
+    let spawnedPid = 5000;
+    const app = new OperatorCliApp({
+      rootDir,
+      cwd: rootDir,
+      currentDate: "2026-05-25",
+      backgroundTaskSpawnProcess: () => ({ pid: ++spawnedPid, unref: () => {} }),
+      backgroundTaskIsProcessRunning: (pid) => pid < 900000,
+    });
     const firstSession = await app.runtime.startSession({ title: "first", cwd: rootDir, agentId: "operator-cli" });
     const secondSession = await app.runtime.startSession({ title: "second", cwd: rootDir, agentId: "operator-cli" });
 
@@ -1063,7 +1078,38 @@ describe("OperatorCliApp", () => {
 
   it("supports background and monitor task commands plus cron commands", async () => {
     const rootDir = await makeTempDir();
-    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    // Run the launch script synchronously instead of as a detached process, so
+    // its output file is guaranteed to exist before the assertions read it (a
+    // detached process races those reads). This exercises the real `run.sh`
+    // end to end — including the JSON state writer. The script exits and marks
+    // the state "completed", but this test expects the task to remain the
+    // session's active task through the watch-active/stop assertions, so the
+    // state is rewritten back to "running" and the liveness probe reports the
+    // pid as alive.
+    let spawnedPid = 424200;
+    const app = new OperatorCliApp({
+      rootDir,
+      cwd: rootDir,
+      currentDate: "2026-05-25",
+      backgroundTaskSpawnProcess: (command, args, options) => {
+        const pid = ++spawnedPid;
+        try {
+          execFileSync(command, args ?? [], { cwd: options.cwd, env: options.env, stdio: "ignore" });
+        } catch {
+          // A non-zero exit is captured by the script's own state writer.
+        }
+        const statePath = path.join(path.dirname(command), "state.json");
+        try {
+          const state = JSON.parse(readFileSync(statePath, "utf8"));
+          const running = { ...state, status: "running", pid, completedAt: undefined, exitCode: undefined };
+          writeFileSync(statePath, `${JSON.stringify(running, null, 2)}\n`);
+        } catch {
+          // If the script never wrote a state file, the store's own recovery path applies.
+        }
+        return { pid, unref: () => {} };
+      },
+      backgroundTaskIsProcessRunning: () => true,
+    });
     const session = await app.runtime.startSession({ title: "CLI ops", cwd: rootDir, agentId: "operator-cli" });
 
     const startOutput = await app.dispatchSlashCommand(

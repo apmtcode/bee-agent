@@ -528,9 +528,15 @@ describe("StandaloneOperatorRuntime", () => {
   });
 
   it("starts, syncs, recovers, lists, and cancels background tasks", async () => {
+    // Inject a no-op spawn so no real detached `run.sh` process runs and races
+    // against the explicit writeState/writeOutput calls below. This test drives
+    // every execution state by hand; a live background process would be
+    // non-deterministic interference (it writes the same state.json).
+    let spawnedPid = 4200;
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
       backgroundTaskIsProcessRunning: () => false,
+      backgroundTaskSpawnProcess: () => ({ pid: ++spawnedPid, unref: () => {} }),
     });
     const session = await runtime.startSession({ title: "Tasks", agentId: "main" });
 
