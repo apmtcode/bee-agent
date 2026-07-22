@@ -70,6 +70,26 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Generalization eval harness: measure replay fidelity on held-out but
       related synthetic trajectories.
 
+## Reliability / correctness
+- [x] **Fix `shellQuote` state-corruption bug** (2026-07-22, run 9). The
+      background-task launch script's single-quote escape was transposed
+      (`"'"'"'` vs the correct `'"'"'`), corrupting the state JSON for any
+      command containing a single quote. Fixed + round-trip regression test.
+- [x] **De-flake the background-task tests** (2026-07-22, run 9). Three
+      runtime-level tests spawned real detached processes that raced their own
+      assertions; injected deterministic spawn stubs (and threaded the spawn
+      hooks through `OperatorCliApp`). Suite now 176/176, 5× consecutive.
+- [ ] **Robust launch-script state writer.** Replace the initial running-state
+      `printf | sed "s/\"\$\$\"/$$/g"` pipeline in
+      `renderLaunchScript` with the same `python3` json writer already used for
+      completed/failed transitions (pass base payload as argv; python fills
+      pid/timestamps). Removes the last sed/printf substitution fragility — a
+      command containing `__OPENCLAW_STARTED_AT__` or `"$$"` still mis-renders
+      today even with the corrected quoting.
+- [ ] **Flake gate** (`scripts/verify.mjs`): run the suite N× in a row and fail
+      on any nondeterministic failure, wired into the engine's pre-push
+      self-check. Would have caught run 9's flakiness automatically.
+
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in

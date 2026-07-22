@@ -6,6 +6,60 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-22 (run 9) — Fix a real state-corruption bug (`shellQuote`) + de-flake the test suite
+
+**Audited:** Ran the suite fresh and found the baseline was **not green** —
+3–4 tests failed *nondeterministically* (failure count varied 3↔4 across runs),
+despite run 8 logging "174/174". Root-caused two independent problems.
+
+**Bug 1 — production state corruption (`src/harness/background-tasks.ts`).**
+Background tasks launch a detached bash script that writes their execution-state
+JSON. The `shellQuote()` helper used to embed the (JSON-encoded) command into
+that script had its POSIX single-quote escape **transposed**: it emitted the
+6-char `"'"'"'` instead of the correct 5-char `'"'"'`. Consequence: **any**
+task whose command contains a single quote (e.g. `printf 'x'`) produced a
+*malformed* state file, so every later `readState`/`sync`/`recover` on that task
+threw `SyntaxError: ... in JSON`. Reproduced end-to-end (rendered the exact
+launch script, ran it, watched `JSON.parse` fail at the `command` field), then
+fixed the idiom. Verified the corrected quoting round-trips every awkward input
+(single/double quotes, `$$`, backticks, backslashes, empty) byte-for-byte
+through bash. Exported `shellQuote` and added a focused round-trip regression
+test.
+
+**Bug 2 — flaky tests spawning real subprocesses.** Three runtime-level tests
+(`operator-runtime`, `control-plane/server`, `cli/app`) constructed a runtime
+with `backgroundTaskIsProcessRunning: () => false` but **no** spawn stub, so they
+launched *real* detached processes that raced the tests' own manual state
+writes (hence the flakiness, and the state-corruption surfacing intermittently).
+Fixes, all additive:
+- Threaded `backgroundTaskSpawnProcess` / `backgroundTaskIsProcessRunning`
+  through `OperatorCliApp` options → the runtime (production defaults unchanged;
+  the app is now deterministically testable).
+- Injected deterministic spawn stubs (stub pid, no real process) into the
+  affected tests. Where a test drives liveness-dependent state, expressed it
+  precisely (`isProcessRunning: (pid) => pid !== 999999` for the app's
+  degrade-then-repair flow; explicit output feed where a test relied on a real
+  `printf`'s stdout; local `process.kill` mocks around the two stop calls).
+
+**Test results:** full suite **176/176 passing, 5× consecutive** (was 174 with
+3–4 flaky failures; +2 new `shellQuote` tests). `npm run build` ✅.
+`npm run typecheck:src` ✅ (exit 0). Full `tsc` unchanged at **125** (no
+regression; still entirely test-file debt). No production behaviour change beyond
+the quoting fix.
+
+**New idea (logged to ROADMAP):** the launch script still writes its *initial*
+running-state via a fragile `printf '%s' … | sed "s/\"\$\$\"/$$/g"` pipeline —
+even with correct quoting this breaks if a command literally contains
+`__OPENCLAW_STARTED_AT__` or the `"$$"` sentinel, and depends on `sed`
+metacharacter behaviour. It should use the *same* robust `python3` state-writer
+already used for the completed/failed transitions (pass the base payload as
+argv, let python fill pid/timestamps and `json.dump`), removing the sed/printf
+substitution entirely. Bigger idea: a tiny `scripts/verify.mjs` that runs the
+suite **N× in a row** as a flake gate, so nondeterministic regressions like this
+are caught by the engine's pre-push self-check instead of by luck.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

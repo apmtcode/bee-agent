@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -5,6 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   BackgroundTaskExecutionService,
   FileBackgroundTaskStore,
+  shellQuote,
   type BackgroundTaskExecutionState,
 } from "./background-tasks.js";
 
@@ -369,5 +371,34 @@ describe("BackgroundTaskExecutionService", () => {
     await expect(fs.readFile(path.join(rootDir, task.execution.launchScript), "utf8")).resolves.toContain("bash -lc");
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
+  });
+});
+
+describe("shellQuote", () => {
+  // Every string, once quoted, must round-trip through the shell byte-for-byte.
+  // A transposed single-quote escape used to corrupt values containing quotes,
+  // which produced malformed background-task state JSON at runtime.
+  const cases = [
+    "printf 'line-1\nline-2\n'",
+    "it's a 'test' with 'many' quotes",
+    'echo "double" and \'single\'',
+    "special $$ `backtick` \\ end",
+    "no-quotes-plain",
+    "",
+    "tab\tand newline\nembedded",
+  ];
+
+  it("produces a single-quoted literal that round-trips through bash", () => {
+    for (const value of cases) {
+      const roundTripped = execFileSync("bash", ["-c", `printf '%s' ${shellQuote(value)}`]).toString();
+      expect(roundTripped).toBe(value);
+    }
+  });
+
+  it("uses the correct POSIX escape and never emits a bare unescaped quote", () => {
+    // Sanity on the idiom itself: the only way a raw single quote appears is as
+    // part of the 5-char `'"'"'` escape, never standalone inside the payload.
+    expect(shellQuote("a'b")).toBe(`'a'"'"'b'`);
+    expect(shellQuote("plain")).toBe("'plain'");
   });
 });

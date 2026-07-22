@@ -793,6 +793,11 @@ function renderStateWriterPython(status: BackgroundTaskExecutionState["status"])
   ];
 }
 
-function shellQuote(value: string): string {
-  return `'${value.replaceAll(`'`, `"'"'"'`)}'`;
+export function shellQuote(value: string): string {
+  // POSIX single-quote escaping: close the quote, emit a literal quote via a
+  // double-quoted section, then reopen. The correct 5-char idiom is `'"'"'`.
+  // (A transposed `"'"'"'` silently corrupts any value containing a single
+  // quote — e.g. a task command like `printf 'x'` — producing malformed state
+  // JSON that later fails to parse.)
+  return `'${value.replaceAll(`'`, `'"'"'`)}'`;
 }
