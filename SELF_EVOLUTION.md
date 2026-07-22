@@ -6,6 +6,72 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-22 (run 9) — 🧠 In-process pluggable movement-model backend (objective #2c/d)
+
+**Audited:** The local-movement learning subsystem (standing objective #2) end to
+end — `src/capture/` (device/os adapters → trajectory → replay) and
+`src/training/` (exporter → job manifest → **runner**). Found the critical gap:
+the training runner (`LocalAppleSiliconTrainingRunner`) only *emits a plan +
+shell script* that runs MLX/axolotl on the user's Apple-Silicon machine. Nothing
+in the pipeline can actually **train a model or predict a movement in-process**,
+so objective #2(c) "post-train a model to repeat recorded movements" and #2(d)
+"generalize to new-but-related movements" were untestable in the cloud. The two
+starred ROADMAP items (pluggable backend + generalization) were both blocked on
+this missing seam.
+
+**Changed (additive) — new `src/training/movement-model.ts`:**
+- **`MovementModelBackend` interface** — the pluggable seam. A real on-device
+  small model (MLX LoRA) is a drop-in alternative; it consumes the exact token
+  vocabulary produced here.
+- **Token layer:** `MovementToken` (tool/gesture/direction/target) +
+  `encodeMovementToken` (canonical vocab symbol) + `actionToMovementToken`
+  (prefers structured device-adapter metadata, falls back to parsing the human
+  summary so legacy/hand-authored trajectories still tokenize) +
+  `buildMovementDataset` (ts-ordered, review-redaction-aware, drops empties).
+- **`MarkovMovementBackend`** — a deterministic, zero-dependency variable-order
+  Markov model with Katz-style **back-off**. Argmax with a stable lexicographic
+  tie-break → *no randomness*, so it trains/evaluates identically in cloud & CI.
+  - **Repeat (2c):** greedy `generate()` from a seen prefix reproduces the
+    recorded continuation (highest-order context matches → its top successor is
+    the recorded one).
+  - **Generalize (2d):** an unseen prefix that shares a shorter *suffix* with
+    training still predicts, because `predictNext()` backs off through
+    progressively shorter contexts; `matchedOrder` reports which order fired.
+- **`SerializedMovementModel` + `toJSON`/`fromJSON`** — a persistable model
+  artifact (round-trip tested).
+- Fixed a real bug during authoring: context keys were joined with an empty
+  delimiter (ambiguous multi-token contexts) → switched to a U+0001 control
+  delimiter that can't appear in a token symbol.
+- Barrel-exported all public types/fns from `src/index.ts`.
+
+**Test results:** new `movement-model.test.ts` — **12/12 passing** (token
+derivation incl. metadata-vs-summary + past-tense normalization; dataset
+ordering/redaction; repeat; determinism; frequency preference; back-off
+generalization; unigram fallback; empty-model safety; JSON round-trip).
+`typecheck:src` ✅ CLEAN. `npm run build` ✅. **Zero regressions** — verified the
+4 pre-existing full-suite failures (`app.test.ts`, `server.test.ts`,
+`operator-runtime.test.ts` — all in the timing-sensitive background-task / monitor
+/ cron / remote-pairing paths) reproduce identically on a clean tree with my
+files removed and the barrel reverted. They are flaky/environment-dependent
+(count fluctuates 1–4 across runs), predate this run, and are unrelated to this
+change.
+
+**Blocker logged:** the full suite is no longer deterministically green — the
+pairing/remote-control + background-task tests are flaky. Root-causing them is a
+good candidate for a future run (see ROADMAP) so the engine's pre-push gate can
+trust `npm test` again.
+
+**New idea:** a **generalization-fidelity eval harness** — hold out related
+synthetic trajectories, train on the rest, and score `predictNext` accuracy vs.
+back-off order to get a single "generalization" number the engine can track run
+over run (regression signal for the movement subsystem). Second idea: wire this
+backend into `LocalTrainingExecutionService` as the *cloud/mock* runtime so a
+job can "complete" in CI by training the Markov model and emitting a real (if
+small) artifact, making the whole capture→train→infer loop exercisable end to end
+without Apple-Silicon.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

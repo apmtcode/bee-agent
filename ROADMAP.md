@@ -59,16 +59,35 @@ unchecked items are queued. Keep this richer than you found it each run.
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
 (exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
-      objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Inventory what `src/capture` + `src/training` already implement vs. the
+      objective's five pieces — DONE run 9. Gap: everything up to *dataset export*
+      existed, but the "train + infer" pieces were external-only (runner emits an
+      MLX/axolotl shell plan; nothing trainable/inferable in-process).
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
+      for a real on-device small model — DONE run 9. `src/training/movement-model.ts`:
+      `MovementModelBackend` interface + `MarkovMovementBackend` (variable-order
+      Markov w/ back-off, deterministic, zero-dep) + token layer + dataset builder
+      + JSON artifact round-trip. Repeat (2c) and generalize (2d) both tested.
 - [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      round-trips without real OS input. (Token/dataset layer now exists in
+      `movement-model.ts`; next: drive it from adapter-level synthetic events.)
+- [ ] Generalization eval harness: hold out related synthetic trajectories, train
+      on the rest, score `predictNext` accuracy vs. back-off order → a single
+      trackable "generalization fidelity" number the engine records each run.
+- [ ] Wire `MarkovMovementBackend` into `LocalTrainingExecutionService` as the
+      cloud/mock runtime so a training job can "complete" in CI (train the model,
+      emit a small real artifact) — makes capture→train→infer exercisable end to
+      end without Apple-Silicon hardware.
+
+## Test health
+- [ ] **Root-cause the flaky full-suite failures** (surfaced run 9). On a clean
+      tree, `npm test` fails 1–4 tests non-deterministically, all in
+      timing/environment-sensitive paths: `app.test.ts` (background/monitor/cron
+      commands), `server.test.ts` (remote/platform-control pairing),
+      `operator-runtime.test.ts` (background task start/sync/recover/cancel). Make
+      them deterministic (inject a clock / await task settlement) so the engine's
+      pre-push gate can trust `npm test` again.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
