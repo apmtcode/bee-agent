@@ -370,4 +370,43 @@ describe("BackgroundTaskExecutionService", () => {
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
   });
+
+  it("runs the real launch script and persists a numeric pid via atomic writes", async () => {
+    // Uses a real detached process (no mock spawn) to exercise renderLaunchScript
+    // end-to-end. Regression guard for two prior bugs:
+    //   1. the persisted pid was the literal string "$$" (a broken `sed`
+    //      substitution), so `isProcessRunning(state.pid)` always saw a live task
+    //      as dead; it must be a real number now.
+    //   2. state was written non-atomically (`> file`), so a concurrent reader
+    //      could parse a half-written file and throw. Writes go through a temp
+    //      file + os.replace, so every observed state must be valid JSON.
+    const rootDir = await makeTempDir();
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"));
+    const task = await store.start({ title: "Quick", command: "true", cwd: rootDir, kind: "task" });
+    const statePath = path.join(rootDir, task.execution.stateFile);
+
+    let final: BackgroundTaskExecutionState | undefined;
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      let raw: string;
+      try {
+        raw = await fs.readFile(statePath, "utf8");
+      } catch {
+        continue; // state file not written yet
+      }
+      // Must never observe a partial/corrupt file — the atomic-write guarantee.
+      const parsed = JSON.parse(raw) as BackgroundTaskExecutionState;
+      expect(typeof parsed.pid).toBe("number");
+      expect(Number.isFinite(parsed.pid)).toBe(true);
+      if (parsed.status !== "running") {
+        final = parsed;
+        break;
+      }
+    }
+
+    expect(final).toBeDefined();
+    expect(final?.status).toBe("completed");
+    expect(final?.exitCode).toBe(0);
+    expect(typeof final?.pid).toBe("number");
+  });
 });

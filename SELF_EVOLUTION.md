@@ -6,6 +6,62 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-22 (run 9) — 🐛 Fix background-task launch script: real numeric pid + atomic state writes (suite was RED)
+
+**Audited:** Ran the baseline build+test gate first (per the standing procedure) and
+found the suite **RED**: 3 tests failing (`operator-runtime`, `control-plane/server`,
+`cli/app`), all in the background-task subsystem — a regression from the 174/174 the
+log last recorded. Root-caused two genuine production bugs in
+`src/harness/background-tasks.ts`'s `renderLaunchScript` (the shell script a launched
+background task runs), reproduced by rendering + executing the real script:
+
+1. **Persisted pid was the literal string `"$$"`, not a number.** The initial
+   "running" state was written via `printf '%s' '<json>' | sed "…; s/\"\$\$\"/$$/g"`.
+   The embedded `"` in the sed pattern *closed the shell double-quote*, so the pid
+   substitution never ran and the state file carried `"pid":"$$"`. Every
+   `isProcessRunning(state.pid)` then hit `Number.isFinite("$$") === false` → a
+   live task was always reported **missing-process/dead**. This is exactly why
+   `cli/app`'s `control=active` assertion flipped to
+   `control=degraded:…background task missing-process`.
+2. **Non-atomic state writes.** Both the `> file` truncate-write and the Python
+   `write_text` left a window where a concurrent `readState` parsed a half-written
+   file and threw `SyntaxError: Expected ',' or '}' …` — the crash seen in
+   `operator-runtime`'s recovery test.
+
+**Changed (additive):**
+- `renderLaunchScript` now assembles the initial "running" state **inside Python**
+  from individually shell-quoted scalars (taskId, kind, outputFile, cwd, command) —
+  never a pre-serialized JSON blob passed as one shell arg — writing `pid` as a real
+  `int($$)`. The fragile `sed` is gone.
+- All three state writes (running / completed / failed) now go through a shared
+  `PYTHON_ATOMIC_WRITE` helper (temp file + `os.replace`), closing the partial-read
+  window.
+- Made the flaky tests deterministic (matching the established `background-tasks.test.ts`
+  pattern): injected a **no-op `backgroundTaskSpawnProcess`** into the runtimes that
+  drive execution state manually via `writeState` (server.test breaker/drift/main,
+  operator-runtime recovery). A real detached launch script writes its own "running"
+  state asynchronously, which races with manual state control — the true source of
+  the `mixed`-vs-`degraded` breaker flakiness.
+- **New regression test** (`background-tasks.test.ts`): runs the *real* launch script
+  end-to-end and asserts (a) the persisted pid is a finite number, (b) every observed
+  state file is valid JSON (atomic-write guarantee), and (c) a successful command
+  reaches `completed`/exit 0.
+
+**Test results:** `npm run build` ✅, `npm run typecheck:src` ✅ (exit 0, source stays
+clean), full `tsc` **125** (unchanged — new test typechecks clean). Suite **171/174 →
+175/175**, verified stable across 5 consecutive full runs + isolated stress runs of the
+two real-process tests. Pushed to `main`.
+
+**New idea:** the launch script now hard-depends on `python3` + `bash` at runtime with
+no capability probe — a host lacking `python3` would fail every background task opaquely.
+Add a one-time `BackgroundTaskExecutionService` preflight that checks for `python3`/`bash`
+and surfaces a clear, actionable error (or falls back to a pure-Node state writer) instead
+of a raw non-zero exit. Bigger: port state-file writing entirely into Node (write the
+running state from `launch()` before spawning, have the child only signal completion) to
+drop the interpreter dependency and shrink the trusted shell surface.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

@@ -4,6 +4,13 @@ Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
 ## Foundations / DX
+- [x] **Fix background-task launch script** (2026-07-22, run 9) — persisted pid was
+      the string `"$$"` (broken `sed` quote-nesting) so live tasks read as dead;
+      state writes were non-atomic so `readState` could crash on a partial file.
+      Now assembles the running state in Python from shell-quoted scalars with a
+      numeric pid and writes every state atomically (temp + `os.replace`). Flaky
+      real-process tests made deterministic with a no-op spawn; new end-to-end
+      regression test added. Suite 171/174 → 175/175.
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`
@@ -71,6 +78,14 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
       related synthetic trajectories.
 
 ## Innovation backlog
+- [ ] **Drop the runtime `python3`/`bash` dependency from background tasks**
+      (surfaced run 9): the launch script now hard-requires `python3` + `bash` to
+      write state, with no capability probe — a host lacking either fails every
+      background task opaquely. Short term: a one-time preflight in
+      `BackgroundTaskExecutionService` that verifies both and raises a clear,
+      actionable error. Long term: write the running state from `launch()` in Node
+      *before* spawning and have the child only signal completion, dropping the
+      interpreter dependency and shrinking the trusted shell surface.
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in
       project health over time.

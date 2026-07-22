@@ -22,6 +22,18 @@ afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })));
 });
 
+// A no-op background-task spawn: returns a stable pid but never runs the launch
+// script, so the *only* execution-state files are the ones a test writes
+// explicitly via `writeState`. Tests that reconcile background-task health must
+// use this (instead of a real detached process) to stay deterministic — a real
+// launch script writes its own "running" state asynchronously, which races with
+// the test's manual state control and makes health assertions flaky.
+let stubbedPid = 40000;
+function noopBackgroundSpawn(): { pid: number; unref(): void } {
+  stubbedPid += 1;
+  return { pid: stubbedPid, unref() {} };
+}
+
 const exportManifest: ReviewedExportManifest = {
   version: 1,
   createdAt: "2026-01-01T00:00:00.000Z",
@@ -84,6 +96,7 @@ describe("OperatorControlPlaneServer", () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir,
       backgroundTaskIsProcessRunning: () => false,
+      backgroundTaskSpawnProcess: noopBackgroundSpawn,
       delivery: new OperatorDeliveryService(rootDir, {
         sendBrowserPush: async () => {},
       }),
@@ -953,6 +966,7 @@ describe("OperatorControlPlaneServer", () => {
     const driftingRuntime = new StandaloneOperatorRuntime({
       rootDir: driftingRootDir,
       backgroundTaskIsProcessRunning: () => false,
+      backgroundTaskSpawnProcess: noopBackgroundSpawn,
     });
     const driftingServer = new OperatorControlPlaneServer({ runtime: driftingRuntime });
     const driftingBootstrap = await driftingServer.handle({
@@ -1019,6 +1033,7 @@ describe("OperatorControlPlaneServer", () => {
     const breakerRuntime = new StandaloneOperatorRuntime({
       rootDir: breakerRootDir,
       backgroundTaskIsProcessRunning: () => false,
+      backgroundTaskSpawnProcess: noopBackgroundSpawn,
     });
     const breakerServer = new OperatorControlPlaneServer({ runtime: breakerRuntime });
     const breakerOne = await breakerServer.handle({
