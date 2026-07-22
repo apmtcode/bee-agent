@@ -4,6 +4,16 @@ Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
 ## Foundations / DX
+- [x] **Fix background-task launch-script bugs + de-flake the suite** (2026-07-22,
+      run 9). Two real production bugs in `src/harness/background-tasks.ts`:
+      `shellQuote` corrupted commands containing `'` (bad `"'"'"'` escape), and the
+      pid placeholder was never substituted (`"pid":"$$"` → every task misread as
+      missing-process). Also made both on-disk state writers atomic and injected
+      deterministic fake spawns into the racy tests. Suite **175/175**, stable.
+- [ ] **Launch-script quoting fuzz** — render `renderLaunchScript` for adversarial
+      commands (`'`, `"`, `$`, newlines, backticks, `;`, `\`), run each, and assert
+      the state file's `command` byte-for-byte equals the input. Catches the whole
+      quoting-layer regression class, not just the two instances fixed in run 9.
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`

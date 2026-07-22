@@ -6,6 +6,68 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-22 (run 9) — 🐛 Two real launch-script bugs fixed; suite fully green + stable
+
+**Audited:** The actual `npm test` result at HEAD — found the suite was **RED (4
+failing)** in this environment, not the "174/174" the log claimed. Root-caused
+each failure instead of trusting the log. Two were genuine production bugs in the
+background-task launch script (`src/harness/background-tasks.ts`); the rest were
+tests that silently depended on the launched subprocess *not* running.
+
+**Bug 1 — `shellQuote` corrupted any command containing a single quote.** The
+single-quote escape used `"'"'"'` (6 chars, wrongly starting with `"`) instead of
+the canonical POSIX `'"'"'` (5 chars). The stray leading `"` injected a rogue
+double-quote into the launched command *and* into the JSON state file — e.g.
+`printf 'line-1\nline-2\n'` produced `"command":"printf "'line-1…` which fails to
+parse (`Expected ',' or '}'` mid-string). This corrupted every background command
+that contained a `'`. (`src/training/runner.ts` already had the correct form —
+`background-tasks.ts` had drifted.)
+
+**Bug 2 — the pid placeholder was never substituted.** The initial "running"
+state was written via `printf … | sed "s/\"\$\$\"/$$/g"`. Inside the
+double-quoted sed script, the literal `"` around `$$` closed and reopened the
+shell quoting, so `$$` expanded to the pid and the pattern degraded to a no-op —
+leaving `"pid":"$$"` (a *string*) on disk. `isProcessRunning("$$")` then returns
+false via `Number.isFinite`, so **every** launched task was misreported as a
+"missing process" → sessions/remotes flapped to `degraded`. Fixed by switching to
+single-quoted sed scripts (`-e 's/…/'"$started_at"'/g' -e 's/"__OPENCLAW_PID__"/'"$$"'/g'`)
+and a clear `__OPENCLAW_PID__` placeholder. Verified end-to-end: state now carries
+a numeric pid matching the spawned shell.
+
+**Robustness — atomic state writes.** Both on-disk state writers (the shell
+`printf|sed` and the Python completion writer) wrote in place, so a concurrent
+reader could observe a truncated file. Both now write a sibling `.tmp` and
+`mv -f` / `os.replace()` — readers only ever see a complete JSON document,
+matching the guarantee `writeJsonAtomic` already gives the TS side.
+
+**Test hardening (determinism, not intent changes).** Three tests spawned *real*
+detached shells and then manually drove state — a race the "passing" env only
+survived because its subprocess never wrote state in time. Injected a deterministic
+fake `backgroundTaskSpawnProcess` (returns a pid, launches nothing) into the
+`operator-runtime` background-task test and the three `server.test` runtimes, so
+state is fully test-controlled. `app.test` needed no injection — Bug 2's fix alone
+de-flaked it (its `printf ok` tasks are now correctly seen as running).
+
+**New regression test** (`background-tasks.test.ts`): launches a real command
+containing single quotes via the default spawn and asserts the state file is valid
+JSON with a **numeric** pid, the command round-trips intact, and it reaches
+`completed`/exit 0 — locking in both bug fixes end-to-end.
+
+**Test results:** `npm test` **175/175** (was 170/4-failing), **stable across 5+
+consecutive full runs** (previously flaky). `typecheck:src` ✅ exit 0. Full
+`typecheck` unchanged at **125** (no regression). Build ✅.
+
+**New idea:** the launch script is assembled by string concatenation with three
+distinct quoting layers (TS template → shell → sed/JSON), which is exactly how
+both bugs hid. Add a tiny unit test that renders `renderLaunchScript` for a
+battery of adversarial commands (embedded `'`, `"`, `$`, newlines, backticks,
+`;`, `\`) and asserts the produced script, when run, yields a state file whose
+`command` field byte-for-byte equals the input. A property-style fuzz over the
+quoting layers would catch this whole *class* of regression, not just the two
+instances fixed here.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

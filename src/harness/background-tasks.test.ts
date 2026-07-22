@@ -353,6 +353,48 @@ describe("FileBackgroundTaskStore", () => {
     ]);
     await expect(reloaded.get(other.id)).resolves.toMatchObject({ id: other.id, status: "running" });
   });
+
+  it("launches a real command with single quotes and records a numeric pid and terminal state", async () => {
+    // End-to-end guard against two launch-script bugs:
+    //   1. shellQuote's single-quote escaping (a command containing `'` must not
+    //      corrupt the JSON state file), and
+    //   2. the pid placeholder substitution (state.pid must be the numeric shell
+    //      pid, not the literal string "$$" — otherwise isProcessRunning() treats
+    //      every task as a missing process).
+    // Uses the DEFAULT spawn so the actual bash launch script runs.
+    const rootDir = await makeTempDir();
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"));
+
+    const task = await store.start({
+      sessionId: "sess-real",
+      title: "Echo with quotes",
+      command: "printf 'hello '\\''world'\\''\\n'",
+      cwd: rootDir,
+      kind: "task",
+    });
+
+    // Poll until the detached launch script writes a terminal state (it must be
+    // valid JSON at every read — the writes are atomic).
+    let state: BackgroundTaskExecutionState | undefined;
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      state = await store.executionService.readState(task);
+      if (state && state.status !== "running") {
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+
+    expect(state).toBeDefined();
+    expect(state?.status).toBe("completed");
+    expect(state?.exitCode).toBe(0);
+    // The pid must be a finite number, never the unsubstituted "$$" placeholder.
+    expect(typeof state?.pid).toBe("number");
+    expect(Number.isFinite(state?.pid)).toBe(true);
+    // The command (single quotes and all) must round-trip intact.
+    expect(state?.command).toBe("printf 'hello '\\''world'\\''\\n'");
+    // isProcessRunning must accept the recorded numeric pid without throwing.
+    expect(() => store.executionService.isProcessRunning(state!.pid)).not.toThrow();
+  });
 });
 
 describe("BackgroundTaskExecutionService", () => {
