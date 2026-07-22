@@ -6,6 +6,67 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-22 (run 9) — 🧠 Trainable local movement-model backend (objective #2c/#2d closed-loop)
+
+**Audited:** The local-movement learning subsystem (`src/capture/` + `src/training/`)
+against objective #2's five pieces. Found capture → schema → dataset (exporter) →
+replay all present, but the **model layer was missing**: `runner.ts` only emits
+*external* shell commands (`mlx_lm.lora`, `axolotl`) that cannot run or be tested
+in the cloud. So objective #2(c) "post-train a local model to repeat recorded
+movements" and #2(d) "generalize to related movements" had no in-process,
+testable implementation — exactly the roadmap's queued "pluggable local-model
+backend + deterministic mock backend" and "synthetic event-stream generator".
+
+**Changed (additive, 3 new modules + tests):**
+- `src/training/movement-model.ts` — the pluggable model seam: `MovementModelBackend`
+  (train/load) and `MovementModel` (predictNext/generate/serialize) interfaces;
+  a movement tokenizer (`tokenizeReplayEvent`/`tokenizeTrajectory` → verb tokens
+  like `act:mouse_click`, dropping free-text so the model learns the *grammar* of
+  movements); `buildMovementDataset` (keeps only action/observation events);
+  `mergeMovementDatasets`; and two eval harnesses — `evaluateReplayFidelity`
+  (measures *repeat*, #2c) and `evaluateGeneralization` (top-1 next-token accuracy
+  + back-off rate on held-out streams, #2d).
+- `src/training/backends/markov-movement-backend.ts` — the deterministic reference
+  backend: a variable-order n-gram model with **Katz-style back-off**. Fully
+  in-process, dependency-free, deterministic → validates the whole loop in the
+  cloud. Greedy decoding from `<bos>` *repeats* recorded movements; back-off to
+  shorter contexts is the *generalization* mechanism for unseen prefixes. Same
+  interface a real MLX on-device model would implement (documented drop-in seam).
+  Context keys join on `` so distinct contexts can't collide.
+- `src/training/synthetic-movements.ts` — deterministic synthetic movement-stream
+  generator (mulberry32 PRNG, no `Math.random`/`Date`): builds `ReplayManifest`s
+  from a movement grammar with tunable dropout, so training/held-out corpora are
+  *related but not identical*. Cloud-safe stand-in for real OS capture.
+- Barrel exports in `src/index.ts`; `movement-model.test.ts` (11 tests).
+
+**Findings while testing:** (1) The repeated-verb grammar is genuinely
+order-4-ambiguous (`obs, mouse.click, obs` precedes both `keyboard.type` and
+`keyboard.enter`) — now covered by an explicit test proving order-3 fails and
+order-5 captures it exactly, demonstrating the model's order sensitivity rather
+than hiding it. (2) **Pre-existing, unrelated test failures** discovered: 4 tests
+(`operator-runtime`, `control-plane/server`, `cli/app` — all in the
+background-task *recovery* path) fail on a clean tree *without* my changes, with
+`SyntaxError: Expected ',' or '}' after property value in JSON at position 311`
+from `readJsonFile` reading a shell-written background-task **state file** — the
+`sed`/`printf` state-writer emits malformed JSON. Logged to ROADMAP as a real
+latent bug for a future run; NOT caused by this change.
+
+**Test results:** `npm run build` ✅. `npm run typecheck:src` ✅ (source stays
+green). New suite ✅ **11/11**. Full suite **181 passed / 4 pre-existing failures**
+(was 174 + 11 new = 185; the 4 failures reproduce on the clean tree). Pushed to
+the designated feature branch `claude/peaceful-dirac-1xvjqi`.
+
+**New idea:** now that a model can *predict* the next movement, add a
+**model-guided replay executor** — a variant of `ReplayRuntimeService` that, given
+a partial/perturbed context, asks the trained `MovementModel` for the next
+movement instead of replaying a fixed manifest. That turns the model from an
+offline artifact into an online policy and gives a natural closed-loop
+generalization demo (start a known prefix, let the model finish the macro).
+Second idea: a `verify` npm script + fixing the malformed-JSON state-writer bug
+so the suite returns fully green.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

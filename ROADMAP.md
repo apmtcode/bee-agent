@@ -62,13 +62,44 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      for a real on-device small model. **DONE run 9** —
+      `src/training/movement-model.ts` (`MovementModelBackend`/`MovementModel`
+      interfaces + tokenizer + dataset builder) and
+      `src/training/backends/markov-movement-backend.ts` (deterministic
+      variable-order n-gram with Katz back-off; same interface a real MLX model
+      implements).
+- [x] Synthetic event-stream generator to validate capture→dataset→replay
+      round-trips without real OS input. **DONE run 9** —
+      `src/training/synthetic-movements.ts` (seeded mulberry32 PRNG, grammar +
+      dropout → `ReplayManifest`s indistinguishable from captured data).
+- [x] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories. **DONE run 9** — `evaluateReplayFidelity`
+      (repeat, #2c) + `evaluateGeneralization` (top-1 next-token accuracy +
+      back-off rate on held-out streams, #2d) in `movement-model.ts`.
+- [ ] **Model-guided replay executor**: a `ReplayRuntimeService` variant that
+      asks a trained `MovementModel` for the next movement given a
+      partial/perturbed context, turning the model from an offline artifact into
+      an online policy (closed-loop generalization demo: known prefix → model
+      finishes the macro).
+- [ ] Wire the trained `MovementModel` artifact into `runner.ts`/`job-store` so a
+      training job can produce and persist a `SerializedMovementModel` via the
+      mock backend end-to-end (currently the runner only emits external shell
+      plans; the in-process backend is not yet invoked by a job).
+- [ ] Additional movement backends behind the same interface (e.g. a
+      smoothed/interpolated model, or a real MLX seam) to prove pluggability.
+
+## Known bugs (discovered, not yet fixed)
+- [ ] **Malformed background-task state JSON** (found run 9). 4 tests fail on a
+      clean tree — `operator-runtime.test.ts`, `control-plane/server.test.ts`,
+      `cli/app.test.ts`, all in the background-task *recovery* path — with
+      `SyntaxError: Expected ',' or '}' after property value in JSON at position
+      311` from `readJsonFile` (`src/shared/fs.ts:17`) reading a state file
+      written by the shell launch-script (`sed`/`printf` state-writer in
+      `background-tasks.ts`, mirrors the pattern in `training/runner.ts`). The
+      writer emits invalid JSON. Real latent bug, pre-dates run 9; fix the
+      state-writer quoting, then the suite returns fully green.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
