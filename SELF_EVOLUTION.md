@@ -6,6 +6,68 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-22 (run 9) — Pluggable local-movement model backend + deterministic Markov inference (objective #2d)
+
+**Audited:** The local-movement learning subsystem (`src/capture/*` +
+`src/training/*`) against objective #2's five pieces. Found capture → schema →
+dataset → replay all exist, and the training *runner* exists — but it only emits
+mlx/axolotl launch **commands/scripts** (`LocalAppleSiliconTrainingRunner`). There
+was **no pluggable model-backend interface** and **no train→infer loop that can
+actually run/be validated in the cloud**. That is precisely objective #2(d)
+("post-train a local model to repeat recorded movements … and generalize") and
+the top queued movement roadmap item.
+
+**Changed (additive, new files only + barrel exports):**
+- **`src/training/movement-model.ts`** — the missing train→infer loop:
+  - `LocalMovementModelBackend` interface (`train`/`predict`) — the pluggable
+    seam a real on-device backend (mlx LoRA) implements; documented as such.
+  - `MarkovMovementBackend` — a **deterministic, dependency-free** reference
+    backend: a variable-order Markov model with stupid-backoff. It **memorizes**
+    recorded movement sequences (repeat) yet **generalizes** to unseen prefixes
+    via back-off to lower-order statistics. Fully serializable JSON; identical
+    inputs → identical model → identical prediction (ties broken by count then
+    lexical token). Runs in cloud/CI with no external ML deps.
+  - Tokenizer (`tokenizeAction`/`tokenizeTrajectory`) mapping recorded actions
+    (device gestures w/ metadata, or summary verbs) to discrete movement tokens.
+  - Dataset builders from trajectories and from replay manifests.
+  - `rolloutMovements` (autoregressive repeat/generalize of a demonstration),
+    `evaluateNextTokenAccuracy` (**generalization eval harness** — measures
+    replay fidelity on held-out-but-related sequences), `MovementBackendRegistry`
+    (backend selection by id), and `generateSyntheticTrajectories` (**deterministic
+    synthetic event-stream generator**, seeded LCG, no Math.random) so the whole
+    loop is exercisable without real OS input.
+- **`src/training/movement-model.test.ts`** — 17 tests: tokenization, dataset
+  builders, exact-repeat, back-off generalization, highest-order preference,
+  deterministic tie-break, serialization round-trip, empty-model handling,
+  stop-token rollout, train-vs-held-out accuracy, registry, synthetic
+  determinism/variation.
+- Barrel exports in `src/index.ts`.
+
+**Test results:** new module **17/17 green**; `npm run build` ✅;
+`npm run typecheck:src` ✅ (exit 0, source stays clean). This single increment
+knocks out **three** roadmap movement items at once (pluggable backend + mock,
+synthetic generator, generalization eval).
+
+**⚠️ Pre-existing blocker (NOT caused by this change):** the full suite is
+**188/191**, with **3 failing tests** that also fail on the clean baseline
+(verified by stashing this change): `operator-runtime.test.ts` (recover
+background tasks), `server.test.ts`, `app.test.ts`. Root cause is a
+`SyntaxError: Expected ',' or '}'` while `readJsonFile` parses a background-task
+**state file** during `recoverBySession` → `reconcileTask` → `readState`
+(`src/harness/background-tasks.ts`). `writeState` writes valid JSON atomically,
+so the corruption is elsewhere in the state lifecycle (position ~311 in the
+serialized state). The suite grew 174→191 since run 8 (a parallel local run added
+tests); these 3 predate this run. **Queued as the next run's highest priority.**
+
+**New idea:** a `MovementPolicyService` that wires this backend into the live
+runtime — subscribe to the capture event bus, maintain a rolling window of recent
+movement tokens, and (behind an off-by-default consent gate) surface the model's
+top-k *next-movement* prediction as an operator suggestion. That turns the trained
+model from a batch artifact into an online "autocomplete for actions," and gives a
+natural place to A/B the Markov backend against a future real on-device model.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

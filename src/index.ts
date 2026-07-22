@@ -410,6 +410,29 @@ export type {
   TrainingTargetPlatform,
 } from "./training/export-manifest.js";
 export {
+  MarkovMovementBackend,
+  MovementBackendRegistry,
+  buildMovementDatasetFromReplays,
+  buildMovementDatasetFromTrajectories,
+  createDefaultMovementBackendRegistry,
+  evaluateNextTokenAccuracy,
+  generateSyntheticTrajectories,
+  rolloutMovements,
+  tokenizeAction,
+  tokenizeTrajectory,
+} from "./training/movement-model.js";
+export type {
+  LocalMovementModelBackend,
+  MovementContext,
+  MovementEvaluation,
+  MovementPrediction,
+  MovementSequence,
+  MovementToken,
+  MovementTrainOptions,
+  MovementTrainingDataset,
+  TrainedMovementModel,
+} from "./training/movement-model.js";
+export {
   createLocalTrainingExecution,
   createLocalTrainingJobManifest,
 } from "./training/job-manifest.js";
