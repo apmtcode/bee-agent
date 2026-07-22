@@ -62,13 +62,32 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
+      for a real on-device small model. — DONE run 9. `src/training/movement-model.ts`:
+      `MovementModelBackend<TModel>` interface + `DeterministicMarkovBackend`
+      (order-N n-gram, stupid-backoff, deterministic) + `buildMovementDataset`
+      (replay→dataset) + `createMovementModelBackend` factory. 13 tests.
 - [ ] Synthetic event-stream generator to validate capture→dataset→replay
       round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+- [ ] Generalization eval harness: train on N synthetic trajectories, hold out
+      related ones, score replay fidelity = fraction of held-out next-moves the
+      model predicts correctly per backoff order (turns "does it generalize?"
+      into a tracked metric). Now unblocked by run 9's model artifact.
+- [ ] Second pluggable backend (`WeightedSampledBackend`, temperature +
+      seeded-deterministic sampling) to prove `MovementModelBackend` against >1
+      implementation before wiring a real on-device small model.
+
+## Known pre-existing test failures (environment-sensitive)
+- [ ] 4 tests fail in the cloud container (green in earlier local runs):
+      `operator-runtime.test.ts` + `app.test.ts` + `server.test.ts`
+      background-task **recovery** cases. Root cause: they assert a task recovers
+      as `failed`/`missing-process` based on `process.kill(pid, 0)` liveness and
+      real-time timers — a fabricated pid may actually be live in-container, and
+      timer-dependent state differs. Make recovery pid-liveness injectable
+      (a `ProcessLivenessProbe` seam with a deterministic mock) so these tests
+      stop depending on the host process table. Verified pre-existing via
+      `git stash` on run 9 — not caused by the movement-model work.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

@@ -6,6 +6,58 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-22 (run 9) — 🧠 Pluggable movement-model backend: train → infer → generate loop
+
+**Audited:** The local-movement learning subsystem (standing objective #2) and
+`src/training/`. Found the runner (`runner.ts`) only emits shell *command plans*
+for on-device MLX/axolotl — there was **no actual train→infer loop** exercisable
+in the cloud, and no pluggable model-backend seam. This is the ROADMAP's top
+movement item ("Pluggable local-model backend interface … with a deterministic
+mock backend").
+
+**Changed (additive) — new `src/training/movement-model.ts`:**
+- `MovementModelBackend<TModel>` interface — the pluggable seam: `train` /
+  `predictNext` / `generate`. A real on-device small model implements the same
+  three methods and is swapped in via the factory; cloud/CI uses the mock.
+- `DeterministicMarkovBackend` — an order-N n-gram model with **stupid-backoff**,
+  fully deterministic (argmax + lexicographic tie-break, no RNG, no clock), so
+  the loop is reproducible in tests. Training records next-token counts under
+  every context length 0..order; inference tries the longest matching context
+  and backs off. This is what delivers objective **2(c)** (repeat recorded
+  movements — a memorized trajectory regenerates exactly) *and* **2(d)**
+  (generalize — an unseen full context falls back to a shorter context / the
+  unigram prior instead of failing). `MarkovMovementModel` is a JSON-serializable
+  local model artifact (round-trip asserted).
+- `buildMovementDataset(replays)` — turns reviewed `ReplayManifest`s into a
+  `MovementDataset`: one movement sequence per source trajectory, action events
+  only, ordered by timestamp. `normalizeMovementSummary` slugs free-text so
+  "tapped Send button" / "tapped  Send  Button!!" collapse to one token (raw
+  noise would otherwise fragment the vocabulary and defeat generalization).
+- `createMovementModelBackend(kind)` factory + barrel exports from `src/index.ts`.
+
+**Test results:** `npm run build` ✅. `typecheck:src` ✅ (source stays green).
+New `movement-model.test.ts` ✅ **13/13** — covers train artifact shape + JSON
+round-trip, exact-repeat generation, probability/argmax, deterministic ties,
+backoff generalization to new-but-related contexts, unigram fallback, cyclic-model
+termination, empty-model safety, dataset extraction/ordering, and a full
+replay→dataset→train→generate round-trip. Full suite: **183/187**; the **4
+failures are pre-existing and unrelated** — verified via `git stash`: they fail
+identically on the clean baseline (`operator-runtime`/`app`/`server` background-task
+recovery tests that depend on `process.kill(pid,0)` liveness + real-time timers,
+environment-sensitive in this cloud container). My change is isolated and adds
+zero regressions. Pushed to the designated feature branch `claude/peaceful-dirac-rnirs9`.
+
+**New idea:** now that a model artifact exists, add a **generalization eval
+harness** (next ROADMAP item): train on N synthetic trajectories, hold out
+related ones, and score replay fidelity = fraction of held-out next-moves the
+model predicts correctly at each backoff order — turning "does it generalize?"
+into a tracked metric rather than a claim. Bigger idea: a `WeightedSampledBackend`
+(temperature-controlled, seeded-deterministic sampling) as a second pluggable
+backend so the interface is proven against >1 implementation before a real
+on-device model is wired in.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
