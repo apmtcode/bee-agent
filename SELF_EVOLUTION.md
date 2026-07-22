@@ -6,6 +6,59 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-22 (run 9) — Background-task state persistence made crash-safe + suite de-flaked (RED → green)
+
+**Audited:** The actual `npm test` baseline — it was **RED** (3–4 failures every
+run), not the 174/174 the run-8 log recorded. Root-caused three failing tests to
+real defects in the background-task launch/reconcile subsystem
+(`src/harness/background-tasks.ts`), not to the tests themselves.
+
+**Product bugs found & fixed (`src/harness/background-tasks.ts`):**
+1. **Corrupt/invalid execution-state JSON.** The launch script built the initial
+   `running` state JSON *in the shell* and patched `$$`/timestamps back in with
+   `sed`. Any command containing quotes or newlines (e.g. the tests'
+   `printf 'line-1\nline-2\n'`) was mangled into **invalid JSON**, so every
+   concurrent reader (reconcile, status polling) crashed on `JSON.parse`
+   (`SyntaxError … in JSON at position 311`). Rebuilt the writer in Python
+   (`json.dumps`), and — because a shell-quoted command with newlines also breaks
+   the *script itself* — the user-controlled `command`/`cwd` now travel through
+   the **environment** (`OPENCLAW_BACKGROUND_COMMAND`/`_CWD`) instead of being
+   interpolated inline. The command round-trips exactly for arbitrary bytes, in
+   both execution and persisted state.
+2. **Non-atomic state writes (torn reads).** The initial (`> state.json`) and
+   terminal (`Path.write_text`) writes truncated the target mid-write, so readers
+   could observe an empty/partial file. Both writes now go temp-file →
+   `mv`/`Path.replace` (atomic rename), so readers only ever see a fully-formed
+   prior/next state.
+
+**Test hermeticity fixes (no product behaviour masked):** the three failing tests
+spawn *real* subprocesses and then inject synthetic execution states; under load
+the seed subprocess's own state/output writes raced (clobbered) the injected
+ones, and a single global `isProcessRunning` mock couldn't serve a test that
+mixes genuinely-alive tasks (`sleep 5`, `tail -f`) with dead-simulation tasks.
+Fixes: (a) `waitFor…Settled/StateWritten` helpers that let the seed subprocess
+finish before injection; (b) **pid-aware** `isProcessRunning` mocks (only the
+real live pids are "alive"; synthetic dead states use a distinct dead pid) in
+`server.test.ts`; (c) corrected `app.test.ts` to the real `isProcessRunning`.
+
+**New test:** `background-tasks.test.ts` now has a deterministic regression test
+that launches a *real* subprocess with a command containing quotes **and**
+newlines and asserts the persisted state parses as valid JSON and the command
+round-trips exactly — this is the guard for bug #1.
+
+**Test results:** `typecheck:src` ✅, `build` ✅, `npm test` **174/174**.
+Stability under back-to-back full-suite load improved from **3–4 failures every
+run** to **~1 flake per ~37 runs**, and that residual is confined to two
+pre-existing non-hermetic tests (`server.test` "handles session" and the
+timer-based `gateway-transport.test`) — never the product code paths.
+
+**New idea:** give the background-task store an injectable **clock + spawn** so
+the reconcile/breaker tests can run fully hermetically (no real subprocesses,
+deterministic time) — this would eliminate the last load-sensitive flakes and
+make the subsystem safe to extend. Logged to ROADMAP.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

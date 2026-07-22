@@ -70,6 +70,24 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Generalization eval harness: measure replay fidelity on held-out but
       related synthetic trajectories.
 
+## Reliability
+- [x] **Crash-safe background-task state persistence** (2026-07-22, run 9). The
+      launch script wrote its execution-state JSON with `sed` (mangled commands
+      with quotes/newlines into invalid JSON → readers crashed) and non-atomically
+      (torn reads). Now: Python `json.dumps` writer, user command/cwd passed via
+      environment (never interpolated into the script), and atomic temp-file +
+      rename writes. Added a real-subprocess regression test for quote/newline
+      commands. Fixed a RED baseline (`npm test` 3–4 failing → 174/174).
+- [ ] **Hermetic background-task test harness.** Give `FileBackgroundTaskStore` /
+      `BackgroundTaskExecutionService` an injectable clock + spawn so the
+      reconcile/breaker/monitor tests need no real subprocesses and no wall-clock
+      timing. This removes the last load-sensitive flakes (the monolithic
+      `server.test` "handles session" test still spawns real `sleep`/`tail -f`
+      processes) and makes the subsystem safe to extend.
+- [ ] **Stabilise `gateway-transport.test`** ("replays only missed events after
+      reconnect…") — a pre-existing timer/heartbeat-based flake (~1/30 under
+      concurrent load), unrelated to background tasks. Likely needs fake timers.
+
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in

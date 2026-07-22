@@ -176,6 +176,12 @@ export class BackgroundTaskExecutionService {
         ...process.env,
         OPENCLAW_BACKGROUND_TASK_ID: task.id,
         OPENCLAW_BACKGROUND_TASK_KIND: task.kind,
+        // The command and cwd are user-controlled and may contain quotes or even
+        // newlines. Passing them through the environment (rather than interpolated
+        // into the launch script) keeps the script well-formed and lets both the
+        // executed command and the persisted state preserve them exactly.
+        OPENCLAW_BACKGROUND_COMMAND: task.command,
+        OPENCLAW_BACKGROUND_CWD: task.cwd,
       },
       stdio: "ignore",
       detached: true,
@@ -732,31 +738,28 @@ function applyExecutionState(task: BackgroundTaskRecord, state: BackgroundTaskEx
 function renderLaunchScript(task: BackgroundTaskRecord): string {
   const quotedStatePath = shellQuote(task.execution.stateFile);
   const quotedOutputFile = shellQuote(task.execution.outputFile);
-  const quotedCwd = shellQuote(task.cwd);
-  const quotedCommand = shellQuote(task.command);
-  const quotedStatePayload = shellQuote(
-    JSON.stringify({
-      version: 1,
-      taskId: task.id,
-      kind: task.kind,
-      status: "running",
-      pid: "$$",
-      startedAt: "__OPENCLAW_STARTED_AT__",
-      updatedAt: "__OPENCLAW_STARTED_AT__",
-      outputFile: task.execution.outputFile,
-      cwd: task.cwd,
-      command: task.command,
-    }),
-  );
+  const quotedTaskId = shellQuote(task.id);
+  const quotedKind = shellQuote(task.kind);
+  const quotedOutputFileValue = shellQuote(task.execution.outputFile);
 
   return [
     "#!/usr/bin/env bash",
     "set -euo pipefail",
     `mkdir -p $(dirname ${quotedStatePath}) $(dirname ${quotedOutputFile})`,
     "started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-    `printf '%s' ${quotedStatePayload} | sed "s/__OPENCLAW_STARTED_AT__/$started_at/g; s/\"\$\$\"/$$/g" > ${quotedStatePath}`,
+    // Write the initial "running" state with Python, building the dict in Python
+    // and json.dumps-ing it. The previous approach built the JSON in the shell and
+    // patched it with `sed`, which mangled any command containing quotes or
+    // newlines into invalid JSON and left readers crashing. The command and cwd
+    // (which may contain quotes or newlines) arrive via the environment so they
+    // never break the script; the remaining fields are safe (ids, paths). The
+    // temp-file + Path.replace makes the write atomic so concurrent readers never
+    // observe a torn or partial file.
+    `python3 - ${quotedStatePath} $$ "$started_at" ${quotedTaskId} ${quotedKind} ${quotedOutputFileValue} <<'PY'`,
+    ...renderInitialStateWriterPython(),
+    "PY",
     `printf '%s\n' "starting ${task.kind} ${task.id}" >> ${quotedOutputFile}`,
-    `if cd ${quotedCwd} && bash -lc ${quotedCommand} >> ${quotedOutputFile} 2>&1; then`,
+    `if cd "$OPENCLAW_BACKGROUND_CWD" && bash -lc "$OPENCLAW_BACKGROUND_COMMAND" >> ${quotedOutputFile} 2>&1; then`,
     "  completed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
     `  python3 - ${quotedStatePath} $$ "$completed_at" 0 <<'PY'`,
     ...renderStateWriterPython("completed"),
@@ -771,6 +774,31 @@ function renderLaunchScript(task: BackgroundTaskRecord): string {
     "fi",
     "",
   ].join("\n");
+}
+
+function renderInitialStateWriterPython(): string[] {
+  return [
+    "import json",
+    "import os",
+    "import pathlib",
+    "import sys",
+    "state_path = pathlib.Path(sys.argv[1])",
+    "state = {",
+    '    "version": 1,',
+    '    "taskId": sys.argv[4],',
+    '    "kind": sys.argv[5],',
+    '    "status": "running",',
+    '    "pid": int(sys.argv[2]),',
+    '    "startedAt": sys.argv[3],',
+    '    "updatedAt": sys.argv[3],',
+    '    "outputFile": sys.argv[6],',
+    '    "cwd": os.environ["OPENCLAW_BACKGROUND_CWD"],',
+    '    "command": os.environ["OPENCLAW_BACKGROUND_COMMAND"],',
+    "}",
+    "tmp_path = state_path.with_name(state_path.name + '.starting.tmp')",
+    "tmp_path.write_text(json.dumps(state, indent=2) + '\\n')",
+    "tmp_path.replace(state_path)",
+  ];
 }
 
 function renderStateWriterPython(status: BackgroundTaskExecutionState["status"]): string[] {
@@ -789,7 +817,14 @@ function renderStateWriterPython(status: BackgroundTaskExecutionState["status"])
     "state['completedAt'] = timestamp",
     "state['exitCode'] = exit_code",
     `state['error'] = None if '${status}' == 'completed' else f'background task exited non-zero ({exit_code})'`,
-    "state_path.write_text(json.dumps(state, indent=2) + '\\n')",
+    // Write the final state atomically. `Path.write_text` truncates the target
+    // before writing, exposing a window where a concurrent reader sees an empty
+    // or partial file. Render to a sibling temp file and `Path.replace` (which
+    // maps to os.replace, an atomic rename) so readers only ever observe the
+    // fully-formed previous or next state.
+    "tmp_path = state_path.with_name(state_path.name + '.finishing.tmp')",
+    "tmp_path.write_text(json.dumps(state, indent=2) + '\\n')",
+    "tmp_path.replace(state_path)",
   ];
 }
 

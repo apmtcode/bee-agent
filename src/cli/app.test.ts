@@ -888,6 +888,19 @@ describe("OperatorCliApp", () => {
       command: "printf drift",
       kind: "task",
     });
+    // Wait for the seeded `printf drift` subprocess to publish its terminal state
+    // before making assertions about this remote. Otherwise, under load, the
+    // reconcile can observe a transient "running" state whose process has already
+    // exited (a false missing-process), flapping the remote to degraded, and the
+    // subprocess's late "completed" write can also clobber the synthetic
+    // dead-"running" state injected further below.
+    for (let attempt = 0; attempt < 300; attempt += 1) {
+      const seeded = await app.runtime.backgroundTasks.executionService.readState(degradedTask);
+      if (seeded && seeded.status !== "running") {
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
     const remoteListOutput = await app.dispatchSlashCommand({ kind: "remote-list" });
     expect(remoteListOutput).toContain(`remote=${pairedBootstrap.result.session.metadata.remoteId}`);
     expect(remoteListOutput).toContain("source=gateway");

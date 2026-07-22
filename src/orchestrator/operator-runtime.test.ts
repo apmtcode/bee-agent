@@ -15,6 +15,25 @@ async function makeTempDir(): Promise<string> {
   return dir;
 }
 
+// Several tests seed a real background task (which exits quickly — `printf …`, or
+// `tail -f` on a missing file) and then inject a synthetic execution state to
+// drive reconcile/recovery. The seeded subprocess writes its own terminal state
+// asynchronously, so under load that write can land after the injected state and
+// clobber it. Waiting for the seed to reach a terminal state first makes the
+// injection authoritative and the reconcile assertions deterministic.
+async function waitForSeedTaskSettled(
+  runtime: StandaloneOperatorRuntime,
+  task: { execution: { stateFile: string } } & Record<string, unknown>,
+): Promise<void> {
+  for (let attempt = 0; attempt < 300; attempt += 1) {
+    const state = await runtime.backgroundTasks.executionService.readState(task as never);
+    if (state && state.status !== "running") {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}
+
 function buildHookCaptureCommand(outputFile: string): string {
   const script = [
     "import fs from 'node:fs';",
@@ -551,6 +570,7 @@ describe("StandaloneOperatorRuntime", () => {
       expect.objectContaining({ id: task.id, sessionId: session.id }),
     ]);
 
+    await waitForSeedTaskSettled(runtime, task);
     await runtime.backgroundTasks.executionService.writeState(task, {
       version: 1,
       taskId: task.id,
@@ -583,6 +603,7 @@ describe("StandaloneOperatorRuntime", () => {
       command: "tail -f app.log",
       kind: "monitor",
     });
+    await waitForSeedTaskSettled(runtime, recoverable);
     await runtime.backgroundTasks.executionService.writeState(recoverable, {
       version: 1,
       taskId: recoverable.id,
@@ -614,6 +635,7 @@ describe("StandaloneOperatorRuntime", () => {
       command: "tail -f app.log",
       kind: "monitor",
     });
+    await waitForSeedTaskSettled(runtime, monitor);
     await runtime.backgroundTasks.executionService.writeState(monitor, {
       version: 1,
       taskId: monitor.id,

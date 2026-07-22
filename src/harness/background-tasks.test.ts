@@ -370,4 +370,39 @@ describe("BackgroundTaskExecutionService", () => {
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
   });
+
+  it("launches with a real subprocess and persists valid JSON state for commands with quotes and newlines", async () => {
+    const rootDir = await makeTempDir();
+    // Real spawn + real launch script so we exercise the generated state writer.
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"));
+    // This command embeds literal newlines and a double quote. The previous
+    // launch script built the state JSON in the shell and patched it with `sed`,
+    // which corrupted such commands into invalid JSON — any reader (reconcile,
+    // status polling) then crashed on JSON.parse. The state must now round-trip.
+    const trickyCommand = "printf 'line-1\nline-2\n' # note: \"quoted\"";
+    const task = await store.start({
+      sessionId: "sess-json",
+      title: "Tricky command",
+      command: trickyCommand,
+      cwd: rootDir,
+      kind: "task",
+    });
+
+    // readState() calls JSON.parse; if the launch wrapper wrote invalid JSON this
+    // throws. Poll until the wrapper has published a terminal state.
+    let state: BackgroundTaskExecutionState | undefined;
+    for (let attempt = 0; attempt < 400; attempt += 1) {
+      state = await store.executionService.readState(task);
+      if (state && state.status !== "running") {
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+
+    expect(state).toBeDefined();
+    expect(state?.taskId).toBe(task.id);
+    // The command must survive the round-trip through the persisted JSON exactly.
+    expect(state?.command).toBe(trickyCommand);
+    expect(["completed", "failed"]).toContain(state?.status);
+  });
 });

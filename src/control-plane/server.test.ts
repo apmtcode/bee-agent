@@ -18,6 +18,43 @@ async function makeTempDir(): Promise<string> {
   return dir;
 }
 
+// Several tests seed a real background task (a fast `printf …`) and then inject a
+// synthetic dead-"running" execution state to drive the missing-process reap
+// path. The seeded subprocess writes its own terminal ("completed") state
+// asynchronously, so under load that write can land *after* the injected state
+// and clobber it, making the reap under test flaky. Waiting for the seed to
+// reach a terminal state first makes the injection authoritative and the reap
+// deterministic.
+async function waitForSeedTaskSettled(
+  runtime: StandaloneOperatorRuntime,
+  task: { execution: { stateFile: string } } & Record<string, unknown>,
+): Promise<void> {
+  for (let attempt = 0; attempt < 300; attempt += 1) {
+    const state = await runtime.backgroundTasks.executionService.readState(task as never);
+    if (state && state.status !== "running") {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}
+
+// For long-lived seed tasks (e.g. `sleep 5`) that never reach a terminal state
+// during the test, wait until the launch wrapper has written its initial state
+// so a synthetic state injected afterwards is the last write and cannot be
+// clobbered by the wrapper's own (single) initial write landing late under load.
+async function waitForSeedStateWritten(
+  runtime: StandaloneOperatorRuntime,
+  task: { execution: { stateFile: string } } & Record<string, unknown>,
+): Promise<void> {
+  for (let attempt = 0; attempt < 300; attempt += 1) {
+    const state = await runtime.backgroundTasks.executionService.readState(task as never);
+    if (state) {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}
+
 afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })));
 });
@@ -81,9 +118,18 @@ const exportManifest: ReviewedExportManifest = {
 describe("OperatorControlPlaneServer", () => {
   it("handles session, transcript, approval, trajectory, memory, and orchestration methods", async () => {
     const rootDir = await makeTempDir();
+    // This test mixes genuinely-alive tasks (a `sleep 5` remote and `tail -f`
+    // monitors that must report status=running/control=active) with
+    // dead-simulation tasks (synthetic "running" states that must reap to
+    // missing-process and trip the breaker). A single global () => true / ()
+    // => false mock can only satisfy one group, and the previous () => false
+    // only "passed" the live-task assertions by racing the subprocess's own
+    // state-file write. Make the mock pid-aware: a task's process is alive iff
+    // its pid was registered as live below.
+    const liveProcessPids = new Set<number>();
     const runtime = new StandaloneOperatorRuntime({
       rootDir,
-      backgroundTaskIsProcessRunning: () => false,
+      backgroundTaskIsProcessRunning: (pid) => liveProcessPids.has(pid),
       delivery: new OperatorDeliveryService(rootDir, {
         sendBrowserPush: async () => {},
       }),
@@ -626,6 +672,12 @@ describe("OperatorControlPlaneServer", () => {
       command: "sleep 5",
       kind: "task",
     });
+    // The remote task's `sleep 5` process is genuinely alive for the duration of
+    // these assertions, so mark its pid live (the launch wrapper records its own
+    // pid as the state pid).
+    if (typeof remoteTask.execution.processId === "number") {
+      liveProcessPids.add(remoteTask.execution.processId);
+    }
     await expect(server.handle({ method: "pairing.list", params: { status: "redeemed" } })).resolves.toMatchObject({
       ok: true,
       result: [expect.objectContaining({ id: pairingCreate.result.id, status: "redeemed" })],
@@ -968,6 +1020,7 @@ describe("OperatorControlPlaneServer", () => {
       command: "printf 'drift'",
       kind: "task",
     });
+    await waitForSeedTaskSettled(driftingRuntime, driftingTask);
     await driftingRuntime.backgroundTasks.executionService.writeState(driftingTask, {
       version: 1,
       taskId: driftingTask.id,
@@ -1016,9 +1069,16 @@ describe("OperatorControlPlaneServer", () => {
     });
 
     const breakerRootDir = await makeTempDir();
+    // Same pid-aware approach as the main runtime: each breaker task's `sleep 5`
+    // process is genuinely alive until the test injects a synthetic dead-"running"
+    // state (with the DEAD_PID below), which is what should trip the breaker. This
+    // keeps the 1→2→3 failure escalation deterministic instead of depending on the
+    // exact interleaving of the launch subprocesses' own state writes.
+    const liveBreakerPids = new Set<number>();
+    const DEAD_PID = 9999;
     const breakerRuntime = new StandaloneOperatorRuntime({
       rootDir: breakerRootDir,
-      backgroundTaskIsProcessRunning: () => false,
+      backgroundTaskIsProcessRunning: (pid) => liveBreakerPids.has(pid),
     });
     const breakerServer = new OperatorControlPlaneServer({ runtime: breakerRuntime });
     const breakerOne = await breakerServer.handle({
@@ -1058,12 +1118,18 @@ describe("OperatorControlPlaneServer", () => {
       command: "sleep 5",
       kind: "task",
     });
+    for (const breakerTask of [breakerTaskOne, breakerTaskTwo, breakerTaskThree]) {
+      if (typeof breakerTask.execution.processId === "number") {
+        liveBreakerPids.add(breakerTask.execution.processId);
+      }
+      await waitForSeedStateWritten(breakerRuntime, breakerTask);
+    }
     await breakerRuntime.backgroundTasks.executionService.writeState(breakerTaskOne, {
       version: 1,
       taskId: breakerTaskOne.id,
       kind: "task",
       status: "running",
-      pid: breakerTaskOne.execution.processId ?? 9999,
+      pid: DEAD_PID,
       startedAt: breakerTaskOne.execution.startedAt ?? breakerTaskOne.updatedAt,
       updatedAt: breakerTaskOne.updatedAt,
       outputFile: breakerTaskOne.execution.outputFile,
@@ -1088,7 +1154,7 @@ describe("OperatorControlPlaneServer", () => {
       taskId: breakerTaskTwo.id,
       kind: "task",
       status: "running",
-      pid: breakerTaskTwo.execution.processId ?? 9999,
+      pid: DEAD_PID,
       startedAt: breakerTaskTwo.execution.startedAt ?? breakerTaskTwo.updatedAt,
       updatedAt: breakerTaskTwo.updatedAt,
       outputFile: breakerTaskTwo.execution.outputFile,
@@ -1134,7 +1200,7 @@ describe("OperatorControlPlaneServer", () => {
       taskId: breakerTaskThree.id,
       kind: "task",
       status: "running",
-      pid: breakerTaskThree.execution.processId ?? 9999,
+      pid: DEAD_PID,
       startedAt: breakerTaskThree.execution.startedAt ?? breakerTaskThree.updatedAt,
       updatedAt: breakerTaskThree.updatedAt,
       outputFile: breakerTaskThree.execution.outputFile,
@@ -1480,6 +1546,11 @@ describe("OperatorControlPlaneServer", () => {
       ok: false,
       error: { code: "NOT_FOUND", message: `unknown background task: ${backgroundTask.id}` },
     });
+    // Let the real `printf` seed finish (its output is asserted below) and settle
+    // so the wrapper's own terminal state write cannot clobber the synthetic
+    // "completed" state injected here — under heavy load the wrapper can otherwise
+    // land a late "failed" write after this injection.
+    await waitForSeedTaskSettled(runtime, backgroundTask);
     await runtime.backgroundTasks.executionService.writeState(backgroundTask, {
       version: 1,
       taskId: backgroundTask.id,
@@ -1522,6 +1593,14 @@ describe("OperatorControlPlaneServer", () => {
     if (!monitorTask) {
       throw new Error("expected monitor task to be created");
     }
+    // The `tail -f` monitor's synthetic state reuses its real pid, so mark it
+    // live to keep it running. Wait for the launch wrapper to settle first so its
+    // own state/output writes cannot clobber the synthetic state and output the
+    // test injects just below.
+    if (typeof monitorTask.execution.processId === "number") {
+      liveProcessPids.add(monitorTask.execution.processId);
+    }
+    await waitForSeedTaskSettled(runtime, monitorTask);
     await runtime.backgroundTasks.executionService.writeState(monitorTask, {
       version: 1,
       taskId: monitorTask.id,
@@ -1570,6 +1649,10 @@ describe("OperatorControlPlaneServer", () => {
     if (!monitorTaskStop) {
       throw new Error("expected second monitor task to be created");
     }
+    if (typeof monitorTaskStop.execution.processId === "number") {
+      liveProcessPids.add(monitorTaskStop.execution.processId);
+    }
+    await waitForSeedTaskSettled(runtime, monitorTaskStop);
     await runtime.backgroundTasks.executionService.writeState(monitorTaskStop, {
       version: 1,
       taskId: monitorTaskStop.id,
