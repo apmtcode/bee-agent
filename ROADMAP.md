@@ -59,16 +59,38 @@ unchecked items are queued. Keep this richer than you found it each run.
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
 (exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
-      objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [~] Inventory what `src/capture` + `src/training` already implement vs. the
+      objective's five pieces (capture → schema → dataset → replay → train/infer).
+      Run 9 mapped the state: capture/schema/dataset/replay existed; the runner
+      only *planned* real on-device training (mlx/axolotl), so **train + infer**
+      had no in-process implementation — now filled (see below).
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      for a real on-device small model. (2026-07-22, run 9 — `src/training/backend.ts`:
+      `LocalModelBackend`/`TrainedMovementModel` seam, `MockNearestNeighborBackend`,
+      `LocalModelBackendRegistry`/`createDefaultBackendRegistry`.)
+- [x] Synthetic event-stream generator to validate capture→dataset→replay
+      round-trips without real OS input. (2026-07-22, run 9 —
+      `src/training/synthetic.ts`, seeded LCG, no `Math.random`.)
+- [x] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories. (2026-07-22, run 9 — `evaluateMovementModel`
+      + `splitMovementDataset`; beats the 5-tool random baseline on held-out runs.)
+- [ ] Backend conformance suite any `LocalModelBackend` must pass (perfect
+      train-set replay, deterministic serialize/restore, monotonic confidence),
+      so a future real on-device backend is validated against the mock's contract.
+- [ ] Wire the mock backend into the training execution-service as a cloud/CI
+      "dry-run train" path so `LocalTrainingExecutionService` can produce a real
+      (mock) model artifact + replay-eval report without an Apple-Silicon host.
+
+## Reliability
+- [ ] **Fix flaky background-task tests** (surfaced run 9): `app.test.ts`,
+      `server.test.ts`, `operator-runtime.test.ts` fail non-deterministically
+      (3↔4 failures across identical runs) because `recoverBackgroundTasks` /
+      execution-state reads race a child process writing the state file
+      mid-write (`SyntaxError: Expected ',' or '}'` from `readJsonFile`). Fix:
+      have the child write state via temp-then-rename (mirror `writeJsonAtomic`)
+      and/or make the reader tolerant of a partial JSON parse (retry once). This
+      is the current blocker to a reliably-green full suite.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

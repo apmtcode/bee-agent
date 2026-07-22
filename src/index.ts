@@ -423,6 +423,37 @@ export type {
   SftTrainingConfig,
 } from "./training/job-manifest.js";
 export {
+  DEFAULT_CONTEXT_WINDOW,
+  LocalModelBackendRegistry,
+  MOVEMENT_DATASET_VERSION,
+  MockNearestNeighborBackend,
+  SERIALIZED_MOVEMENT_MODEL_VERSION,
+  createDefaultBackendRegistry,
+  evaluateMovementModel,
+  extractMovementDataset,
+  splitMovementDataset,
+  tokenizeContext,
+} from "./training/backend.js";
+export type {
+  ActionPrediction,
+  ExtractMovementDatasetOptions,
+  LocalModelBackend,
+  MovementAction,
+  MovementContextEvent,
+  MovementDataset,
+  MovementEvalReport,
+  MovementSample,
+  SerializedMovementModel,
+  TrainedMovementModel,
+  TrainMovementModelOptions,
+} from "./training/backend.js";
+export {
+  synthesizeMovementManifest,
+} from "./training/synthetic.js";
+export type {
+  SynthesizeMovementStreamsOptions,
+} from "./training/synthetic.js";
+export {
   FileTrainingJobStore,
 } from "./training/job-store.js";
 export type {

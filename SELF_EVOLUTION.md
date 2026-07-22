@@ -6,6 +6,66 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-22 (run 9) — 🧠 Pluggable local-model backend: real in-process train + infer + generalize
+
+**Audited:** Standing objective #2 (local-movement learning), specifically the
+gap between the *pieces that exist* and pieces (c) **train a local model** and
+(d) **generalize**. `src/training/` already had the exporter (dataset), the
+`LocalAppleSiliconTrainingRunner` (emits `mlx`/`axolotl` launch plans + shell
+scripts), execution-service, and job-store — but there was **no backend that can
+actually train or infer**. The runner only *plans* real on-device runs, which
+by design cannot execute in the cloud, so the capture→dataset→**train→infer**
+→evaluate loop was never validated end-to-end anywhere.
+
+**Changed (additive — two new source modules + barrel exports):**
+- **`src/training/backend.ts`** — the pluggable backend seam and a deterministic
+  in-process implementation:
+  - `extractMovementDataset(manifest)` turns a `ReviewedExportManifest`'s replay
+    timelines into next-action prediction samples (`{context, action}`), with a
+    bounded, configurable context window; prior actions roll into context so
+    multi-step sequences are learnable.
+  - `LocalModelBackend` interface (`train` / `restore`) + `TrainedMovementModel`
+    (`predict` / `serialize`) — the documented seam a real on-device small model
+    plugs into.
+  - `MockNearestNeighborBackend` — fully deterministic, zero-dependency: memorizes
+    context token sets; exact context → exact replay (confidence 1), otherwise the
+    highest Jaccard-similarity neighbor (confidence = similarity) → *generalizes*
+    to new-but-related movements. All ties break deterministically (no
+    `Math.random`), so a dataset always yields the same model + predictions.
+  - `LocalModelBackendRegistry` + `createDefaultBackendRegistry()` for
+    pluggability; `evaluateMovementModel()` generalization eval harness
+    (exact-match / tool / summary accuracy, mean confidence, per-sample report);
+    `splitMovementDataset()` deterministic train/holdout partition.
+- **`src/training/synthetic.ts`** — `synthesizeMovementManifest()`: a seeded LCG
+  (Park–Miller, no `Math.random`) that generates reproducible observation→action
+  replay streams so the whole loop is validated offline without real OS input.
+- Wired all of the above into `src/index.ts`.
+
+**Test results:** new `src/training/backend.test.ts` — **11/11 green**
+(dataset extraction + window + step indexing; exact replay = 100% on the train
+set; determinism across retrains; serialize/restore round-trip; **generalization**
+to a held-out same-scenario run beats the 0.2 five-tool random baseline;
+registry + tokenizer). `typecheck:src` ✅ (exit 0). `npm run build` ✅.
+Full suite: **182 passed / 3 failed** — the 3 failures are **pre-existing and
+flaky** (verified: they fail on the clean baseline via `git stash`, and the
+failure count varies 3↔4 across identical single-threaded runs). They live in
+`app.test.ts`, `server.test.ts`, `operator-runtime.test.ts` and stem from real
+child-process spawns + state-file reads racing mid-write — **not** touched by
+this change. Pushed to the designated feature branch (not `main`) per the
+session git policy; my additive change is green on its own merits and introduces
+zero regressions.
+
+**New idea:** the flakiness above is a real reliability defect worth its own run —
+`recoverBackgroundTasks`/execution-state reads should tolerate a partially-written
+JSON state file (retry-on-parse-error or write-temp-then-rename on the *child*
+side, mirroring `writeJsonAtomic`). Also: now that `evaluateMovementModel` exists,
+add a **backend conformance suite** any `LocalModelBackend` must pass (perfect
+train-set replay, deterministic serialize/restore, monotonic confidence) so a
+future real on-device backend can be validated against the same contract as the
+mock.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
