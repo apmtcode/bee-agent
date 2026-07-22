@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -107,6 +108,38 @@ describe("FileBackgroundTaskStore", () => {
       status: "completed",
       execution: { exitCode: 0 },
     });
+  });
+
+  it("generates a launch script that writes valid state JSON for single-quote commands", async () => {
+    // Regression: shellQuote used a malformed single-quote escape (`"'"'"'`),
+    // so a command containing a single quote (e.g. `printf 'x'`) produced an
+    // invalid initial state.json in the launch script. The Python completion
+    // writer then failed on json.loads and, under `set -euo pipefail`, the
+    // script exited non-zero — surfacing later as a flaky JSON SyntaxError in
+    // readState() once the process had (not) rewritten the state file.
+    const rootDir = await makeTempDir();
+    const filePath = path.join(rootDir, "background-tasks.json");
+    const store = new FileBackgroundTaskStore(filePath, () => ({ pid: 4242, unref() {} }), () => true);
+
+    const command = "printf 'line-1\nline-2\n'";
+    const task = await store.start({
+      sessionId: "sess-quote",
+      title: "Quoted command",
+      command,
+      cwd: rootDir,
+      kind: "task",
+    });
+
+    // store.start writes the launch script to disk; run it to completion (the
+    // command is fast, so there is no read/write race to reason about here).
+    const scriptPath = path.join(rootDir, task.execution.launchScript);
+    execFileSync("bash", [scriptPath], { cwd: rootDir });
+
+    // readState must not throw — the state file has to be valid JSON.
+    const state = await store.executionService.readState(task);
+    expect(state).toMatchObject({ taskId: task.id, status: "completed", exitCode: 0 });
+    expect(state?.command).toBe(command);
+    await expect(store.getOutput(task.id)).resolves.toContain("line-1\nline-2");
   });
 
   it("cancels running tasks and records cancelled state", async () => {

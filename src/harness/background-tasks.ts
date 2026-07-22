@@ -794,5 +794,10 @@ function renderStateWriterPython(status: BackgroundTaskExecutionState["status"])
 }
 
 function shellQuote(value: string): string {
-  return `'${value.replaceAll(`'`, `"'"'"'`)}'`;
+  // POSIX-safe single-quote escaping: close the quote, emit a quoted literal
+  // quote (`'"'"'`), then reopen. The previous sequence had a stray leading
+  // double quote (`'"'"'`), which corrupted any value containing a single
+  // quote — e.g. a command like `printf 'x'` produced invalid JSON in the
+  // launch script's initial state.json, later crashing readState().
+  return `'${value.replaceAll(`'`, `'"'"'`)}'`;
 }
