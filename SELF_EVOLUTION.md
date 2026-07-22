@@ -6,6 +6,71 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-22 (run 9) — 🐛 Fix real `shellQuote` escaping bug + make background-task tests hermetic (RED→GREEN baseline)
+
+**Audited:** The whole test suite on a fresh cloud checkout. The log claimed
+**174/174**, but the fresh container was actually **RED: 4 failing tests** across
+`operator-runtime.test.ts`, `server.test.ts`, `app.test.ts`. Every prior run had
+been recording green from a machine whose ambient environment happened to mask
+these — so future runs were about to keep stacking work on a broken baseline.
+Root-caused all four rather than papering over them.
+
+**Two distinct problems found:**
+
+1. **Genuine correctness bug** (`src/harness/background-tasks.ts:797`): the POSIX
+   single-quote escaper was wrong — `shellQuote` emitted `"'"'"'` (a *6-char*
+   sequence starting with a double-quote) where the correct escape is `'"'"'`.
+   Verified: with the bug, `printf 'line-1'` round-trips to `printf "'line-1"'`,
+   corrupting both the **executed command** and the launch script's **JSON state
+   payload** for *any* background task whose command/payload contains a `'`
+   (extremely common). The identical helper in `src/training/runner.ts:228` was
+   already correct — this was a copy-paste typo. Fixed to match. This is a real
+   runtime bug that hit users, not just tests (it caused the `SyntaxError:
+   Expected ',' or '}' … position 311` state-file parse failure).
+
+2. **Test hermeticity** (mirrors the run-1 `configHome` fix): the background-task
+   *integration* tests spawned real detached subprocesses and leaned on ambient
+   `process.kill(-pid, 0)` semantics. Fake pids (1234/5678/9999) resolve to
+   `EPERM` ("alive") on the original dev machine but `ESRCH` ("dead") as root in a
+   fresh container → tasks cascaded to `missing-process`/`degraded`/`NOT_FOUND`,
+   and real subprocesses raced the tests' manual `writeState`. The unit tests in
+   `background-tasks.test.ts` already inject a stub spawner; the integration tests
+   didn't.
+
+**Changed (additive, reversible):**
+- `src/harness/background-tasks.ts`: one-line `shellQuote` fix (source change).
+- `src/cli/app.ts`: added an injectable `backgroundTaskSpawnProcess?` option to
+  `OperatorCliAppOptions` (alongside the existing `backgroundTaskIsProcessRunning?`)
+  and threaded both into the `StandaloneOperatorRuntime` it constructs. Production
+  default unchanged (real `spawn`).
+- Tests now inject deterministic stubs (`() => ({ pid: 4242, unref(){} })`) so
+  reconciliation is driven solely by explicit state, keyed off the exact
+  degraded-detection contract in `server.ts` (a remote is only degraded when a
+  **state file exists** with `status:"running"` and a dead pid — no state file ⇒
+  active): `operator-runtime.test.ts` (mock spawn + `()=>false`), `app.test.ts`
+  (session-lifecycle: `pid===4242`; background/monitor: stub writes the expected
+  `output.log` and reports pid 4242 alive so the task stays active for the
+  watch/active assertions), `server.test.ts` (main runtime stub writes no state ⇒
+  `active` early / `NOT_FOUND`+`missing-process` on sync; drifting + breaker
+  runtimes get the stub, keeping `()=>false` so their explicit dead-states degrade
+  as designed).
+
+**Test results:** 🎯 **RED → GREEN: 4 failing → 174/174 passing**, deterministic
+across 3 consecutive runs. Build ✅ (5 files, 532 kB). `typecheck:src` ✅ (exit 0).
+Full `tsc` unchanged at **125** (all in test files; no new type errors).
+
+**New idea (next increment):** the training subsystem (objective #2d) still has
+**no in-process, pluggable model backend** — `runner.ts` only emits an MLX/axolotl
+subprocess *plan*, so the capture→dataset→replay→**train→infer/generalize** loop
+can't be exercised in the cloud at all. Next run: add `src/training/movement-model.ts`
+with a `MovementModelBackend` interface and a dependency-free **variable-order
+Markov policy** reference backend that learns transition stats over the movement
+token stream derived from `ReplayTimelineEvent[]`, memorizes recorded sequences,
+and **generalizes to unseen-but-related contexts via backoff** — deterministic and
+fully testable, with the MLX runner kept as the documented real-backend seam.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

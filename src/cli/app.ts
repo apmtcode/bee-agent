@@ -118,6 +118,21 @@ export type OperatorCliAppOptions = {
    * to an isolated path so the developer's real global config never leaks in.
    */
   configHome?: string;
+  /**
+   * Predicate used to decide whether a background-task pid is still alive.
+   * Defaults to a real `process.kill(pid, 0)` probe in production. Tests should
+   * inject a deterministic predicate so reconciliation does not depend on the
+   * ambient process table (fake pids resolve to ESRCH/EPERM differently across
+   * machines and privilege levels).
+   */
+  backgroundTaskIsProcessRunning?: (pid: number) => boolean;
+  /**
+   * Spawner used to launch background-task processes. Defaults to a real
+   * detached `spawn` in production. Tests should inject a side-effect-free stub
+   * returning a fixed pid so reconciliation is driven solely by explicitly
+   * written state rather than a racing detached subprocess.
+   */
+  backgroundTaskSpawnProcess?: ConstructorParameters<typeof StandaloneOperatorRuntime>[0]["backgroundTaskSpawnProcess"];
   stdin?: NodeJS.ReadableStream;
   stdout?: NodeJS.WritableStream;
   stderr?: NodeJS.WritableStream;
@@ -147,7 +162,15 @@ export class OperatorCliApp {
   readonly teams: FileOperatorCliTeamStore;
 
   constructor(private readonly options: OperatorCliAppOptions) {
-    this.runtime = new StandaloneOperatorRuntime({ rootDir: options.rootDir });
+    this.runtime = new StandaloneOperatorRuntime({
+      rootDir: options.rootDir,
+      ...(options.backgroundTaskIsProcessRunning
+        ? { backgroundTaskIsProcessRunning: options.backgroundTaskIsProcessRunning }
+        : {}),
+      ...(options.backgroundTaskSpawnProcess
+        ? { backgroundTaskSpawnProcess: options.backgroundTaskSpawnProcess }
+        : {}),
+    });
     this.server = new OperatorControlPlaneServer({ runtime: this.runtime });
     this.teams = new FileOperatorCliTeamStore(options.rootDir);
     this.cwd = options.cwd ?? process.cwd();

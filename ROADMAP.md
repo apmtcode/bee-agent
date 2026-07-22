@@ -8,6 +8,16 @@ unchecked items are queued. Keep this richer than you found it each run.
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`
       (2026-06-22).
+- [x] **Fix `shellQuote` single-quote escaping bug** in
+      `src/harness/background-tasks.ts` (2026-07-22, run 9) — emitted `"'"'"'`
+      instead of `'"'"'`, corrupting any background-task command/state payload
+      containing a `'`. Real runtime bug, not just a test issue.
+- [x] **Make background-task integration tests hermetic** (2026-07-22, run 9) —
+      added an injectable `backgroundTaskSpawnProcess` to `OperatorCliApp`
+      (runtime already had it) and stubbed the launcher in operator-runtime /
+      server / app tests so reconciliation no longer depends on ambient
+      `process.kill` semantics or races a real detached subprocess. Restored the
+      suite from 4 failing → 174/174 on a fresh cloud checkout.
 - [ ] **Pay down typecheck debt** (surfaced by the `typecheck` script). Full
       `tsc --noEmit` count was **397** on 2026-06-22; now **125**. 🎯 ALL source
       (`src/**` non-test) files typecheck clean since run 7; remaining 125 errors
@@ -62,9 +72,19 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
-      deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
+- [ ] **Pluggable local-model backend interface for the training runner with a
+      deterministic mock backend** (so cloud/CI tests pass) and a documented seam
+      for a real on-device small model. **← NEXT (run 9 scouted this):** `runner.ts`
+      today only emits an MLX/axolotl subprocess *plan*, so the full
+      capture→dataset→replay→**train→infer/generalize** loop is untestable in the
+      cloud. Add `src/training/movement-model.ts`: a `MovementModelBackend`
+      interface + a dependency-free **variable-order Markov policy** reference
+      backend that (a) derives a movement-token stream from `ReplayTimelineEvent[]`
+      (the `action`/`observation` events), (b) learns context→next-token transition
+      counts at orders 1..N, (c) memorizes recorded sequences (fidelity), and
+      (d) **generalizes to unseen-but-related contexts via backoff**. Deterministic,
+      serializable, fully unit-testable; keep the MLX runner as the real-backend
+      seam behind the same interface.
 - [ ] Synthetic event-stream generator to validate capture→dataset→replay
       round-trips without real OS input.
 - [ ] Generalization eval harness: measure replay fidelity on held-out but
