@@ -734,27 +734,15 @@ function renderLaunchScript(task: BackgroundTaskRecord): string {
   const quotedOutputFile = shellQuote(task.execution.outputFile);
   const quotedCwd = shellQuote(task.cwd);
   const quotedCommand = shellQuote(task.command);
-  const quotedStatePayload = shellQuote(
-    JSON.stringify({
-      version: 1,
-      taskId: task.id,
-      kind: task.kind,
-      status: "running",
-      pid: "$$",
-      startedAt: "__OPENCLAW_STARTED_AT__",
-      updatedAt: "__OPENCLAW_STARTED_AT__",
-      outputFile: task.execution.outputFile,
-      cwd: task.cwd,
-      command: task.command,
-    }),
-  );
 
   return [
     "#!/usr/bin/env bash",
     "set -euo pipefail",
     `mkdir -p $(dirname ${quotedStatePath}) $(dirname ${quotedOutputFile})`,
     "started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-    `printf '%s' ${quotedStatePayload} | sed "s/__OPENCLAW_STARTED_AT__/$started_at/g; s/\"\$\$\"/$$/g" > ${quotedStatePath}`,
+    `python3 - ${quotedStatePath} "$started_at" $$ <<'PY'`,
+    ...renderStartStateWriterPython(task),
+    "PY",
     `printf '%s\n' "starting ${task.kind} ${task.id}" >> ${quotedOutputFile}`,
     `if cd ${quotedCwd} && bash -lc ${quotedCommand} >> ${quotedOutputFile} 2>&1; then`,
     "  completed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
@@ -771,6 +759,37 @@ function renderLaunchScript(task: BackgroundTaskRecord): string {
     "fi",
     "",
   ].join("\n");
+}
+
+function renderStartStateWriterPython(task: BackgroundTaskRecord): string[] {
+  // Embed the running-state payload as a Python string literal (double-encoded
+  // JSON) so that commands containing quotes, slashes, or newlines can never
+  // corrupt the on-disk JSON — Python's json module owns the serialization.
+  // started_at and the real pid arrive via argv, not shell string surgery.
+  const payloadLiteral = JSON.stringify(
+    JSON.stringify({
+      version: 1,
+      taskId: task.id,
+      kind: task.kind,
+      status: "running",
+      outputFile: task.execution.outputFile,
+      cwd: task.cwd,
+      command: task.command,
+    }),
+  );
+  return [
+    "import json",
+    "import pathlib",
+    "import sys",
+    "state_path = pathlib.Path(sys.argv[1])",
+    "started_at = sys.argv[2]",
+    "pid = int(sys.argv[3])",
+    `state = json.loads(${payloadLiteral})`,
+    "state['pid'] = pid",
+    "state['startedAt'] = started_at",
+    "state['updatedAt'] = started_at",
+    "state_path.write_text(json.dumps(state, indent=2) + '\\n')",
+  ];
 }
 
 function renderStateWriterPython(status: BackgroundTaskExecutionState["status"]): string[] {
@@ -794,5 +813,11 @@ function renderStateWriterPython(status: BackgroundTaskExecutionState["status"])
 }
 
 function shellQuote(value: string): string {
-  return `'${value.replaceAll(`'`, `"'"'"'`)}'`;
+  // Wrap in single quotes and escape any embedded single quote as '"'"' — close
+  // the quoted run, emit a double-quoted single quote, then reopen. The previous
+  // escape (`"'"'"'`) had a spurious leading double quote, so any value with a
+  // single quote (e.g. a command like `printf 'x'`) produced an unbalanced
+  // argument that bash rejected with "unexpected EOF while looking for matching
+  // `''`", causing every such background task to fail to launch.
+  return `'${value.replaceAll(`'`, `'"'"'`)}'`;
 }

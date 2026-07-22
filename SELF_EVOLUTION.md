@@ -6,6 +6,75 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-22 (run 9) — 🐛 Two real background-task launch bugs fixed; suite now green + deterministic
+
+**Audited:** The test suite's health at baseline. `npm test` was **flaky**:
+2–4 of 174 tests failed per run (worst case 4), non-deterministically, in
+`operator-runtime.test.ts`, `server.test.ts`, and `app.test.ts` — all the
+background-task paths. Root-caused each instead of papering over it.
+
+**Two genuine source bugs found and fixed in `src/harness/background-tasks.ts`
+(the background-task launch script), plus one control-plane robustness fix:**
+
+1. **Corrupt startup state JSON (`renderLaunchScript`).** The launch script built
+   its initial `state.json` via `printf '<json>' | sed "s/…/…/"` string surgery.
+   Any command containing quotes, slashes, or newlines mangled the JSON on disk
+   (observed: `"command":"printf "'line-1\nline-2\n"'"`). The Python **completion**
+   writer then did `json.loads(state_path.read_text())`, which threw on the
+   malformed file — so the task's state was left permanently corrupt and every
+   later `readState`/reconcile threw. **Fix:** write the startup state through a
+   small Python snippet (mirroring the completion writer), embedding the payload
+   as a double-`JSON.stringify`'d Python string literal inside a quoted heredoc —
+   Python's `json` owns serialization; `started_at`/`pid` arrive via `argv`. No
+   more shell string surgery.
+
+2. **`shellQuote` broke every single-quoted command.** The single-quote escape
+   was `"'"'"'` (a spurious leading `"`, wrong order) instead of the correct
+   `'"'"'`. So `shellQuote("printf 'x'")` produced an **unbalanced** argument and
+   `bash -lc …` rejected it with *"unexpected EOF while looking for matching
+   `''`"* — meaning **any** background task whose command used single quotes
+   (`printf 'x'`, `grep 'pat'`, …) silently failed to launch. **Fix:** correct the
+   escape to `'"'"'`. Verified end-to-end that quoted commands now run.
+
+3. **Platform breaker double-counted one failed task (`src/control-plane/server.ts`).**
+   `getRetryableFailureObservation` fingerprinted failures as
+   `remoteId:cause:taskId`, where `cause` is either `background task
+   missing-process` **or** `missing-state`. The *same* failed task, observed in
+   different phases (state file not yet written vs. written), yielded two distinct
+   fingerprints → counted as two platform failures → the circuit breaker tripped
+   **prematurely**. **Fix:** fingerprint on task identity
+   (`remoteId:background-task-failure:taskId`) so the two causes for one task
+   dedupe. `reason` still reports the specific cause.
+
+**Test changes (deterministic, semantics-preserving):**
+- New regression test in `background-tasks.test.ts` that runs the **real** launch
+  script for a quoted command and asserts it launches, exits 0, and persists
+  parseable state + correct output (guards bugs #1 and #2).
+- `operator-runtime.test.ts` and `server.test.ts` background-task tests now inject
+  a no-op `backgroundTaskSpawnProcess`. These tests already drive every task's
+  state by hand; a real OS process only *raced* those writes (its async
+  launch-script "running" write lands at an arbitrary time, flipping a remote's
+  diagnostics to `missing-process` and skewing the breaker tally). The no-op spawn
+  removes the race while leaving the store's `running` status intact — this is
+  what made the suite flaky, and it is now gone.
+
+**Test results:** `npm test` **175/175, green on 6/6 consecutive runs** (was
+2–4 failures/run). `npm run build` ✅. `npm run typecheck:src` ✅ (exit 0). Full
+`tsc` unchanged at **125** pre-existing test-only errors (zero new). Focused diff:
++102/-17 across 5 files, one source file carrying the real fixes.
+
+**New idea:** the `sleep 5`/`tail -f` commands sprinkled through the background-task
+tests spawn **real detached OS processes** that outlive the test (orphans) and are
+the root of the historical flakiness. Add a tiny `FakeBackgroundProcessHarness`
+test util that (a) provides the no-op spawn, (b) can optionally *simulate* a
+launch-script state write synchronously for tests that want the wrapper's
+contribution deterministically, and (c) asserts no real child was spawned — then
+sweep it across every background-task test so no suite ever shells out again.
+Second idea: a `verify` npm script (`typecheck:src && build && test`) plus a
+`--reporter` retry-once flake detector wired into the engine's pre-push gate.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

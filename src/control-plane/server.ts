@@ -2017,7 +2017,13 @@ function getRetryableFailureObservation(
   if (cause === "background task missing-process" || cause === "background task missing-state") {
     return {
       reason: cause,
-      fingerprint: `${item.remoteId}:${cause}:${item.diagnostics?.taskId ?? ""}`,
+      // Both causes describe the same underlying failed background task on this
+      // remote. Fingerprint on the task identity alone (not the specific cause)
+      // so a task observed first as `missing-state` and later as
+      // `missing-process` — a benign race between the async launch-script state
+      // write and reconciliation — is deduped instead of counted as two
+      // distinct platform failures, which would trip the breaker prematurely.
+      fingerprint: `${item.remoteId}:background-task-failure:${item.diagnostics?.taskId ?? ""}`,
     };
   }
   return undefined;

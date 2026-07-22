@@ -1,7 +1,11 @@
+import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
+
+const execFileAsync = promisify(execFile);
 import {
   BackgroundTaskExecutionService,
   FileBackgroundTaskStore,
@@ -369,5 +373,39 @@ describe("BackgroundTaskExecutionService", () => {
     await expect(fs.readFile(path.join(rootDir, task.execution.launchScript), "utf8")).resolves.toContain("bash -lc");
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
+  });
+
+  it("launches and persists valid state for a command containing single and double quotes", async () => {
+    // Regression for two launch-script bugs that only bite quoted commands:
+    //   1. `shellQuote` mis-escaped embedded single quotes, so `bash -lc` saw an
+    //      unbalanced argument and every single-quoted command failed to launch.
+    //   2. The startup state was built with `printf | sed`, which mangled the
+    //      JSON for commands with quotes/slashes and then crashed the completion
+    //      writer that reads state.json back.
+    // Run the real launch script end-to-end and assert both the command runs and
+    // the persisted state stays parseable.
+    const rootDir = await makeTempDir();
+    const store = new FileBackgroundTaskStore(
+      path.join(rootDir, "background-tasks.json"),
+      () => ({ pid: 4242, unref() {} }),
+      () => false,
+    );
+    const command = `printf 'a/b "c" d/e'`;
+    const task = await store.start({ title: "Tricky command", command, cwd: rootDir });
+    const scriptPath = path.join(rootDir, task.execution.launchScript);
+
+    // Run the launch script exactly as the store would (relative state/output
+    // paths resolve against rootDir), and wait for it to finish.
+    await execFileAsync("bash", [scriptPath], { cwd: rootDir });
+
+    const raw = await fs.readFile(path.join(rootDir, task.execution.stateFile), "utf8");
+    const state = JSON.parse(raw) as BackgroundTaskExecutionState;
+    expect(state.status).toBe("completed");
+    expect(state.exitCode).toBe(0);
+    expect(state.command).toBe(command);
+    expect(typeof state.pid).toBe("number");
+
+    const output = await fs.readFile(path.join(rootDir, task.execution.outputFile), "utf8");
+    expect(output).toContain(`a/b "c" d/e`);
   });
 });

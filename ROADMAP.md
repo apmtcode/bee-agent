@@ -3,6 +3,20 @@
 Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
+## Reliability / correctness
+- [x] **Green + deterministic test suite** (2026-07-22, run 9). Suite was flaky
+      (2–4/174 failing per run). Fixed two real launch-script bugs — corrupt
+      startup `state.json` from `printf|sed` surgery, and a `shellQuote` escape
+      that broke every single-quoted command — plus a platform-breaker
+      double-count, and de-raced the background-task tests with a no-op spawn.
+      Now **175/175, green 6/6 runs**.
+- [ ] `FakeBackgroundProcessHarness` test util: a shared no-op spawn that can
+      optionally simulate the launch-script state write synchronously and assert
+      no real child was spawned; sweep across all background-task tests so the
+      suite never shells out to real `sleep`/`tail` processes again.
+- [ ] Audit remaining `shellQuote` call sites and any other `printf|sed`-style
+      shell string surgery in the harness for the same quoting-corruption class.
+
 ## Foundations / DX
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
@@ -71,6 +85,10 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
       related synthetic trajectories.
 
 ## Innovation backlog
+- [ ] Flake detector in the pre-push gate: run `test` twice (or with a
+      retry-once reporter) and fail the engine's push if results differ, so a
+      re-introduced race is caught before it reaches `main`. (Run 9 removed the
+      current flakiness; this keeps it from silently coming back.)
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in
       project health over time.
