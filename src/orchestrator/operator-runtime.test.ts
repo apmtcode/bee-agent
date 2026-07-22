@@ -530,6 +530,10 @@ describe("StandaloneOperatorRuntime", () => {
   it("starts, syncs, recovers, lists, and cancels background tasks", async () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
+      // Deterministic mock spawn: this test drives every execution-state
+      // transition explicitly via writeState(), so a real detached process
+      // would only race those writes and flake under parallel CPU load.
+      backgroundTaskSpawnProcess: () => ({ pid: 424242, unref() {} }),
       backgroundTaskIsProcessRunning: () => false,
     });
     const session = await runtime.startSession({ title: "Tasks", agentId: "main" });

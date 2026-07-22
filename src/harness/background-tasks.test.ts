@@ -355,6 +355,84 @@ describe("FileBackgroundTaskStore", () => {
   });
 });
 
+describe("BackgroundTaskExecutionService (real launch script)", () => {
+  async function waitForTerminalState(
+    store: FileBackgroundTaskStore,
+    taskId: string,
+    timeoutMs = 10000,
+  ): Promise<BackgroundTaskExecutionState> {
+    const deadline = Date.now() + timeoutMs;
+    for (;;) {
+      const state = await store.getExecutionState(taskId);
+      if (state && (state.status === "completed" || state.status === "failed")) {
+        return state;
+      }
+      if (Date.now() > deadline) {
+        throw new Error(`background task ${taskId} did not reach a terminal state; last=${JSON.stringify(state)}`);
+      }
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+  }
+
+  // Regression guard: the launch script used to hand-quote the JSON state
+  // payload through `printf | sed`, which produced INVALID JSON whenever the
+  // command contained single quotes (and never substituted the pid because
+  // sed treats `$` as an anchor). We now pass the payload via an env var and
+  // let python write it atomically. A command with single quotes must yield a
+  // parseable state file with the command intact and a real numeric pid.
+  it("writes a valid, atomic state file for a command containing single quotes", async () => {
+    const rootDir = await makeTempDir();
+    const filePath = path.join(rootDir, "background-tasks.json");
+    // Real spawn + real is-process-running: exercise the actual bash/python script.
+    const store = new FileBackgroundTaskStore(filePath);
+    const command = "printf 'line-1\\nline-2\\n'";
+
+    const task = await store.start({
+      sessionId: "sess-real",
+      title: "Quoted command",
+      command,
+      cwd: rootDir,
+      kind: "task",
+    });
+
+    const terminal = await waitForTerminalState(store, task.id);
+    expect(terminal.status).toBe("completed");
+    expect(terminal.exitCode).toBe(0);
+    // The command survives the round-trip through the shell unmangled...
+    expect(terminal.command).toBe(command);
+    // ...and the pid placeholder was substituted with a real numeric pid.
+    expect(typeof terminal.pid).toBe("number");
+    expect(terminal.pid).toBeGreaterThan(0);
+
+    // The on-disk file must be valid JSON (the old script emitted broken JSON here).
+    const raw = await fs.readFile(path.join(rootDir, task.execution.stateFile), "utf8");
+    expect(() => JSON.parse(raw)).not.toThrow();
+    expect(JSON.parse(raw)).toMatchObject({ taskId: task.id, status: "completed", command });
+
+    await expect(store.getOutput(task.id, 2)).resolves.toContain("line-2");
+  });
+
+  it("records a failed state (valid JSON) when the command exits non-zero", async () => {
+    const rootDir = await makeTempDir();
+    const filePath = path.join(rootDir, "background-tasks.json");
+    const store = new FileBackgroundTaskStore(filePath);
+
+    const task = await store.start({
+      sessionId: "sess-real",
+      title: "Failing command",
+      command: "sh -c 'exit 3'",
+      cwd: rootDir,
+      kind: "task",
+    });
+
+    const terminal = await waitForTerminalState(store, task.id);
+    expect(terminal.status).toBe("failed");
+    expect(terminal.exitCode).toBe(3);
+    const raw = await fs.readFile(path.join(rootDir, task.execution.stateFile), "utf8");
+    expect(() => JSON.parse(raw)).not.toThrow();
+  });
+});
+
 describe("BackgroundTaskExecutionService", () => {
   it("writes launch artifacts and reads task output", async () => {
     const rootDir = await makeTempDir();

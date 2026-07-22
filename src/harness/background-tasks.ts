@@ -176,6 +176,7 @@ export class BackgroundTaskExecutionService {
         ...process.env,
         OPENCLAW_BACKGROUND_TASK_ID: task.id,
         OPENCLAW_BACKGROUND_TASK_KIND: task.kind,
+        [BACKGROUND_STATE_ENV]: JSON.stringify(buildInitialStatePayload(task)),
       },
       stdio: "ignore",
       detached: true,
@@ -729,42 +730,56 @@ function applyExecutionState(task: BackgroundTaskRecord, state: BackgroundTaskEx
   };
 }
 
+/**
+ * Environment variable through which the initial "running" state payload is
+ * handed to the launch script. Passing it via the environment (set in
+ * `launch()`) rather than shell-quoting a JSON string into the script avoids a
+ * whole class of quoting bugs — e.g. commands containing single quotes used to
+ * produce invalid JSON in the state file. The child's python writer parses it
+ * and stamps in the real pid/timestamps.
+ */
+const BACKGROUND_STATE_ENV = "OPENCLAW_BACKGROUND_STATE";
+
+function buildInitialStatePayload(task: BackgroundTaskRecord): Record<string, unknown> {
+  return {
+    version: 1,
+    taskId: task.id,
+    kind: task.kind,
+    status: "running",
+    outputFile: task.execution.outputFile,
+    cwd: task.cwd,
+    command: task.command,
+  };
+}
+
 function renderLaunchScript(task: BackgroundTaskRecord): string {
   const quotedStatePath = shellQuote(task.execution.stateFile);
   const quotedOutputFile = shellQuote(task.execution.outputFile);
   const quotedCwd = shellQuote(task.cwd);
   const quotedCommand = shellQuote(task.command);
-  const quotedStatePayload = shellQuote(
-    JSON.stringify({
-      version: 1,
-      taskId: task.id,
-      kind: task.kind,
-      status: "running",
-      pid: "$$",
-      startedAt: "__OPENCLAW_STARTED_AT__",
-      updatedAt: "__OPENCLAW_STARTED_AT__",
-      outputFile: task.execution.outputFile,
-      cwd: task.cwd,
-      command: task.command,
-    }),
-  );
 
   return [
     "#!/usr/bin/env bash",
     "set -euo pipefail",
-    `mkdir -p $(dirname ${quotedStatePath}) $(dirname ${quotedOutputFile})`,
+    `state_path=${quotedStatePath}`,
+    `mkdir -p $(dirname "$state_path") $(dirname ${quotedOutputFile})`,
     "started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-    `printf '%s' ${quotedStatePayload} | sed "s/__OPENCLAW_STARTED_AT__/$started_at/g; s/\"\$\$\"/$$/g" > ${quotedStatePath}`,
+    // Initial "running" write. The payload comes from $OPENCLAW_BACKGROUND_STATE
+    // (set by launch()), so no fragile shell-quoting of JSON is needed. Python
+    // stamps in this process's pid + start time and writes atomically.
+    `python3 - "$state_path" $$ "$started_at" <<'PY'`,
+    ...renderInitialStateWriterPython(),
+    "PY",
     `printf '%s\n' "starting ${task.kind} ${task.id}" >> ${quotedOutputFile}`,
     `if cd ${quotedCwd} && bash -lc ${quotedCommand} >> ${quotedOutputFile} 2>&1; then`,
     "  completed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-    `  python3 - ${quotedStatePath} $$ "$completed_at" 0 <<'PY'`,
+    `  python3 - "$state_path" $$ "$completed_at" 0 <<'PY'`,
     ...renderStateWriterPython("completed"),
     "PY",
     "else",
     "  exit_code=$?",
     "  completed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-    `  python3 - ${quotedStatePath} $$ "$completed_at" "$exit_code" <<'PY'`,
+    `  python3 - "$state_path" $$ "$completed_at" "$exit_code" <<'PY'`,
     ...renderStateWriterPython("failed"),
     "PY",
     '  exit "$exit_code"',
@@ -773,9 +788,36 @@ function renderLaunchScript(task: BackgroundTaskRecord): string {
   ].join("\n");
 }
 
+// Atomic write helper shared by both python writers: serialize to a sibling
+// temp file, then os.replace() (atomic rename) so concurrent readers never see
+// a partial JSON document. Mirrors writeJsonAtomic() on the Node side.
+const PYTHON_ATOMIC_WRITE = [
+  "tmp_path = state_path.with_name(state_path.name + f'.{pid}.tmp')",
+  "tmp_path.write_text(json.dumps(state, indent=2) + '\\n')",
+  "os.replace(tmp_path, state_path)",
+];
+
+function renderInitialStateWriterPython(): string[] {
+  return [
+    "import json",
+    "import os",
+    "import pathlib",
+    "import sys",
+    "state_path = pathlib.Path(sys.argv[1])",
+    "pid = int(sys.argv[2])",
+    "started_at = sys.argv[3]",
+    `state = json.loads(os.environ['${BACKGROUND_STATE_ENV}'])`,
+    "state['pid'] = pid",
+    "state['startedAt'] = started_at",
+    "state['updatedAt'] = started_at",
+    ...PYTHON_ATOMIC_WRITE,
+  ];
+}
+
 function renderStateWriterPython(status: BackgroundTaskExecutionState["status"]): string[] {
   return [
     "import json",
+    "import os",
     "import pathlib",
     "import sys",
     "state_path = pathlib.Path(sys.argv[1])",
@@ -789,10 +831,14 @@ function renderStateWriterPython(status: BackgroundTaskExecutionState["status"])
     "state['completedAt'] = timestamp",
     "state['exitCode'] = exit_code",
     `state['error'] = None if '${status}' == 'completed' else f'background task exited non-zero ({exit_code})'`,
-    "state_path.write_text(json.dumps(state, indent=2) + '\\n')",
+    ...PYTHON_ATOMIC_WRITE,
   ];
 }
 
 function shellQuote(value: string): string {
-  return `'${value.replaceAll(`'`, `"'"'"'`)}'`;
+  // POSIX-safe single-quoting: close the quote, emit an escaped quote, reopen.
+  // The previous replacement (`"'"'"'`) had a stray leading double-quote, so any
+  // value containing a single quote (e.g. `printf 'x'`) produced a malformed
+  // token and `bash -lc` failed with "unexpected EOF while looking for `''".
+  return `'${value.replaceAll(`'`, `'\\''`)}'`;
 }

@@ -18,6 +18,17 @@ async function makeTempDir(): Promise<string> {
   return dir;
 }
 
+// Deterministic no-op spawn for background tasks. These tests drive every
+// execution-state transition explicitly via writeState(); a real detached
+// launch script would asynchronously write its own state.json (with a real
+// pid), racing those writes and making failure counts / breaker states
+// nondeterministic under parallel CPU load. The real launch script is covered
+// separately by an end-to-end test in harness/background-tasks.test.ts.
+let mockSpawnPid = 700000;
+function mockBackgroundSpawn(): () => { pid: number; unref(): void } {
+  return () => ({ pid: ++mockSpawnPid, unref() {} });
+}
+
 afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })));
 });
@@ -83,6 +94,7 @@ describe("OperatorControlPlaneServer", () => {
     const rootDir = await makeTempDir();
     const runtime = new StandaloneOperatorRuntime({
       rootDir,
+      backgroundTaskSpawnProcess: mockBackgroundSpawn(),
       backgroundTaskIsProcessRunning: () => false,
       delivery: new OperatorDeliveryService(rootDir, {
         sendBrowserPush: async () => {},
@@ -952,6 +964,7 @@ describe("OperatorControlPlaneServer", () => {
     const driftingRootDir = await makeTempDir();
     const driftingRuntime = new StandaloneOperatorRuntime({
       rootDir: driftingRootDir,
+      backgroundTaskSpawnProcess: mockBackgroundSpawn(),
       backgroundTaskIsProcessRunning: () => false,
     });
     const driftingServer = new OperatorControlPlaneServer({ runtime: driftingRuntime });
@@ -1018,6 +1031,7 @@ describe("OperatorControlPlaneServer", () => {
     const breakerRootDir = await makeTempDir();
     const breakerRuntime = new StandaloneOperatorRuntime({
       rootDir: breakerRootDir,
+      backgroundTaskSpawnProcess: mockBackgroundSpawn(),
       backgroundTaskIsProcessRunning: () => false,
     });
     const breakerServer = new OperatorControlPlaneServer({ runtime: breakerRuntime });

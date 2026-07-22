@@ -6,6 +6,62 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-22 (run 9) — 🛡️ Reliability: background-task launch script fixed; flaky suite → deterministically green
+
+**Audited:** The verification gate itself (procedure step 5). On a fresh install
+the full suite was **non-deterministically failing 3–4 of 174 tests** each run,
+and `operator-runtime.test.ts` + `server.test.ts` failed even *in isolation* —
+so "don't push if tests fail" was effectively unenforceable and every prior
+run's "174/174 ✅" was environment-luck. Traced all failures to
+`src/harness/background-tasks.ts` (the real background-task launch script).
+
+**Three genuine production bugs found & fixed (additive, in `background-tasks.ts`):**
+1. **Invalid-JSON state file.** The launch script hand-quoted the JSON state
+   payload through `printf … | sed … > file`. For any command containing a
+   single quote (e.g. `printf 'x'`) this emitted **invalid JSON**, and the pid
+   was never substituted because `sed`'s `s/"$$"/…/` treats `$` as a
+   *regex anchor*, so `"$$"` stayed literal. → Now the payload is passed via a
+   new `OPENCLAW_BACKGROUND_STATE` env var (set in `launch()`) and parsed by
+   python — no shell-quoting of JSON at all.
+2. **Non-atomic state writes.** Both the shell `>` redirect and python's
+   `write_text` truncate-then-write, so a concurrent reader could observe a
+   torn file (`SyntaxError … at position 311`). → Both writers now write a
+   sibling temp file then `mv`/`os.replace` (atomic rename), mirroring the Node
+   side's `writeJsonAtomic`.
+3. **Broken `shellQuote`.** It produced `"'"'"'` (a stray leading `"`) instead
+   of the POSIX form `'\''`, so *every* single-quote command failed with
+   `bash: -c: unexpected EOF while looking for matching '`. → Corrected the
+   escaping. This was the deterministic root cause of the isolated failures.
+
+**Test hermeticity (test-only):** injected deterministic mock spawns into the
+state-machine tests that already drive every execution-state transition
+explicitly (`operator-runtime` background-task mega-test; `server.test.ts`
+main/drift/breaker runtimes). A real detached launch script would otherwise
+write its own `state.json` and race those writes, making breaker
+`failureCount`s nondeterministic under parallel CPU load. Added a
+`mockBackgroundSpawn()` helper documenting why.
+
+**New coverage:** 2 real-spawn E2E tests in `background-tasks.test.ts` that run
+the *actual* bash/python script to completion and assert (a) a single-quote
+command yields a **parseable** state file with the command intact + a real
+numeric pid, and (b) a non-zero exit records a valid `failed` state. Both would
+have failed on the pre-fix script.
+
+**Test results:** suite **174 → 176** tests; **green 8/8 consecutive full runs**
+(was 3–4 failures/run and deterministically red in isolation). `npm run build`
+✅. `npm run typecheck:src` ✅ (exit 0). Full `tsc` unchanged at **125**
+(test-file-only debt, untouched).
+
+**New idea:** the launch script runs the user command via `bash -lc` — the `-l`
+*login* flag sources `/etc/profile` + user rc files, injecting host-dependent
+env/failures into every background task. Switch to non-login `bash -c` (or make
+the shell configurable) for hermetic, reproducible task execution. Second idea:
+have the engine's pre-push self-check run `npm test` **twice** (or with a small
+repeat count) and treat any inconsistency as a failure, so flakiness like this
+is caught by the gate instead of by luck.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

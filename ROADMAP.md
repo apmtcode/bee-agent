@@ -3,6 +3,23 @@
 Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
+## Reliability / correctness
+- [x] **Fix the background-task launch script** (`src/harness/background-tasks.ts`)
+      — DONE run 9. Three real bugs: (1) invalid-JSON state file for
+      single-quote commands + pid never substituted (`sed` `$` anchor); now the
+      payload is passed via `OPENCLAW_BACKGROUND_STATE` env + written by python.
+      (2) non-atomic state writes → torn reads; now temp+rename atomic.
+      (3) `shellQuote` emitted `"'"'"'` not `'\''`, breaking every single-quote
+      command under `bash -lc`. Added 2 real-spawn E2E regression tests.
+- [x] **De-flake the test suite** — DONE run 9. Injected deterministic mock
+      spawns into state-machine tests that manage state explicitly, so real
+      detached processes stop racing them. Suite now green 8/8 consecutive runs.
+- [ ] Launch script uses `bash -lc` (login shell) — sources host profiles into
+      every background task. Switch to non-login `bash -c` (or configurable
+      shell) for hermetic, reproducible execution.
+- [ ] Engine pre-push self-check: run `npm test` twice (or `--repeat`) and fail
+      on any inconsistency, so flakiness is caught by the gate, not by luck.
+
 ## Foundations / DX
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
