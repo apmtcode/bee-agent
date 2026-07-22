@@ -17,7 +17,7 @@ async function makeTempDir(): Promise<string> {
 }
 
 afterEach(async () => {
-  await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
+  await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })));
 });
 
 describe("FileBackgroundTaskStore", () => {
@@ -370,4 +370,50 @@ describe("BackgroundTaskExecutionService", () => {
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
   });
+
+  it("writes a valid, well-typed state file even when the command contains quotes and newlines", async () => {
+    // Regression: the startup state used to be templated by a fragile
+    // `printf | sed` pipeline that (a) left the pid as the literal string "$$"
+    // and (b) corrupted commands containing quotes/newlines into invalid JSON.
+    // Executing the generated launch script must now yield a state file that
+    // parses cleanly, preserves the command byte-for-byte, and carries a
+    // numeric pid.
+    const rootDir = await makeTempDir();
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"), () => ({ pid: 1313, unref() {} }));
+    // Double quotes, backslash escapes, and an embedded newline are exactly the
+    // characters that JSON must escape and that the old `printf | sed` writer
+    // mangled into invalid JSON.
+    const command = 'printf "a\\nb\\n"\nprintf "c\\n"';
+    const task = await store.start({
+      title: "Emit structured output",
+      command,
+      cwd: rootDir,
+      kind: "task",
+    });
+
+    const launchScriptPath = path.join(rootDir, task.execution.launchScript);
+    await runLaunchScript(launchScriptPath, rootDir);
+
+    const statePath = path.join(rootDir, task.execution.stateFile);
+    const raw = await fs.readFile(statePath, "utf8");
+    const state = JSON.parse(raw) as BackgroundTaskExecutionState;
+    expect(state.taskId).toBe(task.id);
+    expect(state.command).toBe(command);
+    expect(typeof state.pid).toBe("number");
+    expect(state.status).toBe("completed");
+    expect(state.exitCode).toBe(0);
+  });
 });
+
+async function runLaunchScript(scriptPath: string, cwd: string): Promise<void> {
+  const { execFile } = await import("node:child_process");
+  await new Promise<void>((resolve, reject) => {
+    execFile("bash", [scriptPath], { cwd }, (error) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve();
+    });
+  });
+}

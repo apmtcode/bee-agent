@@ -6,7 +6,66 @@ least one new idea. Newest entries first.
 
 ---
 
-## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
+## 2026-07-22 (run 9) — Fix background-task state corruption: invalid JSON → atomic, well-typed writes
+
+**Audited:** The build/test baseline (standing procedure step 5). Found the suite
+was **not** the "174/174" prior runs recorded — in this cloud sandbox it failed
+**deterministically, every run**, with 3–4 failures rooted in a real bug:
+`readState` threw `SyntaxError: … JSON at position 311` while recovering
+background tasks. Stock `main` reproduced this **100% of the time** (verified by
+stashing my changes).
+
+**Root cause (a genuine runtime bug, not a test bug):** the background-task
+launch script wrote its startup state via a fragile
+`printf '%s' <json> | sed "…; s/"$$"/$$/g" > state.json` pipeline. Two defects:
+1. **pid never substituted.** In the emitted script the `\"` in the source
+   template collapses to a bare `"`, so `sed "…s/"$$"/$$/g"` tokenizes as two
+   adjacent double-quoted segments with an unquoted `$$` between them — bash
+   expands it, and the substitution degrades to `s/<pid>/<pid>/g` (a no-op).
+   The state kept `"pid":"$$"` (a string) instead of a number.
+2. **command corruption → invalid JSON.** Commands containing quotes/newlines
+   (e.g. the test's `printf 'line-1\nline-2\n'`) were mangled by the pipeline
+   into unparseable JSON, so any later `readState`/`json.loads` threw.
+   Non-atomic `> state.json` and Python `write_text` also allowed torn reads.
+
+**Changed (additive) in `src/harness/background-tasks.ts`:** replaced the
+`printf | sed` templating with a `python3` writer that receives every field as a
+separate, individually shell-quoted **argv** entry and builds the dict itself
+(quoting-safe by construction). Both the startup and completion writers now emit
+via a shared `renderAtomicWritePython()` helper that writes to `state.json.tmp`
+and `os.replace()`s into place — **atomic**, so a concurrent reader never sees a
+torn file, and the pid is always a real integer.
+
+**Test stabilization (focused, matches existing conventions):**
+- Added a regression test in `background-tasks.test.ts` that *executes* the
+  generated launch script for a command containing double quotes, backslash
+  escapes, and a newline, and asserts the resulting state parses as JSON, keeps
+  the command byte-for-byte, and carries a numeric pid + `completed`/exit-0.
+- Root-caused the two recover-timing flakes: the `operator-runtime` and
+  `server` tests injected `backgroundTaskIsProcessRunning` but **not**
+  `backgroundTaskSpawnProcess`, so `startBackgroundTask` launched a **real**
+  shell whose async state writes raced with (and clobbered) the tests'
+  controlled `writeState`. Injected a no-op spawn in both — `operator-runtime`
+  is now green **17/17 across 6+ consecutive runs**.
+- Added `maxRetries: 5, retryDelay: 50` to the `operator-runtime` and
+  `background-tasks` test teardowns (matching the pattern already used by
+  `app.test.ts`/`server.test.ts`) to absorb parallel-teardown `ENOTEMPTY` races.
+
+**Test results:** `typecheck:src` ✅ (exit 0). Build ✅. Full suite went from
+**100% deterministic failure** on stock `main` to a reliable green (175 tests,
++1 new regression test). Two **pre-existing, time-based** flakes remain in
+subsystems unrelated to this change — they were previously *masked* because the
+JSON bug killed the run first: (a) `server.test.ts` platform-control aggregation
+occasionally reads `"degraded"` instead of `"mixed"` when a remote's wall-clock
+heartbeat crosses a staleness threshold under parallel load; (b)
+`gateway-transport.test.ts` websocket-reconnect timing. Both queued in ROADMAP.
+
+**New idea:** the fragile `printf | sed` state-templating pattern *also* exists
+in `src/training/runner.ts`'s `renderLaunchScript` (identical `s/"$$"/$$/g`
+construction). It has the same latent pid/quoting bug and should get the same
+argv-driven atomic Python writer — a clean follow-up. Bigger idea: a shared
+`renderAtomicStateWriter()` utility both launch-script generators import, so
+there is exactly one audited way to persist run state from a spawned process.
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
 errors; the dominant pattern (`Property 'id' does not exist on type '{}'` ×114)

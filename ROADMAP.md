@@ -45,6 +45,28 @@ unchecked items are queued. Keep this richer than you found it each run.
       have the engine run it as a per-run pre-push self-check.
 - [ ] Add a minimal CI workflow mirroring `verify` for human-opened PRs.
 
+## Reliability / correctness
+- [x] **Fix background-task state corruption** (2026-07-22, run 9). The launch
+      script's `printf | sed` state templating left the pid as the string `"$$"`
+      and mangled commands with quotes/newlines into invalid JSON, causing
+      deterministic `readState` `SyntaxError` failures. Replaced with an
+      argv-driven `python3` writer + atomic `os.replace`. Added a script-execution
+      regression test; injected a no-op spawn in the recover tests to kill a
+      real-process-vs-`writeState` race.
+- [ ] **Port the same fix to `src/training/runner.ts`.** Its `renderLaunchScript`
+      uses the identical fragile `printf … | sed "s/"$$"/$$/g"` pattern (same
+      latent pid/quoting bug + torn writes). Give it the argv-driven atomic Python
+      writer. Best done by extracting a shared `renderAtomicStateWriter()` helper
+      both launch-script generators import.
+- [ ] **Stabilize two pre-existing time-based test flakes** (exposed once the JSON
+      bug above stopped killing runs early, ~1-in-4 under parallel load):
+  - `server.test.ts` platform-control aggregation returns `"degraded"` vs the
+    expected `"mixed"` when a remote's wall-clock heartbeat crosses a staleness
+    threshold mid-run. Inject a clock/`now` into the remote-control health
+    aggregation so staleness is deterministic in tests.
+  - `gateway-transport.test.ts` websocket reconnect/pong timing. Use fake timers
+    or an injected clock instead of real `setTimeout` deadlines.
+
 ## Capability parity (audit reference agents → port gaps)
 - [ ] Build a "capability inventory" generator: enumerate bee-agent's exported
       RPC/tool surface (`src/index.ts`) and diff it against `openclaw`,
@@ -64,7 +86,19 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
       and write the gap list here before adding code.
 - [ ] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
+      for a real on-device small model. **Gap confirmed (run 9):** `training/`
+      today only *emits shell scripts* (`LocalAppleSiliconTrainingRunner.buildPlan`
+      → mlx/axolotl commands). There is **no in-process backend and no inference
+      path**, so objective #2 parts (c) "repeat recorded movements" and (d)
+      "generalize to related movements" are unimplemented. Concrete next increment:
+      add `src/training/movement-policy.ts` with a `MovementPolicyBackend`
+      interface (`train(dataset) → model`, `model.predictNext(context)`,
+      `model.generate(goal)`, `serialize`/`deserialize`), a deterministic mock
+      backend (n-gram transition table + per-goal step template that substitutes
+      differing targets/values to generalize), a converter from `TrajectorySpan`
+      actions (which retain `gesture/target/direction` metadata) → a
+      `MovementTrajectory` of structured `MovementStep`s, and tests proving exact
+      replay of a trained goal + generalization to a held-out related goal.
 - [ ] Synthetic event-stream generator to validate capture→dataset→replay
       round-trips without real OS input.
 - [ ] Generalization eval harness: measure replay fidelity on held-out but
