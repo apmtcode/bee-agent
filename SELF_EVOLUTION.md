@@ -6,6 +6,65 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-22 (run 9) — 🔴→🟢 Green gate restored: hermetic background-task spawn (3 real failures fixed)
+
+**Audited:** The verification gate itself. On a fresh container (`npm install`
+resolving current `^` deps) the suite that run 8 recorded as **174/174** now had
+**3 deterministic failures** plus a 4th intermittently-flaking test — i.e. the
+engine's own pre-push gate (step 5) was red before I wrote a line. Root-caused
+all four to **one class of bug: tests launched *real* detached OS processes.**
+
+**Root cause:** `BackgroundTaskExecutionService.launch()` spawns the rendered
+bash launch script via the injectable `spawnProcess` (default = real `spawn`).
+The failing tests set `backgroundTaskIsProcessRunning: () => false` but left
+`spawnProcess` as the real one, so `startBackgroundTask` fired detached
+`bash`/`python3` processes that wrote `state.json`/output files **concurrently
+with the assertions**:
+- `operator-runtime.test.ts` — a racing writer corrupted the state file →
+  `SyntaxError` in `readState` (mid-write read).
+- `server.test.ts` (`background.tasks.state`) — the spawned process wrote a
+  state file the test expected to be absent → `NOT_FOUND` assertion flipped.
+- `server.test.ts` + `app.test.ts` (platform control aggregate) — real
+  `sleep 5`/`printf drift` processes left "running" state for remotes the test
+  intended as clean → `mixed`/`active` aggregates drifted to `degraded`.
+- `app.test.ts` (background/monitor commands) — a `printf ok` process the test
+  read mid-flight; timing-dependent, ~50% flaky on this box.
+
+**Changed (additive, reversible):**
+- **`src/cli/app.ts` (production seam):** `OperatorCliApp` built its internal
+  `StandaloneOperatorRuntime` with `{ rootDir }` only, so the background-task
+  process backend was unreachable from an embedder. Added
+  `backgroundTaskSpawnProcess?` / `backgroundTaskIsProcessRunning?` to
+  `OperatorCliAppOptions` (typed via `StandaloneOperatorOptions[...]`) and
+  threaded them through. Production default unchanged (real `spawn` +
+  `process.kill` liveness). This makes the background-task backend **pluggable**
+  end-to-end (CLI → runtime → store), aligning with objective #2's
+  "pluggable model/execution backend" direction — and lets tests inject a mock.
+- **Tests → hermetic:** injected a no-op `backgroundTaskSpawnProcess`
+  (`() => ({ pid, unref }`)) into every runtime/app that starts background tasks
+  (`operator-runtime.test.ts`, `server.test.ts` ×3 runtimes,
+  `session-stream.test.ts`, `app.test.ts` ×2). The one test that genuinely reads
+  command output (`background/monitor commands`) now seeds a deterministic
+  "running + output already flushed" snapshot via `writeOutput`/`writeState`
+  with `isProcessRunning: () => true`, instead of racing a real process.
+
+**Test results:** `typecheck:src` ✅ (source stays green), `build` ✅,
+`npm test` ✅ **174/174 — deterministic across 6 consecutive runs** (was
+3 failing + 1 flaky). Full `tsc` total unchanged at **125** (all in test files;
+no regression). No production behaviour change — pure hermeticity + a new
+injectable seam.
+
+**New idea:** the suite still contains ~15 runtimes that pass
+`backgroundTaskIsProcessRunning: () => false` — a lint/test could assert that any
+test runtime which can reach `startBackgroundTask` also injects a mock
+`spawnProcess`, so "test spawns a real OS process" becomes a caught regression
+rather than a latent flake rediscovered on the next fresh container. Bigger:
+add the `verify` script (`typecheck:src && build && test`) the roadmap has
+queued and have the engine run it as the standing pre-push gate — this run is
+concrete evidence that "green last hour" does not imply "green this hour".
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

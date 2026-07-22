@@ -38,8 +38,22 @@ unchecked items are queued. Keep this richer than you found it each run.
     `skills.executable.*`, `push.subscriptions.*`, `trajectories.*`, `replays.*`,
     `cron.runs`/misc — plus a few genuine test-only typings. Map the rest, then
     fix residual test-only typings.
-- [ ] Add a `verify` npm script (`typecheck && build && test`) and have the
-      engine run it as a pre-push self-check each cycle.
+- [ ] Add a `verify` npm script (`typecheck:src && build && test`) and have the
+      engine run it as a pre-push self-check each cycle. **Elevated priority
+      (run 9):** a fresh container regressed run 8's "174/174" to 3 failing +
+      1 flaky purely from environment/spawn non-hermeticity — "green last hour"
+      does not imply "green this hour".
+- [x] **Restore the green gate + make the background-task backend pluggable
+      end-to-end** (run 9). Root-caused 3 deterministic failures + 1 flaky test
+      to tests launching *real* detached OS processes (`launch()` → real
+      `spawn`). Added `backgroundTaskSpawnProcess?`/`backgroundTaskIsProcessRunning?`
+      to `OperatorCliAppOptions` (threaded into the internal runtime; production
+      default unchanged) and injected mock spawns into every test runtime that
+      starts background tasks. Suite now deterministic (6/6 runs 174/174).
+- [ ] **Hermeticity lint (run 9 idea):** assert any test runtime that can reach
+      `startBackgroundTask` also injects a mock `spawnProcess`, so "test spawns a
+      real OS process" is a caught regression, not a latent flake. ~15 runtimes
+      still pass only `isProcessRunning: () => false`.
 - [x] Interim **source-only typecheck gate** — DONE run 7. `tsconfig.src.json`
       (excludes `**/*.test.ts`) + `typecheck:src` script; passes (exit 0). Next:
       have the engine run it as a per-run pre-push self-check.

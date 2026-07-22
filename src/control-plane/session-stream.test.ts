@@ -278,6 +278,7 @@ describe("OperatorControlPlaneSessionStream", () => {
   it("binds monitor requests and streams monitor events for a bootstrapped session", async () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
+      backgroundTaskSpawnProcess: () => ({ pid: 424242, unref() {} }),
       backgroundTaskIsProcessRunning: () => false,
     });
     const server = new OperatorControlPlaneServer({ runtime });
