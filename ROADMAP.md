@@ -55,6 +55,28 @@ unchecked items are queued. Keep this richer than you found it each run.
       gaps.
 - [ ] Audit `claude-code` reference for slash-command / hook coverage gaps.
 
+## Reliability / correctness
+- [x] Fix `shellQuote` POSIX escaping bug (run 9) — embedded `'` was replaced with
+      `"'"'"'` instead of `'\''`, corrupting the background-task `state.json` for
+      any command containing a single quote. Added 8 shell round-trip regression
+      tests.
+- [x] De-flake background-task suites (run 9) — inject a mock spawn so no real
+      async bash launch script races the tests' manual `writeState` calls;
+      threaded `backgroundTaskSpawnProcess`/`backgroundTaskIsProcessRunning`
+      through `OperatorCliAppOptions`.
+- [ ] **Harden `renderLaunchScript` state templating.** It currently uses
+      `printf '%s' <json> | sed "s/…/$$/g"` to inject the pid + timestamp into a
+      JSON blob — fragile (sed delimiter/anchoring hazards, quoting). Replace with
+      a single `python3`/`node` heredoc that builds the JSON from argv, dropping
+      the sed pass entirely.
+- [ ] Add a **real launch-script smoke integration test**: execute a generated
+      launch script for a quote-heavy command and assert `readState` returns valid
+      JSON + expected output (stronger than the unit round-trip; catches this bug
+      class end-to-end).
+- [ ] Consider making `readJsonFile` resilient to a torn/partial file (retry-once
+      or surface a typed `CorruptStateError`) so a bad state file degrades to
+      "recover" rather than an unhandled `SyntaxError` throw.
+
 ## Local-movement learning subsystem
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`

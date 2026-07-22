@@ -6,6 +6,62 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-22 (run 9) — Fix real `shellQuote` bug + de-flake 4 background-task tests
+
+**Audited:** Project health from a clean checkout. `npm test` was **RED** in this
+environment — 3 tests failed (they were green in run 8's environment), so the
+suite could not gate a push. Root-caused rather than papered over.
+
+**Root cause 1 (production correctness bug):** `shellQuote()` in
+`src/harness/background-tasks.ts` used a malformed POSIX escape — it replaced an
+embedded `'` with `` "'"'"' `` (a stray leading `"`) instead of the canonical
+`'\''`. The launch script embeds the task **command** inside a single-quoted JSON
+payload written to `state.json`; for **any command containing a single quote**
+(e.g. `printf 'line-1\nline-2\n'`) the mis-escape leaked unescaped quotes →
+**invalid JSON** → `readState`/`reconcileTask` threw `SyntaxError`, and even the
+Python completion writer (`json.loads`) could not repair it. Verified with a
+shell round-trip repro: old `shellQuote("printf 'hi there'")` → `printf "'hi
+there"'` (mangled); fixed → `printf 'hi there'` (byte-exact). **This breaks real
+usage**, not just tests — it was masked only because run 8's environment timing
+let the async process overwrite the corrupt file first.
+
+**Root cause 2 (flaky tests):** three suites (`operator-runtime`, `server`,
+`app`) start background tasks with the **real** `spawn`, so an async bash launch
+script writes `state.json` and races the tests' own manual `writeState` calls.
+Deterministic only by luck of timing. Fixed 1 exposed a 4th flaky test
+(`app` "background and monitor") once the JSON stopped crashing.
+
+**Changed (all additive / reversible):**
+- `src/harness/background-tasks.ts`: canonical `shellQuote` (`'` → `'\''`);
+  exported it for coverage.
+- `src/harness/background-tasks.test.ts`: **8 new regression tests** round-tripping
+  tricky strings (single/double/mixed quotes, `$$`, newlines/tabs, backticks/pipes)
+  through a real POSIX shell, plus a "command with single quotes keeps embedded
+  JSON valid" case — these fail on the old escape.
+- `src/cli/app.ts`: threaded optional `backgroundTaskSpawnProcess` /
+  `backgroundTaskIsProcessRunning` from `OperatorCliAppOptions` into the runtime
+  (default `undefined` = unchanged production behaviour), so tests can inject
+  deterministic process handling.
+- Test setups now inject a mock spawn (`() => ({ pid: 4321, unref(){} })`) and a
+  `pid === 4321` liveness check where the intended lifecycle needs it — matching
+  the pattern already used in `background-tasks.test.ts`. No production code path
+  changed.
+
+**Test results:** `npm test` now **182/182** (was 174 + 8 new) and **green on 5
+consecutive full runs** (previously 1–3 failures per run). `typecheck:src` CLEAN.
+Build ✅. Full `tsc` unchanged at **125** (all test-file debt; no new errors).
+
+**New idea:** add a tiny **"real launch-script smoke" integration test** that
+actually executes a generated launch script for a quote-heavy command and asserts
+`readState` returns valid JSON + expected output — a stronger guard than the
+unit round-trip, and it would have caught this class of bug directly. Longer term:
+the `printf | sed` state-templating in `renderLaunchScript` is fragile (it string-
+substitutes `$$`/timestamp inside a JSON blob); replace it with a single
+`python3`/`node` heredoc that emits the JSON from argv, eliminating the sed pass
+entirely. Logged to ROADMAP.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

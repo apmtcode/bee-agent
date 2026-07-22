@@ -793,6 +793,13 @@ function renderStateWriterPython(status: BackgroundTaskExecutionState["status"])
   ];
 }
 
-function shellQuote(value: string): string {
-  return `'${value.replaceAll(`'`, `"'"'"'`)}'`;
+/**
+ * POSIX-safe single-quote a string for embedding in a generated shell script.
+ * The result, when evaluated by a POSIX shell, reproduces `value` byte-for-byte.
+ * The canonical replacement for an embedded `'` is `'\''` (close the quote, emit
+ * an escaped literal quote, reopen). Exported for regression coverage of the
+ * background-task launch script, whose state JSON embeds the task command.
+ */
+export function shellQuote(value: string): string {
+  return `'${value.replaceAll(`'`, `'\\''`)}'`;
 }

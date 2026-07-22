@@ -1,12 +1,17 @@
+import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   BackgroundTaskExecutionService,
   FileBackgroundTaskStore,
+  shellQuote,
   type BackgroundTaskExecutionState,
 } from "./background-tasks.js";
+
+const execFileAsync = promisify(execFile);
 
 const tempDirs: string[] = [];
 
@@ -369,5 +374,36 @@ describe("BackgroundTaskExecutionService", () => {
     await expect(fs.readFile(path.join(rootDir, task.execution.launchScript), "utf8")).resolves.toContain("bash -lc");
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
+  });
+});
+
+describe("shellQuote", () => {
+  // The launch script embeds the task command inside a single-quoted JSON blob
+  // that is written to the state file. A broken quote leaks unescaped quotes and
+  // produces invalid JSON, which later crashes readState. These cases round-trip
+  // the value through a real shell to prove the quoting is byte-exact.
+  const cases: Array<{ name: string; value: string }> = [
+    { name: "single quotes", value: "printf 'line-1\nline-2\n'" },
+    { name: "double quotes", value: 'printf "hi there"' },
+    { name: "mixed quotes", value: `echo "it's a test"` },
+    { name: "dollar and backslash", value: "echo $HOME \\ end" },
+    { name: "shell pid token", value: 'echo "$$"' },
+    { name: "newlines and tabs", value: "printf 'a\tb\nc'" },
+    { name: "backticks and pipes", value: "echo `date` | grep x" },
+  ];
+
+  for (const { name, value } of cases) {
+    it(`round-trips ${name} through a POSIX shell`, async () => {
+      const { stdout } = await execFileAsync("bash", ["-c", `printf '%s' ${shellQuote(value)}`]);
+      expect(stdout).toBe(value);
+    });
+  }
+
+  it("keeps embedded JSON valid when a command contains single quotes", async () => {
+    const command = "printf 'line-1\nline-2\n'";
+    const payload = JSON.stringify({ version: 1, command });
+    const { stdout } = await execFileAsync("bash", ["-c", `printf '%s' ${shellQuote(payload)}`]);
+    expect(() => JSON.parse(stdout)).not.toThrow();
+    expect(JSON.parse(stdout)).toEqual({ version: 1, command });
   });
 });

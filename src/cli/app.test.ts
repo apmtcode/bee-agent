@@ -801,7 +801,18 @@ describe("OperatorCliApp", () => {
 
   it("supports session lifecycle, transcript, approvals, pairing, config, and prompt commands", async () => {
     const rootDir = await makeTempDir();
-    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    const app = new OperatorCliApp({
+      rootDir,
+      cwd: rootDir,
+      currentDate: "2026-05-25",
+      // Deterministic background-task process handling: mock spawn (no real bash
+      // launch script) returning a fixed pid, and report only that pid as alive.
+      // This keeps freshly started tasks healthy (control=active) while a later
+      // state written with a different pid (999999) is correctly seen as dead
+      // (control=degraded) — no dependency on a racing real process.
+      backgroundTaskSpawnProcess: () => ({ pid: 4321, unref() {} }),
+      backgroundTaskIsProcessRunning: (pid) => pid === 4321,
+    });
     const firstSession = await app.runtime.startSession({ title: "first", cwd: rootDir, agentId: "operator-cli" });
     const secondSession = await app.runtime.startSession({ title: "second", cwd: rootDir, agentId: "operator-cli" });
 
@@ -1063,7 +1074,16 @@ describe("OperatorCliApp", () => {
 
   it("supports background and monitor task commands plus cron commands", async () => {
     const rootDir = await makeTempDir();
-    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    const app = new OperatorCliApp({
+      rootDir,
+      cwd: rootDir,
+      currentDate: "2026-05-25",
+      // Mock spawn (no real bash) + report the mock pid alive, then drive task
+      // output/state explicitly below. This keeps the task and monitor lifecycle
+      // fully deterministic instead of racing an async real process.
+      backgroundTaskSpawnProcess: () => ({ pid: 4321, unref() {} }),
+      backgroundTaskIsProcessRunning: (pid) => pid === 4321,
+    });
     const session = await app.runtime.startSession({ title: "CLI ops", cwd: rootDir, agentId: "operator-cli" });
 
     const startOutput = await app.dispatchSlashCommand(
@@ -1078,6 +1098,21 @@ describe("OperatorCliApp", () => {
     if (!task) {
       throw new Error("expected background task");
     }
+    // Simulate what the launch script would have written: output plus a running
+    // state referencing the (mock) live pid.
+    await app.runtime.backgroundTasks.executionService.writeOutput(task, "starting task\nok\n");
+    await app.runtime.backgroundTasks.executionService.writeState(task, {
+      version: 1,
+      taskId: task.id,
+      kind: "task",
+      status: "running",
+      pid: task.execution.processId ?? 4321,
+      startedAt: task.execution.startedAt ?? task.updatedAt,
+      updatedAt: task.updatedAt,
+      outputFile: task.execution.outputFile,
+      cwd: task.cwd,
+      command: task.command,
+    });
 
     const listOutput = await app.dispatchSlashCommand({ kind: "background-list" });
     expect(listOutput).toContain(task.id);
@@ -1117,12 +1152,10 @@ describe("OperatorCliApp", () => {
       version: 1,
       taskId: monitor.id,
       kind: "monitor",
-      status: "completed",
-      pid: monitor.execution.processId ?? 1234,
+      status: "running",
+      pid: monitor.execution.processId ?? 4321,
       startedAt: monitor.execution.startedAt ?? monitor.updatedAt,
       updatedAt: monitor.updatedAt,
-      completedAt: monitor.updatedAt,
-      exitCode: 0,
       outputFile: monitor.execution.outputFile,
       cwd: monitor.cwd,
       command: monitor.command,
