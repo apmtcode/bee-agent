@@ -370,4 +370,45 @@ describe("BackgroundTaskExecutionService", () => {
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
   });
+
+  it("runs a real command containing single quotes and writes valid state JSON", async () => {
+    // Regression for the shellQuote bug: a leading-`"` escape (`"'"'"'`) instead
+    // of the POSIX-correct `'"'"'` corrupted any command containing a single
+    // quote, so the executed command and the persisted running-state JSON were
+    // both malformed. Exercise the real launch script end-to-end.
+    const rootDir = await makeTempDir();
+    // Default (real) spawn + a real running-process check.
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"));
+    const command = "printf 'it'\\''s alive: %s\\n' 'line-1'";
+    const task = await store.start({ title: "Quoted command", command, cwd: rootDir, kind: "task" });
+
+    const statePath = path.join(rootDir, task.execution.stateFile);
+    const deadline = Date.now() + 5000;
+    let state: BackgroundTaskExecutionState | undefined;
+    while (Date.now() < deadline) {
+      try {
+        const raw = await fs.readFile(statePath, "utf8");
+        const parsed = JSON.parse(raw) as BackgroundTaskExecutionState; // must never throw
+        if (parsed.status === "completed" || parsed.status === "failed") {
+          state = parsed;
+          break;
+        }
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+          throw error;
+        }
+      }
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+
+    expect(state).toBeDefined();
+    expect(state?.status).toBe("completed");
+    expect(state?.exitCode).toBe(0);
+    // The command round-trips through JSON exactly, and pid is a real number.
+    expect(state?.command).toBe(command);
+    expect(typeof state?.pid).toBe("number");
+    // The command actually executed with its quotes intact.
+    const output = await fs.readFile(path.join(rootDir, task.execution.outputFile), "utf8");
+    expect(output).toContain("it's alive: line-1");
+  });
 });

@@ -6,6 +6,60 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-22 (run 9) — Fix background-task shell-quoting correctness bug; suite green again
+
+**Audited:** Actual build/test health at the top of the run (the true state, not
+the logged state). `npm test` was **failing 3–4 tests** with run-to-run variance
+(`operator-runtime.test.ts`, `app.test.ts`, `server.test.ts`) — the verification
+gate the whole procedure depends on was red. Root-caused the flakiness rather
+than papering over it.
+
+**Bug found (highest value — a real correctness defect, not just a test issue):**
+`shellQuote()` in `src/harness/background-tasks.ts` escaped single quotes with
+`"'"'"'` (leading `"`) instead of the POSIX-correct `'"'"'`. This corrupted **any
+background-task command containing a single quote** — the command handed to
+`bash -lc` was mangled (e.g. `printf 'x'` executed as `printf "'x"'`, exiting
+non-zero) **and** the persisted running-state JSON became invalid, which then
+crashed recovery/reconcile with `SyntaxError: Expected ',' or '}'`. A real user
+running e.g. `git commit -m 'msg'` as a background task would have hit this.
+
+**Changed (additive, reversible):**
+- `src/harness/background-tasks.ts`:
+  - Fixed `shellQuote()` to the correct `'"'"'` escape (root-cause fix).
+  - Replaced the fragile `printf '%s' <json> | sed …` initial-state write with a
+    Python heredoc (`renderInitialStateWriterPython`) that receives each field as
+    an individually shell-quoted argv. The old `sed "s/…/g; s/"$$"/$$/g"` also had
+    a second bug: the unescaped `"` broke out of the double-quoted sed arg, so
+    `"pid":"$$"` was never substituted (left a string where a number belongs). The
+    running state is now always valid, pretty-printed JSON with a numeric pid,
+    consistent with the completed/failed writers.
+- `src/orchestrator/operator-runtime.test.ts` + `src/control-plane/server.test.ts`:
+  injected a **no-op `backgroundTaskSpawnProcess`** into the two runtimes that
+  stage task state by hand. With `shellQuote` fixed, the real launch script now
+  writes a *valid* running-state file at start, which raced these tests' manual
+  `writeState` staging (and, in the breaker test, flagged a task
+  `missing-process` before its intended stage). Suppressing the spawn makes the
+  manual writes authoritative — deterministic and race-free. This preserves each
+  test's intent; it doesn't weaken the assertions.
+- `src/harness/background-tasks.test.ts`: added an end-to-end **regression test**
+  that runs a real command containing single quotes (`printf 'it'\''s alive…'`)
+  and asserts the state file parses, `status === "completed"`, `exitCode === 0`,
+  `command` round-trips exactly, and the output contains `it's alive`. Verified it
+  fails on the pre-fix escape and passes on the fix.
+
+**Test results:** build ✅, `typecheck:src` ✅ (exit 0), `npm test` **175/175**
+passing (was 174 with 3–4 flaky failures; +1 new regression test). Confirmed
+stable across 4 consecutive full runs.
+
+**New idea (logged to ROADMAP):** Add a tiny **shell-quoting fuzz/property test**
+that round-trips a corpus of adversarial command strings (single quotes, double
+quotes, `$$`, backticks, newlines, `$(…)`, unicode) through the real launch
+script and asserts the state JSON parses and `command` is preserved byte-for-byte
+— so the launch-script generator can never silently regress on quoting again.
+Bigger idea: a **`verify` npm script** (`typecheck:src && build && test`) that the
+engine runs as a mandatory pre-push self-check each cycle, so a red suite like the
+one this run inherited is caught at the top of the next run automatically.
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

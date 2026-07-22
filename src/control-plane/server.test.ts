@@ -1019,6 +1019,12 @@ describe("OperatorControlPlaneServer", () => {
     const breakerRuntime = new StandaloneOperatorRuntime({
       rootDir: breakerRootDir,
       backgroundTaskIsProcessRunning: () => false,
+      // No-op spawn: the launch script would otherwise write a valid "running"
+      // state file for each task at start, flagging it missing-process before
+      // this test manually stages its state. Suppressing the spawn makes the
+      // per-task writeState calls below the sole source of task state, so the
+      // breaker escalation (1 → degraded@2 → paused@3) is staged deterministically.
+      backgroundTaskSpawnProcess: () => ({ pid: 987654, unref: () => {} }),
     });
     const breakerServer = new OperatorControlPlaneServer({ runtime: breakerRuntime });
     const breakerOne = await breakerServer.handle({

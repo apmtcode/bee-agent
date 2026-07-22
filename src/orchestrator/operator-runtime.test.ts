@@ -531,6 +531,10 @@ describe("StandaloneOperatorRuntime", () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
       backgroundTaskIsProcessRunning: () => false,
+      // No-op spawn so the manual writeState/writeOutput calls below are the sole
+      // source of task state. Otherwise the real launch script races these writes
+      // and reconciles tasks to "completed"/"failed" out from under the assertions.
+      backgroundTaskSpawnProcess: () => ({ pid: 987654, unref: () => {} }),
     });
     const session = await runtime.startSession({ title: "Tasks", agentId: "main" });
 

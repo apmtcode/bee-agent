@@ -71,6 +71,18 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
       related synthetic trajectories.
 
 ## Innovation backlog
+- [x] **Fix background-task shell-quoting correctness bug** (2026-07-22, run 9).
+      `shellQuote()` used an invalid single-quote escape (`"'"'"'` vs POSIX
+      `'"'"'`), corrupting any background command containing a single quote and
+      producing invalid running-state JSON (crashing recovery). Root-caused,
+      fixed, replaced the fragile `printf|sed` state write with a Python heredoc,
+      de-flaked two racy tests via a no-op spawn, and added an end-to-end
+      regression test. Suite back to green: **175/175**.
+- [ ] **Shell-quoting fuzz/property test** (new, run 9): round-trip a corpus of
+      adversarial command strings (single/double quotes, `$$`, backticks,
+      newlines, `$(…)`, unicode) through the real launch script and assert the
+      persisted state JSON parses and `command` is preserved byte-for-byte, so the
+      launch-script generator can never silently regress on quoting.
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in
       project health over time.
