@@ -62,13 +62,35 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
+      for a real on-device small model — DONE run 9 (`src/training/backends.ts`:
+      `TrainingBackend` seam, `Mlx`/`Axolotl` backends refactored behind it, and
+      `SimulatedTrainingBackend` with an in-process `simulate()` + node-only
+      plan; runner takes an optional backend registry).
 - [ ] Synthetic event-stream generator to validate capture→dataset→replay
       round-trips without real OS input.
 - [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      related synthetic trajectories. Concrete next step (run 9 idea): build it
+      on `SimulatedTrainingBackend.simulate()` — treat the fingerprinted model as
+      a nearest-neighbour policy over reviewed trajectories and score fidelity on
+      held-out related synthetic trajectories. Fully deterministic / cloud-runnable.
+- [ ] Wire `SimulatedTrainingBackend` into `FileTrainingJobStore` behind a flag
+      so an operator (or CI) can run an end-to-end training job with no Apple
+      Silicon, and expose it via the training RPC surface.
+
+## Test hermeticity (real-spawn races — pre-existing, environment-specific)
+Several tests spawn **real** OS background-task processes (`sleep`, `tail -f`)
+that asynchronously overwrite the state files the tests drive explicitly,
+racing the platform breaker. Red on this cloud environment (confirmed on clean
+HEAD). Run 9 fixed `operator-runtime.test.ts` (mock spawn) + a real `shellQuote`
+JSON-corruption bug + made both launch-script state writes atomic. Remaining:
+- [ ] Thread a `backgroundTaskSpawnProcess` injection through `OperatorCliApp`
+      (source change) so `cli/app.test.ts` can mock spawn — fixes its 2 red
+      background/monitor + platform-control tests hermetically.
+- [ ] Give `control-plane/server.test.ts`'s multi-task test a **per-pid**
+      `isProcessRunning` (each task has a distinct intended liveness) plus a mock
+      spawn, so the platform breaker sees the intended state.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

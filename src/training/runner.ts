@@ -1,13 +1,13 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { ensureParentDir, readJsonFile, writeJsonAtomic } from "../shared/fs.js";
+import {
+  createDefaultTrainingBackends,
+  type TrainingBackend,
+  type TrainingBackendRegistry,
+} from "./backends.js";
 import type { TrainingExecutionState } from "./execution-service.js";
-import type {
-  LocalTrainingExecution,
-  LocalTrainingJobManifest,
-  RlTrainingConfig,
-  SftTrainingConfig,
-} from "./job-manifest.js";
+import type { LocalTrainingExecution, LocalTrainingJobManifest } from "./job-manifest.js";
 
 export type LocalTrainingRuntime = "mlx" | "axolotl";
 
@@ -15,8 +15,8 @@ export type TrainingJobPlan = {
   version: 1;
   jobId: string;
   mode: LocalTrainingJobManifest["mode"];
-  targetPlatform: "apple-silicon";
-  runtime: LocalTrainingRuntime;
+  targetPlatform: string;
+  runtime: string;
   datasetPath: string;
   outputPath: string;
   replayEvalPath: string;
@@ -26,78 +26,42 @@ export type TrainingJobPlan = {
 };
 
 export class LocalAppleSiliconTrainingRunner {
-  constructor(private readonly rootDir: string) {}
+  private readonly backends: TrainingBackendRegistry;
+
+  constructor(private readonly rootDir: string, backends?: TrainingBackendRegistry) {
+    this.backends = backends ?? createDefaultTrainingBackends();
+  }
+
+  backendFor(mode: LocalTrainingJobManifest["mode"]): TrainingBackend {
+    const backend = this.backends[mode];
+    if (!backend) {
+      throw new Error(`no training backend registered for mode "${mode}"`);
+    }
+    return backend;
+  }
 
   buildPlan(job: LocalTrainingJobManifest, execution: LocalTrainingExecution): TrainingJobPlan {
-    if (job.mode === "sft") {
-      const config = job.config as SftTrainingConfig;
-      return {
-        version: 1,
-        jobId: job.id,
-        mode: job.mode,
-        targetPlatform: "apple-silicon",
-        runtime: "mlx",
-        datasetPath: execution.datasetDir,
-        outputPath: path.posix.join(execution.artifactDir, "model.gguf"),
-        replayEvalPath: execution.replayEvalFile,
-        statePath: execution.stateFile,
-        command: [
-          "python3",
-          "-m",
-          "mlx_lm.lora",
-          "--train",
-          "--data",
-          execution.datasetDir,
-          "--adapter-path",
-          execution.artifactDir,
-          "--learning-rate",
-          String(config.learningRate),
-          "--batch-size",
-          String(config.batchSize),
-          "--iters",
-          String(config.epochs * 1000),
-        ],
-        environment: {
-          OPENCLAW_TRAINING_JOB_ID: job.id,
-          OPENCLAW_TRAINING_MODE: job.mode,
-          OPENCLAW_TARGET_PLATFORM: job.targetPlatform,
-          OPENCLAW_TRAINING_RUNTIME: "mlx",
-          OPENCLAW_REVIEWED_EXPORT_REQUIRED: "true",
-          OPENCLAW_RAW_CAPTURE_ALLOWED: "false",
-        },
-      };
-    }
-
-    const config = job.config as RlTrainingConfig;
+    const backend = this.backendFor(job.mode);
+    const backendPlan = backend.planExecution({ job, execution });
     return {
       version: 1,
       jobId: job.id,
       mode: job.mode,
-      targetPlatform: "apple-silicon",
-      runtime: "axolotl",
+      targetPlatform: backendPlan.targetPlatform,
+      runtime: backendPlan.runtime,
       datasetPath: execution.datasetDir,
-      outputPath: path.posix.join(execution.artifactDir, "policy.gguf"),
+      outputPath: path.posix.join(execution.artifactDir, backendPlan.outputFileName),
       replayEvalPath: execution.replayEvalFile,
       statePath: execution.stateFile,
-      command: [
-        "python3",
-        "-m",
-        "axolotl.cli.train",
-        execution.planFile,
-        "--reward-model",
-        "replay-manifest",
-        "--rollouts",
-        String(config.rolloutCount),
-        "--kl-penalty",
-        String(config.klPenalty),
-      ],
+      command: [...backendPlan.command],
       environment: {
         OPENCLAW_TRAINING_JOB_ID: job.id,
         OPENCLAW_TRAINING_MODE: job.mode,
         OPENCLAW_TARGET_PLATFORM: job.targetPlatform,
-        OPENCLAW_TRAINING_RUNTIME: "axolotl",
+        OPENCLAW_TRAINING_RUNTIME: backendPlan.runtime,
         OPENCLAW_REVIEWED_EXPORT_REQUIRED: "true",
         OPENCLAW_RAW_CAPTURE_ALLOWED: "false",
+        ...backendPlan.extraEnvironment,
       },
     };
   }
@@ -185,7 +149,8 @@ function renderLaunchScript(execution: LocalTrainingExecution, plan: TrainingJob
     "set -euo pipefail",
     `mkdir -p ${shellQuote(execution.artifactDir)} $(dirname ${quotedLogFile}) $(dirname ${quotedStatePath})`,
     "started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-    `printf '%s' ${quotedStatePayload} | sed "s/__OPENCLAW_STARTED_AT__/$started_at/g; s/\"\$\$\"/$$/g" > ${quotedStatePath}`,
+    `state_tmp=${quotedStatePath}.tmp.$$`,
+    `printf '%s' ${quotedStatePayload} | sed "s/__OPENCLAW_STARTED_AT__/$started_at/g; s/\"\$\$\"/$$/g" > "$state_tmp" && mv "$state_tmp" ${quotedStatePath}`,
     `printf '%s\n' "starting ${plan.mode} training for ${plan.jobId}" >> ${quotedLogFile}`,
     `if ${quotedCommand} >> ${quotedLogFile} 2>&1; then`,
     "  completed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
@@ -207,6 +172,7 @@ function renderLaunchScript(execution: LocalTrainingExecution, plan: TrainingJob
 function renderStateWriterPython(status: TrainingExecutionState["status"]): string[] {
   return [
     "import json",
+    "import os",
     "import pathlib",
     "import sys",
     "state_path = pathlib.Path(sys.argv[1])",
@@ -220,7 +186,9 @@ function renderStateWriterPython(status: TrainingExecutionState["status"]): stri
     "state['completedAt'] = timestamp",
     "state['exitCode'] = exit_code",
     `state['error'] = None if '${status}' == 'completed' else 'training process exited non-zero'`,
-    "state_path.write_text(json.dumps(state, indent=2) + '\\n')",
+    "tmp_path = state_path.with_name(state_path.name + f'.tmp.{os.getpid()}')",
+    "tmp_path.write_text(json.dumps(state, indent=2) + '\\n')",
+    "os.replace(tmp_path, state_path)",
   ];
 }
 

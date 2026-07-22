@@ -400,6 +400,23 @@ export type {
   LocalTrainingRuntime,
   TrainingJobPlan,
 } from "./training/runner.js";
+export {
+  AxolotlRlBackend,
+  MlxSftBackend,
+  SimulatedTrainingBackend,
+  canonicalTrainingInput,
+  createDefaultTrainingBackends,
+  createSimulatedTrainingBackends,
+  fingerprintTrainingInput,
+} from "./training/backends.js";
+export type {
+  SimulatableTrainingBackend,
+  TrainingBackend,
+  TrainingBackendContext,
+  TrainingBackendPlan,
+  TrainingBackendRegistry,
+  TrainingSimulationResult,
+} from "./training/backends.js";
 export type {
   ExportedMemoryReference,
   ExportedPromotedSkill,

@@ -6,6 +6,68 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-22 (run 9) — Pluggable training backends + fixed a real `shellQuote` JSON-corruption bug
+
+**Audited:** The local-movement/training subsystem (`src/training/`) against
+roadmap item "pluggable local-model backend interface + deterministic mock
+backend", and the background-task/training launch-script state writers (found a
+genuine defect while getting the suite green).
+
+**Changed (additive):**
+- **`src/training/backends.ts` (new): pluggable `TrainingBackend` seam.** The
+  runner no longer hardcodes mlx/axolotl. A backend turns a (job, execution)
+  pair into the runtime-specific plan (`runtime`, `outputFileName`, `command`,
+  `extraEnvironment`). Ships three: `MlxSftBackend` + `AxolotlRlBackend`
+  (the *exact* prior behaviour, refactored) and `SimulatedTrainingBackend` — a
+  **dependency-free** backend whose plan runs a self-contained `node` program
+  (no python/mlx/axolotl) and whose `simulate()` runs the "training" fully
+  in-process: it derives a stable djb2 fingerprint from the reviewed dataset
+  shape + config and writes a model artifact + completed state file. Identical
+  inputs → identical fingerprint, so the capture→dataset→train→artifact loop is
+  now assertable in the cloud where Apple Silicon + ML toolchains are absent.
+  Added `createDefaultTrainingBackends()` / `createSimulatedTrainingBackends()`
+  registries; `LocalAppleSiliconTrainingRunner` takes an optional registry (defaults
+  to the production one → zero behaviour change), exported all via the barrel.
+- **Real bug fixed — `src/harness/background-tasks.ts` `shellQuote`.** The
+  single-quote escape was a typo: `"'"'"'` instead of the correct POSIX
+  `'"'"'` (the *training* runner's copy was already correct). Any background-task
+  **command containing a single quote** (e.g. `printf 'line-1\nline-2\n'`)
+  produced a malformed shell escape that corrupted the launch script's state
+  JSON → deterministic `SyntaxError: ... in JSON at position N` on every read.
+  This was silently red on this environment for several runs.
+- **Reliability — atomic state writes.** Both launch scripts (background-tasks +
+  training runner) wrote `state.json` non-atomically (`printf | sed > file` and
+  Python `write_text`), racing readers/writers → torn reads. Switched both to
+  temp-file + `mv` / `os.replace`, matching `writeJsonAtomic`.
+- **Test hermeticity.** `operator-runtime.test.ts` spawned real OS processes
+  (`tail -f`) that asynchronously overwrote the state files it drove explicitly;
+  injected a mock `backgroundTaskSpawnProcess`. Added a background-tasks
+  regression test that *executes the generated launch script for real* with a
+  single-quote command and asserts the state file is valid JSON.
+
+**Test results:** `typecheck:src` **0** (clean; widened `TrainingJobPlan.runtime`/
+`targetPlatform` to `string` for pluggability). Full `tsc` **125** (unchanged;
+new `backends.test.ts` adds 0 errors). Build ✅. My touched tests **31/31**,
+stable across repeated runs; the shellQuote fix + mock spawn turned
+`operator-runtime.test.ts` from red → **17/17**.
+
+**Known pre-existing blocker (NOT this change):** `control-plane/server.test.ts`
+(1) and `cli/app.test.ts` (2) remain red on this environment — confirmed red on
+clean HEAD too. Same class (real background-task processes leaking + the
+platform-breaker recording `missing-process` failures), but each test drives
+several tasks with *different* intended liveness, so the clean fix is a source
+change: thread a `backgroundTaskSpawnProcess` injection through `OperatorCliApp`,
+and give `server.test.ts` a per-pid `isProcessRunning`. Queued in ROADMAP.
+
+**New idea:** add a **generalization/inference eval** on top of the simulated
+backend — treat the fingerprinted "model" as a nearest-neighbour policy over the
+reviewed trajectories and measure replay fidelity on held-out but related
+synthetic trajectories. That closes objective #2(d) (generalize to new but
+related movements) with a fully deterministic, cloud-runnable harness, building
+directly on `SimulatedTrainingBackend.simulate()`.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
