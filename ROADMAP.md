@@ -58,17 +58,45 @@ unchecked items are queued. Keep this richer than you found it each run.
 ## Local-movement learning subsystem
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
-(exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
-      objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
-      deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+(exporter, job store/manifest, runner, execution service, **movement-model** as of
+run 9). Next increments:
+- [x] Inventory what `src/capture` + `src/training` already implement vs. the
+      objective's five pieces (run 9): capture/schema/dataset/replay ✅ in
+      `src/capture`; on-device train launch ✅ in `training/runner.ts`; the missing
+      piece was an **in-process** train + generalize path.
+- [x] Pluggable local-model backend interface with a deterministic reference
+      backend — DONE run 9 (`MovementModelBackend` + `MarkovMovementBackend` in
+      `src/training/movement-model.ts`; backoff ladder gives repeat + generalize).
+      Seam for a real on-device small model is the same interface.
+- [x] Synthetic event-stream generator — DONE run 9
+      (`generateSyntheticMovementDataset` + `defaultSyntheticWorkflows`).
+- [x] Generalization eval harness — DONE run 9 (`evaluateMovementModel`:
+      exact/gesture accuracy, end-to-end reproduction, backoff breakdown).
+- [ ] Wire the movement model into the operator runtime + control-plane RPC
+      (`movement.train`/`movement.predict`/`movement.evaluate`) and persist
+      serialized weights via a store, so the CLI can drive train→infer end-to-end.
+- [ ] `tokenizeReviewedExport`: derive `MovementDataset` from a
+      `ReviewedExportManifest`'s replay action events (currently only
+      `tokenizeTrajectory` from a live `TrajectorySpan`).
+- [ ] Movement **skill distillation**: cluster trajectories by gesture-shape
+      (class-context keys) and auto-promote frequent/high-reward clusters into
+      named executable skills whose steps are the model's `generate()` output.
+- [ ] Add temperature/top-k sampling to the backend so generalization can propose
+      alternative next steps, not only the argmax.
+
+## Test reliability
+- [ ] **De-race the background-task tests** (HIGH — surfaced run 9). The tests in
+      `operator-runtime.test.ts` / `app.test.ts` / `server.test.ts` that exercise
+      background tasks spawn **real subprocesses**; each launcher writes `state.json`
+      asynchronously, racing the test's own `writeState`/recover writes. Result: a
+      *fluctuating* 2–4 test failures per full-suite run in this cloud env (present
+      on clean HEAD; the original 174/174 was a faster/different machine). Run 9
+      hardened `readState` to tolerate torn reads (`SyntaxError`→`undefined`), which
+      removed the hard throw and lowered the average failure count but did not fully
+      de-race it. Fix: inject a **no-op/mock `spawnProcess`** in these tests (the
+      runtime already accepts a `backgroundTaskIsProcessRunning` override; add/route
+      a spawn override the same way) so state files are written only by the test,
+      deterministically. Precedent: the run-1 config-loader hermeticity fix.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

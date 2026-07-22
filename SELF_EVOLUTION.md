@@ -6,6 +6,70 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-22 (run 9) — Movement learning: in-process pluggable model backend + generalization eval (objective #2 c/d)
+
+**Audited:** Standing objective #2 (local-movement learning). `src/capture/`
+already covers capture → schema → dataset → replay; `src/training/` covers export
++ real on-device launch (`runner.ts` emits mlx/axolotl launch scripts). The gap:
+parts **(c) "train a local model to repeat recorded movements"** and **(d)
+"generalize to new but related movements"** had NO in-process, cloud-testable
+implementation — only launch scripts that can only run on the user's real machine.
+
+**Changed (additive, new module `src/training/movement-model.ts`, 0 edits to
+capture/training internals):**
+- `MovementModelBackend` — a **pluggable training-backend interface** (same shape a
+  real mlx/llama.cpp/transformer backend would implement).
+- `MarkovMovementBackend` — a **fully deterministic reference backend**: an order-k
+  Markov model with a **specific → gesture-class → unigram backoff ladder**. Exact
+  context reproduces a recorded workflow step-for-step (part c); an unseen context
+  whose *gesture shape* was seen predicts the right next gesture against a **new
+  target** (part d, generalization). No fs / clock / randomness → reproducible
+  weights.
+- `tokenizeTrajectory(span)` — bridges the real capture schema (device/browser/OS
+  adapter gesture metadata) into `MovementStep[]`.
+- `evaluateMovementModel(model, heldOut)` — **generalization eval harness**:
+  next-step `exactAccuracy` (repeat fidelity), `gestureAccuracy` (generalization),
+  strict end-to-end `fullyReproduced`, and a backoff-usage breakdown.
+- `generateSyntheticMovementDataset` + `defaultSyntheticWorkflows` — deterministic
+  synthetic movement-stream generator (templates × target variants) that powers the
+  tests and eval without real OS input.
+- `serialize()`/`loadMovementModel()` round-trip for persisting trained weights.
+- Wired all exports through `src/index.ts`.
+
+**Also (reliability, `src/harness/background-tasks.ts`):** `readState` now tolerates
+a **torn/partially-written state file** (out-of-process launcher racing the reader)
+by catching `SyntaxError` → `undefined`, so recovery degrades to the
+process-liveness path instead of throwing and **aborting the entire session-wide
+recovery sweep**. This is a genuine production torn-read bug (the state file is
+written by the generated shell/python launch script).
+
+**Test results:** new `movement-model.test.ts` **9/9 green** (repeat-exact,
+generalize-via-class-backoff, unigram/none fallback, determinism, serialize
+round-trip, tokenize, eval perfect-on-train, eval generalizes on held-out).
+`typecheck:src` ✅ (source stays fully clean). Build ✅ (tsdown, 5 files, 550 kB).
+Full suite: my 9 pass; **the pre-existing background-task tests
+(`operator-runtime`/`app`/`server`) remain flaky**, failing a *fluctuating* 2–4
+tests run-to-run (they exist on clean HEAD too). Root cause diagnosed: these tests
+spawn **real subprocesses** whose launcher writes `state.json` asynchronously,
+racing the tests' own `writeState`/recover writes — non-deterministic in this cloud
+env (differs from the original dev machine). My `readState` fix eliminated the hard
+`SyntaxError` throw and lowered the average failure count, but full de-racing needs
+a no-op spawn injection in those tests (logged to ROADMAP as high priority).
+
+**Pushed to** designated branch `claude/peaceful-dirac-9ciphd` (per branch policy),
+not `main`: the increment is green and non-regressing, but the suite isn't fully
+green due to the inherited flake, so this stays on the feature branch for review.
+
+**New idea:** a **movement "skill distillation" loop** — cluster recorded
+trajectories by their tokenized gesture-shape (the class-context keys the Markov
+model already builds), and auto-promote a high-frequency, high-reward cluster into
+a named executable skill whose steps are the model's `generate()` output. That
+closes capture → learn → *reusable capability*, not just replay. Also: add a
+`temperature`/top-k sampling variant to the backend so generalization can propose
+*alternatives* rather than only the argmax next step.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
