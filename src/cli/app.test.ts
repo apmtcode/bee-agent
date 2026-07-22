@@ -801,7 +801,18 @@ describe("OperatorCliApp", () => {
 
   it("supports session lifecycle, transcript, approvals, pairing, config, and prompt commands", async () => {
     const rootDir = await makeTempDir();
-    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    const app = new OperatorCliApp({
+      rootDir,
+      cwd: rootDir,
+      currentDate: "2026-05-25",
+      // No-op spawn so background tasks don't run a real process that would
+      // asynchronously overwrite the state this test controls, and a liveness
+      // probe keyed on the injected pid: 4321 (the healthy tasks) reads as
+      // running, while the pid 999999 the test writes later reads as dead so the
+      // drift task reconciles to failed → degraded exactly as asserted.
+      backgroundTaskSpawnProcess: () => ({ pid: 4321, unref: () => {} }),
+      backgroundTaskIsProcessRunning: (pid) => pid === 4321,
+    });
     const firstSession = await app.runtime.startSession({ title: "first", cwd: rootDir, agentId: "operator-cli" });
     const secondSession = await app.runtime.startSession({ title: "second", cwd: rootDir, agentId: "operator-cli" });
 

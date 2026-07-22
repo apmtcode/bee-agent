@@ -70,6 +70,24 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Generalization eval harness: measure replay fidelity on held-out but
       related synthetic trajectories.
 
+## Reliability / correctness
+- [x] **Robust background-task launch-script JSON** (2026-07-22, run 9): initial
+      `state.json` is now written by a `python3` heredoc that JSON-encodes every
+      dynamic value, replacing a fragile `printf|sed` payload that produced invalid
+      JSON for commands with quotes/newlines and depended on platform `sed` `$`
+      semantics.
+- [x] **Deterministic background-task tests** (2026-07-22, run 9): inject the
+      no-op `backgroundTaskSpawnProcess` seam into state-driven tests so real OS
+      processes no longer race manual `writeState`; added the same seam to
+      `OperatorCliApp` (mirrors `configHome`).
+- [ ] **Launch-script round-trip test**: render the launch script for a command
+      containing quotes/newlines/`$`/unicode, execute it (guarded on bash+python3),
+      and assert `state.json` parses and round-trips — asserts the shell/JSON
+      boundary at the source instead of via downstream breaker assertions.
+- [ ] Make `python3` an explicit, checked dependency of the background-task
+      backend (fail fast with a clear message if absent) or provide a pure-node
+      fallback state writer, so the launch script degrades gracefully off-box.
+
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in

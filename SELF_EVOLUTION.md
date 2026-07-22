@@ -6,6 +6,54 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-22 (run 9) — 🐞 Real bug: launch-script JSON generation + test-race determinism
+
+**Audited:** The actual green gate. On a fresh `npm install` this environment ran
+**3 hard test failures**, not the 174/174 the log claimed — so before adding any
+capability I ran the suite for real. Instrumented `readJsonFile` to dump the
+content that failed to parse and traced it to a concrete, environment-dependent
+bug (masked on whatever machine run 8 used).
+
+**Root cause (real bug, `src/harness/background-tasks.ts`):** a background task's
+initial `state.json` was generated in the launch script by
+`printf '%s' '<json-with-$$-placeholder>' | sed 's/__…__/…/; s/"$$"/<pid>/'`,
+embedding the **raw user command** into the JSON payload. When the command
+contained quotes/newlines (the tests use `printf "line-1\nline-2\n"`) the payload
+became **invalid JSON**, and the `"$$"→pid` substitution relied on `sed`'s BRE
+`$` handling, which differs by platform (here the pid was left as the literal
+string `"$$"`). Reading that file threw `SyntaxError`, cascading into
+breaker-`degraded` assertions in `server.test`/`app.test`.
+
+**Fix (additive):** replaced the `printf|sed` initial-state write with a
+`python3` heredoc (`renderInitialStateWriterPython`) that JSON-encodes every
+dynamic value (command, cwd, task id, pid via bash `$$` argv) with `json.dumps` —
+identical in spirit to the completed/failed writers already in the file, and
+depending on no new tooling. No more shell-level JSON assembly.
+
+**Fix (test determinism):** several tests started **real OS background
+processes** via the default `spawn` and then hand-managed `state.json`, so the
+launch script's async write raced their `writeState` (valid-but-flaky once the
+JSON bug was fixed). Injected the existing `backgroundTaskSpawnProcess` no-op seam
+into the deterministic-state runtimes (operator-runtime lifecycle; server
+main/drifting/breaker) and **added a matching seam to `OperatorCliApp`**
+(`backgroundTaskSpawnProcess` / `backgroundTaskIsProcessRunning`, mirroring the
+`configHome` isolation pattern) for `app.test`, with liveness keyed on the
+injected pid so the drift task still reconciles to failed→degraded as asserted.
+
+**Test results:** baseline **3 failed / flaky → 174/174 stable** across repeated
+full runs (verified app/server/runtime files 5× and the full suite 3×). Build ✅.
+`typecheck:src` ✅ (0). Full `tsc` unchanged at **125** (test-file debt only) — no
+new type debt introduced.
+
+**New idea:** a **launch-script round-trip test** — render the launch script for
+a task whose command contains quotes, newlines, `$`, and unicode; execute it in a
+temp dir (guarded to run only where `bash`+`python3` exist); assert the resulting
+`state.json` parses and every field round-trips. That asserts the shell/JSON
+boundary directly, catching this class of bug at the source instead of via a
+downstream flaky breaker assertion.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

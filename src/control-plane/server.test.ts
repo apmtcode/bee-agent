@@ -83,6 +83,9 @@ describe("OperatorControlPlaneServer", () => {
     const rootDir = await makeTempDir();
     const runtime = new StandaloneOperatorRuntime({
       rootDir,
+      // No-op spawn so background tasks don't run a real process that would
+      // asynchronously overwrite the state this test controls via writeState.
+      backgroundTaskSpawnProcess: () => ({ pid: 4321, unref: () => {} }),
       backgroundTaskIsProcessRunning: () => false,
       delivery: new OperatorDeliveryService(rootDir, {
         sendBrowserPush: async () => {},
@@ -952,6 +955,9 @@ describe("OperatorControlPlaneServer", () => {
     const driftingRootDir = await makeTempDir();
     const driftingRuntime = new StandaloneOperatorRuntime({
       rootDir: driftingRootDir,
+      // No-op spawn: state drift is simulated via writeState, so no real
+      // launch process may race those writes.
+      backgroundTaskSpawnProcess: () => ({ pid: 4321, unref: () => {} }),
       backgroundTaskIsProcessRunning: () => false,
     });
     const driftingServer = new OperatorControlPlaneServer({ runtime: driftingRuntime });
@@ -1018,6 +1024,10 @@ describe("OperatorControlPlaneServer", () => {
     const breakerRootDir = await makeTempDir();
     const breakerRuntime = new StandaloneOperatorRuntime({
       rootDir: breakerRootDir,
+      // Inject a no-op spawn so launched tasks do not run a real process that
+      // asynchronously writes state.json — the test drives state deterministically
+      // via writeState below, and a real launch script would race those writes.
+      backgroundTaskSpawnProcess: () => ({ pid: 4321, unref: () => {} }),
       backgroundTaskIsProcessRunning: () => false,
     });
     const breakerServer = new OperatorControlPlaneServer({ runtime: breakerRuntime });
