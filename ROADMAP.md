@@ -3,6 +3,18 @@
 Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
+## ⚠️ Known-broken (pre-existing, blocks the full-suite green gate)
+- [ ] **Background-tasks JSON state failure.** `operator-runtime.test.ts` fails
+      deterministically (1/17 in isolation): `readJsonFile` →
+      `BackgroundTaskExecutionService.readState` throws `SyntaxError: Expected ','
+      or '}' after property value in JSON` on a malformed background-task state
+      file. Cascades into `server.test.ts` + `app.test.ts` background-task/monitor
+      assertions (`control=degraded … missing-process`). Present on baseline
+      `3c7b7236` (run 9 confirmed it predates the movement-model change). Likely a
+      partial/interrupted state-file write during reconcile — `readState` should
+      tolerate a truncated/corrupt state file (treat as missing → recover) instead
+      of throwing. Fix this to restore the full-suite green gate.
+
 ## Foundations / DX
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
@@ -59,16 +71,26 @@ unchecked items are queued. Keep this richer than you found it each run.
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
 (exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
-      objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Inventory what `src/capture` + `src/training` already implement vs. the
+      objective's five pieces (run 9): capture ✅, schema ✅, dataset/export ✅,
+      replay ✅; the train/infer piece had only the mlx/axolotl launch-script
+      runner (uncloudable). The in-process train→infer→generalize loop was the gap.
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      for a real on-device small model — DONE run 9 (`MovementModelBackend` +
+      registry; `MarkovMovementBackend` reference; `src/training/movement-model.ts`).
+- [x] Synthetic event-stream generator to validate the loop without real OS input
+      — DONE run 9 (`generateSyntheticMovementSamples`, seeded LCG, tool-affinity
+      structure).
+- [x] Generalization eval harness: next-movement top-1 accuracy on held-out
+      sequences with a per-method breakdown — DONE run 9 (`evaluateMovementModel`;
+      verified beats the uniform baseline on held-out synthetic data).
+- [ ] **Reward-weighted movement training** (next): weight transition counts by
+      `TrajectorySpan.outcome.reward` so the model repeats *successful* sequences,
+      not just frequent ones — bridges the SFT/imitation path to the RL path the
+      `axolotl` runner anticipates. Reuses an existing schema field.
+- [ ] Wire the movement model into the control-plane RPC surface + a real
+      on-device backend behind the `registerMovementBackend` seam (mlx/gguf).
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

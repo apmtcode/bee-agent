@@ -6,6 +6,70 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-22 (run 9) — Movement subsystem: pluggable local model that trains, infers & generalizes
+
+**Audited:** Standing objective #2 (local-movement learning). The subsystem had
+capture (`src/capture/*`), an event/trajectory schema, a dataset exporter, and a
+replay-manifest timeline, plus a training **runner** (`src/training/runner.ts`)
+that emits mlx/axolotl launch scripts for real Apple-silicon training. The gap:
+that runner **cannot run in the cloud**, so objective #2(d) — *post-train a model
+to repeat recorded movements and generalize to new-but-related ones* — had **no
+in-process, cloud-testable implementation**. The whole train→infer→generalize
+loop was unvalidated here.
+
+**Changed (additive) — new `src/training/movement-model.ts`:**
+- **Pluggable backend seam** (`MovementModelBackend` interface + a name→factory
+  registry: `createMovementBackend`/`registerMovementBackend`/`listMovementBackends`)
+  so a real on-device small model drops in behind the same API without touching
+  call sites. Documented as the seam the mlx/axolotl runner will eventually fill.
+- **`MarkovMovementBackend`** — a deterministic variable-order Markov reference
+  model with Katz-style backoff. `train()` learns transition counts for orders
+  0..maxOrder from ordered movement-action sequences; `predict()` returns a ranked
+  next-movement distribution; `generate()` rolls the model forward. **Repeats**
+  recorded movements exactly (deterministic continuations regenerate the
+  recording) and **generalizes** two ways: (a) unseen high-order context backs off
+  to the longest seen context; (b) an unseen *seed* movement maps to the nearest
+  known token by feature similarity (Jaccard over keywords + tool bonus) and reuses
+  its continuation — before falling to the global unigram.
+- **`extractMovementSamples`** turns existing `ReplayManifest`s into training
+  samples (canonical `tool::slug(summary)` tokens via `movementToken`), so the new
+  model consumes the *existing* replay dataset with no schema change.
+- **`generateSyntheticMovementSamples`** — seeded-LCG synthetic event streams with
+  learnable tool-affinity structure, for cloud validation without OS input.
+- **`evaluateMovementModel`** — generalization eval harness: top-1 next-movement
+  accuracy on held-out sequences, with a per-method breakdown (exact/backoff/
+  nearest/none). Verified a model trained on synthetic data **beats the uniform
+  8-way baseline (0.125)** on held-out sequences and never returns `none`.
+- Exported all of the above from `src/index.ts`.
+
+This ticks three ROADMAP items: pluggable local-model backend + mock, synthetic
+event-stream generator, and generalization eval harness.
+
+**Test results:** new `src/training/movement-model.test.ts` — **13/13 pass**.
+`npm run typecheck:src` ✅ (source stays fully green). `npm run build` ✅.
+⚠️ **Pre-existing, unrelated test failures** (present on the baseline commit
+`3c7b7236` *before* this change — confirmed by re-running on a stash of only the
+barrel edit): `operator-runtime.test.ts` fails deterministically in isolation
+(1/17) with `SyntaxError: Expected ',' or '}' after property value in JSON` from
+`readJsonFile` → `BackgroundTaskExecutionService.readState` (a malformed
+background-task **state file**); `server.test.ts` and `app.test.ts` fail on
+related background-task/monitor timing (`control=degraded … background task
+missing-process`, missing `[task …]` line). Full-suite failing count varies 3–4
+run to run (cross-test timing), but the background-tasks JSON failure is stable.
+These are in the background-tasks subsystem, **not** the movement code, and are
+out of scope for this focused diff. Pushed to `claude/peaceful-dirac-fy4dnp`
+(designated dev branch) since my contribution is green + additive; the
+pre-existing failures are logged below and promoted to the top of ROADMAP.
+
+**New idea:** the movement model is currently frequency-only. Add a **reward-
+weighted** training mode — weight transition counts by the trajectory's
+`outcome.reward` so the model preferentially repeats *successful* movement
+sequences, not just frequent ones. This is the natural bridge from the SFT
+(imitation) path to the RL path the `axolotl` runner already anticipates, and it
+reuses the `TrajectorySpan.outcome.reward` field that already exists in the schema.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
