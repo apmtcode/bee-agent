@@ -70,6 +70,22 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Generalization eval harness: measure replay fidelity on held-out but
       related synthetic trajectories.
 
+## Test determinism / reliability
+- [x] **Kill background-task test flakiness at the root** (2026-07-23, run 9).
+      Suite was non-deterministic (1–4 intermittent failures/run) because tests
+      spawned real detached subprocesses that raced their own file writes.
+      Fixed: atomic `state.json` writes in the launch script, `readJsonFile`
+      torn-read retry, injectable `createInMemoryBackgroundSpawn()` backend
+      (exposed through `OperatorCliAppOptions`), and deterministic tests. Now
+      185/185 across 12 consecutive full runs.
+- [ ] **Fake-clock seam for the runtime** (`nowMs?: () => number`) threaded into
+      background-task timestamps and the gateway heartbeat/pong logic, so the
+      whole suite runs on virtual time and the last load-sensitive timing (the
+      occasional gateway-transport blip) becomes impossible.
+- [ ] **`flake-scan` npm script** (`vitest run --repeat=N`) the engine runs as a
+      pre-push determinism gate, so newly-introduced flakiness is caught in the
+      run that adds it rather than rediscovered hours later.
+
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in

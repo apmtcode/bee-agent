@@ -8,6 +8,7 @@ import { OperatorCronService } from "./cron-service.js";
 import { OperatorDeliveryService } from "./delivery.js";
 import { buildRuntimeEventFilter, subscribeRuntimeEvents } from "./subscriptions.js";
 import { StandaloneOperatorRuntime } from "../orchestrator/operator-runtime.js";
+import { createInMemoryBackgroundSpawn } from "../harness/spawn-stub.js";
 import type { ReviewedExportManifest } from "../training/export-manifest.js";
 
 const tempDirs: string[] = [];
@@ -83,6 +84,9 @@ describe("OperatorControlPlaneServer", () => {
     const rootDir = await makeTempDir();
     const runtime = new StandaloneOperatorRuntime({
       rootDir,
+      // Deterministic in-memory spawn: exercise background-task RPCs without a
+      // real detached subprocess racing the assertions on state/output files.
+      backgroundTaskSpawnProcess: createInMemoryBackgroundSpawn(),
       backgroundTaskIsProcessRunning: () => false,
       delivery: new OperatorDeliveryService(rootDir, {
         sendBrowserPush: async () => {},
@@ -952,6 +956,7 @@ describe("OperatorControlPlaneServer", () => {
     const driftingRootDir = await makeTempDir();
     const driftingRuntime = new StandaloneOperatorRuntime({
       rootDir: driftingRootDir,
+      backgroundTaskSpawnProcess: createInMemoryBackgroundSpawn(),
       backgroundTaskIsProcessRunning: () => false,
     });
     const driftingServer = new OperatorControlPlaneServer({ runtime: driftingRuntime });
@@ -1018,6 +1023,7 @@ describe("OperatorControlPlaneServer", () => {
     const breakerRootDir = await makeTempDir();
     const breakerRuntime = new StandaloneOperatorRuntime({
       rootDir: breakerRootDir,
+      backgroundTaskSpawnProcess: createInMemoryBackgroundSpawn(),
       backgroundTaskIsProcessRunning: () => false,
     });
     const breakerServer = new OperatorControlPlaneServer({ runtime: breakerRuntime });
@@ -2098,7 +2104,10 @@ describe("OperatorControlPlaneServer", () => {
   });
 
   it("filters runtime events by session, run, and family", async () => {
-    const runtime = new StandaloneOperatorRuntime({ rootDir: await makeTempDir() });
+    const runtime = new StandaloneOperatorRuntime({
+      rootDir: await makeTempDir(),
+      backgroundTaskSpawnProcess: createInMemoryBackgroundSpawn(),
+    });
     const sessionA = await runtime.startSession({ title: "Session A" });
     const sessionB = await runtime.startSession({ title: "Session B" });
     const runA = await runtime.startRun({ sessionId: sessionA.id, title: "Run A" });

@@ -6,6 +6,63 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-23 (run 9) — Kill background-task test flakiness at the root: atomic state writes + injectable spawn
+
+**Audited:** Project health. `npm test` was **non-deterministic** — 3 separate
+runs of the suspect files yielded 2, then 4, then 4 failures. Root cause traced
+to the background-task subsystem: several tests call
+`runtime.startBackgroundTask(...)`, which by default `spawn`s a **real detached
+subprocess** running the launch script. That subprocess writes `state.json`
+(non-atomically, via python `write_text`) and appends to `output.log` on its own
+schedule, **racing** the tests' own manual `writeState`/`writeOutput` calls and
+their assertions. Two distinct failure modes: (a) `readJsonFile` **threw** on a
+torn (mid-write) `state.json` — a genuine production bug, not just a test issue,
+since any concurrent `getBackgroundTaskExecutionState` read can hit it; (b) the
+output assertion saw `"starting task <id>"` (the launch script's banner line)
+instead of the expected command output.
+
+**Changed (all additive/reversible):**
+- **`src/shared/fs.ts` — `readJsonFile` hardened against torn reads.** On a
+  `SyntaxError` or an empty (mid-truncate) file it now retries a few times with a
+  small backoff before falling back/throwing, so a reader that catches a writer
+  mid-flight recovers instead of crashing. Genuine corruption still surfaces
+  after retries. Extracted a `cloneFallback` helper (dedupes the deep-clone
+  branches).
+- **`src/harness/background-tasks.ts` — launch script now writes `state.json`
+  atomically.** The initial bash write goes to `…state.json.tmp` then `mv`s into
+  place; the python completion/failure writer uses `tmp_path.replace(state_path)`
+  (`os.replace`, atomic on POSIX). Concurrent readers now see either the old or
+  the new state, never a partial one.
+- **`src/harness/spawn-stub.ts` (new) — `createInMemoryBackgroundSpawn()`.** A
+  deterministic, side-effect-free `SpawnBackgroundProcess`: hands back stable
+  synthetic pids and records each launch (`.launches`) without forking a real
+  OS process. A real simulation seam (guardrail-aligned), exported from the
+  barrel, usable by tests *and* by embeddings that must not fork processes.
+- **`src/cli/app.ts` — `OperatorCliAppOptions` now exposes
+  `backgroundTaskSpawnProcess` / `backgroundTaskIsProcessRunning`,** threaded
+  into the runtime. The app's background-execution backend is now injectable,
+  matching the seam the runtime already had.
+- **Tests** (`operator-runtime`, `server`, `app`): the flaky cases now inject
+  `createInMemoryBackgroundSpawn()` so no real subprocess races them; the app
+  bg/monitor test writes its output explicitly, mirroring the monitor half it
+  already had. New tests: `src/shared/fs.test.ts` (7 — torn-read recovery,
+  fallback cloning, corruption surfacing) and `src/harness/spawn-stub.test.ts`
+  (4 — pid sequencing, launch recording, arg-copy isolation).
+
+**Test results:** full suite **185/185**, green on **12 consecutive full runs**
+(was flaky at ~174 with 1–4 intermittent failures). `typecheck:src` ✅ (exit 0),
+build ✅. gateway-transport (a timer/pong test, unrelated) passed 10/10 in
+isolation; the single blip seen once under full-parallel load did not recur.
+
+**New idea:** now that a deterministic spawn backend exists, add a **fake clock**
+seam to the runtime (`nowMs?: () => number`, already partially present via
+`cron.tick`'s `nowMs`) and thread it through background-task timestamps and the
+gateway heartbeat/pong logic — the last remaining source of load-sensitive test
+timing. That would let the *entire* suite run on virtual time and make the
+occasional gateway-transport blip impossible. Pair it with a lightweight
+`flake-scan` npm script (`vitest run --repeat=N`) the engine runs pre-push as a
+determinism gate.
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
