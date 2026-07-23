@@ -59,16 +59,37 @@ unchecked items are queued. Keep this richer than you found it each run.
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
 (exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
-      objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
-      deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+- [x] Inventory what `src/capture` + `src/training` already implement vs. the
+      objective's five pieces — DONE run 9. capture→schema→dataset→replay +
+      *training-plan* existed; the missing piece was an in-process learn/infer
+      model, now added (`src/training/movement-model.ts`).
+- [x] Pluggable local-model backend interface with a deterministic mock backend
+      (so cloud/CI tests pass) and a documented seam for a real on-device model —
+      DONE run 9 (`MovementModelBackend` + `MarkovMovementBackend`).
+- [x] Synthetic event-stream generator to validate capture→dataset→replay
+      round-trips without real OS input — DONE run 9
+      (`generateSyntheticMovementSequences`, deterministic LCG).
+- [x] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories — DONE run 9 (`evaluateReplayFidelity` +
+      `evaluateGeneralization`, exact + target-family match rates).
+- [ ] **Online/continual movement backend**: an `update(state, sequence)` seam
+      (incremental refinement + decay) so the model personalizes from each newly
+      approved trajectory, plus a confidence-gated autopilot that only
+      auto-replays when `confidence`/`backoffOrder` clear thresholds.
+- [ ] Wire the movement model into the training runner/execution service so a
+      reviewed export can produce a trained `MovementModelState` artifact via the
+      mock backend end-to-end (not just an mlx/axolotl launch plan).
+
+## Reliability
+- [ ] **Atomic background-task/training state writes** (found run 9): the
+      detached launch scripts in `src/harness/background-tasks.ts` and
+      `src/training/runner.ts` write state via `printf … | sed > state` and
+      `python … write_text` — both non-atomic, so a concurrent reader gets a torn
+      file (`SyntaxError … JSON at position 311`). This deterministically fails 3
+      tests in *this* cloud container (operator-runtime/server/app) while passing
+      on faster/slower hosts — a real latency-sensitive race. Fix: write to a
+      temp path + `mv` (atomic rename) in both launch scripts, and update the two
+      exact-content script assertions (`runner.test.ts`, background-tasks test).
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

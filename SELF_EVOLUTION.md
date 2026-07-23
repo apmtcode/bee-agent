@@ -6,6 +6,68 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-23 (run 9) — 🧠 In-process movement model: post-train + replay + generalize
+
+**Audited:** The local-movement learning subsystem (standing objective #2).
+`src/capture/` (recorder, adapters, trajectory schema, replay) and
+`src/training/` (exporter, job store, **runner**) already cover capture →
+schema → dataset → replay and can *plan* real Apple-Silicon training
+(`LocalAppleSiliconTrainingRunner` emits mlx/axolotl launch scripts). The gap:
+**there was no in-process model that actually learns from a dataset and does
+inference** — so objective #2(c) "post-train a local model to repeat recorded
+movements" and (d) "generalize to new but related movements" were unrealized and
+untestable in the cloud (no OS/GPU).
+
+**Changed (additive) — new `src/training/movement-model.ts` (+ test, + barrel
+exports):**
+- **Pluggable backend seam** `MovementModelBackend { train, predict }` (async, so
+  a real on-device MLX/torch model can shell out behind the same contract).
+- **Default `MarkovMovementBackend`** — a deterministic, dependency-free
+  variable-order Markov model with **target-family back-off**. Higher-order
+  context → next-movement transitions give high-fidelity *replay*; family
+  transitions (instance ids like `row:3`/`row:17` collapsed to `row`) give
+  *generalization* to unseen-but-related targets.
+- **Movement schema + tokenizer** (`MovementEvent`, `tokenOf`/`eventFromToken`,
+  `targetFamily`) and **dataset derivation** from captured trajectories
+  (`deriveMovementSequence`/`movementFromAction`).
+- **`MovementModelTrainer`** orchestrator: `train`, `replay` (repeat/continue a
+  movement from a seed), and two eval reports — `evaluateReplayFidelity` and
+  `evaluateGeneralization` (exact + family-match rates).
+- **Synthetic event-stream generator** `generateSyntheticMovementSequences`
+  (deterministic LCG, no `Math.random`) producing families of related sequences
+  to validate the whole pipeline with no real OS input.
+
+**Test results:** new `movement-model.test.ts` ✅ **10/10** (full replay
+fidelity = 1.0 on trained sequences; held-out generalization family-rate ≥ 0.9;
+determinism; JSON state round-trip; custom-backend pluggability). Build ✅.
+`typecheck:src` ✅ (exit 0 — source stays fully green). Full `npm test`:
+**180 passed / 3 failed** — the 3 failures are **pre-existing on clean HEAD**
+(proven via `git stash` → same 3 fail without my diff) and are all the *same*
+background-task lifecycle test cascading across
+`operator-runtime`/`server`/`app`. **Zero** failures in `training/`; my change
+introduces no regressions.
+
+**Root cause of the pre-existing 3 (documented for next run):** the detached
+launch script in `src/harness/background-tasks.ts` (and the analogous one in
+`src/training/runner.ts`) writes its state file **non-atomically**
+(`printf … | sed > state`, then `python … write_text`). That races with the
+test's reader/`writeState`, yielding a torn read → `SyntaxError … in JSON at
+position 311`. Verified the `printf|sed` pipeline itself emits valid JSON, so the
+corruption is the concurrent non-atomic write, not encoding. Environment-timing
+sensitive (why run 8 saw 174/174). Fix = make those shell/python writes atomic
+(temp + `mv`), updating the two exact-content script assertions. Queued in
+ROADMAP; kept out of this diff to keep the feature reviewable.
+
+**New idea:** an **online/continual movement backend** — instead of batch
+`train()`, expose `update(state, sequence)` so the model refines from each newly
+approved trajectory incrementally (with a decay on old counts), turning the
+capture→train loop into a live personalization loop. Pairs naturally with a
+"confidence-gated autopilot": only auto-replay a predicted movement when
+`prediction.confidence` and `backoffOrder` exceed thresholds, else defer to the
+operator — a safe bridge from record→replay to true assisted automation.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
