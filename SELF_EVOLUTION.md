@@ -6,6 +6,71 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-23 (run 9) — 🧠 In-process movement-model backend: train + infer + generalize (objective #2 (c)/(d))
+
+**Audited:** The local-movement learning subsystem (standing objective #2).
+Runs 2–8 were all typecheck-debt cleanup; the *marquee* objective (a trainable,
+generalizing local model) had stalled. Traced the pipeline end-to-end:
+`src/capture` (recorder → trajectory → replay manifest) → `src/training/exporter`
+(reviewed dataset) → `src/training/runner` (on-device MLX/Axolotl **plan** +
+launch script). **Gap found:** everything only *plans* an external on-device
+process — objective #2 parts (c) "post-train a local model … to repeat the
+recorded movements" and (d) "generalize to perform new but related movements"
+had **no runnable, testable implementation** in the cloud.
+
+**Changed (additive) — new `src/training/movement-model.ts`:**
+- **`MovementModelBackend`** — a pluggable seam (`train`/`predict`/`generate`)
+  so a real on-device small model drops in behind the same interface.
+- **`MarkovMovementBackend`** — a dependency-free, fully deterministic reference
+  backend (order-k Markov over movement tokens). It **replays** recorded
+  movements exactly and **generalizes** by recombining learned transitions
+  across trajectories into new-but-related sequences. Serializable model
+  artifact; binary-search transition lookup; seeded (mulberry32) sampling for
+  reproducible stochastic rollouts, greedy argmax by default.
+- **Dataset builders** — `buildMovementDataset` (from `TrajectorySpan[]`) and
+  `buildMovementDatasetFromReplays` (from `ReplayManifest[]`), with a timestamp
+  -ordered tokenizer (`action:<tool>`, optional `obs:<source>`/`outcome:<status>`
+  tokens, START/END sentinels) and a sorted vocabulary.
+- **Generalization eval harness** — `evaluateNextTokenAccuracy` +
+  `splitMovementDataset` (deterministic FNV-hash train/holdout split, no
+  clock/entropy) to measure replay fidelity on held-out but related synthetic
+  trajectories.
+- **`MovementModelTrainer`** orchestrator so call sites depend on one object
+  regardless of backend. Exported the full surface from `src/index.ts`.
+- **15 tests** covering tokenization, exact replay, ranked probability
+  distributions, unknown-context handling, **genuine generalization** (stitching
+  `scroll→click` from one trajectory with `click→type→submit` from another into
+  an unseen sequence), max-steps/no-transition termination, reproducible seeded
+  sampling, perfect memorized-data accuracy, **above-chance held-out accuracy**,
+  deterministic splitting, and a custom-backend swap.
+
+**Test results:** new file **15/15 ✅**. Build ✅ (tsdown, 5 files, 549 kB).
+`typecheck:src` ✅ (exit 0 — source stays clean). Full `tsc` unchanged at
+**125** (all in test files). **Zero regressions:** the 3 affected legacy test
+files return an *identical* pass/fail set with and without this change
+(4 failed | 46 passed either way).
+
+**⚠️ Pre-existing blocker (NOT caused by this run, logged to ROADMAP):** the full
+suite is **not green on a clean tree** — it flakes **3–5** failures per run in
+`operator-runtime.test.ts` / `server.test.ts` / `app.test.ts`. Root cause of the
+operator-runtime one: `BackgroundTaskExecutionService.readState` →
+`readJsonFile` **throws** on a malformed state file (a `"pid": $$` shell sentinel
+left unsubstituted in the simulated env → invalid JSON), instead of treating an
+unparseable state file as "unknown/recover". Recovery should tolerate a
+half-written state file rather than reject the whole promise. Because the
+baseline is red through no fault of this change, per the "never push work you
+broke" intent I pushed this **additive, self-contained, fully-tested** increment
+to the designated feature branch `claude/peaceful-dirac-f2lh91` (not `main`),
+with the flaky-baseline blocker documented for a dedicated next run.
+
+**New idea:** give the Markov backend an **order-fallback / back-off** at
+inference time — when the order-k context is unseen, fall back to order-(k-1)…1
+before giving up (Katz/stupid-backoff style). This sharply improves
+generalization on held-out trajectories (longer contexts when available, graceful
+degradation when not) and is a small, testable delta over the current single-order
+lookup. Pair it with a `perplexity`/coverage metric in the eval harness so
+generalization quality is a tracked number across runs.
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

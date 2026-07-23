@@ -62,13 +62,35 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      for a real on-device small model. — DONE run 9
+      (`src/training/movement-model.ts`): `MovementModelBackend` interface +
+      deterministic `MarkovMovementBackend` (train/predict/generate) +
+      `MovementModelTrainer`. Runs entirely in-process; 15 tests.
+- [~] Synthetic event-stream generator to validate capture→dataset→replay
+      round-trips without real OS input. Partial (run 9): tests synthesize
+      trajectory spans and drive `buildMovementDataset`/`buildMovementDatasetFromReplays`.
+      Next: a first-class reusable generator producing correlated mouse/keyboard/
+      window event streams (not just per-test factories) for richer coverage.
+- [x] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories. — DONE run 9 (`evaluateNextTokenAccuracy` +
+      deterministic `splitMovementDataset`). Next: add perplexity/coverage metrics.
+- [ ] **Order-fallback (back-off) inference** for `MarkovMovementBackend`: when
+      the order-k context is unseen, back off to order-(k-1)…1 before giving up
+      (Katz/stupid-backoff). Improves held-out generalization; small testable delta.
+
+## Known blockers (fix before a clean `main` push is possible)
+- [ ] **Flaky/red baseline suite** (surfaced run 9): a clean tree fails **3–5**
+      tests per run in `operator-runtime.test.ts` / `server.test.ts` /
+      `app.test.ts` (count varies → timing/isolation flakiness). Confirmed root
+      cause for the operator-runtime case: `BackgroundTaskExecutionService.readState`
+      → `readJsonFile` **throws** on a malformed state file (`"pid": $$` shell
+      sentinel left unsubstituted → invalid JSON) instead of treating an
+      unparseable state file as unknown/recoverable. Fix: make `readState`
+      tolerate a half-written/corrupt state file (return undefined → reconcile as
+      recoverable) so background-task recovery is robust. This is the gate keeping
+      the engine from pushing green to `main`.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
