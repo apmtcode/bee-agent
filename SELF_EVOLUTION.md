@@ -6,6 +6,67 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-23 (run 9) — 🐛 Fix `shellQuote` corruption: red tree → green + hardened background-task launch
+
+**Audited:** The whole test suite health (`npm test`). Found the tree was **red
+at HEAD** — 3 tests failing (`operator-runtime`, `server`, `app`), plus a 4th
+flaky one. Two distinct, genuine production bugs in the background-task launch
+pipeline (`src/harness/background-tasks.ts`), not test bugs:
+
+1. **`shellQuote` inserted a spurious `"` (the deepest root cause).** The single-
+   quote escape was `` `"'"'"'` `` (6 chars, a leading `"`) instead of the
+   canonical `` `'"'"'` `` (5 chars). Every value containing a single quote was
+   mangled — `a'b` → `a"'b`. Since a task's `command` is embedded in the launch
+   script's JSON state payload, any command with a single quote (e.g.
+   `printf 'line-1\n'`) produced **invalid JSON**, and the recovery reader
+   crashed with `SyntaxError … JSON at position 311`, taking down
+   `recoverBackgroundTasks` for the whole session. This is the fix that turns the
+   tree green. `shellQuote` is used for state-path, output-file, cwd, and command,
+   so the bug was broad.
+2. **Non-atomic, fragile state writes.** The running-state file was written via a
+   `printf '%s' <payload> | sed … > file` pipeline: non-atomic (a concurrent
+   recovery read could see a torn file) and the `s/"$$"/…/` substitution never
+   fired (the `$$` in the sed pattern expands to the launcher PID inside bash
+   double-quotes, so `pid` was persisted as the string `"$$"` instead of a
+   number). Replaced it with the same proven `python3` + `json.dumps` writer the
+   completion path uses, passing the payload as a single shell-quoted argv arg
+   (no string substitution), and writing via a per-pid temp file + `os.replace`
+   (atomic POSIX rename). Applied the same atomic temp+replace to the completion
+   writer too.
+
+**Also fixed test determinism:** the 3 runtime/server/app tests spawned **real**
+`sleep`/`printf`/`tail -f` OS processes (they mocked `isProcessRunning` but not
+spawn), whose async launch-script state writes raced the assertions — the source
+of the flaky circuit-breaker `failureCount 2→3` drift and leaked processes.
+Injected a mock `backgroundTaskSpawnProcess` at all 4 sites so no real processes
+launch.
+
+**Changed:**
+- `src/harness/background-tasks.ts`: fixed `shellQuote`; new
+  `renderRunningStateWriterPython()`; atomic `os.replace` in both state writers.
+- `src/harness/background-tasks.test.ts`: new regression test that **executes**
+  the generated launch script (guarded on `bash`+`python3` availability) with a
+  command containing single quotes, double quotes, and `$$`, and asserts the
+  state file is valid JSON that round-trips the command exactly, status
+  `completed`, numeric `pid`, and no leftover `.tmp.` files.
+- `src/control-plane/server.test.ts`, `src/orchestrator/operator-runtime.test.ts`:
+  inject mock spawn for determinism.
+
+**Test results:** `npm test` **175/175 ✅** (174 → 175, +1 regression test),
+verified deterministic across 3 full runs and 8 stress runs of the previously
+flaky suites. `typecheck:src` ✅ (exit 0). Build ✅. Full `tsc` debt unchanged at
+125 (all in test files). Before this run: 3 hard failures + 1 flaky.
+
+**New idea:** add a `verify` npm script (`typecheck:src && build && test`) and
+have the engine run it as the mandatory pre-push gate every cycle — this run
+only caught the red tree because I ran the suite manually before trusting the
+prior log's "174/174". A cheap standing gate would have surfaced the regression
+immediately. Bonus idea: a tiny property test over `shellQuote` (fuzz strings
+with quotes/`$`/backslashes/newlines, assert `bash -c 'printf %s '<quoted>` round-
+trips) so shell-escaping bugs can never silently return.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

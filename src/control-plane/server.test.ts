@@ -83,6 +83,9 @@ describe("OperatorControlPlaneServer", () => {
     const rootDir = await makeTempDir();
     const runtime = new StandaloneOperatorRuntime({
       rootDir,
+      // Mock spawn so no real OS processes launch; their async launch-script
+      // state writes would otherwise race these deterministic assertions.
+      backgroundTaskSpawnProcess: () => ({ pid: 424242, unref() {} }),
       backgroundTaskIsProcessRunning: () => false,
       delivery: new OperatorDeliveryService(rootDir, {
         sendBrowserPush: async () => {},
@@ -952,6 +955,9 @@ describe("OperatorControlPlaneServer", () => {
     const driftingRootDir = await makeTempDir();
     const driftingRuntime = new StandaloneOperatorRuntime({
       rootDir: driftingRootDir,
+      // Mock spawn so no real OS processes launch; their async launch-script
+      // state writes would otherwise race these deterministic assertions.
+      backgroundTaskSpawnProcess: () => ({ pid: 424242, unref() {} }),
       backgroundTaskIsProcessRunning: () => false,
     });
     const driftingServer = new OperatorControlPlaneServer({ runtime: driftingRuntime });
@@ -1018,6 +1024,9 @@ describe("OperatorControlPlaneServer", () => {
     const breakerRootDir = await makeTempDir();
     const breakerRuntime = new StandaloneOperatorRuntime({
       rootDir: breakerRootDir,
+      // Mock spawn so no real OS processes launch; their async launch-script
+      // state writes would otherwise race these deterministic assertions.
+      backgroundTaskSpawnProcess: () => ({ pid: 424242, unref() {} }),
       backgroundTaskIsProcessRunning: () => false,
     });
     const breakerServer = new OperatorControlPlaneServer({ runtime: breakerRuntime });

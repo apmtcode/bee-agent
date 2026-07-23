@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -7,6 +8,19 @@ import {
   FileBackgroundTaskStore,
   type BackgroundTaskExecutionState,
 } from "./background-tasks.js";
+
+function hasBinary(bin: string, versionArg = "--version"): boolean {
+  try {
+    execFileSync(bin, [versionArg], { stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// The launch script requires bash + python3 to emit state files. In cloud/CI
+// runners that lack them we skip the round-trip test rather than fail spuriously.
+const canRunLaunchScript = hasBinary("bash") && hasBinary("python3");
 
 const tempDirs: string[] = [];
 
@@ -370,4 +384,43 @@ describe("BackgroundTaskExecutionService", () => {
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
   });
+
+  // Regression: the launch script previously emitted the running-state file via a
+  // `printf | sed > file` pipeline, which mangled any command containing single
+  // quotes into invalid JSON (e.g. `"command":"printf "'...'"`) and crashed the
+  // recovery reader with a JSON parse error. The state file is now written with
+  // json.dumps + an atomic os.replace, so quotes/`$$` round-trip losslessly and
+  // readers never observe a torn write.
+  it.skipIf(!canRunLaunchScript)(
+    "emits valid JSON state for commands with quotes and $$ (no torn/mangled writes)",
+    async () => {
+      const rootDir = await makeTempDir();
+      const filePath = path.join(rootDir, "background-tasks.json");
+      // Run the generated launch script to completion synchronously so we can
+      // inspect the exact state file it wrote.
+      const store = new FileBackgroundTaskStore(
+        filePath,
+        (command, _args, options) => {
+          execFileSync("bash", [command], { cwd: options.cwd });
+          return { pid: 4242, unref() {} };
+        },
+        () => false,
+      );
+
+      const command = "echo 'it costs $$ dollars, said \"the shell\"'";
+      const task = await store.start({ title: "Quoted command", command, cwd: rootDir });
+
+      const statePath = path.join(rootDir, task.execution.stateFile);
+      const raw = await fs.readFile(statePath, "utf8");
+      // Must not throw — the whole point of the fix.
+      const parsed = JSON.parse(raw) as BackgroundTaskExecutionState;
+      expect(parsed.command).toBe(command);
+      expect(parsed.status).toBe("completed");
+      expect(parsed.exitCode).toBe(0);
+      expect(typeof parsed.pid).toBe("number");
+      // No stray temp files should remain after the atomic rename.
+      const leftovers = (await fs.readdir(path.dirname(statePath))).filter((name) => name.includes(".tmp."));
+      expect(leftovers).toEqual([]);
+    },
+  );
 });
