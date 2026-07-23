@@ -6,6 +6,67 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-23 (run 9) — 🎯 Movement-model backend (train→infer→generalize) + 2 real shell-escaping bugs fixed; suite 187/187
+
+**Audited:** The local-movement learning subsystem (objective #2). `src/capture`
+covers capture→schema→dataset→replay; `src/training` exports a reviewed dataset
+and `runner.ts` *emits* an external MLX/axolotl launch plan. The gap: nothing
+in-process could **close the loop** — learn from recorded movements, predict the
+next movement, and generalize — so none of objective #2(c)/(d) was testable in the
+cloud (no OS, no ML runtime). This is the roadmap's "Pluggable local-model backend
+interface … deterministic mock backend" item.
+
+**Changed (additive):**
+- **New `src/training/movement-model.ts`** — a pluggable movement-model backend:
+  - `MovementModelBackend` (train seam) + `TrainedMovementModel` (infer seam:
+    `predictNext` to repeat a recorded movement, `generate` to roll out a
+    sequence, `score` for fit). A real on-device small model implements the same
+    interface later; documented as the seam.
+  - `MarkovMovementBackend` — the deterministic reference/mock: an n-gram model
+    with Katz-style **back-off**. Repeats recorded movements exactly from a known
+    context, and **generalizes** to an unseen prefix by backing off to shorter
+    shared context. Fully deterministic (ties broken by frequency then lexical
+    order; no RNG/OS) → cloud/CI-safe. JSON round-trips via `toJSON`/`fromJSON`.
+  - Dataset helpers `buildMovementDataset` / `tokenizeMovementEvent` (turn replay
+    manifests — both `ReplayManifest` and `ExportedReplayManifest` — into token
+    sequences) and `evaluateMovementModel` (generalization eval: top-1 accuracy,
+    perplexity, back-off rate on held-out sequences).
+  - Wired all types/values into the `src/index.ts` barrel.
+- **Two genuine pre-existing bugs fixed** (surfaced while validating): the
+  background-task launcher wrote its running-state file from a rendered shell
+  script, and both bits of that script were broken:
+  1. `src/harness/background-tasks.ts` `shellQuote` used `"'"'"'` (6 chars,
+     starts with `"`) for the single-quote escape instead of the POSIX idiom
+     `'"'"'` (5 chars) that `runner.ts` uses correctly. Any command containing a
+     single quote (e.g. `printf 'line-1\nline-2\n'`) mis-escaped and wrote a
+     **corrupt state file** → invalid JSON on read → reconcile crashed.
+  2. The `sed` pid substitution `s/"$$"/$$/g` had `$$` in the *pattern*, which
+     bash expands to the shell PID — so the literal `"$$"` marker in the JSON was
+     never replaced and `processId` stayed the string `"$$"`, making every
+     *running* background task look dead to reconcile. Fixed by capturing `pid=$$`
+     and escaping the pattern (`\$\$`) so bash matches a literal `$$`.
+- **Test hermeticity** (same spirit as the run-1 `configHome` fix): the four
+  reconcile-logic tests set `backgroundTaskIsProcessRunning: () => false` and drive
+  state by hand, but never mocked the spawn — so a *real detached launch script*
+  raced their manual `writeState()` calls. Injected `backgroundTaskSpawnProcess`
+  mocks (already a supported option) so no real process runs.
+
+**Test results:** these three files were **failing on pristine HEAD** (a
+subprocess-timing race that flipped red as the cloud env's process latency
+changed since run 8). Fixing the two shell bugs + mocking spawn made the whole
+suite green: **187/187** (was 174 + 13 new movement-model tests), stable across 3
+consecutive runs. `typecheck:src` ✅ (source stays clean). Build ✅.
+
+**New idea:** now that a `TrainedMovementModel` can `generate`, wire it into the
+replay engine as a *predictive* mode — given a partial recorded trajectory, have
+the model propose the next N movements and diff them against the ground-truth
+continuation, turning `evaluateMovementModel` into a live "replay fidelity"
+signal the operator can watch. Longer term: a second backend (e.g. a small
+on-device transformer served over the existing runner seam) validated against the
+Markov baseline on the same held-out eval, so backends are comparable by number.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

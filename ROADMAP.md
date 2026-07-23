@@ -44,6 +44,11 @@ unchecked items are queued. Keep this richer than you found it each run.
       (excludes `**/*.test.ts`) + `typecheck:src` script; passes (exit 0). Next:
       have the engine run it as a per-run pre-push self-check.
 - [ ] Add a minimal CI workflow mirroring `verify` for human-opened PRs.
+- [ ] Port the run-9 launcher fixes to `src/training/runner.ts`: it shares the
+      same `sed "s/"$$"/$$/g"` pid-substitution bug (bash expands `$$` in the
+      pattern) that was fixed in `background-tasks.ts`. Its `shellQuote` is already
+      correct. No test currently exercises the rendered training launch script, so
+      add one alongside the fix.
 
 ## Capability parity (audit reference agents → port gaps)
 - [ ] Build a "capability inventory" generator: enumerate bee-agent's exported
@@ -59,16 +64,30 @@ unchecked items are queued. Keep this richer than you found it each run.
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
 (exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
-      objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Inventory what `src/capture` + `src/training` already implement vs. the
+      objective's five pieces (run 9): capture/schema/dataset/replay all present;
+      the missing piece was in-process **train→infer→generalize** (the external
+      runner only emits an MLX/axolotl launch plan).
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      for a real on-device small model — DONE run 9 (`src/training/movement-model.ts`:
+      `MovementModelBackend`/`TrainedMovementModel` interfaces + `MarkovMovementBackend`
+      deterministic n-gram back-off mock).
+- [~] Generalization eval harness: `evaluateMovementModel` (top-1 accuracy /
+      perplexity / back-off rate on held-out sequences) landed run 9. Next: run it
+      over *synthetic* held-out trajectories (see generator below) and track the
+      numbers over time.
+- [ ] **Synthetic event-stream generator** to validate capture→dataset→replay
+      round-trips (and feed the eval harness) without real OS input. A seeded,
+      deterministic generator that emits related-but-varying movement trajectories
+      (e.g. parameterized "open→search→act" gestures) — pairs naturally with the
+      new `buildMovementDataset` + `evaluateMovementModel`.
+- [ ] Second movement-model backend (small on-device transformer over the existing
+      runner seam) benchmarked against the `MarkovMovementBackend` baseline on the
+      same held-out eval, so backends are comparable by number.
+- [ ] Predictive replay mode: use `TrainedMovementModel.generate` to propose the
+      next N movements from a partial trajectory and diff against ground truth as a
+      live replay-fidelity signal.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
