@@ -6,6 +6,67 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-23 (run 9) — 🐛 Two real launch-script bugs fixed; background-task tests made deterministic
+
+**Audited:** Test health. A fresh install now showed **3–4 flaky failures** (a
+regression against run 8's 174/174 — those were only ever green by timing luck).
+Traced them, and found **two genuine correctness bugs** in the background-task
+launcher (`src/harness/background-tasks.ts`), both silently corrupting the
+on-disk execution-state file that task *recovery* reads.
+
+**Bug 1 — broken POSIX single-quote escaping (`shellQuote`).** It replaced `'`
+with `` "'"'"' `` when the correct sequence is `` '"'"' `` (close-quote,
+`"'"`, reopen). For `a'b` it emitted `'a"'"'"'b'`, which bash parses as `a"'b`
+(spurious `"`, wrong order). Any task whose **command contained a single quote**
+(e.g. `printf 'line-1\nline-2\n'`) produced an *invalid-JSON* state file →
+`readState` threw `SyntaxError` mid-recovery. Fixed the escape sequence;
+`shellQuote` is now exported for testing.
+
+**Bug 2 — pid placeholder never substituted.** The launcher wrote its initial
+`running` state via `printf '%s' <payload> | sed "…; s/"$$"/$$/g"`. Bash splits
+that double-quoted `sed` argument at the inner `"` around the *unquoted* `$$`, so
+the pattern became the literal **PID number** (`s/<pid>/<pid>/g`, a no-op)
+instead of `"$$"`. The `"pid":"$$"` placeholder was therefore left as the string
+`"$$"`, so recovery saw a non-numeric pid, judged the process dead
+(`missing-process`), and mis-failed live tasks. **Fixed by deleting the
+`printf|sed` hack entirely** and writing the initial `running` state with the
+same robust `python3` heredoc the launcher already uses for completion/failure —
+pid (`$$`) and timestamp arrive via argv, static fields via
+`OPENCLAW_STATE_BASE` env (correctly quoted now that bug 1 is fixed). No new
+dependency: `python3` was already required by the completion path.
+
+**Test determinism (pre-existing latent race).** The recovery/circuit-breaker
+tests stub `backgroundTaskIsProcessRunning: () => false` but used the **real**
+spawn, launching detached `sleep 5` / `tail -f` processes whose *asynchronous*
+state writes raced the tests' manual `writeState`. The python3 startup latency
+merely exposed a race that was always there. Fixed by using the existing
+`backgroundTaskSpawnProcess` seam: added a no-op `noopBackgroundSpawn` helper
+(fake pid, no real process) so manual `writeState` is the sole state author.
+Applied at **all 23 real-spawn test sites** — `operator-runtime.test.ts` (1),
+`server.test.ts` (3), `session-stream.test.ts` (11), `gateway-transport.test.ts`
+(8). No test launches a real OS process now.
+
+**New tests:** `src/harness/shell-quote.test.ts` (11 cases) round-trips tricky
+values (single/double/mixed quotes, `$`/backtick, backslashes, a JSON payload
+with embedded quotes) through a real POSIX shell and asserts the bytes survive —
+plus a direct assertion pinning the correct `'"'"'` escape so bug 1 can't
+silently return.
+
+**Test results:** full suite **185/185**, green **10 consecutive full runs**
+(was 3–4 flaky failures on entry). Build ✅. `typecheck:src` ✅ (exit 0). Full
+`tsc` unchanged at **125** (all test-file debt; no new errors from this change).
+
+**New idea:** the two flaky-only-under-parallel-load failures (`app.test.ts`
+passed in isolation but failed in the full suite) prove the suite has **hidden
+order/resource coupling** from real detached spawns. Worth a `vitest`
+`--sequence.shuffle` + `--repeat` CI lane (or a nightly engine self-check that
+runs the suite 5×) to surface flakiness *before* it lands, instead of
+rediscovering it a run later. Bigger: give `StandaloneOperatorRuntime` a
+"hermetic test mode" flag that defaults `backgroundTaskSpawnProcess` to a no-op
+sink, so no test can accidentally launch a real OS process.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

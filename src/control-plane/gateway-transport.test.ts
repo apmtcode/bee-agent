@@ -14,6 +14,14 @@ async function makeTempDir(): Promise<string> {
   return dir;
 }
 
+// A deterministic no-op background spawn: returns a fake pid without launching
+// a real detached process, so tests are not racing the real launch script's
+// asynchronous state write.
+let noopSpawnPid = 990000;
+function noopBackgroundSpawn(): { pid: number; unref(): void } {
+  return { pid: ++noopSpawnPid, unref() {} };
+}
+
 afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })));
 });
@@ -31,6 +39,7 @@ describe("OperatorGatewayTransportConnection", () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
       backgroundTaskIsProcessRunning: () => false,
+      backgroundTaskSpawnProcess: noopBackgroundSpawn,
     });
     const server = new OperatorControlPlaneServer({ runtime });
     const transport = new InMemoryGatewayTransport();
@@ -146,6 +155,7 @@ describe("OperatorGatewayTransportConnection", () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
       backgroundTaskIsProcessRunning: () => false,
+      backgroundTaskSpawnProcess: noopBackgroundSpawn,
     });
     const server = new OperatorControlPlaneServer({ runtime });
     const transport = new InMemoryGatewayTransport();
@@ -206,6 +216,7 @@ describe("OperatorGatewayTransportConnection", () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
       backgroundTaskIsProcessRunning: () => false,
+      backgroundTaskSpawnProcess: noopBackgroundSpawn,
     });
     const server = new OperatorControlPlaneServer({ runtime });
     const firstTransport = new InMemoryGatewayTransport();
@@ -244,6 +255,7 @@ describe("OperatorGatewayTransportConnection", () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
       backgroundTaskIsProcessRunning: () => false,
+      backgroundTaskSpawnProcess: noopBackgroundSpawn,
     });
     const server = new OperatorControlPlaneServer({ runtime });
     const transport = new InMemoryGatewayTransport();
@@ -294,6 +306,7 @@ describe("OperatorGatewayTransportConnection", () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
       backgroundTaskIsProcessRunning: () => false,
+      backgroundTaskSpawnProcess: noopBackgroundSpawn,
     });
     const server = new OperatorControlPlaneServer({ runtime });
     const transport = new InMemoryGatewayTransport();
@@ -323,6 +336,7 @@ describe("OperatorGatewayTransportConnection", () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
       backgroundTaskIsProcessRunning: () => false,
+      backgroundTaskSpawnProcess: noopBackgroundSpawn,
     });
     const server = new OperatorControlPlaneServer({ runtime });
     const created = await server.handle({ method: "pairing.create", params: { remoteSource: "gateway" } });
@@ -355,6 +369,7 @@ describe("OperatorGatewayTransportConnection", () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
       backgroundTaskIsProcessRunning: () => false,
+      backgroundTaskSpawnProcess: noopBackgroundSpawn,
     });
     const server = new OperatorControlPlaneServer({ runtime });
     const transport = new InMemoryGatewayTransport();
@@ -402,6 +417,7 @@ describe("OperatorGatewayTransportConnection", () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
       backgroundTaskIsProcessRunning: () => false,
+      backgroundTaskSpawnProcess: noopBackgroundSpawn,
     });
     const server = new OperatorControlPlaneServer({ runtime });
     const firstTransport = new InMemoryGatewayTransport();

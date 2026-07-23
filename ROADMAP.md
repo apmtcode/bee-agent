@@ -70,6 +70,24 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Generalization eval harness: measure replay fidelity on held-out but
       related synthetic trajectories.
 
+## Reliability (background-task launcher)
+- [x] Fix `shellQuote` POSIX single-quote escaping (`"'"'"'` → `'"'"'`) — run 9.
+      Corrupted the state JSON for any command containing a single quote.
+- [x] Fix pid-placeholder substitution — run 9. Replaced the fragile
+      `printf|sed` initial-state write with a `python3` heredoc (pid/timestamp
+      via argv, static fields via env), matching the completion/failure writers.
+- [x] Make background-task recovery/breaker tests deterministic via the existing
+      `backgroundTaskSpawnProcess` no-op seam — run 9 (operator-runtime + server).
+- [x] Extend the no-op spawn seam to the remaining real-spawn test sites
+      (session-stream ×11, gateway-transport ×8) — run 9. No test launches a real
+      OS process now; full suite green 10× consecutively.
+- [ ] Add a hermetic "no real OS spawn" runtime flag that defaults
+      `backgroundTaskSpawnProcess` to a no-op sink in tests, so the stub can't be
+      forgotten at a new construction site.
+- [ ] Flaky-detection CI lane: run the suite with `vitest --sequence.shuffle
+      --repeat=3` (or 5× nightly) so order/resource-coupled flakiness is caught
+      before it lands rather than a run later.
+
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in
