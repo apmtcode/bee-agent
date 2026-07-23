@@ -382,6 +382,45 @@ export {
   type TeammateStatus,
 } from "./orchestrator/operator-runtime.js";
 export {
+  MOVEMENT_EVENT_TYPES,
+  MOVEMENT_START_TOKEN,
+  DEFAULT_MOVEMENT_TEMPLATES,
+  createSeededRandom,
+  generateSyntheticDataset,
+  movementSequenceFromTrajectory,
+  tokenizeEvent,
+  tokenizeSequence,
+  type MovementButton,
+  type MovementDataset,
+  type MovementDirection,
+  type MovementEvent,
+  type MovementEventType,
+  type MovementSequence,
+  type MovementTemplate,
+  type SyntheticStreamOptions,
+  type TokenizeOptions,
+} from "./movement/event.js";
+export {
+  MarkovMovementBackend,
+  decodeToken,
+  isMovementSequence,
+  type MovementContext,
+  type MovementGenerateOptions,
+  type MovementModelArtifact,
+  type MovementModelBackend,
+  type MovementPrediction,
+  type MovementTokenProbability,
+  type MovementTrainOptions,
+} from "./movement/backend.js";
+export {
+  evaluateNextEventAccuracy,
+  evaluateReplayFidelity,
+  maxRepresentableOrder,
+  splitSequences,
+  type NextEventAccuracyReport,
+  type ReplayFidelityReport,
+} from "./movement/eval.js";
+export {
   LocalTrainingExporter,
   type CreateReviewedExportParams,
   type LocalTrainingExporterOptions,

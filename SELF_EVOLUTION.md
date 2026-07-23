@@ -6,6 +6,66 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-23 (run 9) — Movement learning: pluggable in-process model backend (train → repeat → generalize)
+
+**Audited:** The local-movement learning subsystem (standing objective #2) —
+`src/capture/*` (recorder, adapters, trajectory/replay schema) and
+`src/training/*` (exporter, job store, **runner**, execution service). Finding:
+the whole "post-train a local model" path only ever **shells out to external
+python** (`mlx_lm.lora` / `axolotl` via `LocalAppleSiliconTrainingRunner`). So
+objective #2 parts (c) "post-train a model to repeat recorded movements" and
+(d) "generalize to related movements" were **completely unvalidatable in the
+cloud** — nothing trains or infers a movement model in-process. That was the
+highest-value gap.
+
+**Changed (new module `src/movement/`, fully additive):**
+- `event.ts` — a compact, replayable `MovementEvent` schema (mouse/keyboard/
+  gesture atoms), a `tokenizeEvent` that quantizes continuous coords to a grid
+  so spatially-similar moves collapse to one token (the generalization
+  mechanism), `movementSequenceFromTrajectory` (privacy-safe: prefers
+  `review.redactedActions`), a seeded PRNG (`mulberry32`, no `Math.random`), and
+  a deterministic **synthetic event-stream generator** with a small library of
+  realistic desktop workflow templates (form-fill / scroll-read / drag-reorder).
+- `backend.ts` — the **pluggable seam**: `MovementModelBackend` interface
+  (`train`/`predict`/`generate`) that a real on-device small model plugs into,
+  plus `MarkovMovementBackend` — a deterministic, dependency-free **in-process**
+  n-gram backend with Katz-style backoff. Trains a JSON-serializable
+  `MovementModelArtifact` (transition counts + a replay exemplar per token) and
+  rolls forward via argmax. (c) repeats recorded sequences exactly; (d)
+  generalizes to held-out related sequences via backoff.
+- `eval.ts` — a **generalization eval harness**: `evaluateNextEventAccuracy`
+  (top-1 / top-k / mean backoff order), `evaluateReplayFidelity` (repeat
+  metric), and a leak-free `splitSequences`.
+
+**Test results:** 3 new test files, **22 new tests, all passing** (next-event
+generalization on held-out synthetic data measures **>0.7 top-1** for the
+regular templates; replay fidelity **1.0** on a distinct-token recording).
+`npm run build` ✅. `npm run typecheck:src` ✅ (fixed one real `""`-widening bug
+in the gesture→type derivation before it landed). Full suite **174 → 196**
+(193 passing; the **same 3** pre-existing failures as the clean baseline, all in
+the background-task **process-liveness** path — `control=degraded:…background
+task missing-process` — which reports `missing-process` in this cloud sandbox
+because the recorded pids aren't alive here; unrelated to this diff, confirmed
+against a clean working tree before any change). Pushed to the designated
+feature branch per the branch requirements.
+
+**Honest limitation (documented, not hidden):** a pure argmax Markov rollout
+self-loops on internally-repeated tokens (e.g. consecutive `scroll:down`), so
+exact replay is guaranteed only for distinct-token sequences; approximate/
+sampled decoding and a repetition penalty are the natural next step.
+
+**New idea:** add a `MovementTrainingBridge` that (1) pulls reviewed trajectories
+from `FileTrajectoryStore`, converts them with `movementSequenceFromTrajectory`
+into a `MovementDataset`, trains a `MovementModelBackend`, and (2) persists the
+artifact next to the existing `LocalTrainingJobManifest` — unifying the two
+training paths so the in-process backend becomes the cloud/CI-testable *default*
+and the python runner an opt-in "real on-device" backend behind the same seam.
+Second idea: a sampling decoder (temperature + top-p) with an n-back repetition
+penalty so `generate()` can reproduce repeated-token workflows and explore
+plausible variations for the generalization objective.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

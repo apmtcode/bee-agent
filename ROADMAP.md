@@ -59,18 +59,40 @@ unchecked items are queued. Keep this richer than you found it each run.
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
 (exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
-      objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
-      deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+- [x] Inventory what `src/capture` + `src/training` already implement vs. the
+      objective's five pieces (2026-07-23, run 9). Gap found: capture→schema→
+      dataset→replay existed, but **train/infer only shelled out to python** —
+      nothing ran in-process, so parts (c)/(d) were unvalidatable in the cloud.
+- [x] Pluggable local-model backend interface for movement learning with a
+      deterministic in-process backend (2026-07-23, run 9) — `src/movement/`:
+      `MovementModelBackend` seam + `MarkovMovementBackend` (train/predict/
+      generate, JSON artifact). Real on-device small model plugs into the same
+      interface; the python runner becomes one opt-in backend behind it.
+- [x] Synthetic event-stream generator (2026-07-23, run 9) — seeded, template-
+      driven `generateSyntheticDataset` validates dataset→train→replay round
+      trips without real OS input.
+- [x] Generalization eval harness (2026-07-23, run 9) — `evaluateNextEventAccuracy`
+      (top-1/top-k/backoff) + `evaluateReplayFidelity` on held-out sequences.
+- [ ] `MovementTrainingBridge`: pull reviewed trajectories from
+      `FileTrajectoryStore` → `movementSequenceFromTrajectory` → `MovementDataset`
+      → train a `MovementModelBackend`, and persist the artifact alongside the
+      existing `LocalTrainingJobManifest`. Unifies the in-process (cloud-testable
+      default) and python (real on-device) training paths behind one seam.
+- [ ] Sampling decoder for `generate()`: temperature + top-p with an n-back
+      repetition penalty, so replay reproduces internally-repeated-token
+      workflows (a pure argmax Markov rollout self-loops on e.g. consecutive
+      `scroll` events) and can explore plausible related variations.
+- [ ] Wire the movement backend into the control-plane RPC surface + CLI so the
+      operator can train/eval a movement model and inspect fidelity metrics.
 
 ## Innovation backlog
+- [ ] **Make background-task process-liveness injectable** (test hermeticity).
+      3 tests fail in the cloud sandbox — `operator-runtime.test.ts`,
+      `control-plane/server.test.ts`, `cli/app.test.ts` (all the recover/sync/
+      remote-repair path) — because the runtime does a real pid-liveness check
+      that reports `missing-process` when the recorded pids aren't alive here.
+      Inject the liveness probe (like `SpawnProcess` already is) so tests are
+      deterministic regardless of the host's process table. Noted run 9.
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in
       project health over time.
