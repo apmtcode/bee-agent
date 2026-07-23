@@ -45,6 +45,41 @@ unchecked items are queued. Keep this richer than you found it each run.
       have the engine run it as a per-run pre-push self-check.
 - [ ] Add a minimal CI workflow mirroring `verify` for human-opened PRs.
 
+## Test-suite health / reliability (run 9)
+- [x] **Fix `shellQuote` single-quote corruption** in
+      `src/harness/background-tasks.ts` (2026-07-23, run 9) — was `"'"'"'`,
+      corrected to `'"'"'`. Real bug: any single-quoted task command corrupted
+      the executed command + JSON state file. Regression test added.
+- [x] **Atomic launch-script state writes** (run 9) — temp-file + `mv` /
+      `os.replace` in both `background-tasks.ts` and `training/runner.ts` so
+      readers never see torn state.
+- [x] **Expose the background-task spawn/liveness seam on `OperatorCliApp`**
+      (run 9) so CLI-level tests run hermetically.
+- [ ] **Hermeticize `server.test.ts`'s "handles session, …" mega-block** (the
+      last red test). Plan, per sub-section, mirroring the run-9 approach in
+      `operator-runtime`/`app` tests:
+  1. Convert each of its three runtimes (main L84, `driftingRuntime` L958,
+     `breakerRuntime` L1024) to inject `backgroundTaskSpawnProcess:
+     () => ({ pid: 4242, unref(){} })` + `backgroundTaskIsProcessRunning:
+     (pid) => pid === 4242`.
+  2. Change the deliberate-degradation `writeState` pids from
+     `task.execution.processId ?? 9999` to an explicit dead pid `9999` (≠ 4242)
+     so degraded tasks fail liveness while untouched tasks stay active
+     (`mixed`/`degraded`/`paused` breaker steps then hold).
+  3. **Recovery section (L1429–1509):** it currently expects a single-quoted
+     `printf 'line-1\nline-2\n'` task to be `failed`/`unchanged` at recover —
+     an artifact of the old shellQuote bug (the command used to fail). Post-fix
+     the correct outcome is a *dead-process* recovery: give that task a distinct
+     dead pid and update the expectation to `missing-process`/`changed:true`,
+     then re-verify the downstream `recoverAll`/state/output assertions.
+  4. Consider splitting this 2000-line `it` into focused cases as part of the
+     rework (smaller blast radius, clearer intent).
+- [ ] Add a `verify` npm script (`typecheck:src && build && test`) and run it as
+      the engine's **first** step each cycle (pre-flight gate) — this run only
+      caught the red suite by testing manually up front.
+- [ ] Test lint: `bash -n` + shell-quote round-trip check over every generated
+      launch/training script in tests, catching quoting bugs structurally.
+
 ## Capability parity (audit reference agents → port gaps)
 - [ ] Build a "capability inventory" generator: enumerate bee-agent's exported
       RPC/tool surface (`src/index.ts`) and diff it against `openclaw`,

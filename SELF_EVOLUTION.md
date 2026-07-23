@@ -6,6 +6,67 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-23 (run 9) — Real bug: fixed `shellQuote` single-quote corruption + atomic state writes; de-flaked 3 tests
+
+**Audited:** The full test suite health (first thing every run needs). Found the
+suite **red at HEAD in the cloud environment**: 4 failing tests
+(`operator-runtime`, `app.test` ×2, `server.test`). Run 8 logged 174/174 — that
+was a different (local) environment; the cloud sandbox's detached-process /
+process-group semantics exposed latent problems. Root-caused each instead of
+assuming flakiness.
+
+**Root cause found (a genuine production bug):** `shellQuote()` in
+`src/harness/background-tasks.ts` escaped single quotes as `` "'"'"' `` (a stray
+leading double quote) instead of the POSIX-correct `` '"'"' ``. **Any background
+task whose command contains a single quote** — hugely common: `printf 'x'`,
+`echo 'hi'`, `grep 'pat'` — was mangled, corrupting **both** the executed command
+(`bash -lc <garbage>`) **and** the JSON state file (written from the same
+shell-quoted payload). This produced the `SyntaxError: Expected ',' or '}' after
+property value` torn-state reads seen in recovery. Notably `src/training/runner.ts`
+already had the **correct** escape, confirming the bug.
+
+**Changed (additive, focused — 6 files, +~120/−8):**
+- **`src/harness/background-tasks.ts`** — corrected `shellQuote` to `` '"'"' ``
+  (the real fix). Also made the launch script's state writes **atomic**
+  (temp-file + `mv` for the initial write; `os.replace` for the Python terminal
+  writer) so a concurrent reader (recovery/sync/status) can never observe a
+  partially-written state file. Reliability hardening for the real-OS path.
+- **`src/training/runner.ts`** — applied the same atomic-write hardening to the
+  training launch script (its `shellQuote` was already correct).
+- **`src/cli/app.ts`** — threaded `backgroundTaskSpawnProcess` +
+  `backgroundTaskIsProcessRunning` through `OperatorCliAppOptions` into the
+  runtime (the runtime already supported the seam; the app didn't expose it), so
+  CLI-level tests can run hermetically instead of spawning real subprocesses.
+- **Tests made hermetic** via that seam (`operator-runtime.test.ts`,
+  `app.test.ts` ×2): inject a deterministic spawn stub (fixed pid, no real
+  process) + a matching liveness predicate, so status/recovery are no longer
+  sensitive to host process semantics — while still letting a test degrade a
+  task by writing a foreign (dead) pid.
+- **New regression test** (`background-tasks.test.ts`): actually executes a
+  single-quoted command's generated launch script via real `bash` (synchronous,
+  no detached/liveness timing) and asserts the state file is valid JSON with the
+  round-tripped command — this fails hard on the old bug.
+
+**Test results:** **170 → 174 passing** (+ the new regression = 175 total).
+`typecheck:src` ✅ clean. Build ✅. One pre-existing failure remains:
+`server.test.ts`'s single 2000-line "handles session, …" block. It is a
+non-hermetic monolith whose breaker/drifting/**recovery** sub-sections are
+calibrated to real-process timing *and* the old shellQuote bug (its recovery
+section expects a single-quoted command to *fail* — which only happened because
+of the bug). Correctly hermeticizing it means reworking multiple sub-section
+expectations — a larger, riskier change than a focused hourly diff should carry,
+so it's deferred with a concrete plan (see ROADMAP) rather than rushed.
+
+**New idea:** add a tiny `verify` script = `typecheck:src && build && test` and
+make the engine run it as the **first** step each cycle. This run only found the
+red suite by running tests manually up front; a standing pre-flight check would
+make "is the gate green?" the explicit start-of-run gate. Bigger idea: a
+`bash -n` (syntax) + shell-quote round-trip lint over *every* generated
+launch/training script in tests, so quoting bugs like this one are caught
+structurally at authoring time, not by a corrupted runtime state file weeks later.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

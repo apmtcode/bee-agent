@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -369,5 +370,34 @@ describe("BackgroundTaskExecutionService", () => {
     await expect(fs.readFile(path.join(rootDir, task.execution.launchScript), "utf8")).resolves.toContain("bash -lc");
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
+  });
+
+  it("runs single-quoted commands without corrupting the state file (shellQuote regression)", async () => {
+    // Regression for a shellQuote bug: single quotes were escaped as `"'"'"'`
+    // (a stray leading double quote) instead of the POSIX-correct `'"'"'`. Any
+    // command containing a single quote — extremely common, e.g. `printf 'x'` —
+    // was mangled, breaking both the executed command and the JSON state file
+    // (which is written from the same shell-quoted payload).
+    const rootDir = await makeTempDir();
+    const store = new FileBackgroundTaskStore(
+      path.join(rootDir, "background-tasks.json"),
+      () => ({ pid: 4242, unref() {} }),
+    );
+    const command = "printf 'line-1\\nline-2\\n'";
+    const task = await store.start({ title: "quoted", command, cwd: rootDir, kind: "task" });
+
+    // Execute the generated launch script synchronously — this exercises the
+    // real shell quoting without any detached-process / liveness-probe timing.
+    execFileSync("bash", [path.join(rootDir, task.execution.launchScript)], { cwd: rootDir });
+
+    const stateRaw = await fs.readFile(path.join(rootDir, task.execution.stateFile), "utf8");
+    const state = JSON.parse(stateRaw) as BackgroundTaskExecutionState; // threw on the corrupted payload
+    expect(state.status).toBe("completed");
+    expect(state.exitCode).toBe(0);
+    expect(state.command).toBe(command);
+
+    const output = await fs.readFile(path.join(rootDir, task.execution.outputFile), "utf8");
+    expect(output).toContain("line-1");
+    expect(output).toContain("line-2");
   });
 });
