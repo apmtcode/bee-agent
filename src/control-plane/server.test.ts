@@ -12,6 +12,14 @@ import type { ReviewedExportManifest } from "../training/export-manifest.js";
 
 const tempDirs: string[] = [];
 
+// Side-effect-free background-task spawn: returns a fake pid and never launches
+// a real subprocess, so the launch script cannot race the explicit writeState
+// calls these tests use to stage task execution state. Combined with the
+// `backgroundTaskIsProcessRunning: () => false` stub, task state is fully
+// controlled by each test, making the platform/remote status assertions
+// deterministic instead of depending on subprocess timing.
+const noBackgroundSpawn = () => ({ pid: 424242, unref() {} });
+
 async function makeTempDir(): Promise<string> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "control-plane-"));
   tempDirs.push(dir);
@@ -83,6 +91,7 @@ describe("OperatorControlPlaneServer", () => {
     const rootDir = await makeTempDir();
     const runtime = new StandaloneOperatorRuntime({
       rootDir,
+      backgroundTaskSpawnProcess: noBackgroundSpawn,
       backgroundTaskIsProcessRunning: () => false,
       delivery: new OperatorDeliveryService(rootDir, {
         sendBrowserPush: async () => {},
@@ -952,6 +961,7 @@ describe("OperatorControlPlaneServer", () => {
     const driftingRootDir = await makeTempDir();
     const driftingRuntime = new StandaloneOperatorRuntime({
       rootDir: driftingRootDir,
+      backgroundTaskSpawnProcess: noBackgroundSpawn,
       backgroundTaskIsProcessRunning: () => false,
     });
     const driftingServer = new OperatorControlPlaneServer({ runtime: driftingRuntime });
@@ -1018,6 +1028,7 @@ describe("OperatorControlPlaneServer", () => {
     const breakerRootDir = await makeTempDir();
     const breakerRuntime = new StandaloneOperatorRuntime({
       rootDir: breakerRootDir,
+      backgroundTaskSpawnProcess: noBackgroundSpawn,
       backgroundTaskIsProcessRunning: () => false,
     });
     const breakerServer = new OperatorControlPlaneServer({ runtime: breakerRuntime });

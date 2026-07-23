@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { execFileSync } from "node:child_process";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   BackgroundTaskExecutionService,
@@ -106,6 +107,52 @@ describe("FileBackgroundTaskStore", () => {
       id: task.id,
       status: "completed",
       execution: { exitCode: 0 },
+    });
+  });
+
+  it("writes valid state JSON from the launch script for commands with quotes and newlines", async () => {
+    const rootDir = await makeTempDir();
+    const filePath = path.join(rootDir, "background-tasks.json");
+    // A command containing single AND double quotes. The launch script must
+    // (a) execute it correctly and (b) round-trip it verbatim into a *valid*
+    // state.json. Regression guards for two bugs: an earlier `printf | sed`
+    // template corrupted the state file for any command with quotes (and never
+    // substituted the "$$" pid), and `shellQuote` mis-escaped single quotes so
+    // `echo "o'brien"` reached bash as `echo "o"'brien"` and failed with exit 2.
+    const command = `echo "o'brien"`;
+    const store = new FileBackgroundTaskStore(
+      filePath,
+      // Run the generated launch script to completion synchronously so the
+      // assertions observe the exact state file it produces on a real machine.
+      (script, _args, options) => {
+        execFileSync("bash", [script], { cwd: options.cwd });
+        return { pid: 4242, unref() {} };
+      },
+      () => true,
+    );
+
+    const task = await store.start({
+      sessionId: "sess-quotes",
+      title: "Quoted command",
+      command,
+      cwd: rootDir,
+      kind: "task",
+    });
+
+    // Reading the raw file must not throw — i.e. it is valid JSON.
+    const raw = await fs.readFile(path.join(rootDir, task.execution.stateFile), "utf8");
+    const parsed = JSON.parse(raw) as BackgroundTaskExecutionState;
+    expect(parsed.command).toBe(command);
+    expect(parsed.cwd).toBe(rootDir);
+    expect(typeof parsed.pid).toBe("number");
+    expect(parsed.status).toBe("completed");
+    expect(parsed.exitCode).toBe(0);
+
+    // readState (used throughout recovery) must succeed rather than throw.
+    await expect(store.executionService.readState(task)).resolves.toMatchObject({
+      taskId: task.id,
+      status: "completed",
+      command,
     });
   });
 

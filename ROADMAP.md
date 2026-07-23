@@ -4,6 +4,21 @@ Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
 ## Foundations / DX
+- [x] **Restore a reliable green test gate** (2026-07-23, run 9). `npm test` was
+      flaky (3–4 failing nondeterministically). Root-caused + fixed two real
+      `background-tasks.ts` bugs: (1) launch script wrote **corrupt state.json**
+      for commands with quotes/newlines (fragile `printf|sed` templating + a
+      broken `"$$"` pid substitution) → now built via base64+Python; (2)
+      `shellQuote` mis-escaped single quotes (`"'"'"'` → `'"'"'`) so quoted
+      commands failed with exit 2. Made the 3 flaky tests hermetic (inject a
+      side-effect-free spawn) and added a regression test that executes the real
+      launch script. Suite now **175/175, green on 6/6 runs**.
+- [ ] **Flake sentinel in the pre-push self-check:** run `vitest run` 2–3× and
+      refuse to push to a shared branch if the pass/fail set differs. Run 9 showed
+      a "174/174" snapshot can hide a timing-dependent bug.
+- [ ] **Lint for un-injected spawns in tests:** flag tests that build a runtime
+      able to spawn real subprocesses without an injected
+      `backgroundTaskSpawnProcess`, so integration races can't creep back in.
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`

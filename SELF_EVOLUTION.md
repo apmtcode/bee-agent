@@ -6,6 +6,61 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-23 (run 9) — 🐛 Fix two real background-task bugs; restore a reliable green test gate
+
+**Audited:** The verification gate itself. `npm test` was **NOT green** — 3–4
+tests failed nondeterministically (`operator-runtime`, `server`, `app` lifecycle),
+so the engine could not safely push. Run 8 recorded 174/174; it had gotten lucky
+on timing. Root-caused two genuine correctness bugs in
+`src/harness/background-tasks.ts` (both would bite real users, not just tests):
+
+1. **Corrupt `state.json` from the launch script.** `renderLaunchScript` built the
+   initial running-state JSON by shell-interpolating a template and patching it
+   with `printf '%s' … | sed`. For any command containing quotes/newlines (e.g.
+   `printf 'line-1\nline-2\n'`) the file came out as invalid JSON, so
+   `readState`/`reconcileTask` threw `SyntaxError` — the exact nondeterministic
+   crash. The `sed "s/\"$$\"/…/"` pid substitution also never worked (`$` is a
+   regex anchor), leaving `"pid":"$$"` as a string. **Fix:** construct the initial
+   state entirely in Python from a **base64-encoded** payload passed as argv —
+   arbitrary command/cwd bytes round-trip with zero shell/JSON escaping, and pid
+   is written as a real int. Removed the `printf|sed` hack.
+2. **`shellQuote` mis-escaped single quotes.** The replacement was `"'"'"'`
+   (a stray leading `"`) instead of the POSIX `'"'"'`, so `echo "o'brien"` reached
+   `bash -lc` as `echo "o"'brien"` — an unterminated quote → the launched command
+   **failed with exit 2 and never ran**. **Fix:** correct the escape sequence.
+   This affects the command, cwd, and state/output paths fed to `bash -lc`.
+
+**Also (test hermeticity):** the three flaky tests spawned **real** subprocesses
+(no mock spawn injected) that raced the tests' own `writeState`. Injected a
+side-effect-free `backgroundTaskSpawnProcess` stub in each; since platform/remote
+status reads state files directly (no reconcile), a task with no state file reads
+as healthy, so status assertions are now deterministic. Exposed
+`backgroundTaskSpawnProcess`/`backgroundTaskIsProcessRunning` on
+`OperatorCliAppOptions` (mirrors the existing `configHome` seam) to make this
+possible for `app.test`.
+
+**New regression test** (`background-tasks.test.ts`): actually *executes* the
+generated launch script (`execFileSync bash`) for a command with single+double
+quotes and asserts the command runs (status `completed`, exit 0) and produces
+**valid** `state.json` with the command preserved verbatim. The prior suite only
+ever mocked spawn, so it never exercised the script — which is why both bugs hid.
+
+**Test results:** `npm run build` ✅. `npm run typecheck:src` ✅ (exit 0, source
+stays clean). `npm test` ✅ **175/175** (was 170–171/174 flaky), **green on 6/6
+consecutive runs** incl. `--no-file-parallelism`. Full `tsc` total unchanged at
+**125** (all in test files; added 0 new errors).
+
+**New idea:** add a **flake sentinel** to the engine's pre-push self-check — run
+`vitest run` 3× (or `--retry=0` twice) and refuse to push to a shared branch if
+the pass/fail set differs between runs. A single green run is not evidence of a
+green suite; this run proves a "174/174" snapshot can hide a bug that only a
+repeated run reveals. Cheap insurance against re-introducing timing-dependent
+tests. Bigger idea: a lint that flags tests constructing a runtime that can spawn
+real processes without an injected `backgroundTaskSpawnProcess`, so integration
+races can't silently creep back in.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
