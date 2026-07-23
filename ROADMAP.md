@@ -8,6 +8,26 @@ unchecked items are queued. Keep this richer than you found it each run.
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`
       (2026-06-22).
+- [x] **Fix state-file JSON corruption** (run 9, 2026-07-23): a malformed POSIX
+      single-quote escape in `background-tasks.ts`'s local `shellQuote` corrupted
+      the launch script's state JSON for any command containing a `'`. Extracted a
+      canonical `singleQuote()` into `src/shared/shell.ts` (tested), routed both
+      call sites through it, and removed the divergent copies.
+- [x] **Deterministic background-task tests** (run 9): the suite spawned real
+      detached processes that raced the tests' own state writes (~1-in-3 flaky).
+      Added `backgroundTaskSpawnProcess`/`backgroundTaskIsProcessRunning` injection
+      to `OperatorCliApp` and stubbed the spawn; suite now 178/178 stable over 8
+      runs.
+- [ ] **Launch-script contract test**: render the background-task + training
+      launch scripts, execute them against adversarial commands (embedded quotes,
+      `$()`, backticks, newlines, unicode), and assert the state files JSON-parse
+      and round-trip the command verbatim — catching quoting regressions at the
+      seam. Add a lint forbidding a re-declared local `shellQuote` when
+      `src/shared/shell.ts` exists, so the copies can't drift again.
+- [ ] Audit `session-stream.test.ts` / `gateway-transport.test.ts` and the
+      `rm -rf build` gating tests in `app.test.ts` — they still spawn real
+      detached processes. Stub their spawn too (they passed here but are latent
+      flakes and run destructive commands for real in temp dirs).
 - [ ] **Pay down typecheck debt** (surfaced by the `typecheck` script). Full
       `tsc --noEmit` count was **397** on 2026-06-22; now **125**. 🎯 ALL source
       (`src/**` non-test) files typecheck clean since run 7; remaining 125 errors

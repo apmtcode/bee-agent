@@ -3,6 +3,7 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { ensureParentDir, readJsonFile, writeJsonAtomic } from "../shared/fs.js";
+import { singleQuote } from "../shared/shell.js";
 
 export type BackgroundTaskKind = "task" | "monitor";
 export type BackgroundTaskStatus = "planned" | "running" | "completed" | "failed" | "cancelled";
@@ -794,5 +795,5 @@ function renderStateWriterPython(status: BackgroundTaskExecutionState["status"])
 }
 
 function shellQuote(value: string): string {
-  return `'${value.replaceAll(`'`, `"'"'"'`)}'`;
+  return singleQuote(value);
 }

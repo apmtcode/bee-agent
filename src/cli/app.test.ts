@@ -1,14 +1,42 @@
-import { execFile } from "node:child_process";
+import { execFile, spawnSync } from "node:child_process";
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
-import { OperatorCliApp, parseSlashCommand } from "./app.js";
+import { OperatorCliApp, parseSlashCommand, type OperatorCliAppOptions } from "./app.js";
 
 const tempDirs: string[] = [];
 const execFileAsync = promisify(execFile);
+
+/**
+ * Deterministic stand-in for the detached background-task launcher used by tests
+ * that assert on real command output and task liveness. The production launcher
+ * spawns a detached process whose async writes race the test's own reads; this
+ * runs the generated launch script synchronously (so its output/state land
+ * before we return), then pins the state back to `running` so the task stays
+ * active for watch/stop assertions. Pair with `backgroundTaskIsProcessRunning:
+ * () => true`.
+ */
+function simulateRunningLaunch(): OperatorCliAppOptions["backgroundTaskSpawnProcess"] {
+  return (command, args, options) => {
+    spawnSync(command, args, { cwd: options.cwd, env: options.env, stdio: "ignore" });
+    const statePath = path.join(path.dirname(command), "state.json");
+    try {
+      const state = JSON.parse(fsSync.readFileSync(statePath, "utf8")) as Record<string, unknown>;
+      state.status = "running";
+      delete state.completedAt;
+      delete state.exitCode;
+      delete state.error;
+      fsSync.writeFileSync(statePath, `${JSON.stringify(state, null, 2)}\n`);
+    } catch {
+      // State not written yet; the caller's reconcile will treat it as running.
+    }
+    return { pid: 4242, unref() {} };
+  };
+}
 
 async function makeTempDir(): Promise<string> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "operator-cli-app-"));
@@ -801,7 +829,13 @@ describe("OperatorCliApp", () => {
 
   it("supports session lifecycle, transcript, approvals, pairing, config, and prompt commands", async () => {
     const rootDir = await makeTempDir();
-    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    const app = new OperatorCliApp({
+      rootDir,
+      cwd: rootDir,
+      currentDate: "2026-05-25",
+      backgroundTaskSpawnProcess: () => ({ pid: 4242, unref() {} }),
+      backgroundTaskIsProcessRunning: () => false,
+    });
     const firstSession = await app.runtime.startSession({ title: "first", cwd: rootDir, agentId: "operator-cli" });
     const secondSession = await app.runtime.startSession({ title: "second", cwd: rootDir, agentId: "operator-cli" });
 
@@ -1063,7 +1097,13 @@ describe("OperatorCliApp", () => {
 
   it("supports background and monitor task commands plus cron commands", async () => {
     const rootDir = await makeTempDir();
-    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    const app = new OperatorCliApp({
+      rootDir,
+      cwd: rootDir,
+      currentDate: "2026-05-25",
+      backgroundTaskSpawnProcess: simulateRunningLaunch(),
+      backgroundTaskIsProcessRunning: () => true,
+    });
     const session = await app.runtime.startSession({ title: "CLI ops", cwd: rootDir, agentId: "operator-cli" });
 
     const startOutput = await app.dispatchSlashCommand(

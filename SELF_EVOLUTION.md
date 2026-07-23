@@ -6,6 +6,65 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-23 (run 9) — 🐛 Fix state-file corruption bug + make background-task tests deterministic (suite 171→178 green)
+
+**Audited:** The build/test gate at the start of the run. Found **3 failing tests
+at baseline** (working tree clean) — `app.test.ts` "session lifecycle…",
+`server.test.ts` "handles session…", `operator-runtime.test.ts` "starts,
+syncs, recovers…" — all with `SyntaxError: Expected ',' or '}' after property
+value in JSON` inside `readState`/`reconcileTask`. Reproduced deterministically:
+these were **flaky** (passed 1/3, failed 2/3 on repeat), not hard failures.
+
+**Root cause (a real correctness bug, not just a test bug):** the background-task
+launch script writes its state JSON via `printf '%s' <payload> | sed …`, quoting
+the payload with a local `shellQuote()`. That helper's POSIX single-quote escape
+was **malformed** — it replaced `'` with `` "'"'"' `` (6 chars, starts with `"`)
+instead of the correct `` '"'"' `` (5 chars). So whenever a task **command
+contained a single quote** (e.g. `printf 'line-1\nline-2\n'`), the emitted
+`command` field became invalid JSON (`"printf "'line-1…'"`), and the state file
+failed to parse on recovery — corrupting real state persistence, not only tests.
+Confirmed via an isolated repro: buggy escape → unparseable JSON; corrected escape
+→ valid JSON with the command intact. Notably `src/training/runner.ts` had the
+**correct** escape — the two hand-rolled copies had silently diverged.
+
+**Changed (additive, minimal):**
+- **New `src/shared/shell.ts`** — one canonical `singleQuote()` (POSIX-correct)
+  + docs, plus `src/shared/shell.test.ts` (4 tests: escape form, real-`bash`
+  round-trip of quotes/newlines/`$`/backslash, and a JSON-payload-through-`sed`
+  regression that reproduces the exact launch-script pattern).
+- Routed **both** call sites (`harness/background-tasks.ts`,
+  `training/runner.ts`) through the shared helper — fixing the bug and removing
+  the duplication that let the copies diverge.
+- **Determinism seam:** the failing tests spawn a **real detached bash process**
+  (default `spawn`) that writes state asynchronously and races the test's own
+  `writeState`/`writeOutput` calls. Added `backgroundTaskSpawnProcess` /
+  `backgroundTaskIsProcessRunning` options to `OperatorCliAppOptions` (mirrors the
+  existing `configHome` injection precedent) threaded into the runtime, and stubbed
+  the spawn in the 3 state-driving tests (no real process → no race).
+- The integration-style `app.test.ts` "background and monitor… plus cron" test
+  genuinely relies on real command output + task liveness, so it gets a
+  `simulateRunningLaunch()` stub that runs the generated launch script
+  **synchronously** then pins state to `running` — deterministic without losing
+  coverage of the real script.
+
+**Test results:** suite **171/174 (3 failing, flaky) → 178/178 passing**, and
+**stable across 8 consecutive full runs** (was ~1-in-3 red). `npm run build` ✅.
+`npm run typecheck:src` ✅ (exit 0, source stays clean). Full `tsc` debt unchanged
+at **125** (all pre-existing test-file errors; my additions add **zero** new
+type errors).
+
+**New idea:** add a tiny **launch-script contract test** that renders the
+background-task/training scripts, executes them against a table of
+adversarial commands (embedded single/double quotes, `$()`, backticks,
+newlines, unicode), and asserts the resulting state files JSON-parse and
+round-trip the command verbatim. That turns "quoting regression" into a caught
+failure at the exact seam where this bug lived, and would have flagged the
+divergence between the two `shellQuote` copies immediately. Longer term: a lint
+that forbids re-declaring a local `shellQuote`/quoting helper when
+`src/shared/shell.ts` exists, so the copies can't drift again.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
