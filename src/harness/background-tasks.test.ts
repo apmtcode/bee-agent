@@ -370,4 +370,49 @@ describe("BackgroundTaskExecutionService", () => {
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
   });
+
+  it("writes execution state atomically so concurrent readers never see torn JSON", async () => {
+    const rootDir = await makeTempDir();
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"), () => ({ pid: 4242, unref() {} }));
+    const task = await store.start({
+      title: "Atomic state",
+      command: "printf 'done'",
+      cwd: rootDir,
+    });
+
+    const launchScript = await fs.readFile(path.join(rootDir, task.execution.launchScript), "utf8");
+    const stateFile = task.execution.stateFile;
+    // The initial "running" state must stage into a temp file and rename into
+    // place — never truncate the live state path with a bare redirect.
+    expect(launchScript).toContain(`mv -f '${stateFile}.tmp' '${stateFile}'`);
+    expect(launchScript).not.toContain(`> '${stateFile}'\n`);
+    // The terminal (completed/failed) state writers must rename atomically too.
+    expect(launchScript).toContain("os.replace(tmp_path, state_path)");
+  });
+
+  it("recovers a torn state file by retrying instead of throwing", async () => {
+    const rootDir = await makeTempDir();
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"), () => ({ pid: 4343, unref() {} }));
+    const task = await store.start({
+      title: "Torn state",
+      command: "printf 'done'",
+      cwd: rootDir,
+    });
+    const service = new BackgroundTaskExecutionService(rootDir, () => ({ pid: 4343, unref() {} }));
+    const statePath = path.join(rootDir, task.execution.stateFile);
+
+    // Simulate a torn write landing on disk, then a well-formed state appearing
+    // shortly after (as an atomic rename would). readState must not crash.
+    await fs.mkdir(path.dirname(statePath), { recursive: true });
+    await fs.writeFile(statePath, '{"version":1,"status":"run', "utf8");
+    setTimeout(() => {
+      void fs.writeFile(
+        statePath,
+        JSON.stringify({ version: 1, taskId: task.id, kind: "task", status: "running", pid: 4343 }),
+        "utf8",
+      );
+    }, 5);
+
+    await expect(service.readState(task)).resolves.toMatchObject({ status: "running", pid: 4343 });
+  });
 });

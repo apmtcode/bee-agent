@@ -9,6 +9,15 @@ import type { ReviewedExportManifest } from "../training/export-manifest.js";
 
 const tempDirs: string[] = [];
 
+/**
+ * Deterministic background-task spawn stub: returns a stable fake pid and spawns
+ * no real subprocess (writing no execution-state file). Tests drive execution
+ * state explicitly via `writeState`/`writeOutput`, so a real subprocess can't
+ * concurrently write a state file mid-read (which produced torn-JSON parse
+ * failures) and background-task assertions stay independent of OS timing.
+ */
+const inertBackgroundSpawn = () => ({ pid: 999_000, unref() {} });
+
 async function makeTempDir(): Promise<string> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "operator-runtime-"));
   tempDirs.push(dir);
@@ -530,6 +539,7 @@ describe("StandaloneOperatorRuntime", () => {
   it("starts, syncs, recovers, lists, and cancels background tasks", async () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
+      backgroundTaskSpawnProcess: inertBackgroundSpawn,
       backgroundTaskIsProcessRunning: () => false,
     });
     const session = await runtime.startSession({ title: "Tasks", agentId: "main" });

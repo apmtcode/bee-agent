@@ -6,6 +6,19 @@ unchecked items are queued. Keep this richer than you found it each run.
 ## Foundations / DX
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
+- [x] **Fix red suite / non-atomic state-write race** (2026-07-23, run 9). The
+      launch script wrote background-task execution state non-atomically → torn
+      JSON crashed concurrent readers; tests also spawned real subprocesses,
+      making 3 tests deterministically fail in-cloud. Made both state writers
+      atomic (temp + rename), added a bounded `readState` retry, made
+      `OperatorCliApp` accept spawn/liveness overrides, and made the affected
+      tests hermetic via an `inertBackgroundSpawn` stub. 174→176 passing, stable.
+- [ ] **Test-hermeticity guard**: forbid real `child_process.spawn` in unit
+      tests (default-inject a stub) so shell-timing races can't re-enter the
+      suite — the run-9 failures were all real subprocesses leaking OS timing.
+- [ ] **Atomic-writer audit**: confirm every on-disk writer (push/cron/pairing/
+      platform-breaker stores) goes through `writeJsonAtomic`; the launch script
+      was the one hand-rolled non-atomic write and it caused a real crash.
 - [x] Make config loading hermetic in tests via an injectable `configHome`
       (2026-06-22).
 - [ ] **Pay down typecheck debt** (surfaced by the `typecheck` script). Full

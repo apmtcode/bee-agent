@@ -6,6 +6,64 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-23 (run 9) — 🔴→🟢 Red suite: fixed a real non-atomic state-write race + test hermeticity
+
+**Audited:** The build/test baseline (procedure step 5) — and found the suite was
+**RED**, not the 174/174 prior runs recorded. Three tests failed *deterministically*
+in this environment (server.test.ts, app.test.ts, operator-runtime.test.ts), all
+tracing to one root cause: **tests spawned real subprocesses** (`sleep 5`,
+`printf …`) whose OS/state-file timing is nondeterministic across machines. Two
+distinct symptoms: (a) a real task's `running` state file plus a `() => false`
+`isProcessRunning` mock produced a spurious "background task missing-process"
+→ `control=degraded` (server + app remote-status); (b) a real task writing its
+state file *concurrently with a read* produced a **torn-JSON `SyntaxError`** that
+crashed `recoverBackgroundTasks` outright (operator-runtime).
+
+**Genuine production bug found (not just a test artifact):** the launch script
+in `src/harness/background-tasks.ts` wrote execution state **non-atomically** —
+the initial `running` state via a bare `> stateFile` shell redirect, and the
+terminal `completed`/`failed` state via Python `write_text` (open-truncate). Any
+concurrent reader (remote-status polling, `syncBackgroundTask`,
+`recoverBackgroundTasks`) could read a half-written file and throw. Symptom (b)
+is that race reproducing in-process.
+
+**Changed (production, additive):**
+- `src/harness/background-tasks.ts`: both state writers now write **atomically**
+  — shell stages to `stateFile.tmp` then `mv -f` into place; Python writer stages
+  to a temp file then `os.replace()`. `readState()` gains a **bounded retry** on
+  `SyntaxError` (3 tries, 10 ms apart) as defense-in-depth against any residual
+  non-atomic/external writer, then re-throws so genuine corruption still surfaces.
+- `src/cli/app.ts`: `OperatorCliApp` now accepts optional
+  `backgroundTaskSpawnProcess` / `backgroundTaskIsProcessRunning`, threaded into
+  its runtime (defaults unchanged in production). This makes the CLI app
+  **deterministically testable** without real subprocesses.
+
+**Changed (tests — hermeticity):** added a shared `inertBackgroundSpawn` stub
+(stable fake pid, no real subprocess, no state file) to server.test.ts,
+app.test.ts and operator-runtime.test.ts, and injected it into the affected
+runtimes/apps; tests that need specific state/output drive it explicitly via
+`writeState`/`writeOutput` (matching the existing monitor pattern). Added two
+guard tests in `background-tasks.test.ts`: the launch script writes state
+atomically (temp + rename, never a bare truncate of the live path), and
+`readState` recovers a torn file by retrying instead of throwing.
+
+**Test results:** build ✅, `typecheck:src` ✅, full `typecheck` **125**
+(unchanged — no debt regression). Full suite **174→176** passing (2 new guard
+tests), **stable across 3 consecutive full runs** (previously 3 deterministic
+failures). The green verification gate every future run depends on is restored.
+
+**New idea:** the recurring flakiness is really a **test-hermeticity gap** — any
+test that shells out (background tasks, worktree git ops, hooks, status-line
+commands) is exposed to real OS timing. Worth a small `describe`-level fixture /
+lint that forbids real `child_process.spawn` in unit tests (inject a stub by
+default) so this class of race can't re-enter the suite. Bigger: a
+`writeJsonAtomic`-style helper is already the norm in TS (`src/shared/fs.ts`) —
+audit *every* on-disk writer (push-store, cron-store, pairing-store,
+platform-breaker-store) to confirm they all go through it, since the launch
+script was the one place that hand-rolled a non-atomic write.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
