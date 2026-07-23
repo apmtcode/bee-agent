@@ -6,6 +6,65 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-23 (run 9) — Movement-learning subsystem: schema→dataset→train→infer→eval
+
+**Audited:** Standing objective #2 (local-movement learning) and the movement
+items in `ROADMAP.md`. Inventoried `src/capture/` (recorder, replay, trajectory,
+device/os/browser adapters) and `src/training/` (exporter, job store/manifest,
+runner, execution service). Finding: the capture layer records only *high-level*
+gestures (`tap`/`swipe`/`type` as `TrajectoryAction` summaries) and the training
+runner only emits mlx/axolotl launch plans — there was **no fine-grained
+movement schema, no learnable dataset, no pluggable model backend, and no way to
+train/infer/generalize movements in the cloud** (objective #2 c+d were entirely
+un-exercised). Three named ROADMAP items (pluggable backend + mock, synthetic
+generator, generalization eval) were all still open.
+
+**Changed (additive, new module `src/training/movement/`):** built the full,
+in-cloud-testable movement-learning chain — five pure, dependency-free files:
+- `event-schema.ts` — fine-grained `MovementEvent` union (pointer-move/down/up,
+  scroll, key-down/up) + `MovementTrajectory`, with `validateMovementTrajectory`
+  (kinds, finite coords, monotonic ts) and `normalizeMovementTrajectory`.
+- `synthetic-stream.ts` — seeded `mulberry32` PRNG (no `Math.random`),
+  `generateClickGesture` (ease-in-out glide + click, endpoint-exact jitter),
+  `generateTypingGesture`, and `generateGestureBatch`. Validates the whole
+  pipeline without any real OS input.
+- `dataset.ts` — replayable JSONL dataset: each example is start/target + a
+  *normalized* motion profile (fraction of the start→target vector per step),
+  learned from `pointer-move` events only. JSONL round-trips.
+- `backend.ts` — `MovementModelBackend` interface + deterministic
+  `MockMovementModelBackend` that learns the averaged normalized profile (global
+  + per-label) and step count/timing, then re-scales it to any (possibly unseen)
+  start/target at inference. The seam for a real on-device small model.
+- `eval.ts` — `evaluateGeneralization`: infers gestures for held-out targets and
+  measures landing error, along-path deviation (arc-resampled), and hit rate.
+Exports wired through `src/index.ts` (no barrel collisions). Two real bugs were
+caught by tests and fixed during the run: (1) `pointerPath` includes the trailing
+click's down/up events, which corrupted the learned profile and step count —
+fixed by building the profile from `pointer-move` events only; (2) floating-point
+jitter residue at gesture endpoints — fixed by zeroing jitter at the endpoints.
+
+**Test results:** new module **22/22 passing** (5 files). `typecheck:src` exit 0.
+`npm run build` ✅. Full suite **192 passing / 4 failing** — the 4 failures are
+**pre-existing on the base branch** (verified by `git stash` + re-run): a JSON
+parse in `background-tasks.ts` `readState` throws instead of recovering
+(`operator-runtime.test.ts`), cascading into `server.test.ts` and `app.test.ts`.
+My change introduces **zero** regressions. Pushed to the designated feature
+branch `claude/peaceful-dirac-6l4ubn`.
+
+**Blocker logged (for a future run):** `readJsonFile`/`BackgroundTaskExecutionService.readState`
+rejects on malformed state JSON instead of falling back — the recover-background-tasks
+path should tolerate a corrupt/partial state file (return `undefined`/quarantine)
+rather than throwing. This predates run 9 and is now the top green-gate blocker.
+
+**New idea (logged to ROADMAP):** A *real* pluggable backend seam beyond the
+mock — an "n-gram / velocity-profile" backend that also learns per-target
+easing *curvature* (not just axis fractions), so gestures around obstacles
+(non-straight approaches) generalize. Plus a `MovementModelBackendRegistry` so
+`src/training/runner.ts` can dispatch to mlx/axolotl (real) or mock (cloud/CI)
+behind one interface, unifying the two currently-separate training paths.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

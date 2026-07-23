@@ -431,3 +431,58 @@ export type {
   FailTrainingJobParams,
   TrainingJobStoreShape,
 } from "./training/job-store.js";
+export {
+  MOVEMENT_EVENT_KINDS,
+  isPointerEvent,
+  normalizeMovementTrajectory,
+  pointerPath,
+  validateMovementTrajectory,
+} from "./training/movement/event-schema.js";
+export type {
+  MovementEvent,
+  MovementTrajectory,
+  MovementValidationIssue,
+  Point,
+  PointerButton,
+} from "./training/movement/event-schema.js";
+export {
+  createSeededRng,
+  easeInOut,
+  generateClickGesture,
+  generateGestureBatch,
+  generateTypingGesture,
+} from "./training/movement/synthetic-stream.js";
+export type {
+  ClickGestureParams,
+  GestureDatasetParams,
+  TypingGestureParams,
+} from "./training/movement/synthetic-stream.js";
+export {
+  buildMovementDataset,
+  parseDatasetJsonl,
+  serializeDatasetJsonl,
+  trajectoryToExample,
+} from "./training/movement/dataset.js";
+export type {
+  MotionSample,
+  MovementDataset,
+  MovementTrainingExample,
+} from "./training/movement/dataset.js";
+export {
+  MockMovementModelBackend,
+} from "./training/movement/backend.js";
+export type {
+  MovementInferenceRequest,
+  MovementModelArtifact,
+  MovementModelBackend,
+} from "./training/movement/backend.js";
+export {
+  euclidean,
+  evaluateGeneralization,
+  resamplePath,
+} from "./training/movement/eval.js";
+export type {
+  EvaluateOptions,
+  GeneralizationEvalResult,
+  TrajectoryFidelity,
+} from "./training/movement/eval.js";

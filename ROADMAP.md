@@ -4,6 +4,14 @@ Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
 ## Foundations / DX
+- [ ] **🔴 Green-gate blocker (found run 9):** `BackgroundTaskExecutionService.readState`
+      (via `readJsonFile` in `src/shared/fs.ts`) throws a `SyntaxError` on a
+      malformed/partial state JSON file instead of recovering. This fails
+      `operator-runtime.test.ts` (recoverBackgroundTasks) and cascades into
+      `server.test.ts` + `app.test.ts` — **4 pre-existing test failures** on the
+      base branch (192 pass / 4 fail). Fix: make `readState` tolerate corrupt
+      state (return `undefined` or quarantine the file) so recovery is resilient.
+      This is the top blocker to a fully-green `npm test`.
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`
@@ -59,16 +67,30 @@ unchecked items are queued. Keep this richer than you found it each run.
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
 (exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
-      objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Inventory what `src/capture` + `src/training` already implement vs. the
+      objective's five pieces — DONE run 9. Gap found: capture recorded only
+      high-level gesture *summaries*, no fine-grained movement schema, no
+      learnable dataset, no model backend, no in-cloud train/infer/generalize.
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      for a real on-device small model — DONE run 9
+      (`src/training/movement/backend.ts`: `MovementModelBackend` +
+      `MockMovementModelBackend`).
+- [x] Synthetic event-stream generator to validate capture→dataset→replay
+      round-trips without real OS input — DONE run 9
+      (`src/training/movement/synthetic-stream.ts`, seeded PRNG).
+- [x] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories — DONE run 9
+      (`src/training/movement/eval.ts`: `evaluateGeneralization`).
+- [ ] Fine-grained-schema → high-level-trajectory bridge: convert the new
+      `MovementEvent` stream into `TrajectoryAction`/`DeviceGesture` records (and
+      back), so the capture adapters can feed the movement model and the movement
+      model can drive the existing replay engine.
+- [ ] `MovementModelBackendRegistry` + wire it into `src/training/runner.ts` so
+      the mlx/axolotl (real) and mock (cloud/CI) training paths share one
+      interface instead of being separate code.
+- [ ] Curvature-aware backend: learn per-target easing *curvature* (not just
+      per-axis fractions) so non-straight approaches generalize.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
