@@ -6,6 +6,69 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-23 (run 9) — Movement policy: the missing *inference* half (repeat + generalize)
+
+**Audited:** The local-movement learning subsystem (standing objective #2)
+end-to-end. Mapped the existing pieces against the objective's five stages:
+capture (`os-observer`, `device-adapter`, `browser-adapter`, `recorder`),
+schema (`trajectory.ts`), dataset/export (`training/exporter.ts`,
+`export-manifest.ts`), replay (`capture/replay.ts`), and train
+(`training/runner.ts`). **Gap found:** stages (c) "repeat the recorded
+movements" and (d) "generalize to new but related movements" had *no runnable
+implementation*. `training/runner.ts` only emits an `mlx_lm`/`axolotl` launch
+script — nothing that trains, predicts, or runs in the cloud/CI. There was no
+inference surface at all.
+
+**Changed (additive):** new `src/training/movement-policy.ts` — a
+dependency-free, fully deterministic movement policy that is both the inference
+piece and the roadmap's "pluggable local-model backend + deterministic mock":
+- `MovementPolicyBackend` interface — the pluggable seam; a real on-device small
+  model implements the same `train`/`predictNext`/`vocabulary` surface later.
+- `NgramMovementPolicy` — variable-order **backoff n-gram** over *action
+  tokens*. **Repetition:** a learned prefix predicts its recorded continuation
+  exactly (`source: "exact"`, confidence 1). **Generalization:** an unseen full
+  context backs off to shorter learned suffixes (`source: "backoff"`), then to
+  the global unigram prior (`source: "prior"`); ties break lexicographically so
+  results are stable/testable with zero randomness. Includes `observe()` for
+  online learning and `toJSON`/`fromJSON` so a trained model persists as a local
+  artifact.
+- `tokenizeMovementAction` — collapses semantically identical movements
+  (gesture+direction, os event) to one low-cardinality token so the model
+  generalizes instead of memorizing prose; falls back to a slugged summary.
+- `extractMovementSequence` / `sequenceFromActions` — build training sequences
+  from `TrajectorySpan`s, honoring reviewed/redacted actions (`useReviewed`) to
+  match the reviewed-export training gate.
+- `generateMovementSequence` — greedy argmax roll-forward from a seed = the
+  "perform *new* movements" half of the objective.
+- `evaluateMovementPolicy` — **generalization eval harness** (a queued roadmap
+  item): top-1 + top-k next-action accuracy on held-out sequences, broken down
+  by backoff source so exact-recall vs. generalized predictions are separable.
+- Exported the surface from `src/index.ts`.
+
+**Test results:** new `movement-policy.test.ts` — **14/14 passing** (tokenizer,
+repetition, backoff generalization, prior fallback, deterministic ties, eval
+top-1/top-k, JSON round-trip, online `observe`). `npm run typecheck:src` ✅
+CLEAN (source stays green). `npm run build` ✅.
+
+**Pre-existing failures (NOT introduced this run):** the full suite shows
+**3 failing** integration tests on clean `HEAD` too — `operator-runtime`,
+`app`, and `server` background-task tests. Root cause is a `SyntaxError:
+Expected ',' or '}'` from `readJsonFile` reading a background-task **state file**
+that the shelled-out launch script writes (`background-tasks.ts` →
+`shared/fs.ts:17`); the `$$`/`__OPENCLAW_STARTED_AT__` `sed` substitution in
+`runner.ts`'s `renderLaunchScript` appears to emit malformed JSON in this
+environment. Verified by running the suite with my files fully removed: still
+`171 passed | 3 failed`. My change is isolated and green. Per the branch
+guardrail I push to the designated branch `claude/peaceful-dirac-e16q4h` (not
+`main`), and filed the pre-existing failure as a roadmap item to fix next run.
+
+**New idea:** wire the movement policy into a live **next-action suggester** — a
+control-plane RPC `movements.suggest` that loads the persisted `toJSON()` model
+and returns `predictNext(recentActions)` with confidence, so the operator can
+offer "you usually do X next" from recorded habits. Pair it with a **replay
+executor** that maps generated tokens back to concrete device/os adapter calls
+(behind the same mock/real seam) to close the capture→train→*act* loop.
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

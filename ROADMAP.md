@@ -44,6 +44,13 @@ unchecked items are queued. Keep this richer than you found it each run.
       (excludes `**/*.test.ts`) + `typecheck:src` script; passes (exit 0). Next:
       have the engine run it as a per-run pre-push self-check.
 - [ ] Add a minimal CI workflow mirroring `verify` for human-opened PRs.
+- [ ] **Fix 3 pre-existing failing integration tests** (found run 9, present on
+      clean `HEAD`): `operator-runtime`/`app`/`server` background-task tests fail
+      with `SyntaxError: Expected ',' or '}'` from `readJsonFile` reading the
+      state file written by `runner.ts`'s `renderLaunchScript` — the
+      `$$`/`__OPENCLAW_STARTED_AT__` `sed` substitution emits malformed JSON in
+      this environment. Make state-file writing robust (write JSON from Python,
+      not `sed`) so the full suite is green and the push gate can require it.
 
 ## Capability parity (audit reference agents → port gaps)
 - [ ] Build a "capability inventory" generator: enumerate bee-agent's exported
@@ -59,16 +66,28 @@ unchecked items are queued. Keep this richer than you found it each run.
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
 (exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
+- [x] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
-      deterministic mock backend (so cloud/CI tests pass) and a documented seam
+      — DONE run 9. Gap: stages (c) repeat + (d) generalize had no runnable
+      implementation; `training/runner.ts` only emits a launch script.
+- [x] Pluggable local-model backend interface + deterministic in-process backend
+      — DONE run 9 (`src/training/movement-policy.ts`: `MovementPolicyBackend`
+      interface + `NgramMovementPolicy` backoff n-gram; trains/predicts/persists
+      with zero deps, fully deterministic, cloud/CI-runnable). Documented seam
       for a real on-device small model.
+- [x] Generalization eval harness — DONE run 9 (`evaluateMovementPolicy`: top-1
+      + top-k next-action accuracy on held-out sequences, split by backoff
+      source). Also `generateMovementSequence` (greedy roll-forward) for the
+      "perform new movements" half.
 - [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      round-trips without real OS input (tests currently hand-build sequences;
+      a reusable generator with templated variation would exercise more paths).
+- [ ] **Replay executor**: map policy-generated tokens back to concrete
+      device/os adapter calls (behind the mock/real seam) to close the
+      capture→train→*act* loop.
+- [ ] Control-plane RPC `movements.suggest`: load the persisted policy
+      (`NgramMovementPolicy.fromJSON`) and return `predictNext(recentActions)`
+      so the operator can surface "you usually do X next" from recorded habits.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
