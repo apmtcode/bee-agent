@@ -4,6 +4,19 @@ Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
 ## Foundations / DX
+- [x] **De-flake the test gate** (2026-07-23, run 9) — the suite was failing
+      ~65% of `npm test` runs nondeterministically because four tests spawn real
+      OS background processes whose async launch-script state writes race manual
+      `writeState` calls / real-output reads. Added `background-spawn-stub.ts`
+      (deterministic spawn + membership liveness probe), threaded injectable
+      `backgroundTaskSpawnProcess`/`backgroundTaskIsProcessRunning` through
+      `OperatorCliAppOptions`, and injected the stubs. Now 10/10 green under load.
+- [ ] **Injectable OS-environment seam** (follow-up to run 9): thread a single
+      `environment` (spawn, `process.kill`, clock/`Date.now`, `randomUUID`)
+      through `OperatorCliAppOptions` so ALL real-OS touchpoints are deterministic
+      in tests, and add a guard/test that fails if a `*.test.ts` calls
+      `startBackgroundTask` on a runtime built without an injected spawner
+      (turns "real process in a unit test" into a caught error, not a latent flake).
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`

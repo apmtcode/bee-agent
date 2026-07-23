@@ -6,6 +6,63 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-23 (run 9) — 🔴→🟢 De-flaked the test gate: eliminated real-process races in 4 tests
+
+**Audited:** The health of the verification gate itself. On a fresh `npm test`
+the suite was **not green** — it failed nondeterministically (3–4 tests per run;
+the full suite failed **4/6** runs before this change). Since every past run
+relies on "tests pass" as its pre-push gate, a flaky gate is the
+highest-value thing to fix: it can green-light a real regression or block a good
+change at random.
+
+**Root cause (one pattern, four tests):** the background-task subsystem
+(`src/harness/background-tasks.ts`) launches a **real detached OS process** whose
+bash launch script writes execution-state files (`running`→`completed`/`failed`)
+**asynchronously**. Four tests either (a) also write execution state by hand —
+racing the launch script's writer on the same file — or (b) read the real
+process's output/liveness before it settled. Under concurrent suite load the
+`printf`/`sleep` processes finished at unpredictable moments, flipping
+control-state (`active`↔`degraded:…missing-process`) and active-task membership.
+- `server.test.ts` › handles session/…/orchestration methods
+- `operator-runtime.test.ts` › starts, syncs, recovers, lists, cancels bg tasks
+- `app.test.ts` › supports session lifecycle/…/prompt commands
+- `app.test.ts` › supports background and monitor task commands plus cron commands
+
+**Changed (additive, production behaviour untouched):**
+- **New shared test helper** `src/harness/background-spawn-stub.ts` exporting
+  `createStubBackgroundSpawn()` (monotonic fake PIDs, no OS process) and
+  `createStubBackgroundProcessControl()` (a paired spawner + liveness probe where
+  a PID reads as *running* iff this stub issued it — so a sentinel PID written by
+  hand reads as *dead*, reproducing "some tasks live, some died" deterministically).
+- **Threaded injectable process control through `src/cli/app.ts`**:
+  `OperatorCliAppOptions` gains `backgroundTaskSpawnProcess` /
+  `backgroundTaskIsProcessRunning`, forwarded to the runtime it constructs
+  (previously it built `new StandaloneOperatorRuntime({ rootDir })` with no seam —
+  so `app.test.ts` had *no way* to inject deterministic process control). Prod
+  leaves them undefined → real `spawn`/`process.kill`, unchanged.
+- **Injected the stubs into the four flaky tests.** The two `() => false` tests
+  (server, runtime) get the no-op spawn (kills the racing state-writer, keeps
+  their intended "process is dead" probe). The two `app.ts` tests get the
+  membership-based control; the monitor/cron test also writes its first task's
+  output by hand instead of reading real `printf` output.
+
+**Test results:** full suite stressed **10/10 green** under concurrent load
+(was ~65% failing). Each modified file also verified in isolation (server 5/5,
+runtime 5/5, app 12/12). `npm run build` ✅. `npm run typecheck:src` ✅ (exit 0).
+Full `tsc` still **125** (all in test files — unchanged, no regression).
+
+**New idea:** the real fix behind the fix is that background-task *process
+control was un-injectable at the app layer* — a testability gap. Generalize it:
+give every subsystem that touches the real OS (process spawn, `process.kill`,
+clock via `Date.now()`, `randomUUID`) a single injectable "environment" seam
+threaded from `OperatorCliAppOptions`, and add a lint/test that fails if a
+`*.test.ts` calls `startBackgroundTask` on a runtime constructed **without** an
+injected spawner — turning "spawns a real process in a unit test" into a caught
+error rather than a latent flake. This also unblocks deterministic clock/UUID
+testing, killing the remaining `Date.now()`/`randomUUID` nondeterminism sources.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
