@@ -6,6 +6,63 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-23 (run 9) — 🧠 Movement-model backend: post-training + inference (objective #2 c/d)
+
+**Audited:** The local-movement learning subsystem (standing objective #2).
+`src/capture/` records movements and `src/training/` exports a reviewed dataset
+and emits an MLX/axolotl **launch plan** (`runner.ts`) — but nothing actually
+*trained a policy* or *ran inference*. Parts (c) "post-train a model to repeat
+the recorded movements" and (d) "generalize to new but related movements" had no
+in-repo, cloud-runnable implementation. That was the highest-value gap.
+
+**Changed (additive, new files only):**
+- `src/training/movement-model.ts` — the post-training + inference layer:
+  - `MovementModelBackend` **pluggable interface** (`train(dataset) →
+    TrainedMovementModel`). The documented seam: a real on-device small model
+    (MLX/axolotl via `runner.ts`) implements the same interface; its `train()`
+    launches the local job and returns a model whose `predictNext` calls the
+    fine-tuned weights.
+  - `MarkovMovementBackend` — a **fully deterministic, dependency-free** backend
+    (no OS input, network, or GPU) that trains a back-off n-gram policy over
+    action chains. Order-k transitions **memorize** recorded movements
+    (repetition, objective c); lower-order suffixes **continue novel-but-related
+    contexts** (generalization, objective d). Predictions carry provenance
+    (`exact` / `backoff` / `prior`) + confidence so generalization is transparent.
+  - `TrainedMovementModel.rollout()` regenerates a memorized movement chain from
+    a seed; `predictNext()` does single-step inference.
+  - `buildMovementDataset()` / `movementDatasetFromExport()` derive the
+    replayable dataset (per-trajectory, ts-ordered action sequences) from replay
+    manifests / a `ReviewedExportManifest`.
+  - `evaluateMovementModel()` — a **generalization eval harness**: replay
+    held-out sequences and measure tool/exact next-action accuracy.
+  - `restoreMovementModel()` + `toJSON()` for persistence / backend handoff.
+- `src/index.ts` — barrel exports for the above.
+- `src/training/movement-model.test.ts` — 9 tests over **synthetic** movement
+  streams (mouse drag chains): dataset grouping/ordering, exact repetition
+  rollout, backoff generalization, prior fallback, held-out eval (100% tool
+  accuracy, no div-by-zero on empty), and serialization round-trip.
+
+**Test results:** `typecheck:src` ✅ (source stays fully green). Build ✅ (tsdown,
+5 files, 545 kB). New tests ✅ **9/9**. Full suite **180/183** — the **3 failures
+are pre-existing and flaky**, unrelated to this change: `recoverBackgroundTasks`
+(operator-runtime), + app/server tests read a **partially-written** background-task
+state file → `SyntaxError: Expected ',' or '}' ... in JSON`. Confirmed on the
+clean baseline via `git stash` (4 failures there; count fluctuates 3↔4 by run
+order — a write/read race in `FileBackgroundTaskStore`, not a logic bug). None
+touch `src/training/**`. Logged as a high-priority roadmap item.
+
+**New idea:** the background-task state race above is worth a real fix — writers
+already use `writeJsonAtomic` (write-temp+rename), so the reader is likely seeing
+a **non-atomic append or a truncated write path**; a `readJsonFile` that treats a
+parse error on a *live/running* state file as "not yet readable, retry once"
+(instead of throwing) would make the whole suite deterministic. Second idea: a
+`SyntheticMovementGenerator` (parameterized: drag/click/type primitives + noise)
+so the eval harness measures generalization on *procedurally* related-but-unseen
+trajectories rather than hand-written ones — turning objective-2d into a tracked
+metric over runs.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

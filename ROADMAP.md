@@ -62,13 +62,36 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
+      for a real on-device small model — DONE run 9. `MovementModelBackend` +
+      `MarkovMovementBackend` (back-off n-gram: order-k memorizes = repetition
+      (2c); backoff continues novel contexts = generalization (2d)) in
+      `src/training/movement-model.ts`. Predictions carry `exact/backoff/prior`
+      provenance + confidence. `rollout()`/`predictNext()` do inference;
+      `toJSON()`/`restoreMovementModel()` persist. Next: wire a real MLX/axolotl
+      backend behind the same interface (its `train()` calls `runner.ts`).
 - [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      round-trips without real OS input. (Run 9 uses hand-written synthetic
+      streams in tests; promote to a parameterized `SyntheticMovementGenerator`
+      — drag/click/type primitives + noise — so generalization is measured on
+      procedurally related-but-unseen trajectories.)
+- [~] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories. Run 9 added `evaluateMovementModel()`
+      (tool/exact next-action accuracy over held-out sequences). Next: feed it
+      the synthetic generator above and record the metric per run.
+
+## Test reliability
+- [ ] **Fix the flaky background-task state read** (surfaced run 9). 3–4 tests
+      fluctuate by run order: `FileBackgroundTaskStore.reconcileTask` →
+      `readState` → `readJsonFile` throws `SyntaxError: Expected ',' or '}' ...
+      in JSON` when it reads a *live/running* state file mid-write. Writers use
+      `writeJsonAtomic`, so the race is likely a non-atomic write path or the
+      reader racing a concurrent writer. Fix: have the reader treat a parse
+      error on a running-state file as "not yet readable, retry once/backoff"
+      rather than throwing. Makes the whole suite deterministic (prereq for the
+      `verify` green-gate below). Affects `operator-runtime.test.ts`,
+      `server.test.ts`, `app.test.ts` — all pre-existing, none in `src/training`.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
