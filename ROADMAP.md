@@ -38,8 +38,21 @@ unchecked items are queued. Keep this richer than you found it each run.
     `skills.executable.*`, `push.subscriptions.*`, `trajectories.*`, `replays.*`,
     `cron.runs`/misc — plus a few genuine test-only typings. Map the rest, then
     fix residual test-only typings.
-- [ ] Add a `verify` npm script (`typecheck && build && test`) and have the
+- [x] **Deterministic background-task spawning in tests** (2026-07-23, run 9).
+      Added `harness/background-tasks.testkit.ts` (`noopBackgroundSpawn`,
+      `synchronousBackgroundSpawn`), threaded `backgroundTaskSpawnProcess`/
+      `backgroundTaskIsProcessRunning` through `OperatorCliAppOptions`, and made
+      the 3 real-subprocess-flaky tests hermetic. Suite back to green (176/176).
+- [x] **Atomic background-task state writes** (2026-07-23, run 9). Launch-script
+      bash + Python state writers now write-temp-then-rename, so a concurrent
+      recovery/sync reader can't observe a torn state file (was crashing
+      `readJsonFile` with a mid-write `SyntaxError`).
+- [ ] Add a `verify` npm script (`typecheck:src && build && test`) and have the
       engine run it as a pre-push self-check each cycle.
+- [ ] **Hermeticity lint**: flag any test that constructs a
+      `StandaloneOperatorRuntime`/`OperatorCliApp`, starts a background task, and
+      does *not* inject `backgroundTaskSpawnProcess` — prevents real-subprocess
+      flakiness from creeping back in.
 - [x] Interim **source-only typecheck gate** — DONE run 7. `tsconfig.src.json`
       (excludes `**/*.test.ts`) + `typecheck:src` script; passes (exit 0). Next:
       have the engine run it as a per-run pre-push self-check.

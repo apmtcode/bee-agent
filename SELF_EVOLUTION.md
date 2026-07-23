@@ -6,6 +6,65 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-23 (run 9) — 🟢 Suite back to green: deterministic background-task spawning + atomic state writes
+
+**Audited:** Full-suite health at the top of the run. Found **3 failing test
+files** on a clean tree (`operator-runtime`, `server`, `app`) — a regression
+from the "174/174" recorded in run 8. Root cause was **not** a code bug but
+**non-hermetic tests**: they launch *real detached OS subprocesses* (a bash
+launch script) and then assert against on-disk state. Under this cloud
+sandbox's parallel test load that is nondeterministic in three ways:
+1. **Torn reads** — the launch script's `> state.json` (bash) and Python
+   `write_text` are non-atomic, so a concurrent `readState` during recovery/sync
+   observes a half-written document → `SyntaxError` crashes recovery
+   (`operator-runtime` failure, at `readJsonFile`).
+2. **Timing** — `sessions.remoteStatus` health (`server.ts:2172`) degrades a
+   remote to `missing-process` when the active task's state file says
+   `running` **and** `isProcessRunning` is false. Tests inject
+   `isProcessRunning: () => false` but *not* a deterministic spawn, so whether
+   the real `sleep 5` subprocess had written its `running` state yet decided
+   `control: active` vs `degraded` (`server` + `app` platform failures).
+3. **Extra failures** — the breaker test hand-writes `running` state for 2 of 3
+   tasks expecting `failureCount 2/2`, but the 3rd task's real subprocess wrote
+   its own `running` state → `3/3 paused` instead of `2/2 degraded`.
+
+**Changed (all additive / reversible):**
+- **Real reliability fix** in `src/harness/background-tasks.ts`: made the launch
+  script's state writes **atomic** — bash writes `state.json.tmp.$$` then
+  `mv -f`; the Python terminal-state writer writes a sibling temp then
+  `os.replace()`. A concurrent reader can no longer observe a torn state file
+  even in production (recovery reads during an in-flight completion).
+- **New testkit** `src/harness/background-tasks.testkit.ts` exposing two
+  deterministic `SpawnBackgroundProcess` implementations: `noopBackgroundSpawn`
+  (records a running task, launches nothing → tests fully control on-disk state)
+  and `synchronousBackgroundSpawn()` (runs the launch script via `spawnSync`
+  with a timeout so a fast command settles before `launch()` returns). Covered
+  by `background-tasks.testkit.test.ts` (2 tests).
+- **Testability/DX**: threaded `backgroundTaskSpawnProcess` +
+  `backgroundTaskIsProcessRunning` through `OperatorCliAppOptions` →
+  `StandaloneOperatorRuntime` (previously only the runtime/store accepted them;
+  the CLI app hard-coded a real spawn, so app tests could not be made hermetic).
+- **Made the 3 flaky tests hermetic** by injecting the deterministic spawners:
+  `operator-runtime` + the `server` fixtures (main/drifting/breaker runtimes) use
+  `noopBackgroundSpawn`; the `app` platform test uses `noopBackgroundSpawn`; the
+  `app` background/monitor test uses `noopBackgroundSpawn` + `isProcessRunning:
+  () => true` and seeds the task's captured output (mirroring how the same test
+  already seeds the monitor).
+
+**Test results:** full suite **176/176 green, run twice** (174 prior + 2 new
+testkit tests). `npm run build` ✅. `npm run typecheck:src` ✅ (exit 0). Full
+`tsc` steady at **125** (unchanged; new source/test files add 0 errors).
+
+**New idea:** add a `verify` npm script (`typecheck:src && build && test`) — now
+that the suite is deterministic again, wire it as the engine's canonical
+pre-push gate so a flaky/broken suite is caught before a push decision. Deeper:
+a lightweight **hermeticity lint** that flags tests constructing a
+`StandaloneOperatorRuntime`/`OperatorCliApp` which start a background task
+*without* injecting `backgroundTaskSpawnProcess`, so real-subprocess flakiness
+can't silently creep back in.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
