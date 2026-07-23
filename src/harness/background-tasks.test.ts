@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   BackgroundTaskExecutionService,
   FileBackgroundTaskStore,
+  createSimulatedBackgroundSpawn,
   type BackgroundTaskExecutionState,
 } from "./background-tasks.js";
 
@@ -369,5 +370,50 @@ describe("BackgroundTaskExecutionService", () => {
     await expect(fs.readFile(path.join(rootDir, task.execution.launchScript), "utf8")).resolves.toContain("bash -lc");
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
+  });
+});
+
+describe("createSimulatedBackgroundSpawn", () => {
+  it("hands out deterministic pids and records launches without touching the OS", async () => {
+    const rootDir = await makeTempDir();
+    const spawn = createSimulatedBackgroundSpawn(1000);
+    const store = new FileBackgroundTaskStore(
+      path.join(rootDir, "background-tasks.json"),
+      spawn,
+      () => false,
+    );
+
+    const first = await store.start({ title: "one", command: "echo one", cwd: rootDir, kind: "task" });
+    const second = await store.start({ title: "two", command: "echo two", cwd: rootDir, kind: "monitor" });
+
+    // Synthetic, deterministic, monotonically increasing pids.
+    expect(first.execution.processId).toBe(1000);
+    expect(second.execution.processId).toBe(1001);
+
+    // Launch intents were captured in order.
+    expect(spawn.launches).toHaveLength(2);
+    expect(spawn.launches[0]).toMatchObject({ cwd: rootDir, pid: 1000 });
+    expect(spawn.launches[1]).toMatchObject({ cwd: rootDir, pid: 1001 });
+
+    // No real process wrote state.json — the caller owns the state file, so a
+    // read before any writeState observes "no state" rather than a torn write.
+    const service = new BackgroundTaskExecutionService(rootDir, spawn, () => false);
+    await expect(service.readState(first)).resolves.toBeUndefined();
+
+    // Caller-authored state is authoritative and round-trips intact.
+    const state: BackgroundTaskExecutionState = {
+      version: 1,
+      taskId: first.id,
+      kind: "task",
+      status: "running",
+      pid: 1000,
+      startedAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      outputFile: first.execution.outputFile,
+      cwd: first.cwd,
+      command: first.command,
+    };
+    await service.writeState(first, state);
+    await expect(service.readState(first)).resolves.toEqual(state);
   });
 });

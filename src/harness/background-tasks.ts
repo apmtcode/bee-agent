@@ -108,6 +108,48 @@ export type SpawnBackgroundProcess = (
 
 export type IsProcessRunning = (pid: number) => boolean;
 
+/** A record of a launch request captured by a simulated spawn backend. */
+export type SimulatedBackgroundSpawnRecord = {
+  command: string;
+  args: string[];
+  cwd: string;
+  pid: number;
+};
+
+/** A {@link SpawnBackgroundProcess} that records launch intents without touching the OS. */
+export type SimulatedBackgroundSpawn = SpawnBackgroundProcess & {
+  /** Launch requests captured so far, in order. */
+  readonly launches: readonly SimulatedBackgroundSpawnRecord[];
+};
+
+/**
+ * Creates a background-task spawn backend that never launches a real OS process.
+ *
+ * It hands back a synthetic, deterministic pid and records each launch request
+ * so callers can assert on what would have run. This is the dry-run / simulation
+ * seam for the background-task subsystem: it lets bee-agent orchestrate
+ * background tasks in environments where launching real processes is unwanted or
+ * impossible (cloud, CI, hermetic tests), and keeps task state authoritative to
+ * the caller instead of a racing detached process.
+ *
+ * @param startPid - first synthetic pid to hand out (incremented per launch).
+ */
+export function createSimulatedBackgroundSpawn(startPid = 900000): SimulatedBackgroundSpawn {
+  const launches: SimulatedBackgroundSpawnRecord[] = [];
+  let nextPid = startPid;
+  const spawnImpl: SpawnBackgroundProcess = (command, args, options) => {
+    const pid = nextPid;
+    nextPid += 1;
+    launches.push({ command, args: [...args], cwd: options.cwd, pid });
+    return { pid, unref() {} };
+  };
+  return Object.assign(spawnImpl, {
+    get launches() {
+      return launches;
+    },
+  }) as SimulatedBackgroundSpawn;
+}
+
 export type BackgroundTaskRecoveryReason =
   | "unchanged"
   | "state-running"

@@ -6,6 +6,59 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-23 (run 9) — 🩹 Simulated background-task spawn: kill test flakiness at the root
+
+**Audited:** Project health — the green gate. On a clean tree (before any change)
+`npm test` was **non-deterministically red**: run 1 → 3 failed, run 2 → 4 failed.
+Prior runs logged "174/174 ✅", so this was a latent race that only recently
+started tipping over. Three (sometimes four) tests flapped:
+`operator-runtime.test.ts` (JSON `SyntaxError: Expected ',' or '}'` from
+`readState`), `server.test.ts` (breaker `control` state `degraded` vs expected
+`mixed`), `app.test.ts` (`control=mixed` vs `active`, and the background/monitor
+command test).
+
+**Root cause:** `FileBackgroundTaskStore.start()` spawns a **real detached bash
+process** (default `spawn`) that runs `renderLaunchScript`, which writes
+`state.json` **non-atomically** (`printf … > state.json`) and then runs the task
+command (e.g. `sleep 5`). Meanwhile the tests write the same `state.json`
+directly via `writeState`. Two racing writers → the reader occasionally sees a
+torn file (corruption) or the wrong status (breaker trips on the timing-dependent
+missing-process/missing-state failures). Pure OS-scheduling nondeterminism.
+
+**Changed (additive):**
+- **New capability — `createSimulatedBackgroundSpawn(startPid?)`** in
+  `src/harness/background-tasks.ts` (exported from `src/index.ts`). A
+  `SpawnBackgroundProcess` that never launches a real OS process: hands back
+  synthetic, deterministic, monotonic pids and records each launch intent
+  (`spawn.launches`) for assertions. This is the documented **dry-run /
+  simulation seam** for the background-task subsystem — lets bee-agent
+  orchestrate background tasks in cloud/CI/hermetic contexts where launching real
+  processes is unwanted, and keeps task state authoritative to the caller instead
+  of a racing detached process.
+- **`OperatorCliApp` gained `backgroundTaskSpawnProcess` +
+  `backgroundTaskIsProcessRunning` options** (`src/cli/app.ts`), threaded into its
+  runtime — the same injection seam the runtime already exposed, now reachable
+  through the CLI app (useful for a real `--dry-run` mode, not just tests).
+- **Made the flaky tests hermetic** by injecting the simulated spawn (and, for
+  the running→watch→stop command test, `isProcessRunning: () => true` + a
+  caller-authored `running` state so `sync` keeps the task active). Added a
+  focused unit test for the new factory (deterministic pids, launch capture, no
+  torn reads, caller-authored state round-trips).
+
+**Test results:** full suite **175/175 ✅**, and — the point — **8/8 consecutive
+runs green** (was 3–4 failing at random before). `typecheck:src` ✅ (source stays
+clean). Build ✅. Full `tsc` debt unchanged at **125** (all in test files).
+
+**New idea (queued):** the underlying product bug still stands even with the
+simulation seam — `renderLaunchScript` writes `state.json` with a plain `>`
+redirect (and the python completion-writer with `write_text`), so a **real**
+control-plane reader can still observe a torn `state.json` while a task is
+starting/finishing. Harden the launch script to write atomically (temp file +
+`mv` / `os.replace`) so external readers never see a partial write — a real
+production reliability fix, not just a test one. Added to ROADMAP.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

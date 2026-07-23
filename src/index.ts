@@ -58,6 +58,9 @@ export {
 export {
   FileBackgroundTaskStore,
   BackgroundTaskExecutionService,
+  createSimulatedBackgroundSpawn,
+  type SimulatedBackgroundSpawn,
+  type SimulatedBackgroundSpawnRecord,
   type BackgroundTaskExecution,
   type BackgroundTaskExecutionState,
   type BackgroundTaskKind,

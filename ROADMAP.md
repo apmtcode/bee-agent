@@ -45,6 +45,22 @@ unchecked items are queued. Keep this richer than you found it each run.
       have the engine run it as a per-run pre-push self-check.
 - [ ] Add a minimal CI workflow mirroring `verify` for human-opened PRs.
 
+## Reliability / project health
+- [x] **Kill background-task test flakiness at the root** (2026-07-23, run 9).
+      `FileBackgroundTaskStore.start()` spawned real detached processes whose
+      launch script wrote `state.json` non-atomically while tests wrote the same
+      file — a race that made `npm test` non-deterministically red (3–4 failures
+      at random). Added `createSimulatedBackgroundSpawn()` (dry-run spawn seam),
+      exposed it through `OperatorCliApp`, and made the affected tests hermetic.
+      Suite is now 8/8 consecutive green.
+- [ ] **Atomic `state.json` writes in `renderLaunchScript`** (found run 9). The
+      launch script still writes state with a plain `> state.json` redirect and
+      the python completion-writer with `write_text`, so a real control-plane
+      reader can observe a torn `state.json` mid-write during task
+      startup/finish. Write to a temp path + `mv`/`os.replace` (atomic rename) in
+      both the bash and python paths. Add a test that runs a real launch script
+      and asserts `readState` never throws while polling. Product reliability fix.
+
 ## Capability parity (audit reference agents → port gaps)
 - [ ] Build a "capability inventory" generator: enumerate bee-agent's exported
       RPC/tool surface (`src/index.ts`) and diff it against `openclaw`,
