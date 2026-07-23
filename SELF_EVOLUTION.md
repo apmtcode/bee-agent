@@ -6,6 +6,69 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-23 (run 9) — 🐛 Fix flaky suite: atomic background-task state I/O + torn-read-resilient JSON reads
+
+**Audited:** The green gate itself. A fresh `npm test` on this environment came
+up **3 failed / 171 passed** — a regression from run 8's 174/174. Root-caused it
+before touching anything:
+- The failing assertions (`server.test.ts:719`, `app.test.ts:906/1104`,
+  `operator-runtime.test.ts:603`) all traced to a single mechanism: those tests
+  create real background tasks, and `startBackgroundTask` **spawns a real
+  detached OS process** (the generated `run.sh`) that asynchronously writes the
+  task's `state.json`. Under vitest's concurrent worker load those writes race
+  the tests' own `writeState`/reconcile reads.
+- The concrete crash was a **torn read**: `readJsonFile` threw
+  `SyntaxError: Expected ',' or '}' … at position 311` because the shell wrote
+  `state.json` **non-atomically** — `printf … | sed > state.json` (truncate in
+  place) and a python `state_path.write_text(...)`. A reader observing the file
+  mid-write parsed a truncated snapshot. Deterministic on this box, timing-lucky
+  on run 8's — i.e. genuinely flaky, not date-dependent.
+
+**Changed (additive, two layers of defense + hermetic tests):**
+- **Production reliability — atomic state writes.** `src/harness/background-tasks.ts`
+  and `src/training/runner.ts` launch scripts now write `state.json` via a temp
+  file + rename: `printf … > state.json.tmp.$$ && mv -f …` for the initial
+  running state, and `tmp = state_path.with_name(name+'.tmp.'+pid);
+  tmp.write_text(...); os.replace(tmp, state_path)` in the python status writer.
+  `mv`/`os.replace` are atomic, so a concurrent reader now always sees a complete
+  document — a real fix for any status/reconcile call racing a live task in
+  production, not just the tests.
+- **Production robustness — torn-read-resilient reads.** `src/shared/fs.ts`
+  `readJsonFile` now retries a `SyntaxError` up to 5× (4 ms apart) before giving
+  up, so any remaining non-atomic writer (or external editor) yields a transient
+  re-read instead of crashing the caller. ENOENT/empty→fallback behaviour and
+  the defensive fallback clone are preserved; a genuinely corrupt file still
+  throws after the budget.
+- **Test hermeticity.** Added a `backgroundTaskSpawnProcess` /
+  `backgroundTaskIsProcessRunning` test seam to `OperatorCliAppOptions`
+  (threaded into the runtime, mirroring the existing `configHome` seam), and
+  injected a deterministic no-op spawn into the three background-task tests
+  (`operator-runtime`, `server`, `app`). They already drove execution state
+  explicitly via `writeState`; not launching real processes makes them
+  environment-independent. The app background/monitor test also pins
+  `isProcessRunning: () => true` so its "active task" assertions are stable.
+
+**Tests added:** `src/shared/fs.test.ts` (5) — round-trip, missing/empty
+fallback + clone identity, **torn-read recovery** (truncated snapshot replaced
+mid-retry → resolves to the settled value), persistent-corruption still throws,
+and a 40×(write‖read) concurrent-atomic stress with zero torn reads.
+
+**Test results:** `npm test` **179/179** (was 3-failing), **stable across 4
+consecutive full runs** and 5× on the isolated files (previously flaky). Build ✅.
+`typecheck:src` ✅ (source stays green). Full `tsc` **125** — unchanged, no new
+test-file debt. The suite is a trustworthy green gate again.
+
+**New idea:** promote the atomic-write pattern to a single shared helper the
+shell/python state writers are generated from, and add a tiny lint/test that
+greps generated launch scripts for a bare `> "$state"` (non-atomic redirect to a
+state file) so this class of torn-write bug can't silently reappear in a future
+runner. Longer term: a `flock`-based writer or an fsync-on-rename option for
+crash-durability of state files, and a `stateWriter` abstraction shared by the
+background-task and training runners (they already duplicate the python writer
+verbatim).
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

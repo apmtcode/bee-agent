@@ -4,6 +4,20 @@ Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
 ## Foundations / DX
+- [x] **Fix flaky suite + atomic background-task state I/O** (2026-07-23, run 9).
+      Root cause: launch scripts wrote `state.json` non-atomically
+      (`… > state.json`, python `write_text`), so a concurrent reader saw a torn
+      snapshot → `SyntaxError` (a real production race, surfaced as 3 flaky
+      tests). Fixed by (a) atomic temp+rename state writes in
+      `harness/background-tasks.ts` and `training/runner.ts`, (b) a
+      torn-read retry in `shared/fs.ts` `readJsonFile`, and (c) a
+      `backgroundTaskSpawnProcess`/`backgroundTaskIsProcessRunning` test seam on
+      `OperatorCliAppOptions` + no-op spawn in the 3 affected tests. New
+      `shared/fs.test.ts` (5 tests). Suite 179/179, stable over 4 full runs.
+- [ ] Generate the shell/python state writers from one shared helper and add a
+      guard (lint or test) that fails if a generated launch script writes a
+      state file via a bare `> "$state"` redirect (non-atomic) — so the
+      torn-write class can't reappear. Optionally add fsync-on-rename durability.
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`
