@@ -6,6 +6,74 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-23 (run 9) — 🧠 Pluggable local-model backend + deterministic Markov mock (movement subsystem)
+
+**Audited:** Standing objective #2 (local-movement learning) — the top queued
+roadmap item. Read `src/training/runner.ts`, `exporter.ts`, `export-manifest.ts`,
+`src/capture/replay.ts`, `trajectory.ts`. **Gap found:** the training runner only
+emits *launch scripts* for an external Apple-Silicon process (mlx/axolotl) — that
+path **cannot run in the cloud/CI**, so nothing ever validated the objective's
+end-to-end loop: *record → post-train → repeat → generalize*. There was no
+in-process, deterministic backend to close it.
+
+**Changed (additive, new module — zero edits to existing training code):**
+- `src/training/backend.ts` — the pluggable backend seam:
+  - `LocalModelBackend` interface (`train` → serializable `LocalModelArtifact`;
+    `infer` → continuation from a prompt), mandated deterministic.
+  - `LocalModelBackendRegistry` so backends are selectable by name (the seam for a
+    real on-device small model without touching call sites).
+  - `tokenizeReplayEvent` + `buildMovementSequences(manifest)` — turn a
+    `ReviewedExportManifest`'s time-ordered replay events into movement-token
+    sequences (`action:<tool>` / `obs:<source>` / `msg:<role>`).
+  - `evaluateReplayFidelity(...)` — the **generalization eval harness**: next-token
+    accuracy over held-out sequences (roadmap item).
+- `src/training/backends/markov-backend.ts` — `MarkovMovementBackend`, the
+  deterministic in-process reference/mock backend: a variable-order n-gram with
+  Katz-style backoff. **Repeats** recorded sequences exactly (longest-context
+  hits) and **generalizes** to novel-but-related prompts (backoff to shorter
+  shared contexts, then the unigram prior). Argmax ties break lexicographically →
+  identical inputs always give identical models/predictions. Plus
+  `createDefaultLocalModelBackendRegistry()` pre-seeded with it.
+- Exported all of the above from `src/index.ts`.
+
+**Test results:** new `src/training/backend.test.ts` — **10/10 passing** (tokenizer,
+sequence builder, registry, deterministic-artifact JSON round-trip, exact repeat
+from a prefix, generalization via backoff, unigram fallback, fidelity harness
+reporting >0.9 on the training set and >0.5 on a held-out related sequence).
+`typecheck:src` ✅ exit 0. `npm run build` ✅. The new module is fully green.
+
+**⚠️ Pre-existing suite red (NOT caused by this change — reproduced on clean HEAD
+via `git stash`; run 8 recorded 174/174 a month ago):** 3 failures surfaced as the
+calendar advanced to 2026-07-23, with **three distinct root causes**, all in
+subsystems this change never touches:
+1. `orchestrator/operator-runtime.test.ts` — the background-task test spawns *real*
+   child processes. `renderLaunchScript` (background-tasks.ts:757) writes an
+   initial **single-line** state file via `printf | sed`, racing with the test's
+   own `writeState` (multi-line via `writeJsonAtomic`). The sed
+   `s/"$$"/$$/g` uses `$` as a regex end-anchor and substitutes a `date`-derived
+   timestamp, so it can emit malformed single-line JSON → `JSON at position 311
+   (line 1 column 312)`. Confirmed the *final* file is valid JSON in isolation, so
+   this is a **spawn/write race + fragile sed**, date-sensitive.
+2. `cli/app.test.ts` — status-string mismatch (`control=degraded` vs expected
+   `control=active`).
+3. `control-plane/server.test.ts` — RPC result-shape mismatch (`result{10}` vs
+   expected `result{2}`).
+   These are queued as the next run's top priority (see ROADMAP). Because they are
+   pre-existing/environmental — not a regression from this run — the green
+   additive increment is committed to the working branch with this analysis rather
+   than stranded.
+
+**New idea:** harden `readJsonFile` (src/shared/fs.ts) against torn/partial writes
+— on a JSON parse error, retry-once then fall back — and, more importantly, mock
+`spawnProcess` in the background-task test so it stops launching real processes.
+Both shrink the flake surface. Longer term: give `MarkovMovementBackend` a
+sampling (temperature) inference mode seeded deterministically from the job id, so
+the eval harness can measure *distributional* replay fidelity, not just greedy
+next-token accuracy — a better proxy for "generalize to new but related
+movements."
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

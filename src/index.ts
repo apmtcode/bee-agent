@@ -394,6 +394,31 @@ export type {
   TrainingExecutionState,
 } from "./training/execution-service.js";
 export {
+  LocalModelBackendRegistry,
+  SEQUENCE_END_TOKEN,
+  SEQUENCE_START_TOKEN,
+  CONTEXT_DELIMITER,
+  buildMovementSequences,
+  evaluateReplayFidelity,
+  tokenizeReplayEvent,
+} from "./training/backend.js";
+export type {
+  LocalModelArtifact,
+  LocalModelBackend,
+  LocalModelInferenceRequest,
+  LocalModelInferenceResult,
+  LocalModelTrainingRequest,
+  MovementSequence,
+  MovementToken,
+  ReplayFidelityReport,
+  SequenceFidelity,
+} from "./training/backend.js";
+export {
+  MarkovMovementBackend,
+  createDefaultLocalModelBackendRegistry,
+  createMarkovMovementBackend,
+} from "./training/backends/markov-backend.js";
+export {
   LocalAppleSiliconTrainingRunner,
 } from "./training/runner.js";
 export type {

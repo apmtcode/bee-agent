@@ -45,6 +45,25 @@ unchecked items are queued. Keep this richer than you found it each run.
       have the engine run it as a per-run pre-push self-check.
 - [ ] Add a minimal CI workflow mirroring `verify` for human-opened PRs.
 
+## 🔴 Pre-existing suite red — surfaced 2026-07-23 (run 9), top priority
+Run 8 (2026-06-23) recorded 174/174 green; three tests broke purely as the
+calendar advanced (all reproduce on clean HEAD, none touched by run 9's additive
+change). Distinct root causes — fix independently:
+- [ ] `orchestrator/operator-runtime.test.ts` "starts, syncs, recovers, lists,
+      and cancels background tasks": the test spawns **real** child processes, so
+      `renderLaunchScript`'s initial single-line `printf | sed` state write
+      (background-tasks.ts:757) races the test's `writeState`, and the sed
+      `s/"$$"/$$/g` (with `$` as a regex end-anchor + a `date`-derived
+      substitution) can emit malformed JSON → parse error at `line 1 column 312`.
+      Fix: inject a mock `spawnProcess` in the test (stop launching real
+      processes) and/or replace the fragile sed with a Node/`writeJsonAtomic`
+      initial-state write. Also harden `readJsonFile` to tolerate torn writes.
+- [ ] `cli/app.test.ts` "supports session lifecycle …": status-string mismatch
+      (`control=degraded` vs expected `control=active`) — likely a
+      freshness/timestamp threshold now crossed.
+- [ ] `control-plane/server.test.ts` "handles session, transcript, approval …":
+      RPC result-shape mismatch (`result{10}` vs expected `result{2}`).
+
 ## Capability parity (audit reference agents → port gaps)
 - [ ] Build a "capability inventory" generator: enumerate bee-agent's exported
       RPC/tool surface (`src/index.ts`) and diff it against `openclaw`,
@@ -62,13 +81,25 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      for a real on-device small model. — DONE run 9 (`src/training/backend.ts`
+      `LocalModelBackend`/`LocalModelBackendRegistry`;
+      `backends/markov-backend.ts` deterministic variable-order Markov).
+- [~] Synthetic event-stream generator to validate capture→dataset→replay
+      round-trips without real OS input. Run 9 added a deterministic synthetic
+      sequence generator *inside* `backend.test.ts`; next, promote it to a
+      reusable exported helper (`synthesizeMovementSequences`) so other tests and
+      the recorder can share it.
+- [x] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories. — DONE run 9 (`evaluateReplayFidelity`;
+      next-token accuracy, >0.9 repeat / >0.5 held-out asserted in tests).
+- [ ] Sampling (temperature) inference mode for `MarkovMovementBackend`, seeded
+      deterministically from the job id, so the eval can measure *distributional*
+      replay fidelity rather than only greedy next-token accuracy.
+- [ ] Wire the pluggable backend into `LocalTrainingExecutionService` so a job can
+      optionally run the in-process backend as a cloud-side dry-run/eval before
+      emitting the real Apple-Silicon launch script.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
