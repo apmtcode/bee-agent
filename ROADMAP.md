@@ -59,18 +59,43 @@ unchecked items are queued. Keep this richer than you found it each run.
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
 (exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
-      objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
-      deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+- [x] Inventory what `src/capture` + `src/training` already implement vs. the
+      objective's five pieces (run 9). Gap found: capture→schema→dataset→replay
+      exist, but `src/training` only *generated external launch scripts* — no
+      in-process learning. Parts (c) repeat and (d) generalize had no executable
+      code. Closed by `src/training/movement-model.ts`.
+- [x] Pluggable local-model backend interface for the training runner with a
+      deterministic backend (so cloud/CI tests pass) and a documented seam for a
+      real on-device small model — DONE run 9 (`MovementModelBackend` +
+      `MovementModelRegistry` + `MarkovMovementBackend` `markov-v1`).
+- [x] Synthetic event-stream generator to validate capture→dataset→replay
+      round-trips without real OS input — DONE run 9
+      (`generateSyntheticMovementDataset`, deterministic seeded LCG grammar).
+- [x] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories — DONE run 9 (`evaluateMovementModel`,
+      top-1/top-k next-move accuracy).
+- [ ] **Closed-loop replay-fidelity gate:** wire `evaluateMovementModel` into
+      `training/execution-service` as a post-train acceptance check — after any
+      backend trains, score it on a held-out slice of the reviewed dataset and
+      refuse to promote a model below a top-k threshold. Works identically for
+      the mock backend today and a real on-device model later.
+- [ ] Real on-device backend behind `MovementModelBackend` (e.g. a small MLX/GGUF
+      policy) — the interface seam is ready; only the concrete `train`/`load` and
+      an inference bridge remain, guarded so cloud tests still use `markov-v1`.
+- [ ] Higher-order / feature-rich tokenization: encode timing deltas and
+      coordinates (not just discrete gesture:target) so the model can reproduce
+      *continuous* mouse paths, not only symbolic movements.
 
 ## Innovation backlog
+- [ ] **Stabilize flaky background-task recovery tests** (surfaced run 9). In
+      `app.test.ts` / `server.test.ts`, assertions around background-task recovery
+      fail non-deterministically — the failing count varies run-to-run (4→3→2→1)
+      and reproduces on the clean baseline. Symptoms: `control=active` vs
+      `control=degraded:...retryable failures 2/2 background task missing-process`,
+      and a task id that intermittently isn't surfaced. Likely a race/isolation
+      issue in `FileBackgroundTaskStore.recoverBySession` /
+      `StandaloneOperatorRuntime.recoverBackgroundTasks`. This flakiness
+      undermines every run's green gate, so it's high value to fix.
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in
       project health over time.

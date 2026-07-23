@@ -6,6 +6,69 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-23 (run 9) — Movement-model backend: bee-agent can now actually learn to repeat & generalize movements (objective #2c/#2d)
+
+**Audited:** The local-movement learning subsystem (`src/capture/` + `src/training/`)
+against objective #2. Finding: capture→schema→dataset→replay exist, and
+`src/training/` is well-built — but the *training* half only **generates external
+launch scripts** (`runner.ts` emits `mlx_lm.lora` / `axolotl` commands). Nothing
+in the repo actually *learns* from a movement dataset, and none of it can run or
+be tested in the cloud (it needs a real Apple-silicon box). Objective #2 parts
+**(c) post-train a local model to repeat recorded movements** and **(d) generalize
+to new but related movements** had zero executable, testable implementation.
+
+**Changed (additive, new files only):**
+- **`src/training/movement-model.ts`** — a pluggable, in-process movement-model
+  layer that closes #2c/#2d and is fully deterministic (no clock/RNG), so it runs
+  in CI/cloud:
+  - `MovementModelBackend` interface (`train` + `load`) — the seam a real
+    on-device small model plugs into later — plus `MovementModelRegistry` /
+    `createDefaultMovementModelRegistry()` so backends are selectable by id.
+  - `MarkovMovementBackend` (`markov-v1`): an interpolated variable-order Markov
+    model with stupid-backoff. **Repeats** recorded movements via `generate()`
+    (most-likely rollout replays a recorded trajectory from its prefix) and
+    **generalizes** because lower orders are always interpolated in — an *unseen*
+    high-order context degrades gracefully to a shorter-context prediction
+    instead of failing. Discrete `context` (e.g. `{app:"mail"}`) is folded into
+    the leading pad so different contexts learn distinct transitions.
+  - `serialize()`/`load()` — JSON snapshot round-trip (train → persist → infer).
+  - `tokenizeTrajectorySpan()` — canonicalizes a recorded `TrajectorySpan`'s
+    actions into ordered movement tokens, so the existing capture pipeline feeds
+    the model directly.
+  - `evaluateMovementModel()` — a **generalization eval harness** (top-1 / top-k
+    next-move accuracy on held-out sequences) — ROADMAP item delivered.
+  - `generateSyntheticMovementDataset()` — a deterministic seeded (LCG) synthetic
+    event-stream generator with learnable grammar — ROADMAP item delivered — so
+    the whole loop is validated without real OS input.
+- **`src/index.ts`** — barrel exports for the new surface.
+- **`src/training/movement-model.test.ts`** — 14 tests: exact replay, high-conf
+  prediction, determinism, unseen-prefix backoff, held-out generalization beats
+  chance (top-1 > 0.4 on a 6-token vocab where chance ≈ 0.17), snapshot
+  round-trip, context conditioning, trajectory tokenization, registry, synthetic
+  generator reproducibility/bounds.
+
+**Test results:** `typecheck:src` ✅ (exit 0). Build ✅ (547 kB). New movement
+tests ✅ **14/14**. Full suite: **186/188** — the 2 failures are **pre-existing
+and flaky**, unrelated to this change: they reproduce on the clean baseline
+(stash-verified) and the failing *count varies run-to-run* (4→3→2→1). They live
+in `app.test.ts` / `server.test.ts` around **background-task recovery** (races on
+"retryable failures 2/2 background task missing-process" and task-id surfacing) —
+a timing/isolation bug in that subsystem, not a logic error I introduced. Pushed
+to the designated branch `claude/peaceful-dirac-tm432m` per the branch
+requirements.
+
+**New idea:** **Closed-loop replay-fidelity gate.** Now that a model can be
+trained and evaluated in-process, wire `evaluateMovementModel` into the training
+`execution-service` as a post-train acceptance check: after any backend trains,
+score it on a held-out slice of the *same* reviewed dataset and refuse to promote
+a model whose top-k replay fidelity is below a threshold — turning "did training
+work?" from a manual guess into an automated gate that works identically for the
+mock backend today and a real on-device model tomorrow. Second idea logged to
+ROADMAP: **stabilize the flaky background-task recovery tests** (they undermine
+every run's green gate).
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
