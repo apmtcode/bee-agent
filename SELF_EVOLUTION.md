@@ -6,6 +6,65 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-23 (run 9) — 🧠 Movement learning: pluggable backend + deterministic Markov model (repeat + generalize)
+
+**Audited:** The local-movement learning subsystem (objective #2). `src/capture`
+covers pieces (a)–(c) — capture/recorder, event schema (`TrajectorySpan` /
+`ReplayTimelineEvent`), dataset (`ReviewedExportManifest`), replay engine.
+`src/training` has the *train* seam: `runner.ts` builds MLX/axolotl launch
+plans and `execution-service.ts` spawns them — but that backend only runs on the
+user's Apple-silicon machine, so **objective 2(c) "repeat recorded movements"
+and 2(d) "generalize to new-but-related movements" had NO cloud-runnable,
+CI-tested implementation.** The roadmap's top movement item — *"pluggable
+local-model backend with a deterministic mock backend so cloud tests pass"* —
+was the exact gap.
+
+**Changed (additive) — new `src/training/movement-policy.ts`:**
+- `MovementLearningBackend` interface (`fit(dataset) → TrainedMovementModel`) —
+  the pluggable seam. The real on-device small model implements this later
+  without touching call sites; the runner stays the MLX/axolotl seam.
+- `MarkovMovementBackend` — the **deterministic in-process default**: a
+  variable-order Markov model (backoff n-gram) over movement tokens. Prediction
+  uses the *longest matching context suffix* (a seen prefix → its recorded
+  continuation exactly = **repeat**) and **backs off** to shorter suffixes when
+  the full context is novel (related-but-unseen prefix → plausible next movement
+  = **generalize**). Ties break by count desc, then token asc → fully
+  reproducible across machines. Internal `END` sentinel lets `rollout()` stop at
+  sequence end. No OS/GPU/`Date`/`Math.random` — pure, cloud-safe.
+- `buildMovementDataset(replays)` — turns replay manifests into per-trajectory,
+  timestamp-ordered token sequences; pluggable `MovementTokenizer` (default:
+  actions tokenized by tool).
+- `evaluateMovementModel(model, heldOut)` — the **generalization eval harness**
+  (roadmap item): next-token accuracy split into `exact` (repeat fidelity) vs
+  `generalized` (backed-off) buckets.
+- `trainMovementPolicy()` convenience + full barrel exports in `src/index.ts`.
+
+**Test results:** new `movement-policy.test.ts` **13/13 ✅** (dataset build +
+ordering, exact repeat, generalization via backoff, deterministic tie-break,
+rollout termination, empty-model, snapshot, eval buckets, and a second custom
+backend proving the seam). `npm run typecheck:src` ✅ (source stays green).
+`npm run build` ✅.
+
+**⚠️ Pre-existing suite red (NOT introduced this run):** full `npm test` shows
+3 files failing — `orchestrator/operator-runtime.test.ts` (`readJsonFile`
+SyntaxError on a background-task state file), `control-plane/server.test.ts`,
+`cli/app.test.ts`. Verified these fail identically on the **pristine base
+commit** (git-stash check) and none import the new module — they surfaced from
+dependency/version drift since run 8's "174/174" (suite has since grown to 187
+tests). My change is green in isolation and additive; pushed to the feature
+branch (which already carries this red). Logged as a roadmap blocker to triage
+next run.
+
+**New idea:** add a **movement-policy CLI/RPC surface** (`movements.train` /
+`movements.predict` / `movements.rollout`) wired through the control-plane
+result map, so the local model is drivable end-to-end (capture → export →
+`buildMovementDataset` → `trainMovementPolicy` → `rollout`) from the operator
+CLI — turning the pieces into one demonstrable pipeline. Second idea: a
+*perplexity*-based eval alongside accuracy, and a **temperature/beam rollout**
+option so generalization can be tuned rather than pure-greedy.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

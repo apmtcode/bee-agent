@@ -59,16 +59,39 @@ unchecked items are queued. Keep this richer than you found it each run.
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
 (exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
-      objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
-      deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
+- [x] Inventory what `src/capture` + `src/training` already implement vs. the
+      objective's five pieces — DONE run 9. capture/schema/dataset/replay live in
+      `src/capture`; the *train* seam (MLX/axolotl) lives in `src/training/runner`
+      + `execution-service` but is on-device only. The cloud-runnable **infer**
+      half (repeat + generalize) was the gap → filled below.
+- [x] Pluggable local-model backend interface with a deterministic mock backend
+      — DONE run 9 (`src/training/movement-policy.ts`): `MovementLearningBackend`
+      seam + `MarkovMovementBackend` (variable-order backoff n-gram). Repeats seen
+      movements exactly, generalizes novel-but-related ones via backoff, fully
+      deterministic + cloud-safe. Real on-device small model implements the same
+      interface later.
+- [x] Generalization eval harness — DONE run 9 (`evaluateMovementModel`): splits
+      next-token accuracy into `exact` (repeat fidelity) vs `generalized`
+      (backed-off) buckets.
 - [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      round-trips without real OS input (movement-policy tests use hand-built
+      replays; a generator would scale coverage + feed the eval harness).
+- [ ] **Movement-policy CLI/RPC surface** (`movements.train`/`predict`/`rollout`)
+      wired through the control-plane result map, so the whole pipeline (capture →
+      export → `buildMovementDataset` → `trainMovementPolicy` → `rollout`) is
+      drivable end-to-end from the operator CLI.
+- [ ] Perplexity metric + temperature/beam rollout option for the movement model,
+      so generalization is tunable rather than pure-greedy.
+
+## Known blockers (triage next run)
+- [ ] **Pre-existing suite red since run 8** (surfaced run 9, NOT introduced by
+      it; fails on the base commit too): 3 files —
+      `orchestrator/operator-runtime.test.ts` (`readJsonFile` JSON SyntaxError on
+      a background-task state file — likely a fixture/writer that emits invalid
+      JSON, or a dependency-drift behavior change), `control-plane/server.test.ts`,
+      `cli/app.test.ts`. Suite grew 174→187 tests since run 8's green report.
+      Triage: run each file, capture the failing assertion, fix the fixture/writer
+      (additive, no mass rewrite). Restores a green `npm test` gate.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
