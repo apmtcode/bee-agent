@@ -61,14 +61,38 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 (exporter, job store/manifest, runner, execution service). Next increments:
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
-      deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      and write the gap list here before adding code. (Partly done run 9: the
+      train/infer piece was the gap — external launch plan only, no in-process
+      model. Capture→schema→dataset→replay all exist.)
+- [x] Pluggable local-model backend interface for the training runner with a
+      deterministic backend (so cloud/CI tests pass) and a documented seam for a
+      real on-device small model — DONE run 9. `src/training/movement-model.ts`:
+      `MovementModelBackend` interface + `NgramMovementBackend` (variable-order
+      Markov, stupid-backoff, deterministic) + `MovementModelRegistry`.
+- [x] Synthetic event-stream generator to validate capture→dataset→replay
+      round-trips without real OS input — DONE run 9 (`synthesizeMovementSequences`
+      template expander; deterministic). Next: a richer generator that emits full
+      `ReplayTimelineEvent` streams (with jittered timestamps) rather than token
+      templates, to also exercise `tokenizeMovementEvent`/`buildMovementSequence`.
+- [x] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories — DONE run 9
+      (`evaluateMovementReplayFidelity`, teacher-forced next-movement accuracy +
+      backoff rate). Next: add a rollout-based (free-running, not teacher-forced)
+      fidelity metric that compares a generated trajectory against the recorded one.
+- [ ] Wire `NgramMovementBackend` into a `sessions.movementModel.*` control-plane
+      RPC family (train on a reviewed export, roll out a prediction) — closes the
+      capture → reviewed dataset → in-process model → replay loop end to end.
+
+## Known blockers / test health
+- [ ] **Cross-platform background-task recovery.** 3 test files fail on the Linux
+      cloud runner (`operator-runtime.test.ts`, `server.test.ts`, `app.test.ts`) —
+      pre-existing on base commit `3c7b7236`, not from run 9. The recovery tests
+      spawn the real bash launch script from `renderLaunchScript` (macOS-oriented:
+      `date -u +…`, `sed`, `$$`), producing a malformed state file → `readJsonFile`
+      throws `SyntaxError`. Fix: make recovery corruption-tolerant (a mangled
+      state file marks the task `failed` and recovery continues instead of
+      crashing `recoverBySession`), and/or make `renderLaunchScript` portable.
+      Flaky (fails 3↔4 across runs). This is the highest-value test-health fix.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

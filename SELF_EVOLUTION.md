@@ -6,6 +6,71 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-23 (run 9) — Pluggable in-process movement model: train / repeat / generalize (objective 2c+2d)
+
+**Audited:** The local-movement learning subsystem (`src/training/` +
+`src/capture/`) against standing objective #2. Finding: the training subsystem
+only produced an **external** launch plan — `LocalAppleSiliconTrainingRunner`
+emits an `mlx`/`axolotl` command + bash script that runs *only on a real Apple
+Silicon machine*, and `LocalTrainingExecutionService` spawns it. There was **no
+in-process model** that could actually learn from a recorded movement dataset
+and predict movements, so objectives **2(c) "post-train … to repeat the
+recorded movements"** and **2(d) "generalize to new but related movements"**
+were entirely unfulfilled and nothing in the train/infer path was
+cloud/CI-testable.
+
+**Changed (additive, new module `src/training/movement-model.ts`):** a
+deterministic, dependency-free, **pluggable** movement-prediction model:
+- `MovementModelBackend` interface — the documented seam for a real on-device
+  small model (e.g. an MLX policy); three members `name` / `train` / `predictNext`.
+- `NgramMovementBackend` — a variable-order Markov model with **stupid-backoff**.
+  It counts next-token distributions for every context length `0..order`, so at
+  inference it uses the longest matching suffix and *backs off* to shorter
+  motifs when the full context is unseen. Deterministic argmax (freq, then
+  lexicographic tie-break) — no `Math.random()`, safe for CI and workflow resume.
+- `tokenizeMovementEvent` / `buildMovementSequence` — turn recorded
+  `ReplayTimelineEvent`s (device gestures, tool actions) into stable discrete
+  tokens; equivalent movements (case/punctuation) collapse to one token.
+- `rolloutMovements` — autoregressive generation from a seed. Seeded with a
+  recorded prefix it **reproduces** the recorded continuation (2c); seeded with
+  a novel-but-related prefix it **composes** seen sub-sequences via backoff (2d).
+  Learns to stop via `MOVEMENT_BOUNDARY_TOKEN` (no infinite loops).
+- `evaluateMovementReplayFidelity` — teacher-forced next-movement accuracy over
+  held-out sequences (generalization eval harness); scores continuation
+  positions (context length ≥ 1).
+- `synthesizeMovementSequences` — deterministic template expander to validate
+  capture→train→replay round-trips with **no real OS input**.
+- `MovementModelRegistry` + `createDefaultMovementModelRegistry()` — makes the
+  backend pluggable by name. All 10 symbols exported from `src/index.ts`.
+
+**Test results:** new `src/training/movement-model.test.ts` — **16/16 green**
+(repeat-recorded-movement, boundary-stop, generalize-via-backoff, freq/tie-break
+determinism, empty model, JSON round-trip, perfect-fidelity + generalization
+eval, template expander, registry incl. a custom drop-in backend). Whole
+`src/training/` suite **26/26**. `typecheck:src` ✅ CLEAN. Build ✅.
+
+**⚠️ Pre-existing blocker (NOT mine, unchanged by this run):** the full
+`npm test` shows **3 failing test files** — `operator-runtime.test.ts`,
+`server.test.ts`, `app.test.ts`. Verified they fail identically on the clean base
+commit `3c7b7236` (via `git stash`). Root cause: the background-task **recovery**
+tests spawn the real bash launch script from `renderLaunchScript`, which is
+macOS-oriented (`date -u +…`, `sed`, `$$`) and produces a **malformed state
+file** on this Linux cloud runner → `readJsonFile` throws
+`SyntaxError: Expected ',' or '}' … JSON`. It's environment-specific and flaky
+(fail count varies 3↔4 across runs). Logged to ROADMAP as the next fix. My change
+is additive and touches none of those files.
+
+**New idea:** make `renderLaunchScript`/`readJsonFile` recovery **corruption-
+tolerant** — a partially-written or platform-mangled state file should mark the
+task `failed` and continue recovery, never crash the whole `recoverBySession`
+sweep. That both fixes the pre-existing cross-platform test failures and hardens
+real recovery. Bigger: wire `NgramMovementBackend` into a
+`sessions.movementModel.*` control-plane RPC family so the runtime can train and
+roll out movement predictions on reviewed exports, closing the loop from capture
+→ reviewed dataset → in-process model → replay.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
