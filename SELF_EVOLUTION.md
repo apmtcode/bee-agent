@@ -6,6 +6,58 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-23 (run 9) — Fix corrupt background-task launch state + de-flake the suite
+
+**Audited:** Project health first (the highest-value check before adding
+features). `npm test` was **red: 3 failing tests** on the tip that run 8 left
+"174/174" — `operator-runtime.test.ts`, `server.test.ts`, `app.test.ts` — and
+the last two were *flaky* (passed ~2 of 3 runs). Root-caused two real bugs, both
+in `src/harness/background-tasks.ts`'s `renderLaunchScript`.
+
+**Bug 1 — corrupt initial `state.json` (deterministic crash).** The launch
+script built the initial "running" state by shell-munging a JSON payload:
+`printf '%s' '<json>' | sed "s/__STARTED__/$started_at/; s/\"$$\"/$$/"`. Any
+`command` containing quotes/backslashes/newlines (e.g. the test's
+`printf 'line-1\nline-2\n'`) produced invalid JSON on disk, so a later
+`readJsonFile` threw `SyntaxError` and `recoverBackgroundTasks` rejected. A
+second latent bug lived in the same line: the `s/"$$"/…/` substitution never
+matched because `$` is a regex anchor in sed, so `pid` was persisted as the
+literal string `"$$"` instead of the real PID.
+
+**Fix:** write the initial state with `python3` (new `renderInitialStateWriterPython`),
+mirroring the completion/failure writers that already used python heredocs.
+Fields are emitted as `JSON.stringify(...)` literals inside a single-quoted
+(`<<'PY'`) heredoc — no shell expansion touches them, and JSON string syntax is
+a subset of Python string syntax, so arbitrary quotes/backslashes/newlines
+round-trip intact. `pid`/`started_at` come in via argv. This also repairs the
+completion path, which previously `json.loads`-crashed on the corrupt file.
+
+**Bug 2 — real detached subprocesses raced test assertions (flakiness).** Once
+Bug 1 was fixed the launch script *worked*, so the real `printf`/`sleep`
+subprocesses started by tests now wrote state that reconcile counted — flipping
+platform-breaker aggregates (`mixed`→`degraded`, `failureCount 2`→`3`) depending
+on timing. Fix: made the runtime's existing `backgroundTaskSpawnProcess` seam
+reachable from the CLI (new additive `OperatorCliAppOptions.backgroundTaskSpawnProcess`
++ `…IsProcessRunning`, forwarded to `StandaloneOperatorRuntime`), and injected a
+deterministic no-op spawn (`() => ({ pid: 4242, unref(){} })`) into the tests
+that drive task state explicitly via `writeState`. One integration test
+(`supports background and monitor task commands`) deliberately keeps the *real*
+spawner — it asserts on the actual subprocess output — and is now annotated as
+such.
+
+**Test results:** `npm test` **174/174**, green **14 consecutive full-suite
+runs** (was failing ~1 in 3). `typecheck:src` ✅ (source gate still clean).
+Full `tsc` steady at **125** (test-only). `npm run build` ✅.
+
+**New idea (queued):** add a `verify` script (`typecheck:src && build && test`)
+**with `vitest --retry=0` and a repeat pass** so flakiness like this is caught by
+the engine's own pre-push gate instead of by the next run. Longer term: a tiny
+"hermeticity" lint that flags any test constructing a runtime/app that can start
+background tasks without injecting the spawn seam — the exact gap that let this
+regression hide.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

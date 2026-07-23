@@ -734,28 +734,20 @@ function renderLaunchScript(task: BackgroundTaskRecord): string {
   const quotedOutputFile = shellQuote(task.execution.outputFile);
   const quotedCwd = shellQuote(task.cwd);
   const quotedCommand = shellQuote(task.command);
-  const quotedStatePayload = shellQuote(
-    JSON.stringify({
-      version: 1,
-      taskId: task.id,
-      kind: task.kind,
-      status: "running",
-      pid: "$$",
-      startedAt: "__OPENCLAW_STARTED_AT__",
-      updatedAt: "__OPENCLAW_STARTED_AT__",
-      outputFile: task.execution.outputFile,
-      cwd: task.cwd,
-      command: task.command,
-    }),
-  );
+  const quotedKind = shellQuote(task.kind);
+  const quotedId = shellQuote(task.id);
 
   return [
     "#!/usr/bin/env bash",
     "set -euo pipefail",
     `mkdir -p $(dirname ${quotedStatePath}) $(dirname ${quotedOutputFile})`,
     "started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-    `printf '%s' ${quotedStatePayload} | sed "s/__OPENCLAW_STARTED_AT__/$started_at/g; s/\"\$\$\"/$$/g" > ${quotedStatePath}`,
-    `printf '%s\n' "starting ${task.kind} ${task.id}" >> ${quotedOutputFile}`,
+    // Write the initial "running" state with python3 (never string-munged shell)
+    // so any command/cwd content — quotes, backslashes, newlines — survives intact.
+    `python3 - ${quotedStatePath} $$ "$started_at" <<'PY'`,
+    ...renderInitialStateWriterPython(task),
+    "PY",
+    `printf 'starting %s %s\\n' ${quotedKind} ${quotedId} >> ${quotedOutputFile}`,
     `if cd ${quotedCwd} && bash -lc ${quotedCommand} >> ${quotedOutputFile} 2>&1; then`,
     "  completed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
     `  python3 - ${quotedStatePath} $$ "$completed_at" 0 <<'PY'`,
@@ -771,6 +763,33 @@ function renderLaunchScript(task: BackgroundTaskRecord): string {
     "fi",
     "",
   ].join("\n");
+}
+
+// Values are emitted as JSON literals inside a single-quoted heredoc, so no
+// shell expansion touches them and JSON escaping (valid Python literal syntax)
+// keeps arbitrary quotes/backslashes/newlines intact.
+function renderInitialStateWriterPython(task: BackgroundTaskRecord): string[] {
+  return [
+    "import json",
+    "import pathlib",
+    "import sys",
+    "state_path = pathlib.Path(sys.argv[1])",
+    "pid = int(sys.argv[2])",
+    "started_at = sys.argv[3]",
+    "state = {",
+    "    'version': 1,",
+    `    'taskId': ${JSON.stringify(task.id)},`,
+    `    'kind': ${JSON.stringify(task.kind)},`,
+    "    'status': 'running',",
+    "    'pid': pid,",
+    "    'startedAt': started_at,",
+    "    'updatedAt': started_at,",
+    `    'outputFile': ${JSON.stringify(task.execution.outputFile)},`,
+    `    'cwd': ${JSON.stringify(task.cwd)},`,
+    `    'command': ${JSON.stringify(task.command)},`,
+    "}",
+    "state_path.write_text(json.dumps(state, indent=2) + '\\n')",
+  ];
 }
 
 function renderStateWriterPython(status: BackgroundTaskExecutionState["status"]): string[] {

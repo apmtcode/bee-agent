@@ -38,8 +38,11 @@ unchecked items are queued. Keep this richer than you found it each run.
     `skills.executable.*`, `push.subscriptions.*`, `trajectories.*`, `replays.*`,
     `cron.runs`/misc — plus a few genuine test-only typings. Map the rest, then
     fix residual test-only typings.
-- [ ] Add a `verify` npm script (`typecheck && build && test`) and have the
-      engine run it as a pre-push self-check each cycle.
+- [ ] Add a `verify` npm script (`typecheck:src && build && test`) and have the
+      engine run it as a pre-push self-check each cycle. **Run 9 raised the
+      priority:** run 8 pushed a tip whose suite was actually red + flaky. The
+      script should include a **repeat/`--retry=0` pass** so timing-dependent
+      flakiness is caught by the gate, not the next run.
 - [x] Interim **source-only typecheck gate** — DONE run 7. `tsconfig.src.json`
       (excludes `**/*.test.ts`) + `typecheck:src` script; passes (exit 0). Next:
       have the engine run it as a per-run pre-push self-check.
@@ -71,6 +74,18 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
       related synthetic trajectories.
 
 ## Innovation backlog
+- [x] **Robust background-task launch state (run 9):** initial `state.json` is
+      now written by `python3` with JSON-literal fields instead of `printf|sed`
+      shell munging — arbitrary command/cwd content (quotes, backslashes,
+      newlines) round-trips intact, and the `pid` is the real PID (was the
+      literal `"$$"`).
+- [x] **CLI spawn-injection seam (run 9):** `OperatorCliApp` now forwards
+      `backgroundTaskSpawnProcess` / `backgroundTaskIsProcessRunning`, so CLI
+      tests can be hermetic instead of racing real subprocesses.
+- [ ] **Test hermeticity lint:** flag any test that builds a runtime/`OperatorCliApp`
+      which can start background tasks without injecting the spawn seam (unless
+      annotated as an intentional integration test). This is the exact gap that
+      let run 8's flaky red tip ship.
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in
       project health over time.

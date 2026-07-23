@@ -10,6 +10,15 @@ import { OperatorCliApp, parseSlashCommand } from "./app.js";
 const tempDirs: string[] = [];
 const execFileAsync = promisify(execFile);
 
+// Hermetic background-task options: a deterministic no-op spawn plus a dead
+// liveness probe. Tests that start background tasks drive their state via
+// explicit writeState/sync, so a real detached subprocess must not race in and
+// mutate state (which otherwise causes flaky platform-control/recovery asserts).
+const HERMETIC_BACKGROUND = {
+  backgroundTaskIsProcessRunning: () => false,
+  backgroundTaskSpawnProcess: () => ({ pid: 4242, unref: () => {} }),
+} as const;
+
 async function makeTempDir(): Promise<string> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "operator-cli-app-"));
   tempDirs.push(dir);
@@ -503,7 +512,7 @@ describe("OperatorCliApp", () => {
 
   it("overrides plan-exit restore mode and reports when plan mode is inactive", async () => {
     const rootDir = await makeTempDir();
-    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25", ...HERMETIC_BACKGROUND });
     const session = await app.runtime.startSession({ title: "plan exit cli", cwd: rootDir, agentId: "operator-cli" });
 
     await expect(app.dispatchSlashCommand({ kind: "plan-exit" }, session.id)).resolves.toBe("Plan mode is not enabled. permissionMode=default");
@@ -733,7 +742,7 @@ describe("OperatorCliApp", () => {
     const rootDir = await makeTempDir();
     await fs.mkdir(path.join(rootDir, ".claude"), { recursive: true });
     await fs.writeFile(path.join(rootDir, ".claude", "settings.local.json"), '{"permissionMode":"default"}');
-    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25", ...HERMETIC_BACKGROUND });
     const session = await app.runtime.startSession({ title: "freeform policy", cwd: rootDir, agentId: "operator-cli" });
 
     const firstAttempt = await app.handleInput("start background wipe -- rm -rf build", session.id);
@@ -801,7 +810,7 @@ describe("OperatorCliApp", () => {
 
   it("supports session lifecycle, transcript, approvals, pairing, config, and prompt commands", async () => {
     const rootDir = await makeTempDir();
-    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25", ...HERMETIC_BACKGROUND });
     const firstSession = await app.runtime.startSession({ title: "first", cwd: rootDir, agentId: "operator-cli" });
     const secondSession = await app.runtime.startSession({ title: "second", cwd: rootDir, agentId: "operator-cli" });
 
@@ -1063,6 +1072,9 @@ describe("OperatorCliApp", () => {
 
   it("supports background and monitor task commands plus cron commands", async () => {
     const rootDir = await makeTempDir();
+    // NOTE: intentionally uses the real spawner — this is an integration test
+    // that asserts on the actual `printf` subprocess output (background-view,
+    // watch-task), so it must run the real launch script rather than a mock.
     const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
     const session = await app.runtime.startSession({ title: "CLI ops", cwd: rootDir, agentId: "operator-cli" });
 
@@ -1184,7 +1196,7 @@ describe("OperatorCliApp", () => {
     const rootDir = await makeTempDir();
     await fs.mkdir(path.join(rootDir, ".claude"), { recursive: true });
     await fs.writeFile(path.join(rootDir, ".claude", "settings.local.json"), '{"permissionMode":"default"}');
-    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25", ...HERMETIC_BACKGROUND });
     const session = await app.runtime.startSession({ title: "policy", cwd: rootDir, agentId: "operator-cli" });
 
     const firstAttempt = await app.dispatchSlashCommand(
@@ -1227,7 +1239,7 @@ describe("OperatorCliApp", () => {
         },
       }),
     );
-    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25", ...HERMETIC_BACKGROUND });
     const session = await app.runtime.startSession({ title: "hooks", cwd: rootDir, agentId: "operator-cli" });
 
     const output = await app.dispatchSlashCommand(
