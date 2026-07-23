@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -369,5 +370,39 @@ describe("BackgroundTaskExecutionService", () => {
     await expect(fs.readFile(path.join(rootDir, task.execution.launchScript), "utf8")).resolves.toContain("bash -lc");
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
+  });
+
+  it("generates a launch script whose state file is always valid JSON, even for commands with quotes/backslashes", async () => {
+    // Regression: the launch script used to write the initial execution state via
+    // `printf '%s' '<json>' | sed …`, which corrupted the JSON whenever the command
+    // contained double quotes, backslashes, or newlines, and failed to substitute
+    // the `$$`→pid placeholder on non-GNU sed. The state file must instead round-trip
+    // through Python's json.dumps and always parse cleanly with a numeric pid.
+    const rootDir = await makeTempDir();
+    let launchScriptPath = "";
+    const store = new FileBackgroundTaskStore(
+      path.join(rootDir, "background-tasks.json"),
+      (command) => {
+        launchScriptPath = command; // the store spawns the launch script path as the command
+        return { pid: 4242, unref() {} };
+      },
+      () => true,
+    );
+    const command = `printf '%s' 'a "quoted" value, a backslash \\ and a dollar $HOME'`;
+    const task = await store.start({ sessionId: "s", title: "nasty command", command, cwd: rootDir, kind: "task" });
+
+    const launchSource = await fs.readFile(launchScriptPath, "utf8");
+    expect(launchSource).not.toContain("| sed"); // no fragile shell JSON munging
+
+    // Execute the generated launch script for real: it writes the initial "running"
+    // state, runs the command, then writes the terminal "completed" state.
+    const result = spawnSync("bash", [launchScriptPath], { cwd: rootDir, encoding: "utf8" });
+    expect(result.status).toBe(0);
+
+    const raw = await fs.readFile(path.join(rootDir, task.execution.stateFile), "utf8");
+    const state = JSON.parse(raw) as { pid: unknown; command: unknown; status: unknown };
+    expect(typeof state.pid).toBe("number");
+    expect(state.command).toBe(command);
+    expect(state.status).toBe("completed");
   });
 });

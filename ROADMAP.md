@@ -3,6 +3,23 @@
 Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
+## Reliability (launch-script / OS-boundary robustness)
+- [x] Fix launch-script initial `state.json` write — was `printf | sed`,
+      corrupting JSON for commands with quotes/newlines and failing `$$`→pid
+      substitution on non-GNU sed. Now a Python `json.dumps` writer in both
+      `harness/background-tasks.ts` and `training/runner.ts` (run 9, 2026-07-23).
+- [x] Fix `shellQuote` single-quote escaping in `background-tasks.ts`
+      (`"'"'"'` → `'"'"'`) — corrupted commands containing `'` (run 9).
+- [x] Make `control-plane/server.test` hermetic — inject a no-op
+      `backgroundTaskSpawnProcess` so real launch scripts don't race assertions
+      (run 9). Suite went 3-failing → deterministic green.
+- [ ] **Dedup shell quoting:** extract one unit-tested `posixSingleQuote()` into
+      `src/shared/` and use it from both launch-script renderers (they each
+      defined `shellQuote`; the copies had diverged — one was buggy).
+- [ ] **Launch-script fuzz/property test:** generate commands with random
+      quotes/backslashes/newlines/`$`/unicode; assert the rendered script always
+      produces valid JSON state with the command preserved verbatim.
+
 ## Foundations / DX
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.

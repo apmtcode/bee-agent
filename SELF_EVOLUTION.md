@@ -6,6 +6,59 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-23 (run 9) — 🐛 Reliability: fixed 3 launch-script/state-write bugs; suite RED→GREEN
+
+**Audited:** Full-suite health on a fresh checkout. **The suite was RED here** — 3
+tests failed at baseline (`operator-runtime.test`, `app.test`, `server.test`),
+which prior runs' environment had masked ("174/174"). All three traced to the
+background-task / training **launch-script state writers**, which spawn real OS
+processes and write `state.json` via shell text-munging. Root-caused via
+instrumentation of `readJsonFile` (the failing read was single-line JSON with
+`"pid":"$$"` and a broken `command` value).
+
+**Three real bugs fixed (additive):**
+1. **Invalid-JSON initial state write.** The launch script wrote the first
+   `state.json` via `printf '%s' '<json>' | sed "s/…/$$/g"`. This (a) corrupted
+   the JSON whenever the command contained `"`, `\`, or newlines, and (b) failed
+   the `$$`→pid substitution on non-GNU sed, leaving `"pid":"$$"` (a string,
+   which then reads as a dead process). Replaced with a Python `json.dumps`
+   writer (mirroring the already-correct completion/failure writers) in **both**
+   `src/harness/background-tasks.ts` and `src/training/runner.ts`.
+2. **`shellQuote` single-quote corruption** (`background-tasks.ts`) — surfaced by
+   the new regression test. It escaped `'` as `"'"'"'` instead of the correct
+   POSIX `'"'"'`, inserting a spurious leading `"` and corrupting **any** command
+   containing single quotes (e.g. `printf '%s' '…'`). Latent because every
+   previously-exercised command happened to lack single quotes. (The training
+   runner's copy was already correct — logged a dedup follow-up.)
+3. **Non-hermetic `server.test`.** The control-plane tests already inject
+   `backgroundTaskIsProcessRunning: () => false` (intending "no live process"),
+   but still spawned **real** launch scripts whose async state write raced the
+   assertions — once written, the injected `false` flipped remotes into spurious
+   `missing-process`/`degraded` states. Injected a no-op `backgroundTaskSpawnProcess`
+   into the 3 affected runtimes so execution state comes only from explicit
+   `writeState()` calls. Fully deterministic.
+
+**Added:** a regression test (`background-tasks.test.ts`) that generates a launch
+script for a command containing quotes/backslashes/`$`, **executes it for real**,
+and asserts `state.json` parses cleanly with a numeric pid and a preserved
+command — plus that the script no longer contains `| sed`. Updated two stale
+`runner.test.ts` assertions (`> '<stateFile>'` redirect → `python3 - '<stateFile>'`).
+
+**Test results:** baseline **3 failed / 174** → **0 failed / 175** (added the
+regression test), verified **deterministic across many full-suite runs** (not
+just isolation — the failures were order/load-dependent). `npm run build` ✅.
+`npm run typecheck:src` ✅ (exit 0). Full `tsc` **125** (unchanged — no new test
+debt).
+
+**New idea:** the recurring failure mode is untested shell/OS-boundary codegen.
+Two follow-ups: (a) extract a single unit-tested `posixSingleQuote()` helper into
+`src/shared/` and use it from **both** the background-task and training launch-
+script renderers — they each defined their own `shellQuote` and the copies had
+**diverged** (one buggy); dedup prevents that class of bug. (b) A launch-script
+**fuzz/property test**: generate commands with random quotes, backslashes,
+newlines, `$`, and unicode, and assert the rendered script always yields valid
+JSON state with the command preserved verbatim.
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

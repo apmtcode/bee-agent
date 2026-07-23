@@ -12,6 +12,19 @@ import type { ReviewedExportManifest } from "../training/export-manifest.js";
 
 const tempDirs: string[] = [];
 
+// A no-op process spawner for the control-plane tests. These tests drive
+// background-task execution state deterministically via writeState() and pair it
+// with `backgroundTaskIsProcessRunning: () => false`. If real launch scripts ran,
+// they would asynchronously write a "running" state file that races the
+// control-plane assertions — once written, the injected isProcessRunning:false
+// flips the remote into a spurious missing-process/degraded state. Stubbing the
+// spawn keeps the only source of execution state the explicit writeState() calls.
+let noopSpawnPid = 100000;
+function noopSpawnProcess(): { pid?: number; unref(): void } {
+  noopSpawnPid += 1;
+  return { pid: noopSpawnPid, unref() {} };
+}
+
 async function makeTempDir(): Promise<string> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "control-plane-"));
   tempDirs.push(dir);
@@ -84,6 +97,7 @@ describe("OperatorControlPlaneServer", () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir,
       backgroundTaskIsProcessRunning: () => false,
+      backgroundTaskSpawnProcess: noopSpawnProcess,
       delivery: new OperatorDeliveryService(rootDir, {
         sendBrowserPush: async () => {},
       }),
@@ -953,6 +967,7 @@ describe("OperatorControlPlaneServer", () => {
     const driftingRuntime = new StandaloneOperatorRuntime({
       rootDir: driftingRootDir,
       backgroundTaskIsProcessRunning: () => false,
+      backgroundTaskSpawnProcess: noopSpawnProcess,
     });
     const driftingServer = new OperatorControlPlaneServer({ runtime: driftingRuntime });
     const driftingBootstrap = await driftingServer.handle({
@@ -1019,6 +1034,7 @@ describe("OperatorControlPlaneServer", () => {
     const breakerRuntime = new StandaloneOperatorRuntime({
       rootDir: breakerRootDir,
       backgroundTaskIsProcessRunning: () => false,
+      backgroundTaskSpawnProcess: noopSpawnProcess,
     });
     const breakerServer = new OperatorControlPlaneServer({ runtime: breakerRuntime });
     const breakerOne = await breakerServer.handle({
