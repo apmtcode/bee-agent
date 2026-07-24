@@ -528,8 +528,13 @@ describe("StandaloneOperatorRuntime", () => {
   });
 
   it("starts, syncs, recovers, lists, and cancels background tasks", async () => {
+    // Inject a deterministic no-op spawn so the detached launch script never
+    // races the manually-written execution states this test asserts on. Without
+    // it, the real bash launcher writes its own state.json asynchronously and
+    // clobbers the states set up below (flaky, environment-timing dependent).
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
+      backgroundTaskSpawnProcess: () => ({ pid: 4242, unref() {} }),
       backgroundTaskIsProcessRunning: () => false,
     });
     const session = await runtime.startSession({ title: "Tasks", agentId: "main" });

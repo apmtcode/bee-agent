@@ -734,27 +734,35 @@ function renderLaunchScript(task: BackgroundTaskRecord): string {
   const quotedOutputFile = shellQuote(task.execution.outputFile);
   const quotedCwd = shellQuote(task.cwd);
   const quotedCommand = shellQuote(task.command);
-  const quotedStatePayload = shellQuote(
-    JSON.stringify({
-      version: 1,
-      taskId: task.id,
-      kind: task.kind,
-      status: "running",
-      pid: "$$",
-      startedAt: "__OPENCLAW_STARTED_AT__",
-      updatedAt: "__OPENCLAW_STARTED_AT__",
-      outputFile: task.execution.outputFile,
-      cwd: task.cwd,
-      command: task.command,
-    }),
-  );
+  // The running-state payload is emitted through a *quoted* heredoc so the shell
+  // reproduces every byte literally — no printf/quoting round-trip that could
+  // mangle a command containing single quotes, double quotes or escaped
+  // newlines (which previously produced invalid JSON in state.json). The two
+  // runtime-resolved fields use sentinel tokens that `sed` swaps in-place:
+  // `__OPENCLAW_STARTED_AT__` → the launch timestamp, and the quoted
+  // `"__OPENCLAW_PID__"` string → the bare numeric pid. JSON.stringify keeps the
+  // payload on a single line (newlines escaped as \n text), so `sed` is safe.
+  const statePayload = JSON.stringify({
+    version: 1,
+    taskId: task.id,
+    kind: task.kind,
+    status: "running",
+    pid: "__OPENCLAW_PID__",
+    startedAt: "__OPENCLAW_STARTED_AT__",
+    updatedAt: "__OPENCLAW_STARTED_AT__",
+    outputFile: task.execution.outputFile,
+    cwd: task.cwd,
+    command: task.command,
+  });
 
   return [
     "#!/usr/bin/env bash",
     "set -euo pipefail",
     `mkdir -p $(dirname ${quotedStatePath}) $(dirname ${quotedOutputFile})`,
     "started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-    `printf '%s' ${quotedStatePayload} | sed "s/__OPENCLAW_STARTED_AT__/$started_at/g; s/\"\$\$\"/$$/g" > ${quotedStatePath}`,
+    `sed "s/__OPENCLAW_STARTED_AT__/$started_at/g; s/\\"__OPENCLAW_PID__\\"/$$/g" > ${quotedStatePath} <<'__OPENCLAW_STATE_PAYLOAD__'`,
+    statePayload,
+    "__OPENCLAW_STATE_PAYLOAD__",
     `printf '%s\n' "starting ${task.kind} ${task.id}" >> ${quotedOutputFile}`,
     `if cd ${quotedCwd} && bash -lc ${quotedCommand} >> ${quotedOutputFile} 2>&1; then`,
     "  completed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",

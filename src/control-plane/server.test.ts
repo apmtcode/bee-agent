@@ -83,6 +83,12 @@ describe("OperatorControlPlaneServer", () => {
     const rootDir = await makeTempDir();
     const runtime = new StandaloneOperatorRuntime({
       rootDir,
+      // No-op spawn keeps background-task execution state deterministic: the real
+      // detached launch script would otherwise write a running state with a live
+      // (soon-dead) pid, which — combined with isProcessRunning:()=>false — trips
+      // a spurious "missing-process" diagnostic and flips remote control to
+      // "degraded" instead of "active" depending on process-timing.
+      backgroundTaskSpawnProcess: () => ({ pid: 4242, unref() {} }),
       backgroundTaskIsProcessRunning: () => false,
       delivery: new OperatorDeliveryService(rootDir, {
         sendBrowserPush: async () => {},
@@ -952,6 +958,9 @@ describe("OperatorControlPlaneServer", () => {
     const driftingRootDir = await makeTempDir();
     const driftingRuntime = new StandaloneOperatorRuntime({
       rootDir: driftingRootDir,
+      // Deterministic spawn: background-task execution state is driven entirely by
+      // the explicit writeState calls below, never by a racing detached launcher.
+      backgroundTaskSpawnProcess: () => ({ pid: 4242, unref() {} }),
       backgroundTaskIsProcessRunning: () => false,
     });
     const driftingServer = new OperatorControlPlaneServer({ runtime: driftingRuntime });
@@ -1018,6 +1027,11 @@ describe("OperatorControlPlaneServer", () => {
     const breakerRootDir = await makeTempDir();
     const breakerRuntime = new StandaloneOperatorRuntime({
       rootDir: breakerRootDir,
+      // Deterministic spawn so the breaker's failure count is driven one step at a
+      // time by the explicit writeState calls below. A racing detached launcher
+      // would write running states for all three tasks up front and trip the
+      // breaker straight to "paused" instead of "mixed" → "degraded" → "paused".
+      backgroundTaskSpawnProcess: () => ({ pid: 4242, unref() {} }),
       backgroundTaskIsProcessRunning: () => false,
     });
     const breakerServer = new OperatorControlPlaneServer({ runtime: breakerRuntime });

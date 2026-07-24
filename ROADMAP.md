@@ -45,6 +45,21 @@ unchecked items are queued. Keep this richer than you found it each run.
       have the engine run it as a per-run pre-push self-check.
 - [ ] Add a minimal CI workflow mirroring `verify` for human-opened PRs.
 
+## Reliability / correctness
+- [x] **Launch-script JSON corruption** — DONE run 9. `renderLaunchScript`
+      hand-rolled JSON-through-shell escaping, so any background-task command
+      containing a quote corrupted its own `state.json` at runtime. Replaced with
+      a quoted-heredoc payload + sentinel-token `sed` substitution; added a
+      foreground regression test that reverts-and-fails cleanly.
+- [x] **De-flake background-task tests** — DONE run 9. Injected the deterministic
+      no-op `backgroundTaskSpawnProcess` into the operator-runtime + server
+      (main/drifting/breaker) tests so hand-written execution states are no longer
+      raced by real detached `bash`/`python3` launchers.
+- [ ] **Hermeticity lint** (NEW run 9): flag any `*.test.ts` that starts
+      background tasks via a runtime/store without injecting
+      `backgroundTaskSpawnProcess`, so no test silently depends on real OS
+      process timing. Author-time guard against the flakiness class fixed in run 9.
+
 ## Capability parity (audit reference agents → port gaps)
 - [ ] Build a "capability inventory" generator: enumerate bee-agent's exported
       RPC/tool surface (`src/index.ts`) and diff it against `openclaw`,

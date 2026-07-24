@@ -6,6 +6,63 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-24 (run 9) — 🐛 Fix launch-script JSON corruption + de-flake control-plane tests
+
+**Audited:** The full test suite health on a fresh checkout. Found the suite was
+**not green in this environment**: 4 tests failing (`operator-runtime`,
+`server`, `app` ×2), all tracing to background-task execution. Run 8 logged
+174/174 — the difference is *process-timing*: these tests spawn **real detached
+bash launchers** whose async state writes had reliably lost the race before, but
+now win it, exposing two distinct defects.
+
+**Root cause #1 — real product bug (`src/harness/background-tasks.ts`).**
+`renderLaunchScript` hand-rolled JSON-through-shell escaping:
+`printf '%s' <shell-quoted-json> | sed …`. Any command containing a single
+quote (e.g. `printf 'line-1\nline-2\n'`) round-tripped through `shellQuote`'s
+`'\''` expansion and emerged as **invalid JSON** in `state.json` (`"command":
+"printf "'line-1…"'"` — mismatched quotes), so every subsequent `readState` /
+Python state-writer threw `SyntaxError`. Real bug: *any* background task whose
+command contained a quote would corrupt its own state file at runtime, on a real
+machine, not just in tests.
+- **Fix:** emit the running-state payload through a **quoted heredoc**
+  (`<<'__OPENCLAW_STATE_PAYLOAD__'`) so the shell reproduces every byte
+  literally — no quoting round-trip — and substitute the two runtime fields via
+  sentinel tokens (`__OPENCLAW_STARTED_AT__`, `"__OPENCLAW_PID__"`) with `sed`.
+  Verified byte-exact for commands with single quotes, double quotes and
+  escaped newlines.
+
+**Root cause #2 — test hermeticity.** Three control-plane/runtime tests set up
+background-task states by hand (`writeState`) but never injected a spawn, so the
+real launcher raced their fixtures. The store-level suite already had the right
+pattern (`backgroundTaskSpawnProcess: () => ({pid, unref(){}})`); the runtime-
+and server-level tests had only `backgroundTaskIsProcessRunning` injected.
+- Added the deterministic no-op spawn to the operator-runtime background-task
+  test and to the main / drifting / breaker runtimes in `server.test.ts`. The
+  breaker test in particular incrementally drives its failure count 1→2→3 via
+  ordered `writeState` calls; a racing launcher wrote all three states up front
+  and tripped it straight to `paused` instead of `mixed`→`degraded`→`paused`.
+
+**New regression guard (`background-tasks.test.ts`).** Since the suite now
+mocks the spawn, the real launcher was no longer exercised at all. Added a test
+that captures the generated script, runs it **foreground** (no race), and
+asserts `state.json` parses and preserves a quote+newline-laden command.
+Confirmed it fails with the exact `SyntaxError` (position 310) when the fix is
+reverted, and passes with it.
+
+**Test results:** full suite **175/175** (was 170/174), stable across repeated
+full runs. `typecheck:src` CLEAN (exit 0). Full `tsc` unchanged at **125**
+(test-file debt). Build ✅.
+
+**New idea:** the whole class of flakiness here is "tests that spawn real OS
+processes." Add a tiny **hermeticity lint** — a test (or eslint rule) that flags
+any `new StandaloneOperatorRuntime`/`FileBackgroundTaskStore` in a `*.test.ts`
+that starts background tasks *without* injecting `backgroundTaskSpawnProcess`,
+so no future test silently depends on real `bash`/`python3` timing. Complements
+the existing self-check-telemetry idea by catching nondeterminism at authoring
+time rather than as an intermittent CI red.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

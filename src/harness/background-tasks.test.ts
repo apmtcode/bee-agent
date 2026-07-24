@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -369,5 +370,43 @@ describe("BackgroundTaskExecutionService", () => {
     await expect(fs.readFile(path.join(rootDir, task.execution.launchScript), "utf8")).resolves.toContain("bash -lc");
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
+  });
+
+  it("emits valid state.json for commands containing quotes and newlines", async () => {
+    const rootDir = await makeTempDir();
+    // Capture the launch script path without running it (detached), then execute
+    // it in the foreground so the resulting state.json can be inspected without a
+    // race. This guards the launch-script escaping regression: commands with
+    // single quotes, double quotes or newlines previously corrupted state.json.
+    let launchScriptPath: string | undefined;
+    const store = new FileBackgroundTaskStore(
+      path.join(rootDir, "background-tasks.json"),
+      (command) => {
+        launchScriptPath = command;
+        return { pid: 1, unref() {} };
+      },
+      () => false,
+    );
+    const trickyCommand = `printf '%s' 'a'\\''b"c'; printf 'line-1\nline-2\n'`;
+    const task = await store.start({
+      title: "Tricky command",
+      command: trickyCommand,
+      cwd: rootDir,
+      kind: "task",
+    });
+    expect(launchScriptPath).toBeDefined();
+
+    await new Promise<void>((resolve, reject) => {
+      const child = spawn("bash", [launchScriptPath as string], { cwd: rootDir, stdio: "ignore" });
+      child.on("error", reject);
+      child.on("close", () => resolve());
+    });
+
+    const raw = await fs.readFile(path.join(rootDir, task.execution.stateFile), "utf8");
+    // Must be parseable JSON — the corruption bug produced a SyntaxError here.
+    const state = JSON.parse(raw) as { command: string; pid: unknown; startedAt: string };
+    expect(state.command).toBe(trickyCommand);
+    expect(typeof state.pid).toBe("number");
+    expect(state.startedAt).not.toContain("__OPENCLAW_STARTED_AT__");
   });
 });

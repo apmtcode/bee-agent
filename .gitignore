@@ -1,3 +1,6 @@
 node_modules/
 dist/
 .DS_Store
+# Background-task runtime artifacts (state/output logs) must never be committed;
+# tests write these into temp dirs, but a stray cwd can leak them to the repo root.
+/background-tasks/
