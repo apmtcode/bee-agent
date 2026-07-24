@@ -166,18 +166,22 @@ function renderLaunchScript(execution: LocalTrainingExecution, plan: TrainingJob
   const quotedLogFile = shellQuote(execution.logFile);
   const quotedWorkingDirectory = shellQuote(execution.workingDirectory);
   const quotedCommand = `${shellQuote(plan.command[0] ?? "")}${plan.command.slice(1).map((arg) => ` ${shellQuote(arg)}`).join("")}`;
+  // Splice in a bare, unquoted sentinel for the numeric pid so sed can swap it
+  // for the real shell pid (`$$`) without stripping JSON quotes and without a
+  // `$` in the search pattern (which the shell would expand). See the matching
+  // note in src/harness/background-tasks.ts.
   const quotedStatePayload = shellQuote(
     JSON.stringify({
       version: 1,
       jobId: plan.jobId,
       status: "running",
-      pid: "$$",
+      pid: 0,
       startedAt: "__OPENCLAW_STARTED_AT__",
       updatedAt: "__OPENCLAW_STARTED_AT__",
       logFile: execution.logFile,
       workingDirectory: execution.workingDirectory,
       command: plan.command,
-    }),
+    }).replace(`"pid":0`, `"pid":__OPENCLAW_PID__`),
   );
 
   return [
@@ -185,7 +189,7 @@ function renderLaunchScript(execution: LocalTrainingExecution, plan: TrainingJob
     "set -euo pipefail",
     `mkdir -p ${shellQuote(execution.artifactDir)} $(dirname ${quotedLogFile}) $(dirname ${quotedStatePath})`,
     "started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-    `printf '%s' ${quotedStatePayload} | sed "s/__OPENCLAW_STARTED_AT__/$started_at/g; s/\"\$\$\"/$$/g" > ${quotedStatePath}`,
+    `printf '%s' ${quotedStatePayload} | sed "s/__OPENCLAW_STARTED_AT__/$started_at/g; s/__OPENCLAW_PID__/$$/g" > ${quotedStatePath}`,
     `printf '%s\n' "starting ${plan.mode} training for ${plan.jobId}" >> ${quotedLogFile}`,
     `if ${quotedCommand} >> ${quotedLogFile} 2>&1; then`,
     "  completed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",

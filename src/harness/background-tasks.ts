@@ -734,19 +734,25 @@ function renderLaunchScript(task: BackgroundTaskRecord): string {
   const quotedOutputFile = shellQuote(task.execution.outputFile);
   const quotedCwd = shellQuote(task.cwd);
   const quotedCommand = shellQuote(task.command);
+  // The pid is a *number* in the final state file. JSON.stringify would quote a
+  // string sentinel, and `$$` cannot live inside the printf'd JSON because sed
+  // would have to strip the surrounding quotes and its own `$$` would expand in
+  // the search pattern. Instead we splice in a bare, unquoted sentinel token and
+  // let sed swap it for the real shell pid (`$$`) — no quote-stripping, and the
+  // pattern contains no `$` to expand.
   const quotedStatePayload = shellQuote(
     JSON.stringify({
       version: 1,
       taskId: task.id,
       kind: task.kind,
       status: "running",
-      pid: "$$",
+      pid: 0,
       startedAt: "__OPENCLAW_STARTED_AT__",
       updatedAt: "__OPENCLAW_STARTED_AT__",
       outputFile: task.execution.outputFile,
       cwd: task.cwd,
       command: task.command,
-    }),
+    }).replace(`"pid":0`, `"pid":__OPENCLAW_PID__`),
   );
 
   return [
@@ -754,7 +760,7 @@ function renderLaunchScript(task: BackgroundTaskRecord): string {
     "set -euo pipefail",
     `mkdir -p $(dirname ${quotedStatePath}) $(dirname ${quotedOutputFile})`,
     "started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-    `printf '%s' ${quotedStatePayload} | sed "s/__OPENCLAW_STARTED_AT__/$started_at/g; s/\"\$\$\"/$$/g" > ${quotedStatePath}`,
+    `printf '%s' ${quotedStatePayload} | sed "s/__OPENCLAW_STARTED_AT__/$started_at/g; s/__OPENCLAW_PID__/$$/g" > ${quotedStatePath}`,
     `printf '%s\n' "starting ${task.kind} ${task.id}" >> ${quotedOutputFile}`,
     `if cd ${quotedCwd} && bash -lc ${quotedCommand} >> ${quotedOutputFile} 2>&1; then`,
     "  completed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
@@ -793,6 +799,14 @@ function renderStateWriterPython(status: BackgroundTaskExecutionState["status"])
   ];
 }
 
-function shellQuote(value: string): string {
-  return `'${value.replaceAll(`'`, `"'"'"'`)}'`;
+/**
+ * POSIX-safe single-quoting for embedding an arbitrary string in a shell
+ * command. A literal single quote is escaped as `'"'"'` (close the quoted
+ * span, emit a double-quoted single quote, reopen the span). The previous
+ * implementation used `"'"'"'`, whose leading `"` injected a spurious double
+ * quote before every escaped `'` — corrupting both the executed command and
+ * the JSON state payload for any command containing single quotes.
+ */
+export function shellQuote(value: string): string {
+  return `'${value.replaceAll(`'`, `'"'"'`)}'`;
 }

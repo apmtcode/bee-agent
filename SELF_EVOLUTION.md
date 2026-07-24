@@ -6,6 +6,63 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-24 (run 9) — 🐛 Two real launch-script bugs fixed; suite 171/174 → 177/177 green
+
+**Audited:** The test suite on a *clean* tree. Prior runs logged "174/174", but
+this environment showed **3 failing tests** (operator-runtime, server, app) all
+throwing `SyntaxError: Expected ',' or '}'` while parsing a background-task
+`state.json`. Instrumented `readJsonFile` to dump the offending file and traced
+it to the launch-script renderer in `src/harness/background-tasks.ts`.
+
+**Two genuine production bugs found (not test-only):**
+1. **`shellQuote` mis-escaped single quotes.** It replaced `'` with `"'"'"'`
+   (a leading `"`), instead of the POSIX form `'"'"'`. That injected a spurious
+   double quote before every escaped `'`, so a command like `printf 'hi'` was
+   reconstructed by the shell as `printf "'hi"'` — corrupting **both** the
+   executed command (`bash -lc <cmd>`) **and** the JSON state payload, making the
+   state file unparseable for *any* command containing a single quote. Verified
+   with a shell round-trip (`printf '%s'`). `training/runner.ts` already had the
+   correct escape — this was copy-paste drift.
+2. **The pid `$$` sed-substitution never fired.** The payload embedded
+   `"pid":"$$"` and relied on `sed 's/"$$"/$$/g'` — but inside the bash
+   double-quoted sed arg the surrounding `"` were consumed by the shell and the
+   `$$` expanded in *both* the search pattern and the replacement, so it matched
+   `PID→PID` and left the literal string `"$$"`. Replaced with a bare, unquoted
+   sentinel `__OPENCLAW_PID__` spliced in after `JSON.stringify` and a clean
+   `s/__OPENCLAW_PID__/$$/g` (no `"` to strip, no `$` in the pattern) → the pid is
+   now a real number. Fixed the identical latent bug in `src/training/runner.ts`
+   (its launch script is only rendered, never executed in tests, so it was
+   masked).
+
+**Test-isolation defect fixed:** the 3 failing tests passed
+`backgroundTaskIsProcessRunning: () => false` but *not* a spawn stub, so they
+launched **real detached bash processes** (default spawn) — including a
+`tail -f app.log` that blocks forever and leaks — whose async state writes raced
+the tests' own `writeState` calls. Injected the existing
+`backgroundTaskSpawnProcess: () => ({ pid, unref })` hook at all four sites, and
+threaded `backgroundTaskSpawnProcess` / `backgroundTaskIsProcessRunning` through
+`OperatorCliAppOptions` (the app hard-coded its runtime with only `rootDir`, so
+these hooks weren't reachable from CLI tests).
+
+**Tests added:** exported `shellQuote` + a deterministic escape assertion and a
+7-case **shell round-trip** test (`printf '%s' ${shellQuote(v)}` must return `v`
+verbatim); plus a **synchronous** launch-script e2e test that executes the
+rendered script and asserts `state.json` is valid JSON with a numeric pid, the
+verbatim single-quoted command, and `exitCode: 0` — no race with harness writes.
+
+**Results:** **171 pass + 3 fail → 177 pass / 177** (41 files). Build ✅.
+`typecheck:src` ✅ (source stays green). Full `tsc` **125** (unchanged — no
+new debt). Changes are additive and reversible.
+
+**New idea:** the two launch-script renderers (`harness/background-tasks.ts`,
+`training/runner.ts`) are near-duplicates of the same fragile shell-templating
+logic — this entire bug class came from copy-paste drift between them. Extract a
+shared, tested `renderStateWritingLaunchScript({ payload, statePath, command,
+… })` helper (or at minimum a shared `shellQuote` + POSIX pid/started-at
+substitution builder) so a fix in one can never diverge from the other. Cheap
+guard in the meantime: a source-grep test asserting the buggy `"'"'"'` escape
+never reappears anywhere in `src/`.
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

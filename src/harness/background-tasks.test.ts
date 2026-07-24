@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -5,6 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   BackgroundTaskExecutionService,
   FileBackgroundTaskStore,
+  shellQuote,
   type BackgroundTaskExecutionState,
 } from "./background-tasks.js";
 
@@ -369,5 +371,65 @@ describe("BackgroundTaskExecutionService", () => {
     await expect(fs.readFile(path.join(rootDir, task.execution.launchScript), "utf8")).resolves.toContain("bash -lc");
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
+  });
+
+  it("renders a launch script that writes a valid JSON state file with a numeric pid and a verbatim single-quoted command", async () => {
+    // Executes the rendered launch script synchronously so there is no race with
+    // the harness's own state writes. Guards the two launch-script bugs:
+    //  (1) shellQuote's escaping must reproduce the command verbatim, and
+    //  (2) the `$$` pid placeholder must be substituted for a real number,
+    //      not left as the literal string "$$" (which broke JSON parsing).
+    const rootDir = await makeTempDir();
+    const store = new FileBackgroundTaskStore(
+      path.join(rootDir, "background-tasks.json"),
+      () => ({ pid: 1111, unref() {} }),
+    );
+    const command = "printf 'line-1\nline-2\n'";
+    const task = await store.start({ title: "Collect logs", command, cwd: rootDir, kind: "task" });
+
+    execFileSync("/bin/bash", [path.join(rootDir, task.execution.launchScript)], {
+      cwd: rootDir,
+      stdio: "ignore",
+    });
+
+    const raw = await fs.readFile(path.join(rootDir, task.execution.stateFile), "utf8");
+    const state = JSON.parse(raw) as BackgroundTaskExecutionState;
+    expect(state.status).toBe("completed");
+    expect(typeof state.pid).toBe("number");
+    expect(state.pid).toBeGreaterThan(0);
+    expect(state.command).toBe(command);
+    expect(state.exitCode).toBe(0);
+
+    const output = await fs.readFile(path.join(rootDir, task.execution.outputFile), "utf8");
+    expect(output).toContain("line-1\nline-2");
+  });
+});
+
+describe("shellQuote", () => {
+  it("escapes a single quote using the POSIX '\"'\"' form, without a spurious leading double quote", () => {
+    // Regression: the previous implementation used `"'"'"'`, whose leading `"`
+    // injected a stray double quote before every escaped single quote.
+    expect(shellQuote("printf 'hi'")).toBe(`'printf '"'"'hi'"'"''`);
+    expect(shellQuote("plain")).toBe(`'plain'`);
+  });
+
+  it("round-trips arbitrary strings faithfully through the shell (printf %s)", () => {
+    const cases = [
+      "printf 'line-1\nline-2\n'",
+      `echo "double" and 'single'`,
+      "a'b'c",
+      "no-special-chars",
+      "trailing'",
+      "'leading",
+      "$HOME `backtick` \\backslash",
+    ];
+    for (const value of cases) {
+      // `printf '%s'` reproduces its argument verbatim, so a correct quoting
+      // means the shell hands `printf` exactly `value` back.
+      const out = execFileSync("/bin/sh", ["-c", `printf '%s' ${shellQuote(value)}`], {
+        encoding: "utf8",
+      });
+      expect(out).toBe(value);
+    }
   });
 });

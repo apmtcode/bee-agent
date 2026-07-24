@@ -4,6 +4,20 @@ Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
 ## Foundations / DX
+- [x] **Fix background-task launch-script bugs + test isolation** (2026-07-24,
+      run 9). `shellQuote` used `"'"'"'` instead of POSIX `'"'"'` (spurious `"`
+      per escaped quote → corrupt command + unparseable state JSON); the pid
+      `$$` sed-substitution never fired (left literal `"$$"`). Fixed both in
+      `harness/background-tasks.ts` and the latent copy in `training/runner.ts`;
+      injected the `backgroundTaskSpawnProcess` mock at the 4 leaking test sites
+      and exposed the hook on `OperatorCliAppOptions`. Suite 171/174 → 177/177.
+- [ ] **Extract a shared launch-script renderer.** `harness/background-tasks.ts`
+      and `training/runner.ts` duplicate the same fragile shell-templating (the
+      run-9 bug class was copy-paste drift). Factor out a tested
+      `renderStateWritingLaunchScript(...)` (shared `shellQuote` + POSIX
+      pid/started-at substitution) so a fix in one can't diverge from the other.
+      Interim guard: a source-grep test asserting the buggy `"'"'"'` escape never
+      reappears in `src/`.
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`
