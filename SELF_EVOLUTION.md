@@ -6,6 +6,62 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-24 (run 9) — 🐛 Fix 3 real launcher bugs; suite 174→176 deterministically green
+
+**Audited:** Overall test-suite health. Run 8 claimed **174/174**, but a month
+later (and in a slower container) the suite had silently regressed to **2–4
+failing tests per run** — flaky *and* partly deterministic. Root-caused three
+**distinct real bugs** in the background-task launcher plus a layer of
+timing-fragile tests.
+
+**Fixed (production) in `src/harness/background-tasks.ts`:**
+1. **`shellQuote` produced malformed shell for any command containing a single
+   quote.** The POSIX single-quote escape had a stray leading `"`
+   (`"'"'"'` instead of `'"'"'`), so e.g. `printf 'hi'` became `printf "'hi"'`
+   → `bash: unexpected EOF while looking for matching '` → the task **always
+   failed** and wrote a corrupt `command` field. Latent bug hitting any quoted
+   command; unit tests never caught it because they mock the spawner.
+2. **The initial "running" state was built with `printf … | sed`,** whose
+   `s/"$$"/…/` pid-substitution was broken by nested shell double-quoting (pid
+   was never substituted) and which mangled quoted commands into invalid JSON.
+   Replaced with a **python writer** (correct JSON escaping via `argv`), matching
+   the existing terminal-state writer.
+3. **State-file writes were non-atomic** (truncate-then-write the live path), so a
+   concurrent `reconcile`/`readState` could read a half-written file and throw
+   `SyntaxError` (the exact `position 31x` crash the failing tests hit). Both the
+   initial and terminal writes now write a temp file then **atomically rename**
+   (`mv` / `os.replace`). Added a defensive 3-try retry in `readState` as
+   belt-and-suspenders against any non-atomic external writer.
+
+**Test hermeticity:**
+- Added a `backgroundTaskSpawnProcess` / `backgroundTaskIsProcessRunning` DI seam
+  to `OperatorCliApp` (passes through to the runtime — an additive testability
+  improvement).
+- Injected a **deterministic mock spawner** into the lifecycle tests that had
+  been depending on real detached `sleep 5`/`printf`/`tail` process timing
+  (`server.test.ts` ×3 runtimes, `operator-runtime.test.ts`, `app.test.ts` ×2).
+  These tests assert on explicitly-written state, so real processes only added
+  nondeterminism (e.g. a `sleep 5` exiting mid-test flipped remote control state
+  `active → degraded`; a fast `printf` exiting flipped `stop()` to "not running").
+
+**New tests** (`background-tasks.test.ts`): two **real-launcher** tests that (a)
+run a real quoted command to completion and assert the state file is complete,
+parseable JSON with no stray `.tmp` file, and (b) hammer `readState` throughout
+the launcher's writes and assert it never surfaces a partial-read parse error.
+
+**Results:** full suite **176/176**, green across **12/12** stress runs (was 2–4
+failures/run). `typecheck:src` ✅, build ✅, full `tsc` unchanged at **125** (all
+in test files, no regression).
+
+**New idea:** the launcher shells out to `bash` + `python3` and hand-builds shell
+strings — a whole class of quoting/escaping bugs (this run fixed two). Replace it
+with a small **compiled Node "task supervisor" entrypoint** invoked as
+`node supervisor.mjs <state.json> <cmd…>`: it spawns the child, writes state via
+`fs` + atomic rename, and drops the `python3` runtime dependency entirely. Also
+worth adding: a `verify` script (`typecheck:src && build && test`) the engine
+runs as a pre-push self-check, and a lint forbidding real detached processes in
+unit tests (they must inject a spawner).
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

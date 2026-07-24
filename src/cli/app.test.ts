@@ -16,6 +16,18 @@ async function makeTempDir(): Promise<string> {
   return dir;
 }
 
+// Deterministic background-task spawner: stable fake pid, no real detached
+// process. The remote-lifecycle test writes task state explicitly, so a real
+// launcher only adds nondeterministic state-file writes that race the
+// assertions. Inject it to keep the test hermetic.
+function deterministicBackgroundSpawn() {
+  let nextPid = 500000;
+  return () => {
+    nextPid += 1;
+    return { pid: nextPid, unref() {} };
+  };
+}
+
 afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })));
 });
@@ -801,7 +813,13 @@ describe("OperatorCliApp", () => {
 
   it("supports session lifecycle, transcript, approvals, pairing, config, and prompt commands", async () => {
     const rootDir = await makeTempDir();
-    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    const app = new OperatorCliApp({
+      rootDir,
+      cwd: rootDir,
+      currentDate: "2026-05-25",
+      backgroundTaskSpawnProcess: deterministicBackgroundSpawn(),
+      backgroundTaskIsProcessRunning: () => false,
+    });
     const firstSession = await app.runtime.startSession({ title: "first", cwd: rootDir, agentId: "operator-cli" });
     const secondSession = await app.runtime.startSession({ title: "second", cwd: rootDir, agentId: "operator-cli" });
 
@@ -1063,7 +1081,20 @@ describe("OperatorCliApp", () => {
 
   it("supports background and monitor task commands plus cron commands", async () => {
     const rootDir = await makeTempDir();
-    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    // Hermetic spawner + forced liveness: this test asserts on task output and
+    // lifecycle, which a real detached `printf` provides only nondeterministically
+    // (fast processes exit before assertions, flipping stop() to "not running").
+    // We write the expected output/state explicitly below instead.
+    const app = new OperatorCliApp({
+      rootDir,
+      cwd: rootDir,
+      currentDate: "2026-05-25",
+      backgroundTaskSpawnProcess: deterministicBackgroundSpawn(),
+      backgroundTaskIsProcessRunning: () => true,
+    });
+    const originalKill = process.kill;
+    process.kill = (() => true) as typeof process.kill;
+    try {
     const session = await app.runtime.startSession({ title: "CLI ops", cwd: rootDir, agentId: "operator-cli" });
 
     const startOutput = await app.dispatchSlashCommand(
@@ -1078,6 +1109,19 @@ describe("OperatorCliApp", () => {
     if (!task) {
       throw new Error("expected background task");
     }
+    await app.runtime.backgroundTasks.executionService.writeOutput(task, "ok");
+    await app.runtime.backgroundTasks.executionService.writeState(task, {
+      version: 1,
+      taskId: task.id,
+      kind: "task",
+      status: "running",
+      pid: task.execution.processId ?? 500001,
+      startedAt: task.execution.startedAt ?? task.updatedAt,
+      updatedAt: task.updatedAt,
+      outputFile: task.execution.outputFile,
+      cwd: task.cwd,
+      command: task.command,
+    });
 
     const listOutput = await app.dispatchSlashCommand({ kind: "background-list" });
     expect(listOutput).toContain(task.id);
@@ -1178,6 +1222,9 @@ describe("OperatorCliApp", () => {
 
     const cronDelete = await app.dispatchSlashCommand({ kind: "cron-delete", jobId: job.id }, session.id);
     expect(cronDelete).toContain(`Deleted cron job ${job.id}`);
+    } finally {
+      process.kill = originalKill;
+    }
   });
 
   it("gates dangerous background commands and allows rerun after approval", async () => {

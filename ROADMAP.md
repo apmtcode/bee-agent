@@ -38,8 +38,15 @@ unchecked items are queued. Keep this richer than you found it each run.
     `skills.executable.*`, `push.subscriptions.*`, `trajectories.*`, `replays.*`,
     `cron.runs`/misc — plus a few genuine test-only typings. Map the rest, then
     fix residual test-only typings.
-- [ ] Add a `verify` npm script (`typecheck && build && test`) and have the
-      engine run it as a pre-push self-check each cycle.
+- [ ] Add a `verify` npm script (`typecheck:src && build && test`) and have the
+      engine run it as a pre-push self-check each cycle. (Run 9 established the
+      suite is deterministically green again — 176/176 across 12 stress runs — so
+      a `verify` gate is now meaningful rather than perpetually red.)
+- [x] **De-flake the background-task lifecycle tests** — DONE run 9. Fixed the
+      real launcher bugs (`shellQuote` single-quote escaping, `printf|sed`
+      running-state build, non-atomic state writes) and made the lifecycle tests
+      hermetic by injecting a deterministic mock spawner instead of depending on
+      real detached `sleep`/`printf` process timing.
 - [x] Interim **source-only typecheck gate** — DONE run 7. `tsconfig.src.json`
       (excludes `**/*.test.ts`) + `typecheck:src` script; passes (exit 0). Next:
       have the engine run it as a per-run pre-push self-check.
@@ -80,6 +87,18 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Barrel-collision lint: scan `src/index.ts` re-exports for names exported
       from more than one module and flag them, so duplicate-identifier debt is
       caught at authoring time instead of accumulating silently.
+- [ ] **Compiled Node "task supervisor" launcher** (replaces the bash+python
+      launch script in `src/harness/background-tasks.ts`). The current launcher
+      hand-builds shell strings and shells out to `python3` for JSON writes; run 9
+      fixed two quoting/escaping bugs there. A small `node supervisor.mjs
+      <state.json> <cmd…>` entrypoint that spawns the child and writes state via
+      `fs` + atomic rename removes the whole class of shell-quoting bugs and drops
+      the `python3` runtime dependency. Keep behind the same interface; add a
+      real-launcher test (like run 9's) for parity.
+- [ ] **"No real detached processes in unit tests" guard** — a lint/test that
+      flags `StandaloneOperatorRuntime`/`OperatorCliApp` constructions in `*.test.ts`
+      that start background tasks without injecting `backgroundTaskSpawnProcess`,
+      so timing-fragile tests can't silently reappear.
 - [ ] Per-module typecheck ratchet: record each module's current `tsc` error
       count to a baseline file and fail if a module regresses above it. Lets the
       engine pay debt down module-by-module without one green-gate blocking

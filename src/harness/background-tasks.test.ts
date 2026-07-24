@@ -371,3 +371,85 @@ describe("BackgroundTaskExecutionService", () => {
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
   });
 });
+
+describe("BackgroundTaskExecutionService atomic state writes (real launcher)", () => {
+  // These tests intentionally use the REAL detached-process launcher (no spawn
+  // override) to exercise the launch script's state-file writes. The launcher
+  // writes state atomically (temp file + rename / os.replace), so a concurrent
+  // reconcile/readState must never observe a half-written, unparseable file.
+
+  async function pollState(
+    service: BackgroundTaskExecutionService,
+    task: Awaited<ReturnType<FileBackgroundTaskStore["start"]>>,
+    predicate: (state: BackgroundTaskExecutionState | undefined) => boolean,
+    timeoutMs = 15000,
+  ): Promise<BackgroundTaskExecutionState | undefined> {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      const state = await service.readState(task);
+      if (predicate(state)) {
+        return state;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 15));
+    }
+    throw new Error("timed out waiting for background task state");
+  }
+
+  it("writes a valid, parseable terminal state file via the real launcher", async () => {
+    const rootDir = await makeTempDir();
+    // Real spawn (no override) so the detached bash/python launcher actually runs.
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"));
+    const task = await store.start({
+      title: "quick task",
+      command: "printf 'hello atomic'",
+      cwd: rootDir,
+      kind: "task",
+    });
+
+    const finalState = await pollState(store.executionService, task, (state) => state?.status === "completed");
+    expect(finalState).toMatchObject({ taskId: task.id, status: "completed", exitCode: 0 });
+
+    // The launcher must leave no stray temp file behind after the atomic rename.
+    const stateDir = path.dirname(path.join(rootDir, task.execution.stateFile));
+    const entries = await fs.readdir(stateDir);
+    expect(entries.some((name) => name.includes(".tmp"))).toBe(false);
+
+    // The file on disk is complete JSON, not a truncated fragment.
+    const raw = await fs.readFile(path.join(rootDir, task.execution.stateFile), "utf8");
+    expect(() => JSON.parse(raw)).not.toThrow();
+  }, 20000);
+
+  it("never surfaces a partial-read parse error while the launcher writes state", async () => {
+    const rootDir = await makeTempDir();
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"));
+    const task = await store.start({
+      title: "racy task",
+      // A brief command so the launcher transitions running -> completed while we hammer readState.
+      command: "sleep 0.2; printf 'ok'",
+      cwd: rootDir,
+      kind: "task",
+    });
+
+    // Hammer readState concurrently with the launcher's non-final and final writes.
+    // Every read must be either `undefined` or a well-formed state object; a raw
+    // JSON.parse of a half-written file would throw here without atomic writes.
+    let reads = 0;
+    let sawRunning = false;
+    let sawCompleted = false;
+    const deadline = Date.now() + 15000;
+    while (Date.now() < deadline && !sawCompleted) {
+      const state = await store.executionService.readState(task);
+      reads += 1;
+      if (state?.status === "running") {
+        sawRunning = true;
+      }
+      if (state?.status === "completed") {
+        sawCompleted = true;
+      }
+    }
+
+    expect(reads).toBeGreaterThan(0);
+    expect(sawRunning).toBe(true);
+    expect(sawCompleted).toBe(true);
+  }, 20000);
+});
