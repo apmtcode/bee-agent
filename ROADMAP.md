@@ -70,6 +70,20 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Generalization eval harness: measure replay fidelity on held-out but
       related synthetic trajectories.
 
+## Reliability
+- [x] Fix background-task launch-script corruption (2026-07-24, run 9): correct
+      `shellQuote` single-quote escaping (`'"'"'`, not `"'"'"'`); replace the
+      pid-mangling `printf | sed` initial-state write with a python argv writer;
+      inject mock spawns in tests so no real OS process leaks past temp-dir
+      cleanup. Added the first test that runs the *real* launch script.
+- [ ] Replace the hand-rolled bash+python launch template with a committed
+      `runner` script invoked via a single JSON args *file*, so arbitrary
+      command/cwd/env never round-trip through shell quoting (only the args-file
+      path is shell-quoted).
+- [ ] Direct property-style unit test for `shellQuote` over adversarial inputs
+      (embedded `'`, `"`, `$`, backticks, newlines) — unit-level guard for the
+      class of bug fixed in run 9.
+
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in

@@ -6,6 +6,61 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-24 (run 9) — 🐛 Background-task launch script: 3 real bugs fixed + reliability seam
+
+**Audited:** Baseline health. `npm test` surfaced **4 deterministically-failing
+tests** (background-task recovery/lifecycle in `operator-runtime`, `server`, and
+`app` suites) — despite run 8 logging "174/174". The failures traced to a
+corrupt `state.json` written by the *real* launch script, not to the tests.
+
+**Root causes — three genuine bugs in `src/harness/background-tasks.ts`:**
+1. **`shellQuote` mis-escaped single quotes.** It emitted `"'"'"'` (a stray
+   leading `"`) instead of the correct POSIX form `'"'"'` (close-single /
+   quoted-single-via-double / reopen-single). Any command containing a `'` —
+   e.g. `printf '%s\n' …` — was corrupted, producing invalid JSON in the state
+   file. Fixed to the standard `'\''` pattern.
+2. **`printf | sed` never substituted the pid.** The initial "running" state was
+   templated with `sed "…; s/\"\$\$\"/$$/g"`; bash re-parsed the `"$$"` inside
+   the double-quoted sed program, so the substitution collapsed to
+   `s/<pid>/<pid>/` (a no-op) and the state kept the literal `"pid":"$$"`. The
+   sed/printf pipeline also mangled quote-containing commands.
+3. Replaced that fragile `printf | sed` with a **python writer** (python3 is
+   already required for the completion/failure states). Subtlety caught during
+   repro: `python3 - <<'PY'` consumes stdin for the *program*, so the payload
+   can't be piped on stdin — it's now passed as an **argv argument**
+   (`json.loads(sys.argv[4])`), which round-trips arbitrary commands safely.
+
+**Reliability seam (additive):** several background-task tests launched **real
+detached processes** (`sleep 5`, `tail -f app.log`) that raced their own
+`writeState` calls and leaked past temp-dir cleanup (`ENOTEMPTY`). Added a
+`backgroundTaskSpawnProcess` **mock-injection**: threaded pass-through options
+(`backgroundTaskSpawnProcess` / `backgroundTaskIsProcessRunning`) through
+`OperatorCliApp`, and injected mock spawns in the affected `operator-runtime`,
+`server`, and `app` runtimes so no real OS process is started. Integration tests
+that genuinely assert real command output (e.g. `printf ok`) were left on the
+real spawn.
+
+**New test:** `background-tasks.test.ts` now renders **and executes** the real
+launch script with a quote-containing command (`printf '%s\n' "quoted \"…\" $$"`)
+and asserts the state file is valid JSON with a numeric pid and `exitCode 0` —
+the *first* test to exercise the real launch script (all others mock spawn), so
+this class of shell-quoting bug can't silently return.
+
+**Test results:** 174 → **175** tests, **green across 6 consecutive full runs**
+(was flaky/failing before). `typecheck:src` ✅ clean. Full `tsc` unchanged at
+**125** (all test-only) — no new debt. Build ✅.
+
+**New idea:** the launch script is a hand-rolled bash+python template that still
+threads arbitrary strings through shell quoting at several points. Replace it
+with a small **committed runner** (a `runner.py`/`runner.mjs` shipped in `dist`,
+invoked with a single JSON args *file*) so command/cwd/env never round-trip
+through shell escaping at all — the only shell-quoted token becomes the args-file
+path. Pair it with a **property-style unit test for `shellQuote`** over
+adversarial inputs (quotes, `$`, backticks, newlines) to catch quoting
+regressions at the unit level instead of via a full launch-script integration.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

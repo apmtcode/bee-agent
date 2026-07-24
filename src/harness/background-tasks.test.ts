@@ -370,4 +370,45 @@ describe("BackgroundTaskExecutionService", () => {
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
   });
+
+  it("runs the real launch script and writes a valid running state for commands with quotes", async () => {
+    const rootDir = await makeTempDir();
+    // Real spawn (default), so the generated run.sh actually executes. The command
+    // deliberately embeds double quotes and a `$$` — the shapes that used to corrupt
+    // the JSON state file or leave the pid placeholder unsubstituted.
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"));
+    const task = await store.start({
+      title: "Echo quoted",
+      command: `printf '%s\\n' "quoted \\"value\\" and pid $$"`,
+      cwd: rootDir,
+      kind: "task",
+    });
+
+    const statePath = path.join(rootDir, task.execution.stateFile);
+    // Poll until the script has written a terminal state (or time out).
+    let raw = "";
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      try {
+        raw = await fs.readFile(statePath, "utf8");
+        const parsed = JSON.parse(raw) as BackgroundTaskExecutionState;
+        if (parsed.status === "completed" || parsed.status === "failed") {
+          break;
+        }
+      } catch {
+        // File not written yet, or momentarily mid-write; retry.
+      }
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+
+    // The state file must be valid JSON — the old sed/printf approach produced
+    // invalid JSON for quote-containing commands.
+    const state = JSON.parse(raw) as BackgroundTaskExecutionState;
+    expect(state.status).toBe("completed");
+    expect(state.command).toBe(task.command);
+    // The pid placeholder must be replaced with a real numeric pid, never the
+    // literal string "$$".
+    expect(typeof state.pid).toBe("number");
+    expect(state.pid).toBeGreaterThan(0);
+    expect(state.exitCode).toBe(0);
+  });
 });
