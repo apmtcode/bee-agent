@@ -62,13 +62,41 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
+      for a real on-device small model. **DONE run 9** — `src/training/movement-model.ts`:
+      `MovementModelBackend` interface + `MarkovMovementBackend` (variable-order
+      Markov w/ stupid-backoff), dataset adapters, snapshot persistence.
+- [x] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories. **DONE run 9** — `evaluateMovementReplay`
+      (exact-reconstruction accuracy + failure list); backoff generalization
+      covered by `predictNext` backoffOrder tests.
 - [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      round-trips without real OS input (a fuzz/generator that emits plausible
+      device/os/browser gesture streams to feed the dataset adapters end-to-end).
+- [ ] **`MovementPolicyRunner`** (new, run 9 idea): given a live prefix of
+      observed actions, call `predictNext` and emit the predicted action through
+      the replay/device-adapter seam so the trained model can *drive* a mock
+      device in tests. Add a confidence/backoffOrder gate that falls back to
+      "ask the operator" below a threshold — a safety-first autonomy dial.
+- [ ] Wire the movement model into the training pipeline: have the runner (or a
+      new execution step) train a `MarkovMovementBackend` snapshot from the
+      reviewed export's replays as the cloud-side default, with the MLX/axolotl
+      shell plan reserved for on-device runs.
+
+## Reliability / test hermeticity
+- [x] **Atomic background-task state writes** — DONE run 9. The launch script
+      wrote `state.json` in-place (`printf|sed >`, Python `write_text`), so
+      recovery could read a torn write and crash with an uncaught `SyntaxError`.
+      Now writes via `.launch.tmp` + `mv -f`/`os.replace`, and `readState`
+      degrades an unparseable state to `undefined`.
+- [ ] **Injectable process-spawner + clock seam for background tasks.** The 3
+      remaining suite failures (`operator-runtime`/`server`/`app` `.test.ts`)
+      spawn *real* subprocesses (`tail -f app.log`, `printf …`) and assert on
+      timing-dependent recovery reasons, so they're non-hermetic in the cloud
+      sandbox. Add a `spawn`/`now` injection point to `FileBackgroundTaskStore`
+      so tests use a deterministic fake process lifecycle. This is the last gap
+      before the full `npm test` can be a green gate.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

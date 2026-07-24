@@ -6,6 +6,71 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-24 (run 9) — Movement subsystem: in-process trainable model backend + atomic state-write bug fix
+
+**Audited:** Standing objective #2 (local-movement learning). `src/capture/`
+handles capture → schema → dataset → replay, and `src/training/` had an
+exporter, job store/manifest, and a **runner that only emits MLX/axolotl shell
+scripts** — external tooling that *cannot run in the cloud*. So objective #2(c/d)
+(post-train a local model to repeat recorded movements and generalize) had **no
+runnable, testable implementation** — the loop could never be validated in CI.
+
+**Changed (additive) — new `src/training/movement-model.ts`:**
+- **`MovementModelBackend` interface** — the pluggable seam. A real on-device
+  small model implements `train()`/`load()`; the reference backend below fills
+  the cloud/CI role. `MovementModel` exposes `predictNext`, `generate`,
+  `serialize`.
+- **`MarkovMovementBackend`** — a deterministic variable-order Markov model with
+  stupid-backoff. It "post-trains" by counting context→next-token transitions at
+  every order ≤ N, then **repeats recorded movements exactly** (prefers the
+  longest matching context) and **generalizes to related-but-unseen movements**
+  (backs off to shorter contexts when the exact prefix was never recorded, with
+  `backoffOrder` reporting how far it generalized). Zero native deps, byte-for-byte
+  reproducible.
+- **Dataset adapters** `movementDatasetFromReplays` / `movementDatasetFromTrajectories`
+  tie it into the existing `ReplayTimelineEvent` / `TrajectorySpan` shapes; a
+  learnable end-of-movement sentinel lets `generate` terminate.
+- **`MovementModelSnapshot` + `loadMovementModel`** — the persistence/transfer
+  seam (serialize learned params, reload on device).
+- **`evaluateMovementReplay`** — a generalization/replay-fidelity harness that
+  seeds each held-out movement with its first action and measures exact
+  reconstruction (accuracy + failures). Exported from the barrel.
+
+**Bonus reliability fix — `src/harness/background-tasks.ts`:** while running the
+suite I found a **deterministic pre-existing crash**: recovery read a background
+task's `state.json` and threw an uncaught `SyntaxError` ("Expected ',' or '}' …
+at position 311"). Root cause: the spawned **launch script wrote `state.json`
+non-atomically** (`printf|sed > file` truncate-in-place; Python `write_text`
+in-place), so a concurrent reader observed a torn write. Fixed both writers to
+render into a `.launch.tmp` sibling and `mv -f`/`os.replace` over the target
+(atomic rename), and made `readState` treat an unparseable state as
+`undefined` (graceful missing-state reconciliation) instead of crashing the whole
+recovery. This turned a hard crash into correct handling: full suite **4 → 3
+failures, +1 test now passing, zero regressions.**
+
+**Test results:** new `movement-model.test.ts` ✅ **16/16** (codec round-trip,
+dataset builders, exact replay, backoff generalization, snapshot persistence,
+unknown-backend guard, replay-fidelity eval). `typecheck:src` ✅ (exit 0).
+Build ✅. Full suite **187 passed / 3 failed** (was 186/4).
+
+**Remaining 3 failures (pre-existing, NOT this change):** the background-task
+integration tests in `operator-runtime.test.ts`, `server.test.ts`, `app.test.ts`
+**spawn real subprocesses** (`tail -f app.log`, etc.) and assert on
+timing-dependent recovery *reasons*. In this cloud sandbox the real process
+lifecycle differs from the author's machine, so the reason/state races. The
+atomic-write fix cleared the *crash*; making these green needs an **injectable
+process-spawner + clock seam** so recovery reconciliation is deterministic —
+queued in ROADMAP.
+
+**New idea:** add a `MovementPolicyRunner` that closes the loop — given a live
+prefix of observed actions it calls `predictNext` and emits the predicted action
+through the existing replay/device-adapter path (behind the same simulated seam),
+so the trained model can *drive* a mock device in tests. Pair it with a
+confidence gate (fall back to "ask the operator" when `confidence`/`backoffOrder`
+drops below a threshold) — a safety-first autonomy dial for real on-device use.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
