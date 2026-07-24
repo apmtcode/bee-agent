@@ -6,6 +6,60 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-24 (run 9) — 🎯 Pluggable in-process movement model: memorize + generalize
+
+**Audited:** The local-movement learning subsystem (standing objective #2) end to
+end — `src/capture/` (recorder → trajectory → replay) and `src/training/`
+(exporter → job-store → **runner**). Found the decisive gap: the runner only
+*emits external launch commands* (`mlx_lm.lora`, `axolotl.cli.train`) that would
+run on a real Mac. There was **no in-process model** anywhere — nothing that
+actually trains on the movement dataset, and nothing that can (c) *repeat* a
+recorded movement run or (d) *generalize* to a new-but-related one. That means
+objective #2's model layer (c/d) was completely untested in the cloud. This was
+also the top-queued ROADMAP item.
+
+**Changed (additive) — new `src/training/movement-model.ts`:**
+- **`MovementModelBackend` interface** (`id` + `train(dataset, config)`) and a
+  `TrainedMovementModel` interface (`predictNext` / `generate` / `vocabulary`).
+  This is the pluggable seam: a real on-device neural policy drops in without
+  touching the harness (proven by a `ConstantBackend` test double).
+- **`NgramMovementBackend`** — a fully deterministic back-off n-gram sequence
+  model over movement tokens. Training counts token continuations for every
+  context length 0..maxOrder; prediction uses stupid-back-off (longest matching
+  context, else shorter, down to global frequency). Exact recorded prefixes
+  reproduce the recorded next move (**memorization / replay, 2c**);
+  unseen-but-related prefixes back off and still emit a plausible related move,
+  flagged `fromBackoff` (**generalization, 2d**). No GPU/network/OS needed.
+- **`buildMovementDatasetFromReplays`** — bridges the real pipeline: derives one
+  time-ordered token sequence per trajectory from `ExportedReplayManifest[]`
+  action events, via a stable `tokenizeActionSummary` slug.
+- **`evaluateMovementModel`** — generalization eval harness: top-1 next-move
+  accuracy on held-out sequences, split into memorized vs. back-off (generalized)
+  hits, plus `generalizationRate` and average confidence.
+- Exported all of the above from `src/index.ts`.
+
+**Test results:** new `movement-model.test.ts` **12/12** (memorize exact replay,
+generalize via back-off, global-frequency fallback, deterministic lexical
+tie-break, eval-harness metrics, replay→dataset extraction, pluggable-backend
+seam). `npm run typecheck:src` ✅ (exit 0). `npm run build` ✅ (543 kB).
+Full `npm test`: **182/186**. The **4 failures are pre-existing and
+environment-specific** — `operator-runtime`/`background-tasks` spawn a bash
+launch script whose `sed`/`date` state-writer emits malformed JSON *in this
+container's shell* (`SyntaxError … position 311`); they fail identically on the
+clean tree with my changes stashed, so they are not caused by this run. Logged
+as a new ROADMAP item. Committed to the designated feature branch per the branch
+policy.
+
+**New idea:** now that a trained model can *predict* the next movement, add a
+**model-guided replay engine** — feed the current context to `predictNext` and,
+when confidence clears a threshold, drive the existing replay/execution service;
+below threshold, defer to the recorded trajectory or ask for review. That turns
+the n-gram (or a future neural backend) into an actual autonomous movement
+executor with a built-in confidence gate, and gives the generalization metric a
+real consumer.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

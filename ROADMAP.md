@@ -62,13 +62,27 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
+      for a real on-device small model. — DONE run 9 (`src/training/movement-model.ts`:
+      `MovementModelBackend` interface + deterministic `NgramMovementBackend`;
+      memorizes recorded runs and generalizes via back-off; 12 tests).
 - [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      round-trips without real OS input. (Partly covered: run 9's
+      `buildMovementDatasetFromReplays` + tests exercise replay→dataset→model;
+      still want a first-class *capture-side* synthetic gesture stream feeding
+      the recorder/adapters.)
+- [x] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories. — DONE run 9 (`evaluateMovementModel`:
+      top-1 next-move accuracy split into memorized vs generalized hits +
+      `generalizationRate`).
+- [ ] **Model-guided replay engine** (run 9 idea): use `predictNext` with a
+      confidence gate to drive the replay/execution service — above threshold
+      the model executes the next movement, below it defers to the recorded
+      trajectory or requests review. Gives the generalization metric a consumer.
+- [ ] Higher-order / neural movement backend behind the same
+      `MovementModelBackend` seam (e.g. a small on-device model), validated
+      against the same eval harness the n-gram backend passes.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
@@ -80,6 +94,13 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Barrel-collision lint: scan `src/index.ts` re-exports for names exported
       from more than one module and flag them, so duplicate-identifier debt is
       caught at authoring time instead of accumulating silently.
+- [ ] **Harden the training launch script for portable shells** (surfaced run
+      9): `renderLaunchScript` in `src/training/runner.ts` uses a `sed`/`date`
+      pipeline to stamp the state JSON; in some container shells this emits
+      malformed JSON, so `operator-runtime`/`background-tasks` recover/reconcile
+      tests fail with a JSON `SyntaxError`. Replace the `sed` substitution with a
+      pure-`python3`/`node` state writer (already used for the completed/failed
+      paths) so the state file is always valid JSON regardless of shell.
 - [ ] Per-module typecheck ratchet: record each module's current `tsc` error
       count to a baseline file and fail if a module regresses above it. Lets the
       engine pay debt down module-by-module without one green-gate blocking
