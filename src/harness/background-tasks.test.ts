@@ -1,3 +1,4 @@
+import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -370,4 +371,42 @@ describe("BackgroundTaskExecutionService", () => {
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
   });
+
+  // Regression: shellQuote must POSIX-escape single quotes so the launch
+  // script emits *valid* JSON for its running-state file. A prior bug used the
+  // escape `"'"'"'` (extra leading `"`) instead of `'"'"'`, corrupting the
+  // state.json for any command containing a single quote — which broke
+  // recovery/sync (readState → JSON.parse throw). We drive the real launch
+  // script through bash and assert the resulting state parses and round-trips.
+  const hasShellToolchain =
+    spawnSync("bash", ["-c", "true"]).status === 0 && spawnSync("python3", ["--version"]).status === 0;
+
+  it.runIf(hasShellToolchain)(
+    "launch script produces valid state JSON for single-quote commands",
+    async () => {
+      const rootDir = await makeTempDir();
+      const store = new FileBackgroundTaskStore(
+        path.join(rootDir, "background-tasks.json"),
+        () => ({ pid: 2222, unref() {} }),
+      );
+      // Single-quoted command — the exact shape that used to corrupt the
+      // generated JSON (matches the operator-runtime recovery scenario).
+      const command = "printf 'line-1\nline-2\n'";
+      const task = await store.start({ title: "Quote stress", command, cwd: rootDir });
+      const service = new BackgroundTaskExecutionService(rootDir);
+      await service.writeArtifacts(task);
+
+      execFileSync("bash", [path.join(rootDir, task.execution.launchScript)], {
+        cwd: rootDir,
+        stdio: "ignore",
+      });
+
+      const raw = await fs.readFile(path.join(rootDir, task.execution.stateFile), "utf8");
+      // Must be parseable JSON (the corruption manifested as a parse error).
+      const state = JSON.parse(raw) as BackgroundTaskExecutionState;
+      expect(state.command).toBe(command);
+      expect(state.status).toBe("completed");
+      expect(state.exitCode).toBe(0);
+    },
+  );
 });

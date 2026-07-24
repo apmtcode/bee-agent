@@ -801,7 +801,7 @@ describe("OperatorCliApp", () => {
 
   it("supports session lifecycle, transcript, approvals, pairing, config, and prompt commands", async () => {
     const rootDir = await makeTempDir();
-    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25", backgroundTaskSpawnProcess: () => ({ pid: 4321, unref() {} }), backgroundTaskIsProcessRunning: () => false });
     const firstSession = await app.runtime.startSession({ title: "first", cwd: rootDir, agentId: "operator-cli" });
     const secondSession = await app.runtime.startSession({ title: "second", cwd: rootDir, agentId: "operator-cli" });
 
@@ -1063,7 +1063,19 @@ describe("OperatorCliApp", () => {
 
   it("supports background and monitor task commands plus cron commands", async () => {
     const rootDir = await makeTempDir();
-    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    // Inert spawn so no real detached process is launched; the task's output and
+    // terminal state are written explicitly below. This removes the race where
+    // the CLI read the output/state file before the real process had flushed it
+    // (previously flaky), while still exercising the full command surface.
+    const app = new OperatorCliApp({
+      rootDir,
+      cwd: rootDir,
+      currentDate: "2026-05-25",
+      backgroundTaskSpawnProcess: () => ({ pid: 4321, unref() {} }),
+      // Treat the (inert) task's pid as alive so sync keeps it "running" and it
+      // remains discoverable by watch-active / task-stop below.
+      backgroundTaskIsProcessRunning: () => true,
+    });
     const session = await app.runtime.startSession({ title: "CLI ops", cwd: rootDir, agentId: "operator-cli" });
 
     const startOutput = await app.dispatchSlashCommand(
@@ -1078,6 +1090,23 @@ describe("OperatorCliApp", () => {
     if (!task) {
       throw new Error("expected background task");
     }
+
+    // Deterministically stand in for the output the real launch script would
+    // have produced (command: `printf ok`). Keep the task "running" so the
+    // active-watch and stop assertions below still apply.
+    await app.runtime.backgroundTasks.executionService.writeOutput(task, "ok\n");
+    await app.runtime.backgroundTasks.executionService.writeState(task, {
+      version: 1,
+      taskId: task.id,
+      kind: "task",
+      status: "running",
+      pid: task.execution.processId ?? 4321,
+      startedAt: task.execution.startedAt ?? task.updatedAt,
+      updatedAt: task.updatedAt,
+      outputFile: task.execution.outputFile,
+      cwd: task.cwd,
+      command: task.command,
+    });
 
     const listOutput = await app.dispatchSlashCommand({ kind: "background-list" });
     expect(listOutput).toContain(task.id);

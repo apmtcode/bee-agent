@@ -6,6 +6,65 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-24 (run 9) — 🐛 Fix `shellQuote` JSON corruption + deterministic background-task tests (suite back to green)
+
+**Audited:** Project health at run start. `npm test` was **RED** — 4 failures
+(`server.test.ts`, `app.test.ts` ×2, `operator-runtime.test.ts`), all surfacing
+as `SyntaxError` in `readJsonFile` while reading a background-task `state.json`.
+The run-8 log claimed 174/174; the regression appeared because this environment
+can actually **spawn** the detached launch script (bash + python3 present),
+whereas the recorded-green env apparently could not — so latent bugs in the
+real launch path became live.
+
+**Root cause (genuine source bug) in `src/harness/background-tasks.ts`:**
+`shellQuote()` escaped interior single quotes as `"'"'"'` (6 chars, extra
+leading `"`) instead of the POSIX-correct `'"'"'` (5 chars). For any command or
+path containing a `'` (e.g. the tests' `printf 'line-1\nline-2\n'`), this
+injected a stray `"` and broke the shell quoting, so the launch script's
+`printf … | sed > state.json` wrote **malformed JSON**. Recovery/sync then threw
+at `JSON.parse`. Fixed to `'"'"'` (verified the round-trip decodes correctly
+through bash). This is a real production correctness fix, not just a test fix —
+any single-quoted background command would have corrupted its own state file.
+
+**Changed:**
+- `src/harness/background-tasks.ts` — one-line `shellQuote` fix + explanatory
+  comment.
+- `src/harness/background-tasks.test.ts` — **new regression test** that drives
+  the *real* launch script through bash for a single-quoted command and asserts
+  the resulting `state.json` parses and round-trips (`command`, `status`,
+  `exitCode`). Gated with `it.runIf(hasShellToolchain)` (bash + python3) so it
+  skips cleanly in minimal environments.
+- `src/cli/app.ts` (additive, production-safe) — plumbed optional
+  `backgroundTaskSpawnProcess` / `backgroundTaskIsProcessRunning` through
+  `OperatorCliAppOptions` into the runtime (defaults preserve current behavior),
+  so hosts/tests can supply an inert spawn.
+- Test determinism: injected an **inert spawn** (`() => ({ pid, unref })`) into
+  the runtime/app/server tests that only exercise recovery/status *logic* via
+  explicit `writeState()` — so a real detached process (`tail -f`, `sleep 5`)
+  no longer launches and races the assertions (which, under the mocked
+  `isProcessRunning: () => false`, were misread as `missing-process`/`degraded`).
+  Sites: `operator-runtime.test.ts` (1), `server.test.ts` (3 runtimes),
+  `app.test.ts` (1). The `app.test` background-*integration* test that asserts
+  real `printf ok` output was deliberately **left on the real spawn** — the
+  `shellQuote` fix alone greens it.
+
+**Test results:** `npm test` **175/175 ✅** (was 4-failing; +1 new regression
+test). `npm run build` ✅. `npm run typecheck:src` ✅ (source stays green).
+
+**New idea:** the suite silently depends on whether the host can spawn+persist
+real background processes — a hidden environment coupling that flipped this
+run's health from green to red with zero code change. Add a tiny **environment
+capability probe** to the engine's pre-run self-check (does `bash -lc true` +
+`python3 --version` succeed?) and record it alongside build/test timings in the
+telemetry file already on the roadmap. That makes "green here / red there"
+diagnosable instead of mysterious, and lets CI assert the launch path is
+actually exercised rather than skipped. Longer term: consider making the
+default `SpawnBackgroundProcess` fail *loudly* (or no-op with a warning) when
+the toolchain is absent, instead of spawning a process that immediately dies and
+leaves a stale `running` state file.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

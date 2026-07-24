@@ -530,6 +530,10 @@ describe("StandaloneOperatorRuntime", () => {
   it("starts, syncs, recovers, lists, and cancels background tasks", async () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
+      // Inert spawn: the test drives state via explicit writeState() calls, so a
+      // real detached process (e.g. `tail -f`) must not launch and race the
+      // recovery assertions by re-writing state.json.
+      backgroundTaskSpawnProcess: () => ({ pid: 4321, unref() {} }),
       backgroundTaskIsProcessRunning: () => false,
     });
     const session = await runtime.startSession({ title: "Tasks", agentId: "main" });

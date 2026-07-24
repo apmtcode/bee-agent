@@ -83,6 +83,12 @@ describe("OperatorControlPlaneServer", () => {
     const rootDir = await makeTempDir();
     const runtime = new StandaloneOperatorRuntime({
       rootDir,
+      // Inert spawn: exercise the RPC surface without launching real detached
+      // OS processes (e.g. `sleep 5`) whose execution-state files would race
+      // the assertions and, under the mocked `isProcessRunning: () => false`
+      // probe, be misread as missing-process. Task *records* still report
+      // "running"; only the on-disk execution state is absent, matching intent.
+      backgroundTaskSpawnProcess: () => ({ pid: 4321, unref() {} }),
       backgroundTaskIsProcessRunning: () => false,
       delivery: new OperatorDeliveryService(rootDir, {
         sendBrowserPush: async () => {},
@@ -952,6 +958,8 @@ describe("OperatorControlPlaneServer", () => {
     const driftingRootDir = await makeTempDir();
     const driftingRuntime = new StandaloneOperatorRuntime({
       rootDir: driftingRootDir,
+      // Inert spawn — see the note on the first runtime in this file.
+      backgroundTaskSpawnProcess: () => ({ pid: 4321, unref() {} }),
       backgroundTaskIsProcessRunning: () => false,
     });
     const driftingServer = new OperatorControlPlaneServer({ runtime: driftingRuntime });
@@ -1018,6 +1026,8 @@ describe("OperatorControlPlaneServer", () => {
     const breakerRootDir = await makeTempDir();
     const breakerRuntime = new StandaloneOperatorRuntime({
       rootDir: breakerRootDir,
+      // Inert spawn — see the note on the first runtime in this file.
+      backgroundTaskSpawnProcess: () => ({ pid: 4321, unref() {} }),
       backgroundTaskIsProcessRunning: () => false,
     });
     const breakerServer = new OperatorControlPlaneServer({ runtime: breakerRuntime });

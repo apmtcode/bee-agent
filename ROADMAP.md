@@ -4,6 +4,13 @@ Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
 ## Foundations / DX
+- [x] **Fix `shellQuote` JSON corruption + deterministic background-task tests**
+      (2026-07-24, run 9). `shellQuote` used `"'"'"'` instead of the POSIX
+      `'"'"'`, corrupting the launch script's `state.json` for any single-quoted
+      command; suite went red (4 failures) once the env could actually spawn.
+      Fixed the escape, added a bash-driven regression test, plumbed an inert
+      spawn override through `OperatorCliApp`, and injected inert spawns into the
+      logic-only tests. Suite: **175/175 ✅**.
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`
@@ -71,6 +78,13 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
       related synthetic trajectories.
 
 ## Innovation backlog
+- [ ] **Environment capability probe in the pre-run self-check** (run 9 idea):
+      the suite silently depends on whether the host can spawn+persist real
+      background processes (`bash -lc true` + `python3 --version`). This flipped
+      run 9's health green→red with zero code change. Probe the toolchain, record
+      it beside build/test timings in the telemetry file below, and consider
+      making the default `SpawnBackgroundProcess` fail loudly (not spawn a
+      process that dies and leaves a stale `running` state) when it's absent.
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in
       project health over time.

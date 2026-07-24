@@ -794,5 +794,10 @@ function renderStateWriterPython(status: BackgroundTaskExecutionState["status"])
 }
 
 function shellQuote(value: string): string {
-  return `'${value.replaceAll(`'`, `"'"'"'`)}'`;
+  // POSIX-safe single-quoting: close the quote, emit a literal `'` via a
+  // double-quoted `'`, then reopen. The correct escape is `'"'"'` (5 chars).
+  // A prior version used `"'"'"'` (an extra leading `"`), which injected a
+  // stray double-quote and corrupted any command/path containing a single
+  // quote — producing malformed launch-script JSON (see background-tasks tests).
+  return `'${value.replaceAll(`'`, `'"'"'`)}'`;
 }
