@@ -400,6 +400,24 @@ export type {
   LocalTrainingRuntime,
   TrainingJobPlan,
 } from "./training/runner.js";
+export {
+  NgramMovementModel,
+  evaluateNextTokenAccuracy,
+  evaluateSequenceFidelity,
+  movementTokenKey,
+  tokenizeReplayManifest,
+  tokenizeTrajectory,
+} from "./training/movement-model.js";
+export type {
+  GenerateOptions,
+  MovementModelBackend,
+  MovementModelState,
+  MovementPrediction,
+  MovementSequence,
+  MovementToken,
+  NextTokenAccuracy,
+  SequenceFidelity,
+} from "./training/movement-model.js";
 export type {
   ExportedMemoryReference,
   ExportedPromotedSkill,

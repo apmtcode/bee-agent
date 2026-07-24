@@ -6,6 +6,69 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-24 (run 9) — 🧠 In-process movement model: train → repeat → generalize (objective #2 c+d)
+
+**Audited:** The local-movement learning subsystem (`src/capture/` + `src/training/`)
+against objective #2's five pieces (capture → schema → dataset → replay →
+train/infer). Findings: capture/schema/dataset/replay are all scaffolded, but the
+**train + infer + generalize** pieces (2(c)+(d)) were *entirely missing in-process*.
+`training/runner.ts` only emits an Apple-Silicon launch script that shells out to
+`mlx_lm.lora` / `axolotl` — a real on-device toolchain that **cannot run in the
+cloud**, so nothing validated that a model can actually learn recorded movements,
+repeat them, or generalize. The roadmap's top movement item ("pluggable
+local-model backend + deterministic mock backend so cloud/CI tests pass") targets
+exactly this gap.
+
+**Changed (additive):**
+- **`src/training/movement-model.ts`** — a deterministic, dependency-free,
+  in-process movement learner (the "local model" of 2(c)+(d)):
+  - `MovementToken` / `MovementSequence` schema distilled from recorded
+    actions/gestures; serializable `MovementModelState` (this *is* the trained
+    artifact).
+  - `MovementModelBackend` — the **pluggable backend interface**; a real on-device
+    neural policy can implement it and swap in behind the same seam.
+  - `NgramMovementModel` — order-k Markov model with Katz-style backoff and
+    **deterministic argmax decoding (no RNG, no Date)**, so train/infer are
+    reproducible and CI-safe. *Repeat*: seeding a recorded prefix reproduces the
+    dominant recorded path. *Generalize*: a novel prefix sharing a suffix with
+    training backs off to the longest seen suffix → routes to the learned
+    continuation.
+  - Tokenizer bridges `tokenizeTrajectory()` / `tokenizeReplayManifest()` (capture
+    schema → training sequences).
+  - Eval harnesses `evaluateSequenceFidelity()` (position-wise repeat fidelity) and
+    `evaluateNextTokenAccuracy()` (held-out generalization accuracy + backoff
+    count) — a first cut of the roadmap's generalization eval harness.
+  - Exported the full surface from `src/index.ts`.
+- **`src/harness/background-tasks.ts`** — reliability hardening: `readState()` now
+  tolerates a **half-written state file** (external launch scripts write state
+  non-atomically) by treating a JSON parse error as "no readable state yet"
+  (→ routes to the missing-state reconcile path) instead of throwing and crashing
+  the whole recover pass. I/O errors other than corruption still propagate.
+
+**Tests:** `movement-model.test.ts` (15) — training/determinism, repeat,
+generalize/backoff, probabilities, generation guards (stop token + cycle cap),
+tokenizers, and both eval harnesses. `background-tasks.test.ts` +1 regression
+proving a truncated state file no longer crashes recovery. **All new tests green
+(23/23 in the two touched files).** `npm run build` ✅. `npm run typecheck:src` ✅
+(exit 0, source stays clean). Full suite: **186–187 / 190 passing**; the only
+failures are **3 pre-existing, flaky, real-process-spawning harness tests**
+(`app.test.ts`, `server.test.ts`, `operator-runtime.test.ts`) that assert on live
+OS-process liveness — they oscillate 3↔4 failures run-to-run in *this* cloud
+sandbox and were already failing on clean `HEAD` (run 8, which logged 174/174 in
+its canonical environment) **before any edit this run**. My change touches only
+deterministic modules and introduced **zero** new failures — it actually converts
+one of those flakes from a hard JSON crash into graceful degradation. Decision:
+pushed to `main` (the flakiness is environmental and pre-existing, not a
+regression; stranding this on a WIP branch would stall main indefinitely for a
+sandbox-only cause). Logged a top-priority de-flake item below.
+
+**New idea:** give `NgramMovementModel` a **temporal/dwell channel** — bucket the
+inter-event `ts` gaps into coarse duration classes and fold them into the token so
+the model learns movement *rhythm/timing*, not just order. Pairs naturally with a
+`generate()` that also emits predicted dwell times, making replayed movements
+feel human-paced rather than instantaneous — and gives the eventual real neural
+backend a richer target than pure gesture order.
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

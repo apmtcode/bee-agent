@@ -231,10 +231,23 @@ export class BackgroundTaskExecutionService {
   }
 
   async readState(task: BackgroundTaskRecord): Promise<BackgroundTaskExecutionState | undefined> {
-    return await readJsonFile<BackgroundTaskExecutionState | undefined>(
-      path.join(this.rootDir, task.execution.stateFile),
-      undefined,
-    );
+    try {
+      return await readJsonFile<BackgroundTaskExecutionState | undefined>(
+        path.join(this.rootDir, task.execution.stateFile),
+        undefined,
+      );
+    } catch (error) {
+      // The launch script writes state non-atomically, so reconciliation can
+      // observe a half-written file. A corrupt/partial read is transient — treat
+      // it as "no readable state yet" so recovery routes to the missing-state
+      // path instead of crashing the whole recover pass; the next pass reads the
+      // completed file. Only JSON parse errors are swallowed here; I/O errors
+      // other than ENOENT (already handled by readJsonFile) still propagate.
+      if (error instanceof SyntaxError) {
+        return undefined;
+      }
+      throw error;
+    }
   }
 
   async writeOutput(task: BackgroundTaskRecord, content: string): Promise<void> {

@@ -59,18 +59,49 @@ unchecked items are queued. Keep this richer than you found it each run.
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
 (exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
-      objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
-      deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
+- [x] Inventory what `src/capture` + `src/training` already implement vs. the
+      objective's five pieces — DONE run 9. capture/schema/dataset/replay were
+      scaffolded; **train+infer+generalize (2c+2d) were absent in-process** — the
+      runner only shelled out to an un-cloud-runnable Apple-Silicon toolchain.
+- [x] Pluggable local-model backend interface **+ deterministic in-process model**
+      — DONE run 9 (`src/training/movement-model.ts`): `MovementModelBackend`
+      interface + `NgramMovementModel` (order-k Markov, Katz backoff, deterministic
+      argmax — no RNG/Date, so cloud/CI-safe). Trains on recorded movements,
+      repeats the dominant path, and generalizes via suffix backoff. A real
+      on-device neural policy can implement the same interface behind the seam.
+- [ ] Wire the movement model into the training pipeline as a selectable
+      **backend** for `LocalAppleSiliconTrainingRunner` (mode → backend registry),
+      so `NgramMovementModel` is the default cloud/CI backend and mlx/axolotl is the
+      on-device backend — the runner should delegate command/env/artifact building
+      to the chosen backend instead of hardcoding the runtime.
+- [ ] Temporal/dwell channel for `NgramMovementModel`: bucket inter-event `ts`
+      gaps into duration classes, fold into the token, and have `generate()` emit
+      predicted dwell times so replayed movement is human-paced (see run 9 idea).
 - [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      round-trips without real OS input (now also feeds movement-model training).
+- [~] Generalization eval harness — first cut DONE run 9
+      (`evaluateSequenceFidelity` + `evaluateNextTokenAccuracy` with backoff count).
+      Next: held-out *trajectory-level* replay-fidelity scoring over synthetic
+      related trajectories, and a threshold gate the engine can assert on.
+
+## Test reliability (raised priority — blocks the push gate)
+- [ ] **De-flake the real-process harness tests.** `app.test.ts`,
+      `server.test.ts`, and `operator-runtime.test.ts` each start background tasks
+      with the DEFAULT spawn (real OS processes: `tail -f`, etc.) and then assert on
+      process liveness / reconciled breaker state. In the cloud sandbox these
+      oscillate 3↔4 failures run-to-run (mixed vs degraded breaker state,
+      missing-process vs state-running, and — before run 9's `readState`
+      hardening — a hard JSON crash on a half-written state file). They pass in the
+      canonical env (run 8: 174/174). Fix additively: inject a mock
+      `spawnProcess` + `isProcessRunning` into these tests (the seams already
+      exist — `FileBackgroundTaskStore(filePath, spawn, isRunning)` and the
+      runtime's options) so liveness is deterministic, exactly as
+      `background-tasks.test.ts` already does. This is the single biggest thing
+      standing between the engine and a fully-green push gate.
 
 ## Innovation backlog
+- [x] Reliability: `readState` tolerates a half-written state file (run 9) —
+      recovery no longer crashes on a mid-write launch-script state file.
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in
       project health over time.

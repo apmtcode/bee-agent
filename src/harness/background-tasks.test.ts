@@ -370,4 +370,34 @@ describe("BackgroundTaskExecutionService", () => {
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
   });
+
+  it("tolerates a half-written state file instead of crashing recovery", async () => {
+    const rootDir = await makeTempDir();
+    const store = new FileBackgroundTaskStore(
+      path.join(rootDir, "background-tasks.json"),
+      () => ({ pid: 2222, unref() {} }),
+      () => false,
+    );
+    const task = await store.start({
+      sessionId: "sess-x",
+      title: "Watch logs",
+      command: "tail -f app.log",
+      cwd: rootDir,
+      kind: "monitor",
+    });
+
+    // Simulate the external launch script caught mid-write (non-atomic writer):
+    // a truncated JSON document that JSON.parse would reject.
+    const statePath = path.join(rootDir, task.execution.stateFile);
+    await fs.mkdir(path.dirname(statePath), { recursive: true });
+    await fs.writeFile(statePath, '{ "version": 1, "taskId": "', "utf8");
+
+    // readState treats the transient corruption as "no readable state yet".
+    await expect(store.executionService.readState(task)).resolves.toBeUndefined();
+
+    // Recovery must not throw; it routes to the missing-process fallback.
+    const recovered = await store.recoverBySession("sess-x");
+    expect(recovered).toHaveLength(1);
+    expect(recovered[0]).toMatchObject({ task: { id: task.id }, reason: "missing-process" });
+  });
 });
