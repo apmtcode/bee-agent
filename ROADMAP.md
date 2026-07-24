@@ -62,13 +62,27 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
+      for a real on-device small model. — DONE run 9 (`src/training/movement-model.ts`:
+      `MovementModelBackend` interface + `NgramMovementBackend` reference/mock +
+      `MovementModelRegistry`). Next: register a *real* on-device backend behind
+      the same contract (MLX/llama.cpp/ONNX), reading the `TrainingJobPlan`.
 - [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      round-trips without real OS input. (Movement-model tests build small
+      hand-specced streams; a reusable generator with configurable branching /
+      noise would strengthen the generalization eval.)
+- [x] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories. — DONE run 9 (`evaluateMovementModel()`
+      reports accuracy split by exact/backoff/prior source). Next: pair it with
+      the synthetic generator above to sweep generalization vs. n-gram order.
+- [ ] **Hermetic background-task liveness** (unblocks 4 pre-existing test
+      failures, run 9): inject a pluggable `isProcessAlive(pid)` probe into the
+      background-task store — default `process.kill(pid, 0)`, overridable with a
+      deterministic fake in tests — so `app.test.ts` / `server.test.ts` /
+      `operator-runtime.test.ts` platform-control + background-task assertions stop
+      flipping to `degraded` in fresh cloud containers where the spawned pid isn't
+      live. Same OS-seam pattern as the capture/training adapters.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

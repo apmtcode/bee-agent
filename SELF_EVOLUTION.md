@@ -6,6 +6,62 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-24 (run 9) — Movement subsystem: in-process learning + inference backend (obj #2c/2d)
+
+**Audited:** `src/training/` and `src/capture/` against standing objective #2
+parts (c) "post-train a local model … to repeat the recorded movements" and (d)
+"generalize to perform new but related movements". Found the subsystem could
+capture → schema (`TrajectorySpan`/`ReplayTimelineEvent`) → dataset
+(`ReviewedExportManifest.replays[].events`) → build an *external* mlx/axolotl
+launch **plan** (`LocalAppleSiliconTrainingRunner`), but had **no in-process
+model that actually learns or infers** — nothing that runs in the cloud/CI, and
+no pluggable backend seam. That is precisely the roadmap's queued increment
+("Pluggable local-model backend interface … with a deterministic mock backend").
+
+**Changed (additive) — new `src/training/movement-model.ts`:**
+- **Tokenizer** `tokenizeReplayEvents()` turns the replay timeline into a
+  discrete movement vocabulary: `obs:<source>:<slug>` / `act:<tool>:<slug>`
+  (transcript optional), with a stable `slugifyMovement()`.
+- **`MovementModelBackend` interface** — the pluggable seam: `train(examples)` /
+  `load(serialized)` → `TrainedMovementModel` (`predict` / `generate` /
+  `serialize`). A real on-device small model (MLX, llama.cpp, ONNX) registers a
+  backend with the same contract; the bundled one is the always-available
+  reference.
+- **`NgramMovementBackend`** — a deterministic order-k n-gram next-action policy
+  with **stupid backoff**. Longest matching context wins → *exact repeat* of
+  recorded movements; unseen contexts back off to shorter suffixes → *generalize*
+  to new-but-related movements; falls to the unigram prior otherwise. Tie-break by
+  token order = reproducible in the cloud. Serializes to plain JSON.
+- **`MovementModelRegistry`** (+ `createDefaultMovementModelRegistry`) for
+  backend selection, `trainMovementModelFromReplays()` to train straight from a
+  reviewed export, and **`evaluateMovementModel()`** — an eval harness reporting
+  accuracy split by prediction source (exact vs backoff vs prior), i.e. repeat
+  fidelity vs generalization.
+- Barrel exports added to `src/index.ts`.
+
+**Test results:** new `movement-model.test.ts` **12/12 ✅** (repeat fidelity =
+100% exact; a held-out related trajectory recovered via `backoff`; prior
+fallback; deterministic `generate`; serialize/load round-trip; tie-break
+determinism; registry pluggability). `npm run build` ✅. `npm run typecheck:src`
+✅ (exit 0, source stays green). Full `npm test` = **182/186 pass**; the **4
+failures pre-exist at clean HEAD** (verified via `git stash -u`) and are entirely
+in files this run did not touch — environment-sensitive background-task
+**process-liveness** checks (`app.test.ts` platform `control=active` expected but
+`degraded:… background task missing-process`; `server.test.ts` remote
+`control.state active→degraded`; `operator-runtime.test.ts` background-task
+recover; `app.test.ts` monitor/cron). They flip because a spawned pid isn't live
+in this cloud container, not from any change here.
+
+**New idea:** the 4 pre-existing failures are all the same root cause —
+background-task liveness is asserted against a real OS pid that doesn't survive in
+a fresh cloud container. A future run should inject a **pluggable process-liveness
+probe** (`isProcessAlive(pid)`) into the background-task store, defaulting to
+`process.kill(pid, 0)` but overridable in tests with a deterministic fake — same
+pattern as the capture/training OS seams — which would make these tests
+hermetic and green in CI. Logged to ROADMAP.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

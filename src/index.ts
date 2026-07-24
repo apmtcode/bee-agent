@@ -394,6 +394,32 @@ export type {
   TrainingExecutionState,
 } from "./training/execution-service.js";
 export {
+  MovementModelRegistry,
+  NgramMovementBackend,
+  buildMovementExamples,
+  createDefaultMovementModelRegistry,
+  evaluateMovementModel,
+  slugifyMovement,
+  tokenizeReplayEvents,
+  trainMovementModelFromReplays,
+} from "./training/movement-model.js";
+export type {
+  MovementEvalResult,
+  MovementExample,
+  MovementModelBackend,
+  MovementModelHyperparams,
+  MovementPrediction,
+  MovementPredictionSource,
+  MovementToken,
+  MovementTokenKind,
+  MovementTrainingSource,
+  SerializedMovementModel,
+  TaggedMovementToken,
+  TokenizeOptions,
+  TrainMovementModelOptions,
+  TrainedMovementModel,
+} from "./training/movement-model.js";
+export {
   LocalAppleSiliconTrainingRunner,
 } from "./training/runner.js";
 export type {
