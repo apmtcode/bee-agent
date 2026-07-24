@@ -370,4 +370,42 @@ describe("BackgroundTaskExecutionService", () => {
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
   });
+
+  // Regression: the real launch script must persist a NUMERIC pid in the initial
+  // "running" state. A previous version of the sed substitution left the literal
+  // string "$$" in state.json, so every task looked like a dead ("missing-process")
+  // process to isProcessRunning(), corrupting recovery and remote-control status.
+  // This test uses the DEFAULT (real) spawn so the launch script actually runs.
+  it("persists a numeric, live pid in the running state written by the launch script", async () => {
+    const rootDir = await makeTempDir();
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"));
+    const task = await store.start({
+      sessionId: "sess-pid",
+      title: "Sleep",
+      command: "sleep 5",
+      cwd: rootDir,
+      kind: "task",
+    });
+    try {
+      // The launch script writes state.json asynchronously; poll briefly for it.
+      let state: BackgroundTaskExecutionState | undefined;
+      for (let attempt = 0; attempt < 40; attempt += 1) {
+        state = await store.executionService.readState(task);
+        if (state?.status === "running") {
+          break;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+      expect(state?.status).toBe("running");
+      expect(typeof state?.pid).toBe("number");
+      expect(Number.isFinite(state?.pid)).toBe(true);
+      expect(state?.pid).toBeGreaterThan(0);
+      // The launch script records its own ($$) pid, which is exactly the pid the
+      // store captured from the spawned child.
+      expect(state?.pid).toBe(task.execution.processId);
+      expect(store.executionService.isProcessRunning(state!.pid)).toBe(true);
+    } finally {
+      await store.cancel(task.id);
+    }
+  });
 });

@@ -15,6 +15,13 @@ async function makeTempDir(): Promise<string> {
   return dir;
 }
 
+// Deterministic background-task spawn for tests: returns a stable pid without
+// launching a real detached process, so no launch script asynchronously writes
+// `state.json` to race the test's own `writeState`/liveness assertions.
+function noopBackgroundSpawn(): { pid: number; unref(): void } {
+  return { pid: 424242, unref() {} };
+}
+
 function buildHookCaptureCommand(outputFile: string): string {
   const script = [
     "import fs from 'node:fs';",
@@ -531,6 +538,7 @@ describe("StandaloneOperatorRuntime", () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
       backgroundTaskIsProcessRunning: () => false,
+      backgroundTaskSpawnProcess: noopBackgroundSpawn,
     });
     const session = await runtime.startSession({ title: "Tasks", agentId: "main" });
 

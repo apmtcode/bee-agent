@@ -6,6 +6,61 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-24 (run 9) — 🐛 Latent bug: background-task launch script persisted a corrupt (string) pid; hardened flaky tests
+
+**Audited:** Project health via the pre-push gate. On a fresh `npm test` in this
+cloud environment, **2 tests failed** (`app.test.ts`, `server.test.ts`) — but the
+prior run logged 174/174. Rather than dismiss it as flake, I traced the root
+cause by reproducing a real background task through the built runtime.
+
+**Real defect found (`src/harness/background-tasks.ts`, `renderLaunchScript`):**
+the initial `running` state written by the detached launch script encoded the
+pid as the JSON string `"$$"` and relied on a `sed` post-substitution to turn
+`"$$"` into the bare numeric PID. But the substitution was written in a JS
+template literal as `s/\"\$\$\"/$$/g` — and JS collapses `\"`→`"` and `\$`→`$`
+*before* the string ever reaches bash. The rendered bash became
+`sed "s/…/g; s/"$$"/$$/g"`: the quoting broke, `$$` expanded early, and the
+program degenerated to `s/<PID>/<PID>/g`, so the JSON's `"$$"` was **never
+replaced**. Every background task on non-Windows therefore persisted
+`pid: "$$"` (a string). `isProcessRunning()` does `Number.isFinite(pid)` →
+`false` for a string → **every task looked like a dead `missing-process`
+process**, corrupting recovery (`reconcilePersistedState`), remote-control
+status (`control=degraded … missing-process`), and the platform circuit breaker.
+Undetected because *every existing unit test injected a mock spawn*, so the real
+launch script (and its sed) was never exercised.
+
+**Changed (additive, surgical):**
+- `background-tasks.ts`: replaced the fragile `"$$"` placeholder with a distinct
+  token `"__OPENCLAW_PID__"` and a clean substitution
+  `s/\\"__OPENCLAW_PID__\\"/$$/g` (JS `\\"` → bash `\"`), mirroring the working
+  `__OPENCLAW_STARTED_AT__` substitution. Now yields `"pid":<number>`.
+- **New regression test** (`background-tasks.test.ts`): runs the **real** launch
+  script (default spawn) for a `sleep 5` task and asserts the persisted running
+  state has a numeric, finite, live pid equal to the captured `processId`.
+  Verified it FAILS on the pre-fix source (`expected 'string' to be 'number'`)
+  and passes after — a true guard, not a tautology.
+- **Test hermeticity:** the two failing suites (`server.test.ts`,
+  `operator-runtime.test.ts`) start real detached tasks whose launch script
+  asynchronously rewrites `state.json`, racing their own manual `writeState`.
+  They already inject `backgroundTaskIsProcessRunning`; I added the parallel
+  `backgroundTaskSpawnProcess: noopBackgroundSpawn` seam (already supported by
+  the runtime) so no real process is spawned and the manually-written state is
+  authoritative. Both files went from failing-in-isolation to deterministic.
+
+**Test results:** full `npm test` **175/175** (was 174 + 1 new regression),
+green **3× consecutively** and in isolation. `typecheck:src` ✅ (exit 0).
+Build ✅. The 2 pre-existing failures are gone.
+
+**New idea (logged to ROADMAP):** add a small **"real-artifact" smoke test tier**
+that exercises the actual shell launch scripts / rendered templates (guarded to
+skip on Windows / when `bash`/`python3` are absent), because the mock-everything
+unit tests structurally cannot catch shell-quoting/escaping bugs like this one.
+More broadly: a lint that flags shell fragments assembled inside JS template
+literals containing `\"` or `\$` (almost always an escaping mistake, since the
+backslash is consumed by JS, not passed to the shell).
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

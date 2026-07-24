@@ -70,6 +70,22 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Generalization eval harness: measure replay fidelity on held-out but
       related synthetic trajectories.
 
+## Reliability / correctness
+- [x] **Fix corrupt background-task pid** (2026-07-24, run 9). The launch
+      script's `sed` left the initial running state's pid as the literal string
+      `"$$"` (a JS-template escaping bug), so `isProcessRunning` saw every task
+      as `missing-process`, breaking recovery, remote-control status, and the
+      breaker. Fixed via a clean `__OPENCLAW_PID__` token substitution + a
+      real-launch-script regression test.
+- [ ] **Real-artifact smoke test tier**: exercise the actual rendered shell
+      launch scripts / templates (not just mock-spawn unit tests), guarded to
+      skip on Windows or when `bash`/`python3` are unavailable. The existing
+      unit tests inject a mock spawn and structurally cannot catch
+      shell-quoting/escaping defects.
+- [ ] **JS-template shell-escaping lint**: flag shell fragments assembled inside
+      JS template literals that contain `\"` or `\$` — almost always a mistake,
+      since JS consumes the backslash before the string reaches the shell.
+
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in
