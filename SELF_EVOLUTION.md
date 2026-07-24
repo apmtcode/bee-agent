@@ -6,6 +6,70 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-24 (run 9) — In-process movement model: pluggable backend + synthetic streams + generalization eval
+
+**Audited:** The local-movement learning subsystem (objective 2). `src/capture/`
+and `src/training/` already cover capture → schema → dataset → replay and can
+emit a reviewed export + an external `mlx`/`axolotl` training *command plan*
+(`runner.ts`). The gap: there was **no in-process model** — nothing that actually
+learns from recorded movements, predicts/generates new ones, or lets us test the
+train→infer half of the loop in the cloud (objective 2c/2d). The three roadmap
+items "pluggable local-model backend", "synthetic event-stream generator", and
+"generalization eval harness" were all unbuilt.
+
+**Changed (additive, new files only):**
+- `src/training/movement-model.ts` — the model subsystem:
+  - `MovementStep`/`MovementSequence`/`MovementDataset` schema + a reversible
+    token codec (`encode/decodeMovementToken`).
+  - `MovementModelBackend` **pluggable interface** (`train` → `TrainedMovementModel`
+    with `predictNext`/`generate`/`snapshot`; `restore`). Real on-device backends
+    implement the same shape — the seam the objective asks for.
+  - `NgramMovementBackend`: a deterministic, dependency-free Katz-style
+    backoff n-gram reference backend. It **repeats** recorded movements (greedy
+    argmax regenerates the dominant path) and **generalizes** to new-but-related
+    movements (unseen contexts back off to shorter contexts). Optional seeded-LCG
+    stochastic generation for reproducible variation. Snapshot/restore for
+    persistence.
+  - Dataset builders from captured trajectories (`buildMovementDatasetFromTrajectories`,
+    ts-ordered, metadata-aware tokenization with target bucketing) and from replay
+    manifests.
+  - `evaluateNextStepPrediction` **generalization eval harness** — next-step
+    accuracy + mean backoff order + backoff rate on held-out sequences.
+- `src/training/synthetic-movement.ts` — seeded, reproducible synthetic
+  movement-stream generator over a small task-flow grammar (compose-and-send,
+  browse-and-scroll, file-edit-save), a deterministic train/held-out split, and
+  `syntheticSequenceToTrajectory` so synthetic streams flow through the real
+  capture/export path. Validates the loop with no real OS input.
+- Exported all of the above from `src/index.ts`.
+
+**Test results:** 2 new test files, **20 new tests, all passing** (token
+round-trip, learned-prefix prediction, greedy regeneration, termination, seeded
+determinism, snapshot/restore, backoff-on-unseen, dataset builders, and an
+end-to-end generalization eval that hits **>60% held-out next-step accuracy** on
+data the model never trained on). `typecheck:src` ✅ (exit 0). `npm run build` ✅.
+Suite went **174 → 194 tests, +20 passing, 0 new failures**.
+
+**Known pre-existing blocker (NOT introduced this run):** 4 tests were already
+red on the base commit `3c7b7236` (verified by stashing this run's diff):
+`app.test.ts` (×2), `server.test.ts` (×1), `operator-runtime.test.ts` (×1). Root
+cause is a `SyntaxError` in `readJsonFile` while parsing a background-task state
+file (`src/harness/background-tasks.ts` → `src/shared/fs.ts:17`) — a malformed
+JSON fixture/state-writer issue in the background-tasks subsystem, unrelated to
+the movement model. Queued in ROADMAP as its own focused fix. Because the full
+suite is not green (these pre-existing reds), this run pushes to the designated
+feature branch `claude/peaceful-dirac-9onjyt` rather than `main`.
+
+**New idea:** add a `MovementModelBackend` that emits an actual `mlx`/`axolotl`
+fine-tune dataset (JSONL of tokenized movement sequences) so the in-process
+n-gram model and the on-device runtime consume the *same* dataset format — the
+n-gram then serves as a fast, cloud-runnable *smoke oracle* for the real model
+(train both, assert the on-device model beats the n-gram baseline on the
+generalization eval before promoting an artifact). Also: close the loop by
+feeding `generate()` output back through the replay engine to produce executable
+replay manifests, so a trained model can *drive* movements, not just score them.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
