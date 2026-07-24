@@ -6,6 +6,78 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-24 (run 9) — Pluggable movement-model backend + launch-script quoting bug fix
+
+**Audited:** The local-movement learning subsystem (`src/capture` + `src/training`)
+against objective #2's five pieces (capture → schema → dataset → replay →
+train/infer). Finding: capture/schema/dataset/replay and the *external* (mlx/
+axolotl) launch plan exist, but there was **no in-process model** that actually
+(c) trains on recorded movements to repeat them or (d) generalizes to new-but-
+related movements. The training layer only shelled out to Python; nothing was
+testable in the cloud.
+
+**Changed (additive):**
+- **New `src/training/movement-model.ts`** — the missing model layer for
+  objective #2(c)/(d):
+  - `MovementModelBackend` — the pluggable backend seam (async, so a real
+    on-device small model drops in behind the same interface).
+  - `MarkovMovementBackend` — a deterministic, dependency-free reference backend
+    (variable-order Markov model with **stupid-backoff**). Backoff is what lets
+    it produce plausible continuations for *new but related* movement contexts
+    rather than only exact recorded runs — i.e. generalization. Fully
+    deterministic (no `Math.random`): argmax prediction with lexicographic
+    tie-break, plus optional reproducible seeded sampling (mulberry32) for
+    generation.
+  - Dataset adapters wiring recorded `ReplayManifest`/`TrajectorySpan` data into
+    a `MovementDataset` (`movementSequenceFromReplay`, `…FromTrajectory`,
+    `movementDatasetFromReplays`, `…FromTrajectories`, `tokenizeAction`) so the
+    pipeline is end-to-end, not disconnected.
+  - `MovementModelTrainer` — train / persist (atomic JSON snapshot) / load /
+    predict / generate, mirroring how the external runner persists plans.
+  - Exported the whole surface from `src/index.ts`.
+- **Bug fix — `src/harness/background-tasks.ts`:** the background-task launch
+  script serializes the task command into a JSON state file *via the shell*.
+  `shellQuote()` had a **malformed single-quote escape** (`"'"'"'` — 6 chars,
+  starts with `"`; the correct POSIX escape is `'"'"'`, exactly what the training
+  runner already used). Any task whose command/cwd contained a single quote
+  (e.g. `printf 'x'`) corrupted the state JSON into unparseable text, which then
+  **crashed background-task recovery** with a `SyntaxError`. Fixed the escape and
+  additionally made both shell-side state writers **atomic** (write-temp +
+  `mv`/`os.replace`) so a recovery sweep can never read a half-written state
+  file. Added a regression test that executes the real launch script with a
+  single-quoted command and asserts the resulting state is valid JSON
+  (confirmed it fails against the old escape).
+- **Test stability — `src/orchestrator/operator-runtime.test.ts`:** the
+  background-tasks test drove state manually yet still launched the *real* bash/
+  python launch script, whose async writes raced the assertions (the corruption
+  bug above surfaced there first). Injected the runtime's existing
+  `backgroundTaskSpawnProcess` seam with a deterministic no-op spawn — the test
+  now passes 3/3 across repeated runs.
+
+**Test results:** `typecheck:src` ✅, `build` ✅. Full suite **187 tests, 184
+passing** (added 12 movement-model tests + 1 launch-script regression test; the
+run **fixed** the previously-failing `operator-runtime` background-tasks test).
+
+**Known pre-existing blocker (NOT introduced this run, present at branch HEAD):**
+3 tests remain red — `app.test.ts` ×2 and `server.test.ts` ×1, all asserting
+platform-control health (`control=active` / `degraded` / `mixed`). Root cause:
+those tests start background tasks with the **real** process spawner and assert
+on platform-control state *derived from task recovery*, which is timing-
+dependent. Unlike the runtime test, they have a genuinely mixed requirement (the
+gateway aggregate must read `active` while a specific drifted remote must read
+`degraded:background task failed`), so a single global spawn/liveness mock can't
+satisfy them — they need a deterministic launch-script *simulation* in the test
+harness. Queued in ROADMAP as the next high-value fix. Verified these 3 fail
+identically on a clean `git stash` of this run's changes.
+
+**New idea (logged to ROADMAP):** A **`MovementReplayFidelity` eval harness** —
+train the movement model on a held-out split of synthetic trajectories, then
+measure next-movement top-1/top-k accuracy and full-run edit distance on the
+held-out set, so generalization quality becomes a tracked metric instead of a
+qualitative claim. Pairs naturally with a synthetic event-stream generator.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

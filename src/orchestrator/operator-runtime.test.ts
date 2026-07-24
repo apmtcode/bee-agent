@@ -528,9 +528,15 @@ describe("StandaloneOperatorRuntime", () => {
   });
 
   it("starts, syncs, recovers, lists, and cancels background tasks", async () => {
+    // Deterministic spawn: this test drives execution state manually via
+    // writeState/writeOutput, so it must NOT launch the real bash/python launch
+    // script — a real async process races the assertions (and previously masked
+    // a JSON-corruption bug in the launch script's shell quoting).
+    let nextPid = 6100;
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
       backgroundTaskIsProcessRunning: () => false,
+      backgroundTaskSpawnProcess: () => ({ pid: (nextPid += 1), unref: () => {} }),
     });
     const session = await runtime.startSession({ title: "Tasks", agentId: "main" });
 

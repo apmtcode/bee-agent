@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -369,5 +370,37 @@ describe("BackgroundTaskExecutionService", () => {
     await expect(fs.readFile(path.join(rootDir, task.execution.launchScript), "utf8")).resolves.toContain("bash -lc");
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
+  });
+
+  // Regression: the launch script serializes the task command into a JSON state
+  // file via the shell. A malformed single-quote escape in shellQuote() used to
+  // corrupt that JSON whenever the command contained a single quote (e.g.
+  // `printf 'x'`), producing an unparseable state file that crashed recovery.
+  it("runs a launch script with a single-quoted command into valid JSON state", async () => {
+    const rootDir = await makeTempDir();
+    let launchScript = "";
+    const store = new FileBackgroundTaskStore(
+      path.join(rootDir, "background-tasks.json"),
+      (command) => {
+        launchScript = command;
+        return { pid: 2020, unref() {} };
+      },
+      () => false,
+    );
+    const command = "printf 'quoted value'";
+    const task = await store.start({ title: "Quoted", command, cwd: rootDir, kind: "task" });
+
+    // Actually execute the generated launch script (bash + python3 state writer).
+    const exitCode = await new Promise<number>((resolve, reject) => {
+      const child = spawn("bash", [launchScript], { cwd: rootDir, stdio: "ignore" });
+      child.on("error", reject);
+      child.on("exit", (code) => resolve(code ?? -1));
+    });
+    expect(exitCode).toBe(0);
+
+    // The state file must be valid JSON and faithfully preserve the command.
+    const state = await store.executionService.readState(task);
+    expect(state).toMatchObject({ taskId: task.id, status: "completed", command });
+    expect(typeof state?.pid).toBe("number");
   });
 });
