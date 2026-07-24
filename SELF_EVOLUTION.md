@@ -6,6 +6,50 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-24 (run 9) — 🔴→🟢 De-flaked the suite: hermetic background-task spawn seam
+
+**Audited:** Ran the baseline before touching anything and found the suite was
+**red — 3 failing tests** (171/174), not the 174/174 the log claimed. All three
+collapsed to **one root cause**, and it was *not* date-dependent (my first
+hypothesis): the CLI/control-plane tests **spawn real detached OS processes**
+(`sleep 5`, `printf …`) via `startBackgroundTask`, then assert control health.
+The remote-health diagnostic (`server.ts:2170`) only flags `missing-process`
+when a state file says `running` *and* the pid isn't live. The tests silently
+rely on the spawned launch script being **slow enough that no state file exists
+yet** at check time (→ `active`). In this cloud container the launch script wins
+that race — writes its `running` state file immediately — so with
+`isProcessRunning:()=>false` every task reads back as `missing-process` →
+`degraded`, and the platform breaker even tripped to `paused` (expected `mixed`).
+A pure timing flake baked into the fixtures.
+
+**Changed (additive, production behaviour unchanged):**
+- `src/cli/app.ts`: exposed the injection seam that already existed on
+  `StandaloneOperatorRuntime` — added `backgroundTaskSpawnProcess` and
+  `backgroundTaskIsProcessRunning` to `OperatorCliAppOptions` and threaded them
+  into the runtime. Defaults are untouched, so production still uses the real
+  detached `child_process.spawn` / `process.kill(pid,0)`.
+- Tests (`app.test.ts`, `control-plane/server.test.ts`,
+  `orchestrator/operator-runtime.test.ts`): added a shared `noopBackgroundSpawn`
+  helper (launches **no** real process, returns a stable pid) and injected it
+  into every runtime/app that starts background tasks (7 sites). No real OS
+  process now races the tests' own `writeState` calls; the fixtures' intended
+  "no state file yet ⇒ active" holds deterministically. The manual
+  degraded/missing-process paths (which write their own state) are untouched.
+
+**Test results:** full `npm test` **171 → 174/174**, now green across **3
+consecutive full runs** (was deterministically 3-failing in isolation, flaky in
+combination). `typecheck:src` ✅ (exit 0). Full `tsc` debt unchanged at **125**
+(all test-file; the injections are type-clean). Build ✅.
+
+**New idea:** add a **real-spawn test-hygiene guard** — a tiny check (or lint
+test) that fails if any `*.test.ts` constructs an `OperatorCliApp` /
+`StandaloneOperatorRuntime` that can reach `startBackgroundTask` without
+injecting `backgroundTaskSpawnProcess`. That turns "a test silently shells out to
+the host OS and depends on its scheduler" into an authoring-time error, so this
+whole class of environment-timing flake can't creep back in. Logged to ROADMAP.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

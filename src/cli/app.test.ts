@@ -10,6 +10,17 @@ import { OperatorCliApp, parseSlashCommand } from "./app.js";
 const tempDirs: string[] = [];
 const execFileAsync = promisify(execFile);
 
+let noopSpawnPid = 40000;
+/**
+ * Deterministic background-task spawner for tests: it launches no real OS
+ * process (so nothing races the test's own state-file writes) yet returns a
+ * stable pid so `startBackgroundTask` records a "running" task. Keeps the suite
+ * hermetic in cloud/CI where detached-process timing is non-deterministic.
+ */
+function noopBackgroundSpawn() {
+  return { pid: (noopSpawnPid += 1), unref() {} };
+}
+
 async function makeTempDir(): Promise<string> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "operator-cli-app-"));
   tempDirs.push(dir);
@@ -801,7 +812,12 @@ describe("OperatorCliApp", () => {
 
   it("supports session lifecycle, transcript, approvals, pairing, config, and prompt commands", async () => {
     const rootDir = await makeTempDir();
-    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    const app = new OperatorCliApp({
+      rootDir,
+      cwd: rootDir,
+      currentDate: "2026-05-25",
+      backgroundTaskSpawnProcess: noopBackgroundSpawn,
+    });
     const firstSession = await app.runtime.startSession({ title: "first", cwd: rootDir, agentId: "operator-cli" });
     const secondSession = await app.runtime.startSession({ title: "second", cwd: rootDir, agentId: "operator-cli" });
 

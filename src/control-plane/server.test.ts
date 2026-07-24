@@ -18,6 +18,17 @@ async function makeTempDir(): Promise<string> {
   return dir;
 }
 
+let noopSpawnPid = 50000;
+/**
+ * Deterministic background-task spawner for tests: launches no real OS process
+ * (so nothing races the test's own state-file writes) yet returns a stable pid
+ * so `startBackgroundTask` records a "running" task. Keeps the suite hermetic in
+ * cloud/CI where detached-process timing is non-deterministic.
+ */
+function noopBackgroundSpawn() {
+  return { pid: (noopSpawnPid += 1), unref() {} };
+}
+
 afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })));
 });
@@ -84,6 +95,7 @@ describe("OperatorControlPlaneServer", () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir,
       backgroundTaskIsProcessRunning: () => false,
+      backgroundTaskSpawnProcess: noopBackgroundSpawn,
       delivery: new OperatorDeliveryService(rootDir, {
         sendBrowserPush: async () => {},
       }),
@@ -953,6 +965,7 @@ describe("OperatorControlPlaneServer", () => {
     const driftingRuntime = new StandaloneOperatorRuntime({
       rootDir: driftingRootDir,
       backgroundTaskIsProcessRunning: () => false,
+      backgroundTaskSpawnProcess: noopBackgroundSpawn,
     });
     const driftingServer = new OperatorControlPlaneServer({ runtime: driftingRuntime });
     const driftingBootstrap = await driftingServer.handle({
@@ -1019,6 +1032,7 @@ describe("OperatorControlPlaneServer", () => {
     const breakerRuntime = new StandaloneOperatorRuntime({
       rootDir: breakerRootDir,
       backgroundTaskIsProcessRunning: () => false,
+      backgroundTaskSpawnProcess: noopBackgroundSpawn,
     });
     const breakerServer = new OperatorControlPlaneServer({ runtime: breakerRuntime });
     const breakerOne = await breakerServer.handle({
@@ -2098,7 +2112,7 @@ describe("OperatorControlPlaneServer", () => {
   });
 
   it("filters runtime events by session, run, and family", async () => {
-    const runtime = new StandaloneOperatorRuntime({ rootDir: await makeTempDir() });
+    const runtime = new StandaloneOperatorRuntime({ rootDir: await makeTempDir(), backgroundTaskSpawnProcess: noopBackgroundSpawn });
     const sessionA = await runtime.startSession({ title: "Session A" });
     const sessionB = await runtime.startSession({ title: "Session B" });
     const runA = await runtime.startRun({ sessionId: sessionA.id, title: "Run A" });

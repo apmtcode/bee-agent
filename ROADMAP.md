@@ -70,6 +70,19 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Generalization eval harness: measure replay fidelity on held-out but
       related synthetic trajectories.
 
+## Test hygiene / reliability
+- [x] **Hermetic background-task spawn seam** (2026-07-24, run 9). Exposed
+      `backgroundTaskSpawnProcess`/`backgroundTaskIsProcessRunning` on
+      `OperatorCliAppOptions` and injected a `noopBackgroundSpawn` into every
+      test runtime/app that starts background tasks — killed a 3-test
+      environment-timing flake (real `sleep`/`printf` processes racing the tests'
+      own state-file writes). Production defaults unchanged.
+- [ ] **Real-spawn test-hygiene guard**: a lint/test that fails if any
+      `*.test.ts` builds an app/runtime reaching `startBackgroundTask` without
+      injecting a deterministic `backgroundTaskSpawnProcess`, so no test silently
+      shells out to the host OS and depends on its scheduler. Prevents the run-9
+      flake class from recurring.
+
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in
