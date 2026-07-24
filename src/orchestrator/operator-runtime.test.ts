@@ -15,6 +15,16 @@ async function makeTempDir(): Promise<string> {
   return dir;
 }
 
+// An inert spawn for tests that drive background-task execution state by hand.
+// The real launch script runs an async bash+python subprocess whose writes would
+// race with the manual `writeState`/`writeOutput` calls below, so these tests
+// stub the spawn out and assert only on the state they control themselves.
+let mockBackgroundPid = 40000;
+function inertBackgroundSpawn(): { pid: number; unref(): void } {
+  mockBackgroundPid += 1;
+  return { pid: mockBackgroundPid, unref() {} };
+}
+
 function buildHookCaptureCommand(outputFile: string): string {
   const script = [
     "import fs from 'node:fs';",
@@ -531,6 +541,7 @@ describe("StandaloneOperatorRuntime", () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
       backgroundTaskIsProcessRunning: () => false,
+      backgroundTaskSpawnProcess: inertBackgroundSpawn,
     });
     const session = await runtime.startSession({ title: "Tasks", agentId: "main" });
 

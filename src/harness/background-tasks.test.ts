@@ -371,3 +371,70 @@ describe("BackgroundTaskExecutionService", () => {
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
   });
 });
+
+async function waitForTerminalState(
+  service: BackgroundTaskExecutionService,
+  task: { execution: { stateFile: string } },
+  timeoutMs = 5000,
+): Promise<BackgroundTaskExecutionState> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const state = await service.readState(task as never);
+    if (state && (state.status === "completed" || state.status === "failed")) {
+      return state;
+    }
+    if (Date.now() > deadline) {
+      throw new Error(`timed out waiting for terminal state (last: ${state?.status ?? "<none>"})`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+}
+
+// Regression coverage for the real launch script. Every other test in this file
+// mocks the spawn and hand-writes state, so a broken launch script (fragile
+// `printf | sed` JSON templating, or an indented heredoc terminator that stops
+// the completion writer from ever running) went undetected. These cases run the
+// generated bash+python for real and assert the state file ends up valid.
+describe("BackgroundTaskExecutionService (real launch)", () => {
+  it("drives a task to a valid completed state even with tricky shell quoting", async () => {
+    const rootDir = await makeTempDir();
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"));
+    const task = await store.start({
+      title: "Emit lines",
+      // Single quotes + embedded newlines are exactly what corrupted the old
+      // sed-based JSON templating.
+      command: "printf 'line-1\nline-2\n'",
+      cwd: rootDir,
+    });
+    expect(task.status).toBe("running");
+
+    const state = await waitForTerminalState(store.executionService, task);
+    expect(state.status).toBe("completed");
+    expect(state.exitCode).toBe(0);
+    expect(state.taskId).toBe(task.id);
+    expect(state.command).toBe("printf 'line-1\nline-2\n'");
+    expect(typeof state.pid).toBe("number");
+
+    // The persisted file must be parseable JSON (no torn/partial writes).
+    const raw = await fs.readFile(path.join(rootDir, task.execution.stateFile), "utf8");
+    expect(() => JSON.parse(raw)).not.toThrow();
+
+    const output = await store.executionService.readOutput(task, { lineLimit: 2 });
+    expect(output).toContain("line-2");
+  });
+
+  it("records a failed terminal state with the real exit code", async () => {
+    const rootDir = await makeTempDir();
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"));
+    const task = await store.start({
+      title: "Fail fast",
+      command: "exit 7",
+      cwd: rootDir,
+    });
+
+    const state = await waitForTerminalState(store.executionService, task);
+    expect(state.status).toBe("failed");
+    expect(state.exitCode).toBe(7);
+    expect(state.error).toContain("non-zero");
+  });
+});

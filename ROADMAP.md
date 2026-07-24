@@ -70,6 +70,18 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Generalization eval harness: measure replay fidelity on held-out but
       related synthetic trajectories.
 
+## Test suite health
+- [x] **Green the background-task subsystem** (2026-07-24, run 9). Suite was
+      silently 171/174 — 3 deterministic failures traced to a broken `shellQuote`
+      (`"'"'"'` instead of `'\''`), fragile `printf|sed` state templating, and
+      non-atomic Python state writes. Fixed all three; added real-launch
+      regression tests; suite now 176/176.
+- [ ] **Real-execution smoke lane** (NEW, run 9): an opt-in test lane
+      (`BEE_REAL_EXEC=1`) that exercises every shell-out subsystem (background
+      tasks, hooks, cron) against the real OS, so shell/heredoc generation bugs
+      can't hide behind universally-mocked spawns. Add a lint that flags launch/
+      heredoc string builders lacking a round-trip test.
+
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in

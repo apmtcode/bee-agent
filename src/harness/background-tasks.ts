@@ -734,65 +734,91 @@ function renderLaunchScript(task: BackgroundTaskRecord): string {
   const quotedOutputFile = shellQuote(task.execution.outputFile);
   const quotedCwd = shellQuote(task.cwd);
   const quotedCommand = shellQuote(task.command);
-  const quotedStatePayload = shellQuote(
+  // The immutable identity of the task, encoded once as JSON and passed to the
+  // Python state writer as a single argv value. This avoids the fragile
+  // `printf | sed` templating used previously, which mangled the JSON (an
+  // embedded `"` broke the shell quoting, the pid placeholder was left as the
+  // literal string "$$", and single-quoted commands were corrupted). The
+  // resulting invalid JSON then made the completion writer's `json.loads`
+  // throw, so tasks were stuck in an unreadable "running" state forever.
+  const quotedBaseState = shellQuote(
     JSON.stringify({
       version: 1,
       taskId: task.id,
       kind: task.kind,
-      status: "running",
-      pid: "$$",
-      startedAt: "__OPENCLAW_STARTED_AT__",
-      updatedAt: "__OPENCLAW_STARTED_AT__",
       outputFile: task.execution.outputFile,
       cwd: task.cwd,
       command: task.command,
     }),
   );
 
+  const writeState = (status: BackgroundTaskExecutionState["status"], timestampVar: string, exitCodeExpr: string) =>
+    [
+      `python3 - ${quotedStatePath} $$ ${status} "$started_at" "${timestampVar}" ${exitCodeExpr} ${quotedBaseState} <<'PY'`,
+      ...renderStateWriterPython(),
+      "PY",
+    ];
+
   return [
     "#!/usr/bin/env bash",
     "set -euo pipefail",
-    `mkdir -p $(dirname ${quotedStatePath}) $(dirname ${quotedOutputFile})`,
+    `mkdir -p "$(dirname ${quotedStatePath})" "$(dirname ${quotedOutputFile})"`,
     "started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-    `printf '%s' ${quotedStatePayload} | sed "s/__OPENCLAW_STARTED_AT__/$started_at/g; s/\"\$\$\"/$$/g" > ${quotedStatePath}`,
+    ...writeState("running", "$started_at", "0"),
     `printf '%s\n' "starting ${task.kind} ${task.id}" >> ${quotedOutputFile}`,
     `if cd ${quotedCwd} && bash -lc ${quotedCommand} >> ${quotedOutputFile} 2>&1; then`,
     "  completed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-    `  python3 - ${quotedStatePath} $$ "$completed_at" 0 <<'PY'`,
-    ...renderStateWriterPython("completed"),
-    "PY",
+    // Heredoc bodies and their closing delimiter must stay at column 0: a plain
+    // `<<'PY'` only recognises the terminator when it is unindented, so these
+    // lines are intentionally not indented to match the surrounding block.
+    ...writeState("completed", "$completed_at", "0"),
     "else",
     "  exit_code=$?",
     "  completed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-    `  python3 - ${quotedStatePath} $$ "$completed_at" "$exit_code" <<'PY'`,
-    ...renderStateWriterPython("failed"),
-    "PY",
+    ...writeState("failed", "$completed_at", '"$exit_code"'),
     '  exit "$exit_code"',
     "fi",
     "",
   ].join("\n");
 }
 
-function renderStateWriterPython(status: BackgroundTaskExecutionState["status"]): string[] {
+// Builds the full execution-state document from argv and writes it atomically
+// (temp file + os.replace) so a concurrent reader never observes a torn write.
+// Argv: statePath, pid, status, startedAt, updatedAt, exitCode, baseStateJson.
+function renderStateWriterPython(): string[] {
   return [
     "import json",
-    "import pathlib",
+    "import os",
     "import sys",
-    "state_path = pathlib.Path(sys.argv[1])",
+    "state_path = sys.argv[1]",
     "pid = int(sys.argv[2])",
-    "timestamp = sys.argv[3]",
-    "exit_code = int(sys.argv[4])",
-    "state = json.loads(state_path.read_text())",
-    `state['status'] = '${status}'`,
+    "status = sys.argv[3]",
+    "started_at = sys.argv[4]",
+    "updated_at = sys.argv[5]",
+    "exit_code = int(sys.argv[6])",
+    "state = json.loads(sys.argv[7])",
+    "state['status'] = status",
     "state['pid'] = pid",
-    "state['updatedAt'] = timestamp",
-    "state['completedAt'] = timestamp",
-    "state['exitCode'] = exit_code",
-    `state['error'] = None if '${status}' == 'completed' else f'background task exited non-zero ({exit_code})'`,
-    "state_path.write_text(json.dumps(state, indent=2) + '\\n')",
+    "state['startedAt'] = started_at",
+    "state['updatedAt'] = updated_at",
+    "if status in ('completed', 'failed'):",
+    "    state['completedAt'] = updated_at",
+    "    state['exitCode'] = exit_code",
+    "    state['error'] = None if status == 'completed' else f'background task exited non-zero ({exit_code})'",
+    "tmp_path = state_path + '.tmp'",
+    "with open(tmp_path, 'w') as handle:",
+    "    handle.write(json.dumps(state, indent=2) + '\\n')",
+    "os.replace(tmp_path, state_path)",
   ];
 }
 
+// Wrap a value in single quotes for safe interpolation into the generated bash
+// launch script. An embedded single quote is escaped with the canonical POSIX
+// idiom `'\''` (close-quote, escaped-quote, reopen-quote). The previous
+// implementation used `"'"'"'`, which starts with a double quote instead of
+// closing the surrounding single quote — for any value containing a `'` (e.g.
+// `printf 'done'`) that produced broken shell that corrupted the JSON payload
+// passed to the state writer, leaving tasks stuck in an unreadable state.
 function shellQuote(value: string): string {
-  return `'${value.replaceAll(`'`, `"'"'"'`)}'`;
+  return `'${value.split("'").join(`'\\''`)}'`;
 }

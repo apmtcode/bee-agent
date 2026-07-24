@@ -6,6 +6,65 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-24 (run 9) — Fix background-task launch script: suite 171/174 → 176/176 green
+
+**Audited:** The actual build/test gate on a real machine (the procedure's
+step-5 verification). Found the suite was **not** green as prior entries assumed:
+**3 tests failed** deterministically (`operator-runtime.test.ts`,
+`server.test.ts`, `app.test.ts`), all in the background-task subsystem. Confirmed
+the failures are pre-existing (reproduce back to `c8dd2c79`), so past "174/174"
+claims were environmental — the failing paths never actually ran the launch
+script.
+
+**Root causes found (all in `src/harness/background-tasks.ts`):**
+1. **`shellQuote` was broken for single-quoted values.** Its escape sequence was
+   `"'"'"'` (starts with `"`) instead of the canonical POSIX idiom `'\''`. For any
+   value containing a `'` (e.g. `printf 'line-1\nline-2\n'`), it emitted shell that
+   corrupted the JSON state payload → the Python writer's `json.loads` threw →
+   the task was stuck in an unreadable `"running"` state forever. This is the
+   deepest cause; it silently mangled every command/path containing a quote.
+2. **Fragile `printf | sed` JSON templating** for the initial running-state write:
+   a mis-escaped `\"` rendered to a bare `"` in bash, breaking the sed quoting so
+   the `pid` placeholder stayed the literal string `"$$"` and the command field
+   was corrupted. Replaced entirely with an argv-driven Python writer.
+3. **Non-atomic state writes** (`pathlib.write_text`) allowed torn reads →
+   intermittent `SyntaxError` when a poller read mid-write. Now writes to a temp
+   file + `os.replace` (atomic), matching the TS-side `writeJsonAtomic` guarantee.
+
+Downstream effect of a stuck `"running"` state: `deriveRemoteDiagnostics` saw a
+running task with a dead pid → reported `background task missing-process` →
+tripped the platform breaker to `degraded`, which is why the two remote-control
+tests failed on `control=active`.
+
+**Changed:**
+- Rewrote `renderLaunchScript` / `renderStateWriterPython` to build state from
+  argv and write it atomically via Python; dropped the `sed` templating. (Also
+  fixed a self-inflicted heredoc bug caught mid-run: an indented `<<'PY'`
+  terminator stops bash finding the delimiter — heredoc bodies now stay at
+  column 0.)
+- Fixed `shellQuote` to use `'\''`.
+- **New real-launch regression tests** in `background-tasks.test.ts`: every other
+  test here mocks the spawn and hand-writes state, so a broken launch script went
+  undetected. Added two that run the generated bash+python for real and assert a
+  valid `completed` state (with tricky single-quote+newline quoting) and a
+  `failed` state carrying the real exit code.
+- Gave the four runtime/server tests that manually drive execution state
+  (`backgroundTaskIsProcessRunning: () => false` + a *real* spawn) an inert
+  `backgroundTaskSpawnProcess`, removing the latent race the launch-script fix
+  exposed.
+
+**Test results:** `npm run build` ✅. `npm test` ✅ **176/176** (was 171/174),
+stable across 3 consecutive runs. `npm run typecheck:src` exit 0 ✅.
+
+**New idea (logged to ROADMAP):** A "real-execution smoke lane" — a small set of
+tests (opt-in via env, e.g. `BEE_REAL_EXEC=1`) that exercise every subsystem
+which shells out (background tasks, hooks, cron) against the actual OS, so
+shell-generation bugs like this can't hide behind universally-mocked spawns.
+Pair it with a lint that flags launch/heredoc string builders lacking a
+round-trip test.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
