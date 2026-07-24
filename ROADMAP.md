@@ -62,13 +62,28 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      for a real on-device small model. — DONE run 9
+      (`src/training/movement-model.ts`: `MovementModelBackend` interface +
+      `InProcessMovementModelBackend` frequency/similarity policy; real
+      on-device MLX backend implements the same interface).
+- [x] Synthetic event-stream generator to validate capture→dataset→replay
+      round-trips without real OS input. — DONE run 9
+      (`src/capture/synthetic.ts`: deterministic LCG generator with
+      `holdOutScreenIndexes` for building eval splits).
+- [x] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories. — DONE run 9 (`evaluateMovementModel`;
+      test hits 1.0 tool/gesture fidelity on 4 held-out unseen-screen apps).
+- [ ] Wire the movement-model backend into the RPC/CLI surface: expose
+      `train`/`predict`/`evaluate` as control-plane methods so a local run can
+      derive a dataset from stored trajectories, train, and query the model.
+- [ ] Serialize/persist a trained `MovementModel` (the descriptor already
+      captures contexts+features) so training and inference can be separate
+      processes; add a `loadMovementModel(descriptor)` inverse.
+- [ ] Second backend implementing `MovementModelBackend` backed by the real
+      MLX launch path (`LocalAppleSiliconTrainingRunner`), selected by a
+      pluggable factory so cloud uses in-process and local uses MLX.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
@@ -84,3 +99,10 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
       count to a baseline file and fail if a module regresses above it. Lets the
       engine pay debt down module-by-module without one green-gate blocking
       progress, and prevents backsliding while the total is still > 0.
+- [ ] **Fix launch-script state-write portability** (surfaced run 9): the
+      background-task/training launch scripts write the *running*-state JSON via
+      `printf | sed` with `__OPENCLAW_STARTED_AT__`/`"$$"` substitution, which
+      emits invalid JSON under a stricter shell/date (causes 3 pre-existing test
+      failures in this container — `SyntaxError … after property value in JSON`
+      from `readJsonFile`). Replace the `sed` surgery with a `python3 -c`/`node -e`
+      JSON writer, matching what the completion path already does.

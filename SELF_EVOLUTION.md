@@ -6,6 +6,70 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-24 (run 9) — 🧠 Movement-model backend: train + generalize (objective #2 c/d)
+
+**Audited:** The local-movement learning subsystem (`src/capture/`, `src/training/`)
+against objective #2's five pieces. Found the first four (capture → schema →
+dataset → replay) scaffolded, but **(c) post-train a local model** and **(d)
+generalize to new but related movements** had *no code-level, cloud-runnable
+implementation*: `LocalAppleSiliconTrainingRunner` only *plans* a real MLX/axolotl
+launch (a shell script), so nothing could actually learn-then-infer in CI. The
+roadmap's "pluggable local-model backend + deterministic mock" item covered
+exactly this gap.
+
+**Changed (additive, two new modules + barrel exports):**
+- `src/training/movement-model.ts` — the pluggable model seam:
+  - A normalized policy schema: `MovementContext` (appId/screen/goal/recentTools)
+    → `MovementAction` (tool/gesture/target/direction), with `MovementDataset`,
+    `MovementPrediction` (+ `source: exact | generalized | fallback`, similarity,
+    confidence).
+  - `deriveMovementDataset(trajectories)` — pairs every recorded action with the
+    observation that preceded it (supervised context→action pairs), threading the
+    last-3 tools and the trajectory outcome as goal signal.
+  - `MovementModelBackend` interface + `InProcessMovementModelBackend` — a
+    **deterministic** frequency/similarity policy: memorizes the top action per
+    context (repeat exactly), and for an unseen context transfers the action from
+    the most similar known context via app-weighted Jaccard over feature tokens
+    (perform new-but-related movements); falls back to the global top action when
+    nothing clears the generalization threshold. A real on-device backend
+    (MLX-served small model) implements the same interface.
+  - `evaluateMovementModel(model, heldOut)` — generalization eval harness
+    (tool/gesture fidelity + exact/generalized/fallback breakdown).
+- `src/capture/synthetic.ts` — deterministic synthetic movement-event generator
+  (LCG, no `Math.random`/`Date.now` in logic): emits `TrajectorySpan`s across
+  configurable apps/screens with a per-app "skill", and can **withhold screens**
+  (`holdOutScreenIndexes`) to build held-out eval sets for generalization. Stands
+  in for real OS capture so the whole pipeline runs in the cloud.
+- `src/index.ts` — exported both modules (no barrel collisions).
+
+**Design note:** app identity is the strongest generalization signal, so
+`app:` features carry weight 5 in the Jaccard — same-app/different-screen transfer
+scores ~0.45 (generalized) while cross-app scores 0 (fallback), cleanly
+separating the two regimes at the 0.34 default threshold.
+
+**Test results:** new `movement-model.test.ts` — **10/10 pass**, incl. an
+end-to-end generalization eval hitting **1.0 tool & gesture fidelity** on 4
+held-out (unseen-screen) apps, plus determinism, exact-repeat, fallback, and
+empty-dataset cases. `typecheck:src` ✅ (source stays 100% clean). Build ✅
+(tsdown, 5 files). **Pre-existing, NOT mine:** the full suite shows 3 failing
+tests in the background-task subprocess path
+(`operator-runtime`/`app`/`server` — a `SyntaxError: … after property value in
+JSON` from `readJsonFile` reading a state file the launch-script `sed`/`$$`
+substitution writes malformed in *this container's* shell). Verified by
+`git stash -u` → the same 3 fail on clean `HEAD` (they predate this run). My diff
+is additive and fully green; pushing to the designated branch
+`claude/peaceful-dirac-3h83ga` per the branch guardrail.
+
+**New idea:** the pre-existing JSON-parse failure is a *real* portability bug —
+`renderLaunchScript` writes the running-state JSON via a `printf | sed`
+`__OPENCLAW_STARTED_AT__`/`"$$"` substitution that assumes a specific shell/date;
+in a stricter/BusyBox-ish shell it emits invalid JSON. Fix: have the launch
+script write state through a tiny `python3 -c` (or `node -e`) JSON writer instead
+of `sed` string surgery — the completion path already uses `python3` for exactly
+this, so the *start* path should too. Logged to ROADMAP.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
