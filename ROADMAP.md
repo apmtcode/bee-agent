@@ -8,6 +8,23 @@ unchecked items are queued. Keep this richer than you found it each run.
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`
       (2026-06-22).
+- [x] **Deterministic test suite** (2026-07-24, run 9). The suite was flaky
+      (3–4 failing tests/run, varying) because `startBackgroundTask` spawned a
+      real detached child whose launch script wrote the task state file
+      out-of-band, racing the control plane and the tests' `writeState`. Fixed:
+      (1) made the launch-script state writes atomic (temp + rename in both the
+      shell and Python paths) — a real read/write concurrency bug, not just a
+      test artifact; (2) threaded `backgroundTaskSpawnProcess`/`…IsProcessRunning`
+      through `OperatorCliApp` and injected an inert spawn in the 3 flaky tests.
+      Now 174/174 green across 10 consecutive full-suite runs.
+- [ ] **Default the inert-spawn seam for all tests.** Extract
+      `inertBackgroundSpawn()` into a shared `src/testing/background-tasks.ts`
+      (imported only by `*.test.ts`, not shipped) and use it wherever a test
+      starts a background task but doesn't assert on real child output, so no
+      test leaks a detached process or depends on OS scheduling.
+- [ ] **`flake-guard` script.** Add an npm script that runs the suite repeatedly
+      (`vitest run` in a loop / `--repeat`) so newly-introduced timing races are
+      caught at authoring time rather than surfacing as an hourly-engine surprise.
 - [ ] **Pay down typecheck debt** (surfaced by the `typecheck` script). Full
       `tsc --noEmit` count was **397** on 2026-06-22; now **125**. 🎯 ALL source
       (`src/**` non-test) files typecheck clean since run 7; remaining 125 errors

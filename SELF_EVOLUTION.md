@@ -6,6 +6,58 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-24 (run 9) — 🟢 Deterministic test suite: kill background-task spawn races + atomic state writes
+
+**Audited:** The green gate itself. `npm test` was **flaky** — running the full
+suite repeatedly gave 3–4 failing tests that *changed between runs* (a JSON
+`SyntaxError`, `control=active` → `degraded`, task-listing mismatches). Root
+cause traced to `src/harness/background-tasks.ts`: `startBackgroundTask` spawns a
+**real detached child** whose launch script writes the task *state file*
+out-of-band, racing the control plane's concurrent `readState` and the tests'
+own deterministic `writeState`/`writeOutput` setup.
+
+**Two problems, two fixes:**
+
+1. **Production concurrency bug (real, not just a test artifact).** The launch
+   script wrote state with a **non-atomic** shell redirect (`printf … > state`)
+   and a non-atomic Python `write_text`, so a control-plane reader could observe
+   a **partially written** state file (the intermittent JSON parse crash). Made
+   both writes atomic (temp file + `mv` / `os.replace`), matching the
+   `writeJsonAtomic` contract used everywhere else. On a real machine this is the
+   difference between a monitor's status being reliably readable vs. corrupt
+   under concurrent read/write.
+
+2. **Test determinism seam.** Added `backgroundTaskSpawnProcess` /
+   `backgroundTaskIsProcessRunning` to `OperatorCliAppOptions` (forwarded to the
+   runtime — the runtime + `FileBackgroundTaskStore` already exposed the seam;
+   `OperatorCliApp` hard-coded `new StandaloneOperatorRuntime({ rootDir })` and
+   dropped it). Injected an **inert spawn** (`inertBackgroundSpawn()` — returns a
+   fake pid, launches nothing) into the flaky tests so background-task behaviour
+   is driven only by explicit `writeState`/`writeOutput`, never by a racing
+   child. `deriveRemoteDiagnostics` had a deterministic false-positive: a
+   child-written `running` state + injected `isProcessRunning: () => false` read
+   as `missing-process`; the inert spawn removes the stray state file so it
+   doesn't fire. Also seeded output/state explicitly in the background+monitor
+   CLI test (it previously depended on a `printf ok` child both producing real
+   output *and* still being "active" after an instant exit — mutually exclusive).
+
+**Test results:** **174/174, green 10 consecutive full-suite runs** (was 3–4
+flaky failures/run). `typecheck:src` ✅ clean, build ✅, full `tsc` unchanged at
+**125** (all pre-existing test-file debt — no regression). Changed files:
+`background-tasks.ts` (production), `app.ts` (+2 forwarded options), and the 3
+flaky test files (inert-spawn injection).
+
+**New idea:** the inert-spawn seam should become the *default* for the whole test
+suite via a shared `src/testing/background-tasks.ts` helper (not shipped — only
+imported by `*.test.ts`), so no test ever leaks a real detached process or
+depends on OS scheduling. Broader: add a `flake-guard` dev script that runs
+`vitest run --repeat=5` (or a loop) in CI so a newly-introduced timing race is
+caught at authoring time instead of surfacing as an hourly-engine surprise. Pair
+it with the queued `verify` script (`typecheck:src && build && test`) as the
+canonical pre-push gate.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

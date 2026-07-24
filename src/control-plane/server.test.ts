@@ -8,7 +8,20 @@ import { OperatorCronService } from "./cron-service.js";
 import { OperatorDeliveryService } from "./delivery.js";
 import { buildRuntimeEventFilter, subscribeRuntimeEvents } from "./subscriptions.js";
 import { StandaloneOperatorRuntime } from "../orchestrator/operator-runtime.js";
+import type { SpawnBackgroundProcess } from "../harness/background-tasks.js";
 import type { ReviewedExportManifest } from "../training/export-manifest.js";
+
+/**
+ * A background-task spawn that never launches a real OS process. Without this,
+ * `startBackgroundTask` spawns a detached child that asynchronously writes the
+ * task state file, racing (and corrupting) the deterministic state the tests set
+ * up via `writeState`. With an inert spawn, no state file is written out-of-band
+ * so behaviour is fully driven by the test.
+ */
+function inertBackgroundSpawn(): SpawnBackgroundProcess {
+  let pid = 2_000_000_000;
+  return () => ({ pid: pid++, unref() {} });
+}
 
 const tempDirs: string[] = [];
 
@@ -83,6 +96,7 @@ describe("OperatorControlPlaneServer", () => {
     const rootDir = await makeTempDir();
     const runtime = new StandaloneOperatorRuntime({
       rootDir,
+      backgroundTaskSpawnProcess: inertBackgroundSpawn(),
       backgroundTaskIsProcessRunning: () => false,
       delivery: new OperatorDeliveryService(rootDir, {
         sendBrowserPush: async () => {},
@@ -952,6 +966,7 @@ describe("OperatorControlPlaneServer", () => {
     const driftingRootDir = await makeTempDir();
     const driftingRuntime = new StandaloneOperatorRuntime({
       rootDir: driftingRootDir,
+      backgroundTaskSpawnProcess: inertBackgroundSpawn(),
       backgroundTaskIsProcessRunning: () => false,
     });
     const driftingServer = new OperatorControlPlaneServer({ runtime: driftingRuntime });
@@ -1018,6 +1033,7 @@ describe("OperatorControlPlaneServer", () => {
     const breakerRootDir = await makeTempDir();
     const breakerRuntime = new StandaloneOperatorRuntime({
       rootDir: breakerRootDir,
+      backgroundTaskSpawnProcess: inertBackgroundSpawn(),
       backgroundTaskIsProcessRunning: () => false,
     });
     const breakerServer = new OperatorControlPlaneServer({ runtime: breakerRuntime });

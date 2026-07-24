@@ -5,7 +5,18 @@ import { afterEach, describe, expect, it } from "vitest";
 import { StandaloneOperatorRuntime } from "./operator-runtime.js";
 import { resolveOperatorCliExecutionConfig } from "../cli/config.js";
 import { runOperatorHooks } from "../cli/execution-policy.js";
+import type { SpawnBackgroundProcess } from "../harness/background-tasks.js";
 import type { ReviewedExportManifest } from "../training/export-manifest.js";
+
+/**
+ * A background-task spawn that never launches a real OS process, so the child
+ * never writes the task state file out-of-band and races the deterministic
+ * state the test sets up via `writeState`.
+ */
+function inertBackgroundSpawn(): SpawnBackgroundProcess {
+  let pid = 2_000_000_000;
+  return () => ({ pid: pid++, unref() {} });
+}
 
 const tempDirs: string[] = [];
 
@@ -530,6 +541,7 @@ describe("StandaloneOperatorRuntime", () => {
   it("starts, syncs, recovers, lists, and cancels background tasks", async () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
+      backgroundTaskSpawnProcess: inertBackgroundSpawn(),
       backgroundTaskIsProcessRunning: () => false,
     });
     const session = await runtime.startSession({ title: "Tasks", agentId: "main" });
