@@ -83,6 +83,12 @@ describe("OperatorControlPlaneServer", () => {
     const rootDir = await makeTempDir();
     const runtime = new StandaloneOperatorRuntime({
       rootDir,
+      // Deterministic launch: no real detached process writes state concurrently.
+      // A background task only becomes a health failure once a "running" state
+      // file exists for a dead process; with no state file the started tasks stay
+      // in their record status, so control checks are stable instead of racing the
+      // real `sleep 5` launch script.
+      backgroundTaskSpawnProcess: () => ({ pid: 4242, unref: () => {} }),
       backgroundTaskIsProcessRunning: () => false,
       delivery: new OperatorDeliveryService(rootDir, {
         sendBrowserPush: async () => {},
@@ -1018,6 +1024,10 @@ describe("OperatorControlPlaneServer", () => {
     const breakerRootDir = await makeTempDir();
     const breakerRuntime = new StandaloneOperatorRuntime({
       rootDir: breakerRootDir,
+      // No real detached process: the manual writeState calls below are the only
+      // source of task state, so the breaker observes failures on a deterministic
+      // timeline instead of racing the real `sleep 5` launch scripts.
+      backgroundTaskSpawnProcess: () => ({ pid: 4242, unref: () => {} }),
       backgroundTaskIsProcessRunning: () => false,
     });
     const breakerServer = new OperatorControlPlaneServer({ runtime: breakerRuntime });

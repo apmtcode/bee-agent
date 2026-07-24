@@ -801,7 +801,18 @@ describe("OperatorCliApp", () => {
 
   it("supports session lifecycle, transcript, approvals, pairing, config, and prompt commands", async () => {
     const rootDir = await makeTempDir();
-    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    const app = new OperatorCliApp({
+      rootDir,
+      cwd: rootDir,
+      currentDate: "2026-05-25",
+      // Deterministic background-task launch: the mock process writes no state,
+      // so the `sleep 5` task has no state file and never becomes a health
+      // failure (leaving control "active"), while the task this test explicitly
+      // marks running-but-dead (pid 999999) is still detected as failed because
+      // the launched pid is reported not-running.
+      backgroundTaskSpawnProcess: () => ({ pid: 4242, unref: () => {} }),
+      backgroundTaskIsProcessRunning: () => false,
+    });
     const firstSession = await app.runtime.startSession({ title: "first", cwd: rootDir, agentId: "operator-cli" });
     const secondSession = await app.runtime.startSession({ title: "second", cwd: rootDir, agentId: "operator-cli" });
 
@@ -1063,7 +1074,16 @@ describe("OperatorCliApp", () => {
 
   it("supports background and monitor task commands plus cron commands", async () => {
     const rootDir = await makeTempDir();
-    const app = new OperatorCliApp({ rootDir, cwd: rootDir, currentDate: "2026-05-25" });
+    const app = new OperatorCliApp({
+      rootDir,
+      cwd: rootDir,
+      currentDate: "2026-05-25",
+      // Deterministic launch: the mock process writes no state/output, so the
+      // task stays active (reconciled via the reported-alive pid) and its output
+      // is written explicitly below, mirroring the monitor handling further down.
+      backgroundTaskSpawnProcess: () => ({ pid: 4242, unref: () => {} }),
+      backgroundTaskIsProcessRunning: () => true,
+    });
     const session = await app.runtime.startSession({ title: "CLI ops", cwd: rootDir, agentId: "operator-cli" });
 
     const startOutput = await app.dispatchSlashCommand(
@@ -1078,6 +1098,9 @@ describe("OperatorCliApp", () => {
     if (!task) {
       throw new Error("expected background task");
     }
+    // The mock launch writes no output; supply it deterministically so the
+    // view/watch assertions below don't depend on a real `printf` process.
+    await app.runtime.backgroundTasks.executionService.writeOutput(task, "ok\n");
 
     const listOutput = await app.dispatchSlashCommand({ kind: "background-list" });
     expect(listOutput).toContain(task.id);

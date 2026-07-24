@@ -1,7 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { ensureParentDir, readJsonFile, writeJsonAtomic } from "../shared/fs.js";
-import type { TrainingExecutionState } from "./execution-service.js";
+import {
+  renderAtomicPythonStateWriter,
+  renderAtomicShellStateWrite,
+  shellQuote,
+} from "../shared/launch-script.js";
 import type {
   LocalTrainingExecution,
   LocalTrainingJobManifest,
@@ -185,18 +189,21 @@ function renderLaunchScript(execution: LocalTrainingExecution, plan: TrainingJob
     "set -euo pipefail",
     `mkdir -p ${shellQuote(execution.artifactDir)} $(dirname ${quotedLogFile}) $(dirname ${quotedStatePath})`,
     "started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-    `printf '%s' ${quotedStatePayload} | sed "s/__OPENCLAW_STARTED_AT__/$started_at/g; s/\"\$\$\"/$$/g" > ${quotedStatePath}`,
+    ...renderAtomicShellStateWrite(
+      quotedStatePath,
+      `printf '%s' ${quotedStatePayload} | sed "s/__OPENCLAW_STARTED_AT__/$started_at/g; s/\"\$\$\"/$$/g"`,
+    ),
     `printf '%s\n' "starting ${plan.mode} training for ${plan.jobId}" >> ${quotedLogFile}`,
     `if ${quotedCommand} >> ${quotedLogFile} 2>&1; then`,
     "  completed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
     `  python3 - ${quotedStatePath} $$ "$completed_at" 0 <<'PY'`,
-    ...renderStateWriterPython("completed"),
+    ...renderAtomicPythonStateWriter("completed", "None"),
     "PY",
     "else",
     "  exit_code=$?",
     "  completed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
     `  python3 - ${quotedStatePath} $$ "$completed_at" "$exit_code" <<'PY'`,
-    ...renderStateWriterPython("failed"),
+    ...renderAtomicPythonStateWriter("failed", "'training process exited non-zero'"),
     "PY",
     '  exit "$exit_code"',
     "fi",
@@ -204,26 +211,3 @@ function renderLaunchScript(execution: LocalTrainingExecution, plan: TrainingJob
   ].join("\n");
 }
 
-function renderStateWriterPython(status: TrainingExecutionState["status"]): string[] {
-  return [
-    "import json",
-    "import pathlib",
-    "import sys",
-    "state_path = pathlib.Path(sys.argv[1])",
-    "pid = int(sys.argv[2])",
-    "timestamp = sys.argv[3]",
-    "exit_code = int(sys.argv[4])",
-    "state = json.loads(state_path.read_text())",
-    `state['status'] = '${status}'`,
-    "state['pid'] = pid",
-    "state['updatedAt'] = timestamp",
-    "state['completedAt'] = timestamp",
-    "state['exitCode'] = exit_code",
-    `state['error'] = None if '${status}' == 'completed' else 'training process exited non-zero'`,
-    "state_path.write_text(json.dumps(state, indent=2) + '\\n')",
-  ];
-}
-
-function shellQuote(value: string): string {
-  return `'${value.replaceAll(`'`, `'"'"'`)}'`;
-}

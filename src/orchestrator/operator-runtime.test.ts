@@ -530,6 +530,10 @@ describe("StandaloneOperatorRuntime", () => {
   it("starts, syncs, recovers, lists, and cancels background tasks", async () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
+      // Deterministic launch: return a stable pid and never spawn a real process,
+      // so the detached launch script cannot asynchronously overwrite the state
+      // files this test writes and asserts against.
+      backgroundTaskSpawnProcess: () => ({ pid: 4242, unref: () => {} }),
       backgroundTaskIsProcessRunning: () => false,
     });
     const session = await runtime.startSession({ title: "Tasks", agentId: "main" });

@@ -6,6 +6,62 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-24 (run 9) — 🛠️ Reliability: atomic launch-script state writes + deterministic background-task tests (suite 174+3-flaky → 179 green)
+
+**Audited:** Baseline test health before touching anything. Found the suite was
+**not green** on this environment — 3 tests failed, and the count *varied* run to
+run (3–5 failures), i.e. genuinely flaky. The previous run's "174/174" was
+environment/timing luck. Two distinct root causes:
+
+1. **Torn JSON reads → hard crash (real production bug).** The detached launch
+   scripts emitted by `src/harness/background-tasks.ts` and
+   `src/training/runner.ts` wrote their JSON *state* file **non-atomically** —
+   a shell redirect (`printf … | sed … > state.json`) truncates-then-writes, and
+   the terminal-status Python used `write_text` (also truncate-then-write). A
+   concurrent `readState` during recovery/sync landing mid-write read torn bytes
+   and threw `SyntaxError: … in JSON at position 311`, which propagated out of
+   `readState` and **crashed the whole `recoverBackgroundTasks` operation**. Not
+   a test-only issue: real recovery/sync/status polling hits the same window.
+2. **Real detached processes racing assertions.** Several tests started *real*
+   background processes (`sleep 5`, `printf …`) whose launch scripts wrote state
+   asynchronously, so control-plane health/pairing assertions saw
+   nondeterministic task states (running vs missing-process vs completed).
+
+**Changed (additive):**
+- **New `src/shared/launch-script.ts`** — shared helpers making generated-script
+  state writes atomic (temp file + `mv -f` / `os.replace`, mirroring
+  `writeJsonAtomic`): `renderAtomicShellStateWrite`, `renderAtomicPythonStateWriter`,
+  `shellQuote`. Applied at both write sites in `background-tasks.ts` **and**
+  `training/runner.ts` (removing their duplicated `renderStateWriterPython` +
+  `shellQuote`). rename(2) is atomic on POSIX, so readers now always see a
+  complete old-or-new file.
+- **New `src/shared/launch-script.test.ts`** (5 tests) incl. a **torn-read stress
+  test**: a script performs 40 atomic rewrites of a 4 KB state file while the test
+  hammers it with concurrent reads and asserts **zero** parse failures.
+- **Deterministic background-task test harness.** Injected a no-op mock
+  `backgroundTaskSpawnProcess` (stable pid, writes nothing) into the 4 tests that
+  launched real processes (`operator-runtime.test`, `server.test` main + breaker
+  runtimes, `app.test` ×2), pairing each with the `isProcessRunning` its
+  assertions actually intend (a no-state task is never a health failure; a
+  task the test marks running-but-dead still fails). Added a
+  `backgroundTaskSpawnProcess`/`backgroundTaskIsProcessRunning` DI seam to
+  `OperatorCliApp` (production default unchanged). One test-only output was
+  written explicitly (`writeOutput(task,"ok\n")`) instead of relying on a real
+  `printf`, mirroring the monitor handling already in that test.
+
+**Test results:** build ✅; `typecheck:src` ✅ (exit 0); full `tsc` **unchanged at
+125** (my new/edited files are clean); **`npm test` 179/179 passing, verified
+deterministic across 4 consecutive full runs** (was 174 + 3 flaky). Net +5 tests.
+
+**New idea:** make `writeJsonAtomic` the *single sanctioned* JSON writer and add a
+tiny guard/lint that flags any generated-script `> *.json` / `write_text(...json)`
+that isn't wrapped in the atomic temp+rename helper — so future launch-script
+authors can't reintroduce torn writes. Longer term: land the `verify` script
+(`typecheck:src && build && test`) and have the engine run it as the pre-push
+gate every cycle (this run effectively did that by hand).
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

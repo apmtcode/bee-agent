@@ -3,6 +3,11 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { ensureParentDir, readJsonFile, writeJsonAtomic } from "../shared/fs.js";
+import {
+  renderAtomicPythonStateWriter,
+  renderAtomicShellStateWrite,
+  shellQuote,
+} from "../shared/launch-script.js";
 
 export type BackgroundTaskKind = "task" | "monitor";
 export type BackgroundTaskStatus = "planned" | "running" | "completed" | "failed" | "cancelled";
@@ -754,18 +759,21 @@ function renderLaunchScript(task: BackgroundTaskRecord): string {
     "set -euo pipefail",
     `mkdir -p $(dirname ${quotedStatePath}) $(dirname ${quotedOutputFile})`,
     "started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-    `printf '%s' ${quotedStatePayload} | sed "s/__OPENCLAW_STARTED_AT__/$started_at/g; s/\"\$\$\"/$$/g" > ${quotedStatePath}`,
+    ...renderAtomicShellStateWrite(
+      quotedStatePath,
+      `printf '%s' ${quotedStatePayload} | sed "s/__OPENCLAW_STARTED_AT__/$started_at/g; s/\"\$\$\"/$$/g"`,
+    ),
     `printf '%s\n' "starting ${task.kind} ${task.id}" >> ${quotedOutputFile}`,
     `if cd ${quotedCwd} && bash -lc ${quotedCommand} >> ${quotedOutputFile} 2>&1; then`,
     "  completed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
     `  python3 - ${quotedStatePath} $$ "$completed_at" 0 <<'PY'`,
-    ...renderStateWriterPython("completed"),
+    ...renderAtomicPythonStateWriter("completed", "None"),
     "PY",
     "else",
     "  exit_code=$?",
     "  completed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
     `  python3 - ${quotedStatePath} $$ "$completed_at" "$exit_code" <<'PY'`,
-    ...renderStateWriterPython("failed"),
+    ...renderAtomicPythonStateWriter("failed", "f'background task exited non-zero ({exit_code})'"),
     "PY",
     '  exit "$exit_code"',
     "fi",
@@ -773,26 +781,3 @@ function renderLaunchScript(task: BackgroundTaskRecord): string {
   ].join("\n");
 }
 
-function renderStateWriterPython(status: BackgroundTaskExecutionState["status"]): string[] {
-  return [
-    "import json",
-    "import pathlib",
-    "import sys",
-    "state_path = pathlib.Path(sys.argv[1])",
-    "pid = int(sys.argv[2])",
-    "timestamp = sys.argv[3]",
-    "exit_code = int(sys.argv[4])",
-    "state = json.loads(state_path.read_text())",
-    `state['status'] = '${status}'`,
-    "state['pid'] = pid",
-    "state['updatedAt'] = timestamp",
-    "state['completedAt'] = timestamp",
-    "state['exitCode'] = exit_code",
-    `state['error'] = None if '${status}' == 'completed' else f'background task exited non-zero ({exit_code})'`,
-    "state_path.write_text(json.dumps(state, indent=2) + '\\n')",
-  ];
-}
-
-function shellQuote(value: string): string {
-  return `'${value.replaceAll(`'`, `"'"'"'`)}'`;
-}

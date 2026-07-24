@@ -8,6 +8,18 @@ unchecked items are queued. Keep this richer than you found it each run.
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`
       (2026-06-22).
+- [x] **Atomic launch-script state writes** (2026-07-24, run 9) — background-task
+      and training launch scripts now write JSON state via temp+`mv`/`os.replace`
+      (`src/shared/launch-script.ts`), fixing torn reads that crashed
+      recovery/sync. Covered by a torn-read stress test.
+- [x] **Deterministic background-task tests** (2026-07-24, run 9) — inject a
+      no-op mock spawn so tests don't race real detached processes; suite is now
+      179/179 green across repeated runs (was 174 + 3 flaky). Added a
+      spawn/probe DI seam to `OperatorCliApp`.
+- [ ] Guard/lint: flag any generated-script `> *.json` or Python
+      `write_text(...json)` that isn't wrapped in the atomic temp+rename helper,
+      so torn writes can't be reintroduced. Make `writeJsonAtomic` the single
+      sanctioned JSON writer.
 - [ ] **Pay down typecheck debt** (surfaced by the `typecheck` script). Full
       `tsc --noEmit` count was **397** on 2026-06-22; now **125**. 🎯 ALL source
       (`src/**` non-test) files typecheck clean since run 7; remaining 125 errors
