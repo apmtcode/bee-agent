@@ -6,6 +6,57 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-24 (run 9) — 🩹 Hermetic background-task tests: suite made deterministic (flaky 3–4 fails → 0)
+
+**Audited:** The health of the engine's own verification gate. On a clean
+checkout `npm test` was **red** — 3–4 failing tests, and the *count varied
+between runs* (3, then 4, then 3). Root-caused the nondeterminism: several
+background-task lifecycle tests call `runtime.startBackgroundTask(...)`, which
+**spawns a real detached OS process** running the generated launch script. That
+script writes the task's execution-state JSON file *concurrently* with the test's
+own `writeState`/`readState` on the same path → partial-JSON `SyntaxError`s,
+status races, and platform-control health flapping (`control=active` vs
+`control=degraded`). It happened to pass at run 8 by timing luck; in this
+container it loses the race.
+
+**Changed (additive, test-only seam):**
+- New `src/harness/test-support.ts` → `makeNoopSpawn()`: a deterministic
+  `SpawnBackgroundProcess` that returns an incrementing fake pid and launches
+  nothing, so the launch script never runs and never races the test's state
+  writes. Production always uses the real `spawn`; this is purely a test seam.
+- `src/cli/app.ts`: threaded two optional injectors through
+  `OperatorCliAppOptions` → the runtime (`backgroundTaskSpawnProcess`,
+  `backgroundTaskIsProcessRunning`). Forwarded only when provided, so production
+  behaviour is byte-for-byte unchanged. `OperatorCliApp` previously hard-coded
+  `new StandaloneOperatorRuntime({ rootDir })` with **no** way to inject a
+  spawner — the gap that forced app tests to use real processes.
+- Injected `makeNoopSpawn()` at the spawning sites in
+  `operator-runtime.test.ts` (recovery), `server.test.ts` (main RPC, drift,
+  breaker, event-filter monitors), and `app.test.ts` (remote-lifecycle +
+  background/monitor tests). Where a test asserts a *dead* process it keeps its
+  intent via a liveness predicate — e.g. the remote-lifecycle test rewrites the
+  degraded task to sentinel `pid 999999` and now injects
+  `isProcessRunning: (pid) => pid !== 999999`, so `control=degraded:background
+  task failed` is produced deterministically rather than by process-timing. The
+  background/monitor test now writes the task's `ok` stdout + running state
+  explicitly (mirroring how it already simulated its monitor).
+
+**Test results:** full suite **reliably green** — ran `npm test` ×3 →
+**174/174** every time (was 3–4 nondeterministic failures at baseline). Ran the
+three previously-flaky files ×4 individually → stable. Build ✅. `typecheck:src`
+✅ (exit 0; new file is source-clean). Full `tsc` **125 → 125** (no regression;
+`test-support.ts` adds zero errors).
+
+**New idea:** add a **flakiness gate** to the (planned) `verify` script — run the
+process-spawning test subset N× and fail if pass/fail differs between runs, so
+nondeterminism is caught before it reaches `main` instead of surfacing an hour
+later as a "green suddenly went red" mystery. Second idea: a global test setup
+that defaults `backgroundTaskSpawnProcess` to `makeNoopSpawn()` unless a test
+opts into real spawning, so no future test can accidentally leak a real detached
+process into CI.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

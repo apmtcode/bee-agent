@@ -38,8 +38,20 @@ unchecked items are queued. Keep this richer than you found it each run.
     `skills.executable.*`, `push.subscriptions.*`, `trajectories.*`, `replays.*`,
     `cron.runs`/misc — plus a few genuine test-only typings. Map the rest, then
     fix residual test-only typings.
+- [x] **Make the test suite deterministic** — DONE run 9. Background-task
+      lifecycle tests spawned real detached OS processes whose launch script
+      raced the tests' own state-file writes → 3–4 *nondeterministic* failures.
+      Added `src/harness/test-support.ts#makeNoopSpawn`, threaded
+      `backgroundTaskSpawnProcess`/`backgroundTaskIsProcessRunning` through
+      `OperatorCliApp`, and injected the no-op spawner at all spawning test
+      sites. Suite now `174/174` across repeated runs.
 - [ ] Add a `verify` npm script (`typecheck && build && test`) and have the
-      engine run it as a pre-push self-check each cycle.
+      engine run it as a pre-push self-check each cycle. Extend it with a
+      **flakiness gate**: run the process-spawning subset N× and fail on
+      differing results, so nondeterminism is caught before `main`.
+- [ ] Global vitest setup that defaults `backgroundTaskSpawnProcess` to
+      `makeNoopSpawn()` unless a test opts into real spawning — belt-and-suspenders
+      so no future test can leak a real detached process into CI.
 - [x] Interim **source-only typecheck gate** — DONE run 7. `tsconfig.src.json`
       (excludes `**/*.test.ts`) + `typecheck:src` script; passes (exit 0). Next:
       have the engine run it as a per-run pre-push self-check.
