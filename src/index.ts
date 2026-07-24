@@ -265,6 +265,17 @@ export {
   ReplayRuntimeService,
 } from "./capture/replay-service.js";
 export {
+  DEFAULT_MOVEMENT_TEMPLATES,
+  generateSyntheticReplays,
+  partitionReplays,
+} from "./capture/synthetic-stream.js";
+export type {
+  MovementTemplate,
+  MovementTemplateStep,
+  SyntheticReplay,
+  SyntheticStreamOptions,
+} from "./capture/synthetic-stream.js";
+export {
   CAPTURE_TIER_VALUES,
   DEFAULT_SENSITIVE_APP_DENYLIST,
   buildTrajectorySpan,
@@ -422,6 +433,31 @@ export type {
   RlTrainingConfig,
   SftTrainingConfig,
 } from "./training/job-manifest.js";
+export {
+  buildMovementDataset,
+  evaluateMovementModel,
+  MOVEMENT_END_TOKEN,
+  NgramMovementBackend,
+  tokenizeMovementEvent,
+} from "./training/movement-model.js";
+export type {
+  BuildMovementDatasetOptions,
+  EvaluateMovementModelOptions,
+  MovementDataset,
+  MovementEvalPerSequence,
+  MovementEvalResult,
+  MovementGenerateOptions,
+  MovementModel,
+  MovementModelBackend,
+  MovementModelState,
+  MovementPrediction,
+  MovementPredictionCandidate,
+  MovementSequence,
+  MovementToken,
+  MovementTrainOptions,
+  NgramMovementBackendOptions,
+  ReplayLike,
+} from "./training/movement-model.js";
 export {
   FileTrainingJobStore,
 } from "./training/job-store.js";

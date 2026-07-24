@@ -59,16 +59,38 @@ unchecked items are queued. Keep this richer than you found it each run.
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
 (exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
-      objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
-      deterministic mock backend (so cloud/CI tests pass) and a documented seam
+- [x] Inventory what `src/capture` + `src/training` already implement vs. the
+      objective's five pieces — DONE run 9. Capture→schema→dataset→replay existed
+      (`src/capture`); `runner.ts` planned real MLX/axolotl on-device runs. The
+      missing piece was the **model layer** (train/infer), now added.
+- [x] Pluggable local-model backend interface with a deterministic mock — DONE
+      run 9. `MovementModelBackend` seam + `NgramMovementBackend` (backoff
+      n-gram, no randomness) in `src/training/movement-model.ts`; documented seam
       for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+- [x] Synthetic event-stream generator — DONE run 9.
+      `src/capture/synthetic-stream.ts` (seeded LCG, template grammar) +
+      `partitionReplays`; validates capture→dataset→replay→train→eval with no OS
+      input.
+- [x] Generalization eval harness — DONE run 9. `evaluateMovementModel`
+      (next-token accuracy + top-K recall) over held-out synthetic replays.
+- [ ] **Close the inference loop:** wire `MovementModel.generate()` into
+      `ReplayRuntimeService` so a trained policy drives the replay engine
+      (predict → synthesise `ReplayTimelineEvent` → execute via device/browser
+      adapters). Makes "learn to repeat movements" an autonomous replay agent.
+- [ ] Second movement backend behind the same interface (e.g. a smoothed
+      Kneser-Ney or a tiny embedding-KNN) to prove the seam and compare
+      generalisation against the n-gram baseline on the eval harness.
+
+## Known blockers / reliability
+- [ ] **De-flake the background-task test path** (surfaced run 9). Full suite
+      shows 2–3 run-to-run-varying failures in `operator-runtime.test.ts`,
+      `server.test.ts`, `app.test.ts` — a `readJsonFile` JSON parse error
+      (`Expected ',' or '}'…`) from reading a **truncated** background-task state
+      file. `writeJsonAtomic` is temp+rename-atomic, so the culprit is a
+      non-atomic *writer* in the task path (or a test writing state directly).
+      Fix options: (a) route all state writes through `writeJsonAtomic`; (b)
+      one-shot retry-on-parse-error in `readJsonFile` to absorb the race. NOTE:
+      these predate run 9 and are unrelated to the movement-model change.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

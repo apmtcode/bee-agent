@@ -6,6 +6,73 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-24 (run 9) — 🧠 Movement-model backend: pluggable train/infer + synthetic streams + eval
+
+**Audited:** The local-movement learning subsystem (standing objective #2) —
+`src/capture/` (recorder, replay, trajectory, adapters, consent, ingestion) and
+`src/training/` (exporter, job store/manifest, runner, execution service).
+**Gap found:** the subsystem could *record* movements (capture → schema →
+dataset → replay) and *plan* a real on-device run (`runner.ts` emits MLX/axolotl
+commands + a launch script), but there was **no model layer that could actually
+train on a movement dataset and infer the next movement** — objective #2 parts
+(c) "post-train a local model to repeat the recorded movements" and (d)
+"generalize to new but related movements" were unimplemented, and nothing was
+cloud/CI-runnable because the runner only shells out to MLX on Apple Silicon.
+
+**Changed (additive; two new modules + barrel exports):**
+- **`src/training/movement-model.ts`** — the model layer:
+  - `tokenizeMovementEvent` / `buildMovementDataset` turn `ReplayTimelineEvent`
+    streams into discrete movement-token sequences (coarse `kind:id` tokens so
+    the model generalises across sessions rather than memorising summaries).
+  - **`MovementModelBackend`** interface — the pluggable seam (`train(dataset)`
+    → `MovementModel`, `restore(state)`), so a real on-device small model can be
+    swapped in later without touching call sites.
+  - **`NgramMovementBackend`** — the deterministic default/mock: a variable-order
+    n-gram next-movement predictor with **stupid-backoff generalisation** (unseen
+    exact contexts back off to shorter contexts). No randomness → reproducible in
+    the cloud. Supports `predictNext` (token + probability + ranked candidates),
+    autoregressive `generate` (end-token + `maxSteps` cap so cyclic policies
+    can't loop forever), and `serialize`/`restore` round-trips.
+  - **`evaluateMovementModel`** — generalisation eval harness: next-token
+    accuracy + top-K recall over held-out sequences.
+- **`src/capture/synthetic-stream.ts`** — deterministic (seeded LCG, never
+  `Math.random`) synthetic movement-stream generator from a small grammar of
+  desktop task templates (open-and-edit / search-and-select / copy-between-
+  windows, sharing sub-flows so held-out generalisation is measurable), plus
+  `partitionReplays` for train/held-out splits. Lets the full capture → dataset
+  → replay → train → eval loop run end-to-end with **no OS input**.
+- Barrel exports added to `src/index.ts` for both modules.
+
+**Test results:** two new test files, **18/18 passing** and deterministic
+(`movement-model.test.ts` 12, `synthetic-stream.test.ts` 6) — cover
+reproduce-recorded-sequence, backoff generalisation, tie-break determinism,
+serialize/restore behavioural equivalence, generation cap, and a >50%-accuracy
+generalisation check on 30 held-out synthetic replays. `typecheck:src` ✅ CLEAN
+(source stays fully green). Build ✅.
+
+**⚠️ Pre-existing flaky failures (NOT caused by this change):** the full suite
+now shows **2–3 failures that vary run-to-run** in `operator-runtime.test.ts`,
+`server.test.ts`, `app.test.ts` — all a JSON parse error
+(`Expected ',' or '}'…`) from `readJsonFile` reading a **truncated** background-
+task state file. Verified pre-existing by stashing this run's changes (still
+fails) and by the non-deterministic count (2 then 3). Root cause is a
+non-atomic *writer* in the background-task test path racing an atomic reader
+(`writeJsonAtomic` itself is temp+rename-atomic, so it isn't the culprit). Since
+these are flaky, pre-existing, and unrelated, and this run's diff is additive +
+fully green on its own, work is pushed to the designated feature branch
+`claude/peaceful-dirac-1vupbq` with this blocker recorded and queued in ROADMAP.
+
+**New idea:** now that inference exists, close the loop — feed
+`MovementModel.generate()` output back through the existing `ReplayRuntimeService`
+so a trained policy can *drive* the replay engine (predict next movement →
+synthesise a `ReplayTimelineEvent` → execute via the device/browser adapters).
+That turns "learn to repeat movements" into an actual autonomous replay agent,
+with the n-gram backend as the cloud-testable stand-in for the on-device model.
+Second idea: harden `readJsonFile` with a one-shot retry-on-parse-error (re-read
+after a tick) to absorb the truncated-write race and de-flake the suite.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
