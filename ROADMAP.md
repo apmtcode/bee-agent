@@ -38,8 +38,21 @@ unchecked items are queued. Keep this richer than you found it each run.
     `skills.executable.*`, `push.subscriptions.*`, `trajectories.*`, `replays.*`,
     `cron.runs`/misc — plus a few genuine test-only typings. Map the rest, then
     fix residual test-only typings.
-- [ ] Add a `verify` npm script (`typecheck && build && test`) and have the
-      engine run it as a pre-push self-check each cycle.
+- [x] **De-flake the verification gate** (2026-07-24, run 9). `npm test` was
+      nondeterministic on `origin/main` (3 tests racing real detached OS
+      processes); now **174/174 stable across 5 runs**. Added optional
+      `backgroundTaskSpawnProcess`/`backgroundTaskIsProcessRunning` seams to
+      `OperatorCliApp` and injected deterministic spawn stubs in the affected
+      `server.test.ts`/`app.test.ts` cases.
+- [ ] Add a `verify` npm script (`typecheck:src && build && test`) and have the
+      engine run it as a pre-push self-check each cycle — **run the suite twice**
+      so a flake is caught the run it appears (see run 9).
+- [ ] Flake-guard lint: flag any test that constructs a runtime/app with a real
+      `command:` background task but no `backgroundTaskSpawnProcess` stub.
+- [ ] Health telemetry: append pass-count + build/test wall-time to
+      `.evolution/health.jsonl` each run to detect regressions/flakes over time
+      (moved up from Innovation backlog — the flaky-gate discovery makes it
+      concrete).
 - [x] Interim **source-only typecheck gate** — DONE run 7. `tsconfig.src.json`
       (excludes `**/*.test.ts`) + `typecheck:src` script; passes (exit 0). Next:
       have the engine run it as a per-run pre-push self-check.
@@ -65,6 +78,19 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
       for a real on-device small model.
+      **Gap found run 9:** `src/training/runner.ts` only *emits launch scripts*
+      for external MLX/axolotl processes — nothing in-process actually learns
+      from a movement dataset or does inference, so objective #2(c)/(d)
+      (post-train to repeat movements + generalize) is unvalidated in the cloud.
+      Concrete next increment: `src/training/movement-model.ts` with a
+      `MovementModelBackend` interface (`train(dataset) → TrainedMovementModel`
+      with `predictNext`/`generate`/`serialize`), a deterministic variable-order
+      **n-gram/Markov backend** that (a) exactly replays training prefixes and
+      (b) backs off to shorter contexts to generalize to unseen-but-related
+      sequences, a seeded **synthetic movement-stream generator**, and a
+      **generalization eval** (teacher-forced next-step accuracy on held-out
+      sequences). Consumes the existing `ReplayTimelineEvent`/`TrajectoryAction`
+      shapes. All cloud-testable; real on-device backend is a later pluggable impl.
 - [ ] Synthetic event-stream generator to validate capture→dataset→replay
       round-trips without real OS input.
 - [ ] Generalization eval harness: measure replay fidelity on held-out but

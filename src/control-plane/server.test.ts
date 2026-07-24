@@ -84,6 +84,13 @@ describe("OperatorControlPlaneServer", () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir,
       backgroundTaskIsProcessRunning: () => false,
+      // Deterministic no-op spawn: real detached processes (e.g. `sleep 5`)
+      // write a "running" state file at an unpredictable time. Once that file
+      // exists, isProcessRunning:()=>false classifies the task as
+      // missing-process → control "degraded", which flips remoteStatus off
+      // "active" on slower hosts. The stub keeps process lifetime under the
+      // test's explicit control.
+      backgroundTaskSpawnProcess: () => ({ pid: 4321, unref() {} }),
       delivery: new OperatorDeliveryService(rootDir, {
         sendBrowserPush: async () => {},
       }),
@@ -953,6 +960,9 @@ describe("OperatorControlPlaneServer", () => {
     const driftingRuntime = new StandaloneOperatorRuntime({
       rootDir: driftingRootDir,
       backgroundTaskIsProcessRunning: () => false,
+      // See the note on the primary runtime above: the explicit writeState calls
+      // below define this task's lifecycle; a real spawn would race them.
+      backgroundTaskSpawnProcess: () => ({ pid: 4321, unref() {} }),
     });
     const driftingServer = new OperatorControlPlaneServer({ runtime: driftingRuntime });
     const driftingBootstrap = await driftingServer.handle({
@@ -1019,6 +1029,9 @@ describe("OperatorControlPlaneServer", () => {
     const breakerRuntime = new StandaloneOperatorRuntime({
       rootDir: breakerRootDir,
       backgroundTaskIsProcessRunning: () => false,
+      // See the note on the primary runtime above: the explicit writeState calls
+      // below define these tasks' lifecycles; real `sleep 5` spawns would race them.
+      backgroundTaskSpawnProcess: () => ({ pid: 4321, unref() {} }),
     });
     const breakerServer = new OperatorControlPlaneServer({ runtime: breakerRuntime });
     const breakerOne = await breakerServer.handle({

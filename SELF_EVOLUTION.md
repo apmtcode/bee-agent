@@ -6,6 +6,60 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-24 (run 9) — 🔴→🟢 De-flaked the verification gate: 3 nondeterministic tests → 174/174 stable
+
+**Audited:** The verification gate itself (step 5 of the run procedure). On this
+host (`node v22`, `@types/node ^26`) the committed `origin/main` did **not** pass
+`npm test`: **3 tests failed**, and rerunning showed the count *varied* — the
+gate every prior run trusted as "174/174" is actually **flaky**. A flaky gate is
+nearly as dangerous as the un-runnable one run 1 fixed: it can green-light a real
+regression or red-flag a clean change at random. So this run's highest-value work
+was making the gate trustworthy before adding any capability on top of it.
+
+**Root cause (single, shared):** several tests exercise remote/platform/background
+task control by spawning **real detached OS processes** (`printf`, `sleep 5`) and
+then asserting against manually-written execution state. The real launch script
+writes its own `state`/`output` files *asynchronously*, so it **races** the test's
+explicit `writeState`/`writeOutput`:
+- `operator-runtime.test.ts` — the real `printf` clobbered the test's output
+  (`expected "line-2"`, got `"starting task …"`).
+- `server.test.ts` — once the real `sleep 5` wrote a `running` state file,
+  `isProcessRunning:()=>false` reclassified the task as *missing-process* →
+  control `degraded`, flipping `remoteStatus` off `active` on slower hosts.
+- `app.test.ts` (session-lifecycle) — same race aggregated up to platform
+  `control=mixed` instead of `active`.
+- `app.test.ts` (background/monitor) — genuinely flaky (~1-in-4): asserted on the
+  real `printf ok` **output** before the detached process had written it.
+
+**Changed (additive, production-safe):**
+- `src/cli/app.ts`: added two **optional** test seams to `OperatorCliAppOptions` —
+  `backgroundTaskSpawnProcess` and `backgroundTaskIsProcessRunning` — threaded into
+  the internal `StandaloneOperatorRuntime` via conditional spreads. Unset in
+  production ⇒ **byte-identical** behavior (real `spawn`); the runtime already
+  exposed these seams, the CLI app just didn't forward them.
+- De-flaked the four tests by completing the isolation they already intended:
+  injected a deterministic no-op spawn (`() => ({ pid: 4321, unref(){} })`) into
+  the 3 `server.test.ts` runtimes and the 2 `app.test.ts` apps that drive state
+  manually, and for the background/monitor test kept the task `running` under a
+  live-pid stub while writing the `ok` output/state the launch script would have.
+  `process.kill(-pid)` already swallows `ESRCH`, so a stub pid stops cleanly.
+
+**Test results:** `npm test` **174/174, green 5 runs in a row** (was 171/174 with
+a varying failure set). `npm run build` ✅. `typecheck:src` ✅ (exit 0 — kept the
+run-7 source-clean milestone; fixed a `StandaloneOperatorOptions` import I added).
+Full `tsc` debt **unchanged at 125** (all in test files).
+
+**New idea:** the flaky gate went undetected for 8 runs because each run trusted
+the *prior* run's "174/174" claim instead of establishing its own baseline. Add a
+**`verify` script** (`typecheck:src && build && test`) that runs the suite
+**twice** (or with `--retry=0` and a repeat) as the engine's per-run pre-push
+self-check, and record pass-count + wall-time to an append-only
+`.evolution/health.jsonl` so a regression *or* a new flake is caught the run it
+appears, not 8 runs later. Longer term: a lint that flags any test constructing a
+runtime/app with a real `command:` but no `backgroundTaskSpawnProcess` stub.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

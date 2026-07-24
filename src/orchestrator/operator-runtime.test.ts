@@ -531,6 +531,11 @@ describe("StandaloneOperatorRuntime", () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
       backgroundTaskIsProcessRunning: () => false,
+      // Deterministic no-op spawn: a real detached process would asynchronously
+      // write its own state/output and race the explicit writeState/writeOutput
+      // calls below (flaky on slower hosts). The stub completes the isolation
+      // that backgroundTaskIsProcessRunning already intends.
+      backgroundTaskSpawnProcess: () => ({ pid: 4321, unref() {} }),
     });
     const session = await runtime.startSession({ title: "Tasks", agentId: "main" });
 
