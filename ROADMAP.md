@@ -62,13 +62,32 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      for a real on-device small model. **DONE run 9** —
+      `src/training/model-backend.ts`: `MovementModelBackend` interface +
+      `MovementModelBackendRegistry` + `DeterministicMarkovMovementBackend`
+      (variable-order back-off Markov: exact suffix ⇒ replay, tool back-off ⇒
+      generalize, prior fallback).
+- [x] Synthetic event-stream generator to validate capture→dataset→replay
+      round-trips without real OS input. **DONE run 9** — `buildMovementDataset`
+      + `rolloutMovements` validated against synthetic macro trajectories in
+      `model-backend.test.ts` (no real OS input).
+- [x] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories. **DONE run 9** — `evaluateMovementModel`
+      reports exact/tool accuracy + coverage + source breakdown on held-out
+      spans.
+- [ ] `ReplayTimelineEvent`-level movement backend (predict timing/observations,
+      not just action tokens) so rollouts carry `ts`; keep the token backend as
+      the fast path.
+- [ ] Auto-train + eval loop: after each reviewed export, train the mock backend
+      on a train split, run `evaluateMovementModel` on a held-out split, and
+      append accuracy/coverage to a metrics file to detect capture/replay
+      regressions and flag when a real on-device backend beats the mock.
+- [ ] Fix the flaky launch-script state JSON (`renderLaunchScript` in
+      `runner.ts`): the `sed`-substituted timestamp can yield malformed JSON in
+      some shells, causing `operator-runtime`/`app`/`server` background-task
+      tests to fail non-deterministically in cloud sandboxes.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

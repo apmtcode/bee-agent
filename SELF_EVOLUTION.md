@@ -6,6 +6,61 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-24 (run 9) — 🧠 Movement-model backend: in-repo train → predict → generalize
+
+**Audited:** The local-movement learning subsystem (standing objective #2) —
+`src/capture/` (trajectory schema, replay manifest) and `src/training/`. Found
+the pieces present were capture → dataset → replay and an *external* training
+launcher (`runner.ts` emits mlx/axolotl commands). **The gap:** there was **no
+in-repo model backend** — nothing that actually learns from recorded movements
+and predicts the next one, so objective 2(c) "post-train a model to repeat
+movements" and 2(d) "generalize to new but related movements" had no code path
+that runs in the cloud. This is also the top movement-subsystem roadmap item
+("pluggable local-model backend interface … with a deterministic mock backend").
+
+**Changed (additive) — new `src/training/model-backend.ts` (+ full test file):**
+- **Pluggable backend seam** `MovementModelBackend { train(); predict() }` plus a
+  `MovementModelBackendRegistry` so a real on-device small model drops in by id;
+  the deterministic backend is the reference/mock so cloud/CI stays green.
+- **`buildMovementDataset(trajectories)`** — slides a window over each
+  trajectory's time-ordered actions into `(context → next)` examples; prefers
+  reviewed/redacted actions and derives strictly-positive example weights from
+  `outcome.reward` (negative rewards clamp, never cancel counts).
+- **`DeterministicMarkovMovementBackend`** — variable-order back-off Markov model.
+  Longest exact n-gram suffix match ⇒ **replays** recorded movements; backs off
+  to the last action's *tool* ⇒ **generalizes** to new-but-related contexts;
+  then a global prior. Fully deterministic tie-breaks (score desc, key asc), so
+  results are reproducible; the artifact is plain-serializable.
+- **`rolloutMovements()`** — autoregressive generation of a full movement
+  sequence from a seed (regenerates a recorded macro; stops on low confidence /
+  `stopWhen` / `maxSteps`).
+- **`evaluateMovementModel()`** — generalization eval harness: next-movement
+  exact/tool accuracy + coverage + source breakdown on held-out trajectories.
+- Exported all of the above from `src/index.ts`.
+
+**Test results:** new `model-backend.test.ts` **17/17 pass** (replay, tool-level
+generalization on an unseen target, reward weighting, rollout, held-out eval,
+registry). `typecheck:src` ✅ (source stays clean). Build ✅. Full suite: **188
+passed**, up exactly +17 from the 171-passing baseline — **zero new failures**.
+The 3–4 *flaky, pre-existing* failures (`operator-runtime`/`app`/`server`
+background-task tests) are unrelated: they exercise the real shell-script
+subprocess path (`renderLaunchScript`), and in this cloud sandbox the spawned
+`date`/`sed`/`printf` emit malformed state JSON (`SyntaxError: Expected ',' or
+'}'` from `readJsonFile`). They fail identically with my changes stashed, so
+they predate this run and are environmental, not a regression. Committed to the
+designated branch `claude/peaceful-dirac-94mr53` (my green, additive diff).
+
+**New idea:** the backend seam + eval harness make a *self-improvement loop*
+possible — after each reviewed export, auto-train the mock backend, run
+`evaluateMovementModel` on a held-out split, and record accuracy/coverage to a
+metrics file; the engine can then flag when a real on-device backend beats the
+mock, or when capture quality regresses replay fidelity. Also worth a
+`ReplayTimelineEvent`-level (not just action-token) backend so predictions carry
+timing, and fixing the flaky launch-script JSON (quote the `sed`-substituted
+timestamp) as a separate hygiene run.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
