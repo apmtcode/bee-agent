@@ -6,6 +6,61 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-24 (run 9) — 🐛 Fix corrupt background-task state JSON + deterministic sim spawn (suite 171→175 green)
+
+**Audited:** Started from the required green gate and found the suite was **not**
+174/174 — **3 tests failed** (`operator-runtime`, `app`, `server` control-plane).
+Root-caused two distinct, real defects in the background-task subsystem (a
+capability-parity feature ported from the reference agents), not test bugs:
+
+1. **Corrupt initial-state JSON (deterministic crash).** `renderLaunchScript`
+   wrote the launched task's initial `state.json` with a brittle
+   `printf '%s' <json> | sed "…s/\"\$\$\"/$$/g"` pipeline. For any command
+   containing quotes or newlines (e.g. the test's `printf 'line-1\nline-2\n'`)
+   the shell-quoting + sed substitutions produced **invalid JSON**, so every
+   later `readState`/`reconcileTask` threw `SyntaxError: … in JSON` and crashed
+   recovery. Confirmed by dumping the on-disk file
+   (`"pid":"$$"` unsubstituted, `command` value with unescaped quotes).
+2. **Non-deterministic control-state race (flaky).** Tests inject
+   `backgroundTaskIsProcessRunning: () => false` but let a **real detached
+   `run.sh` spawn**. The remote/platform control-state derivation reads the live
+   task's state file and calls the mocked `isProcessRunning`, so whether a
+   freshly-"running" task reads back as `active`/`mixed` vs `degraded` depended
+   on whether the async process had written its state file yet — 1-in-5 flaky
+   locally (`state: "mixed"` expected, `"degraded"` received).
+
+**Changed (additive, in `src/harness/background-tasks.ts` + `src/index.ts`):**
+- Rewrote the initial-state write to use the **same python/json path** as the
+  completion writers (new `renderInitialStateWriterPython`), and pass the base
+  payload **base64-encoded** so it crosses the shell as one opaque token with
+  **zero quoting hazards** — robust to quotes, newlines, `$`, backslashes. (A
+  first attempt passed raw JSON as a shell argv; `shellQuote` of a quote-heavy
+  blob still corrupted it at char 267, so base64 is the durable fix.)
+- Added exported **`createSimulatedBackgroundSpawn(startPid?)`** — a
+  deterministic no-op spawn (monotonic fake PIDs, launches nothing) fulfilling
+  the guardrail's "provide a simulated/mock implementation so tests pass in the
+  cloud." Paired it with every `isProcessRunning: () => false` across the 4
+  affected test files (23 sites) so those suites never spawn real processes.
+- New regression test (`background-tasks.test.ts`): renders + runs a real
+  `run.sh` whose command is full of quotes and newlines and asserts the
+  persisted state is **valid, faithfully round-tripped JSON** (the exact old
+  failure); command-exit status intentionally ignored (a minimal login shell
+  returns 127 for the inner command — irrelevant to JSON validity).
+
+**Test results:** suite **171→175 passing**, green **4× consecutively** (was
+flaky). `typecheck:src` ✅ (source stays clean). Full `tsc` **125** (unchanged —
+no test-debt regression). Build ✅.
+
+**New idea:** the `run.sh` launcher embeds three near-identical python state
+writers assembled as string arrays — fragile to edit and untested in isolation.
+Extract a single parameterized `renderStateWriterPython({phase})` (or better,
+ship a tiny committed `state_writer.py` the script invokes with args) and add a
+focused unit test that feeds it hostile payloads. Bigger: a `verify` gate that
+actually **executes** a generated `run.sh` in CI would have caught both defects
+a month ago instead of them masquerading as "174/174".
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

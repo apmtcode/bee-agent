@@ -39,7 +39,15 @@ unchecked items are queued. Keep this richer than you found it each run.
     `cron.runs`/misc — plus a few genuine test-only typings. Map the rest, then
     fix residual test-only typings.
 - [ ] Add a `verify` npm script (`typecheck && build && test`) and have the
-      engine run it as a pre-push self-check each cycle.
+      engine run it as a pre-push self-check each cycle. **Note (run 9):** the
+      logged "174/174 green" was optimistic — 3 tests were actually failing
+      (a deterministic corrupt-JSON crash + a spawn/race flake in the
+      background-task subsystem), fixed run 9 → 175/175 green ×4. A real
+      `verify` gate that *executes* a generated `run.sh` would have caught both.
+- [ ] **Extract the `run.sh` python state writers** (run 9 idea): the launcher
+      embeds three near-identical inline python writers as string arrays.
+      Consolidate into one parameterized writer (or a committed `state_writer.py`
+      invoked with args) and unit-test it against hostile payloads in isolation.
 - [x] Interim **source-only typecheck gate** — DONE run 7. `tsconfig.src.json`
       (excludes `**/*.test.ts`) + `typecheck:src` script; passes (exit 0). Next:
       have the engine run it as a per-run pre-push self-check.
@@ -65,6 +73,10 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
       for a real on-device small model.
+- [x] Deterministic simulated process spawn for the background-task subsystem
+      (`createSimulatedBackgroundSpawn`) — DONE run 9. Same "mock backend so
+      cloud tests pass" pattern this objective needs for the training runner;
+      reuse the shape (injected interface + exported deterministic fake).
 - [ ] Synthetic event-stream generator to validate capture→dataset→replay
       round-trips without real OS input.
 - [ ] Generalization eval harness: measure replay fidelity on held-out but

@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -369,5 +370,51 @@ describe("BackgroundTaskExecutionService", () => {
     await expect(fs.readFile(path.join(rootDir, task.execution.launchScript), "utf8")).resolves.toContain("bash -lc");
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
+  });
+
+  // Regression: the launch script's initial "running" state was written with a
+  // brittle `printf … | sed` pipeline that mangled any command containing
+  // quotes or newlines into invalid JSON, crashing every later readState. This
+  // launches a real script whose command is full of shell-hostile characters
+  // and asserts the persisted state is valid, faithfully round-tripped JSON.
+  it("persists valid state JSON for commands containing quotes and newlines", async () => {
+    const rootDir = await makeTempDir();
+    // A no-op spawn keeps `start()` from launching a real detached process; we
+    // then execute the generated launch script synchronously so the assertion
+    // is deterministic. Real bash + python3 (hard deps of the subsystem) back
+    // the script's initial + completion state writers.
+    const store = new FileBackgroundTaskStore(
+      path.join(rootDir, "background-tasks.json"),
+      () => ({ pid: 4242, unref() {} }),
+      () => false,
+    );
+    const service = new BackgroundTaskExecutionService(rootDir);
+    const nastyCommand = `echo "double\\"quote"; echo 'single quote'; printf 'line-1\nline-2\n'`;
+    const task = await store.start({
+      title: "Quote torture",
+      command: nastyCommand,
+      cwd: rootDir,
+      kind: "task",
+    });
+
+    // Run the real run.sh. Its initial "running" write used to emit invalid
+    // JSON for quote/newline commands, so readState would throw (the regression
+    // this guards). We only care that a valid, faithful state is persisted — the
+    // command's own exit status is irrelevant here and intentionally ignored.
+    try {
+      execFileSync("bash", [path.join(rootDir, task.execution.launchScript)], { cwd: rootDir, stdio: "ignore" });
+    } catch {
+      // The launched command may exit non-zero in a minimal shell; the state
+      // writers still run and must leave valid JSON behind.
+    }
+
+    // readState JSON.parses the file; a malformed payload throws here.
+    const state = await service.readState(task);
+    expect(state).toBeDefined();
+    // A terminal state was recorded (completed on success, failed otherwise).
+    expect(["completed", "failed"]).toContain(state?.status);
+    // The command survives the round-trip through JSON exactly, quotes and all.
+    expect(state?.command).toBe(nastyCommand);
+    expect(typeof state?.pid).toBe("number");
   });
 });

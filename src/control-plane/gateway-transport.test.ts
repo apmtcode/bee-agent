@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { createSimulatedBackgroundSpawn } from "../harness/background-tasks.js";
 import { OperatorControlPlaneServer } from "./server.js";
 import { OperatorGatewayTransportConnection, type GatewayClientMessage, type GatewayServerMessage } from "./gateway-transport.js";
 import { StandaloneOperatorRuntime } from "../orchestrator/operator-runtime.js";
@@ -30,6 +31,7 @@ describe("OperatorGatewayTransportConnection", () => {
   it("bootstraps a remote connection, binds requests, and forwards live events", async () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
+      backgroundTaskSpawnProcess: createSimulatedBackgroundSpawn(),
       backgroundTaskIsProcessRunning: () => false,
     });
     const server = new OperatorControlPlaneServer({ runtime });
@@ -145,6 +147,7 @@ describe("OperatorGatewayTransportConnection", () => {
   it("rejects requests before bootstrap and filters unrelated events", async () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
+      backgroundTaskSpawnProcess: createSimulatedBackgroundSpawn(),
       backgroundTaskIsProcessRunning: () => false,
     });
     const server = new OperatorControlPlaneServer({ runtime });
@@ -205,6 +208,7 @@ describe("OperatorGatewayTransportConnection", () => {
   it("reattaches by remoteId across gateway connections", async () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
+      backgroundTaskSpawnProcess: createSimulatedBackgroundSpawn(),
       backgroundTaskIsProcessRunning: () => false,
     });
     const server = new OperatorControlPlaneServer({ runtime });
@@ -243,6 +247,7 @@ describe("OperatorGatewayTransportConnection", () => {
   it("replays task plans in gateway bootstrap and forwards task-family events", async () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
+      backgroundTaskSpawnProcess: createSimulatedBackgroundSpawn(),
       backgroundTaskIsProcessRunning: () => false,
     });
     const server = new OperatorControlPlaneServer({ runtime });
@@ -293,6 +298,7 @@ describe("OperatorGatewayTransportConnection", () => {
   it("forwards subagent-family events across the gateway", async () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
+      backgroundTaskSpawnProcess: createSimulatedBackgroundSpawn(),
       backgroundTaskIsProcessRunning: () => false,
     });
     const server = new OperatorControlPlaneServer({ runtime });
@@ -322,6 +328,7 @@ describe("OperatorGatewayTransportConnection", () => {
   it("passes pairingCode through gateway bootstrap", async () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
+      backgroundTaskSpawnProcess: createSimulatedBackgroundSpawn(),
       backgroundTaskIsProcessRunning: () => false,
     });
     const server = new OperatorControlPlaneServer({ runtime });
@@ -354,6 +361,7 @@ describe("OperatorGatewayTransportConnection", () => {
   it("sends heartbeat pings, marks stale without pong, and reports stale remote status", async () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
+      backgroundTaskSpawnProcess: createSimulatedBackgroundSpawn(),
       backgroundTaskIsProcessRunning: () => false,
     });
     const server = new OperatorControlPlaneServer({ runtime });
@@ -401,6 +409,7 @@ describe("OperatorGatewayTransportConnection", () => {
   it("replays only missed events after reconnect cursor and reports healthy status after pong", async () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
+      backgroundTaskSpawnProcess: createSimulatedBackgroundSpawn(),
       backgroundTaskIsProcessRunning: () => false,
     });
     const server = new OperatorControlPlaneServer({ runtime });

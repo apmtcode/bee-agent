@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { createSimulatedBackgroundSpawn } from "../harness/background-tasks.js";
 import { OperatorControlPlaneServer } from "./server.js";
 import { OperatorControlPlaneSessionStream } from "./session-stream.js";
 import { StandaloneOperatorRuntime } from "../orchestrator/operator-runtime.js";
@@ -22,6 +23,7 @@ describe("OperatorControlPlaneSessionStream", () => {
   it("bootstraps a session, binds requests, and filters live events", async () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
+      backgroundTaskSpawnProcess: createSimulatedBackgroundSpawn(),
       backgroundTaskIsProcessRunning: () => false,
     });
     const server = new OperatorControlPlaneServer({ runtime });
@@ -133,6 +135,7 @@ describe("OperatorControlPlaneSessionStream", () => {
   it("replays and streams subagent events for a bootstrapped session", async () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
+      backgroundTaskSpawnProcess: createSimulatedBackgroundSpawn(),
       backgroundTaskIsProcessRunning: () => false,
     });
     const server = new OperatorControlPlaneServer({ runtime });
@@ -188,6 +191,7 @@ describe("OperatorControlPlaneSessionStream", () => {
   it("binds task requests and streams task events for a bootstrapped session", async () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
+      backgroundTaskSpawnProcess: createSimulatedBackgroundSpawn(),
       backgroundTaskIsProcessRunning: () => false,
     });
     const server = new OperatorControlPlaneServer({ runtime });
@@ -278,6 +282,7 @@ describe("OperatorControlPlaneSessionStream", () => {
   it("binds monitor requests and streams monitor events for a bootstrapped session", async () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
+      backgroundTaskSpawnProcess: createSimulatedBackgroundSpawn(),
       backgroundTaskIsProcessRunning: () => false,
     });
     const server = new OperatorControlPlaneServer({ runtime });
@@ -365,6 +370,7 @@ describe("OperatorControlPlaneSessionStream", () => {
   it("binds plan requests and streams plan events for a bootstrapped session", async () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
+      backgroundTaskSpawnProcess: createSimulatedBackgroundSpawn(),
       backgroundTaskIsProcessRunning: () => false,
     });
     const server = new OperatorControlPlaneServer({ runtime });
@@ -486,6 +492,7 @@ describe("OperatorControlPlaneSessionStream", () => {
   it("binds message requests and streams message events for a bootstrapped session", async () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
+      backgroundTaskSpawnProcess: createSimulatedBackgroundSpawn(),
       backgroundTaskIsProcessRunning: () => false,
     });
     const server = new OperatorControlPlaneServer({ runtime });
@@ -572,6 +579,7 @@ describe("OperatorControlPlaneSessionStream", () => {
     });
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
+      backgroundTaskSpawnProcess: createSimulatedBackgroundSpawn(),
       backgroundTaskIsProcessRunning: () => false,
       delivery,
     });
@@ -645,6 +653,7 @@ describe("OperatorControlPlaneSessionStream", () => {
   it("binds teammate requests for a bootstrapped session", async () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
+      backgroundTaskSpawnProcess: createSimulatedBackgroundSpawn(),
       backgroundTaskIsProcessRunning: () => false,
     });
     const server = new OperatorControlPlaneServer({ runtime });
@@ -720,6 +729,7 @@ describe("OperatorControlPlaneSessionStream", () => {
   it("reattaches to an idle session and returns only session-scoped bootstrap state", async () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
+      backgroundTaskSpawnProcess: createSimulatedBackgroundSpawn(),
       backgroundTaskIsProcessRunning: () => false,
     });
     const server = new OperatorControlPlaneServer({ runtime });
@@ -773,6 +783,7 @@ describe("OperatorControlPlaneSessionStream", () => {
   it("reattaches by remoteId when sessionId is absent", async () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
+      backgroundTaskSpawnProcess: createSimulatedBackgroundSpawn(),
       backgroundTaskIsProcessRunning: () => false,
     });
     const server = new OperatorControlPlaneServer({ runtime });
@@ -801,6 +812,7 @@ describe("OperatorControlPlaneSessionStream", () => {
   it("redeems an approved pairing code through bootstrap", async () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
+      backgroundTaskSpawnProcess: createSimulatedBackgroundSpawn(),
       backgroundTaskIsProcessRunning: () => false,
     });
     const server = new OperatorControlPlaneServer({ runtime });
