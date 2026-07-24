@@ -6,6 +6,71 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-24 (run 9) — 🧠 Pluggable in-process movement-model backend: train → repeat → generalize, all in-cloud
+
+**Audited:** The local-movement learning subsystem (standing objective #2) end to
+end — `src/capture/` (recorder, replay, device/os/browser adapters, trajectory)
+and `src/training/` (exporter, job-store, runner). **Gap found (highest value):**
+the training subsystem could only emit *external* launch scripts for mlx/axolotl
+(`runner.ts` builds a `command[]` + bash script). There was **no in-process model
+at all** — nothing that could actually *repeat* recorded movements or *generalize*
+to related ones, and nothing that runs in the cloud/CI. That is exactly objective
+#2(d) ("post-train a local model … to repeat the recorded movements, and
+generalize to new but related movements") and the #1 movement roadmap item
+("Pluggable local-model backend interface … with a deterministic mock backend").
+
+**Changed (additive) — new `src/training/model-backend.ts` (+ test):**
+- **`MovementModelBackend` interface** — the pluggable seam. `train(dataset,
+  options) → TrainedMovementModel`. A real on-device runtime (mlx) can implement
+  the same interface later; today the reference impl runs in-process.
+- **`MarkovMovementBackend`** — a deterministic, dependency-free variable-order
+  Markov model with **stupid-backoff** smoothing. Full-order context reproduces
+  recorded movement sequences verbatim (*repeat*); when a context was never seen
+  it backs off to shorter suffixes (*generalize* to related movements). Training
+  is a single deterministic pass → byte-stable, reproducible in CI. END-sentinel
+  handling lets `generate()` terminate at the learned end of a flow; the sentinel
+  is kept internal (stripped from `vocabulary()` and generated output) and only
+  wins a prediction when it *strictly* dominates (real tokens beat it on ties).
+- **`TrainedMovementModel`**: `predictNext` / `rankNext` (with `backoffOrder` so
+  callers see whether a prediction was verbatim or generalized), `generate`,
+  `logLikelihood` (stupid-backoff score), and `toJSON` / `loadMovementModel`
+  round-trip serialization.
+- **`sequencesFromReplays`** — bridges the capture/replay subsystem to the
+  dataset: one time-ordered action-token sequence per `ReplayManifest`, with a
+  default `tokenizeReplayAction` tokenizer (overridable).
+- **`evaluateMovementModel`** — the generalization eval harness (another roadmap
+  item): reports next-token accuracy + perplexity on held-out sequences so
+  generalization is machine-trackable across runs.
+- Exported the whole surface from `src/index.ts`.
+
+**Test results:** new `model-backend.test.ts` — **18/18 pass** (repeat-verbatim,
+backoff-generalization, cold-start unigram, determinism, END-termination,
+ranking, serialization round-trip, empty corpus, replay extraction, and the
+eval harness: related > unrelated accuracy & perplexity). `npm run typecheck:src`
+✅ (source stays green). `npm run build` ✅.
+
+**⚠️ Pre-existing blocker discovered (NOT introduced this run):** on a clean tree
+(same commit as run 8) **4 tests fail** — `operator-runtime.test.ts`
+("starts, syncs, recovers … background tasks"), `server.test.ts` (session/…/
+orchestration), `app.test.ts` (session lifecycle …), and one more. Diagnosed the
+operator-runtime one: the test builds `StandaloneOperatorRuntime` with only
+`backgroundTaskIsProcessRunning` stubbed and **no `spawnProcess` mock**, so
+`startBackgroundTask` spawns *real* shell processes whose launch-script writes
+race the fixture's `writeState` on the same state file → `SyntaxError: Expected
+',' or '}'` (partial-write JSON) in `readJsonFile`. This is flaky test-isolation
+(real subprocess spawn in a unit test), timing/environment-dependent — which is
+why it was green in run 8 and red now. Left untouched to keep this diff focused;
+logged to ROADMAP as a real bug to fix (inject a deterministic spawn mock).
+
+**New idea:** a **movement policy server** — wrap `TrainedMovementModel` behind a
+control-plane RPC (`movement.predictNext` / `movement.generate`) so the running
+agent can *consult* the trained local policy at inference time (autocomplete the
+next UI action, or roll out a candidate movement plan for the operator to
+approve) — closing the loop from capture → train → **act**, not just train.
+Pairs naturally with a confidence gate: only auto-execute a predicted movement
+when `backoffOrder === order` (verbatim match) and probability > threshold;
+otherwise surface it as a suggestion.
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

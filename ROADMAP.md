@@ -62,13 +62,37 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
+      for a real on-device small model. — DONE run 9 (`src/training/model-backend.ts`:
+      `MovementModelBackend` interface + deterministic `MarkovMovementBackend`
+      variable-order/stupid-backoff model that repeats verbatim and generalizes
+      via backoff; `sequencesFromReplays` bridges capture→dataset; full
+      serialization round-trip). 18/18 tests.
+- [x] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories. — DONE run 9 (`evaluateMovementModel`:
+      next-token accuracy + perplexity on held-out sequences).
+- [ ] **Movement policy server** (run 9 idea): expose `TrainedMovementModel`
+      via control-plane RPC (`movement.predictNext` / `movement.generate`) so the
+      agent can consult the trained local policy at inference time, gated by a
+      confidence check (`backoffOrder === order` && probability > threshold →
+      auto-suggest; else surface only). Closes capture→train→**act**.
+- [ ] Wire `MovementModelBackend` into `LocalAppleSiliconTrainingRunner` as the
+      concrete on-device seam (the runner currently only emits mlx/axolotl launch
+      scripts; let it also register/select an in-process or on-device backend).
 - [ ] Synthetic event-stream generator to validate capture→dataset→replay
       round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+
+## Known bugs
+- [ ] **Flaky background-task tests spawn real subprocesses** (found run 9). On a
+      clean tree 4 tests fail: `operator-runtime.test.ts` (background-task
+      recover/sync), `server.test.ts`, `app.test.ts`. Root cause (operator-runtime):
+      `StandaloneOperatorRuntime` is built with only `backgroundTaskIsProcessRunning`
+      stubbed — no `spawnProcess` mock — so `startBackgroundTask` launches real
+      shell processes whose launch-script writes race the fixture's `writeState`
+      on the same state file → partial-write `SyntaxError` in `readJsonFile`.
+      Timing/environment-dependent (green in run 8, red run 9). Fix: inject a
+      deterministic spawn mock (or a `writeState` that is race-safe) in these tests.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
