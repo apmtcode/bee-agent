@@ -6,6 +6,70 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-24 (run 9) — 🧠 In-process pluggable movement-model backend + generalization eval harness
+
+**Audited:** The **local-movement learning subsystem** (standing objective #2),
+untouched since runs 1–4. Traced the train→infer seam: `src/training/runner.ts`
++ `execution-service.ts` delegate *all* real training to external Python
+(mlx/axolotl) via an emitted launch script — a path that only runs on the user's
+machine and **cannot validate the train→infer→generalize loop in the cloud**.
+So objective #2 parts (c) "post-train a local model to repeat recorded
+movements" and (d) "generalize to related movements" had **no in-process,
+testable implementation** — exactly the three queued movement-subsystem roadmap
+items (pluggable backend + deterministic mock, generalization eval harness).
+
+**Changed (purely additive, in-memory, deterministic):**
+- **`src/training/model-backend.ts`** — the missing in-process seam:
+  - `MovementModelBackend` interface (`train(dataset) → TrainedMovementModel`)
+    and `TrainedMovementModel` (`predictNext` / `generate` / `toJSON`). Real
+    on-device neural backends implement the same contract; the mock is the
+    always-available fallback + test oracle.
+  - `DeterministicMarkovBackend` — an order-k Markov model with **stupid-backoff**.
+    It learns per-context transition counts over movement tokens, so an exact
+    recorded prefix **repeats verbatim** (full-order match), while an
+    unseen-but-related prefix **backs off** to shorter contexts and still emits
+    the most plausible next movement — objective #2(c)+(d) in a dependency-free,
+    fully reproducible form (ties break by count then lexicographically; no
+    `Date.now`/`Math.random`).
+  - `tokenizeReplayEvent(s)` + `buildMovementDataset(replays)` bridge the
+    existing `ReplayManifest`/`ExportedReplayManifest` event streams into
+    movement-token sequences (action→`act:<tool>`, observation→`obs:<source>`,
+    transcript dropped as dialogue-not-movement).
+- **`src/training/eval-harness.ts`** — `evaluateMovementModel(model, heldOut)`
+  measuring generalization on held-out samples: **nextTokenAccuracy** (teacher-
+  forced top-1), **replayFidelity** (free-running rollout vs. recorded tail),
+  and a **backoffProfile** (full-order share = memorization vs. backoff share =
+  generalization).
+- Barrel exports for both modules in `src/index.ts`.
+- Tests: `model-backend.test.ts` (8) + `eval-harness.test.ts` (5), asserting
+  verbatim replay, backoff-driven generalization on an unseen leading obs,
+  deterministic tie-breaking, empty/single-token safety, and custom seed length.
+
+**Test results:** `typecheck:src` ✅ (exit 0). Build ✅ (tsdown, 5 files). New
+tests ✅ **13/13, deterministic across 3 runs**. Full suite **184/187** —
+the **3 failures are PRE-EXISTING and FLAKY**, not mine: confirmed by `git stash`
+(they fail 3–4/50 on clean HEAD too) and by re-runs where the count varied
+(4→3). They live in `operator-runtime`/`server`/`app` background-task tests and
+trace to `readJsonFile` (`src/shared/fs.ts:17`) throwing while reading
+detached-process state files mid-write — a filesystem-atomicity race in the
+capture/background-task state layer, unrelated to training. My diff is isolated
+(new files + additive exports) and green in isolation.
+
+**New idea:** the flaky failures are a genuine regression risk the engine keeps
+re-encountering. `readJsonFile` should tolerate a torn atomic write — retry-once
+on `JSON.parse`/ENOENT (the `writeJsonAtomic` temp+rename window), or the
+background-task `readState` should read via the same atomic path. Fixing that
+one seam likely greens the whole suite. Logged as the top ROADMAP item.
+
+**Next increment idea (movement subsystem):** a *synthetic event-stream
+generator* that emits parameterized `ReplayLikeManifest`s (a "grammar" of
+app→focus→click→type→submit flows with controlled variation) to feed
+`buildMovementDataset` — giving the eval harness held-out-but-related data
+without real OS input, and turning "does it generalize?" into a measurable,
+tunable score per run.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

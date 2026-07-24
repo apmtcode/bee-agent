@@ -431,3 +431,31 @@ export type {
   FailTrainingJobParams,
   TrainingJobStoreShape,
 } from "./training/job-store.js";
+export {
+  DeterministicMarkovBackend,
+  buildMovementDataset,
+  tokenizeReplayEvent,
+  tokenizeReplayEvents,
+} from "./training/model-backend.js";
+export type {
+  GenerateMovementOptions,
+  MovementDataset,
+  MovementModelBackend,
+  MovementPrediction,
+  MovementSample,
+  MovementToken,
+  ReplayLikeManifest,
+  SerializedMovementModel,
+  TokenizableReplayEvent,
+  TrainMovementModelOptions,
+  TrainedMovementModel,
+} from "./training/model-backend.js";
+export {
+  evaluateMovementModel,
+} from "./training/eval-harness.js";
+export type {
+  BackoffProfile,
+  MovementEvalOptions,
+  MovementEvalReport,
+  SampleEvalResult,
+} from "./training/eval-harness.js";

@@ -4,6 +4,13 @@ Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
 ## Foundations / DX
+- [ ] **Fix flaky background-task state tests** (surfaced run 9). 3–4 of 50 tests
+      in `operator-runtime`/`server`/`app` fail nondeterministically: `readJsonFile`
+      (`src/shared/fs.ts:17`) throws while reading a detached-process state file
+      mid-write (the `writeJsonAtomic` temp→rename window). Fix: make `readJsonFile`
+      retry-once on `JSON.parse`/ENOENT, or route `BackgroundTaskExecutionService.readState`
+      through the atomic path. Likely greens the whole suite — do before the
+      `verify` gate below can be trusted.
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`
@@ -58,17 +65,33 @@ unchecked items are queued. Keep this richer than you found it each run.
 ## Local-movement learning subsystem
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
-(exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
-      objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+(exporter, job store/manifest, runner, execution service, **model-backend +
+eval-harness** as of run 9). Next increments:
+- [x] Inventory what `src/capture` + `src/training` already implement vs. the
+      objective's five pieces (capture → schema → dataset → replay → train/infer).
+      DONE run 9: capture/schema/dataset/replay all existed; the gap was the
+      *in-process* train→infer seam — the runner only emitted external mlx/axolotl
+      launch scripts (device-only, uncloud-testable).
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      for a real on-device small model. DONE run 9 — `src/training/model-backend.ts`
+      (`MovementModelBackend` / `TrainedMovementModel` + `DeterministicMarkovBackend`
+      with stupid-backoff). Repeats recorded movements verbatim, generalizes via
+      backoff.
+- [x] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories. DONE run 9 — `src/training/eval-harness.ts`
+      (`evaluateMovementModel` → nextTokenAccuracy + replayFidelity + backoffProfile).
+- [ ] **Synthetic event-stream generator** (next): emit parameterized
+      `ReplayLikeManifest`s (a grammar of app→focus→click→type→submit flows with
+      controlled variation) to feed `buildMovementDataset`, so the eval harness
+      gets held-out-but-related data without real OS input and generalization
+      becomes a tunable per-run score.
+- [ ] Wire the Markov backend into the training runner/job as the default local
+      backend when no external mlx/axolotl runtime is available, and persist the
+      serialized model (`toJSON`) as a training artifact.
+- [ ] Higher-fidelity movement tokens: fold action `summary`/coordinates into the
+      token (bucketed) so replay/inference reproduces *parameters*, not just the
+      tool identity.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
