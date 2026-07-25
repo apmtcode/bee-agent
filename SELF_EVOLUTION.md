@@ -6,6 +6,69 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-25 (run 9) — Fix broken `shellQuote` corrupting background-task state JSON (real reliability bug)
+
+**Audited:** The verification gate itself. `npm test` was **red** on this
+environment — 3–4 *flaky* failures (count varied run-to-run) in
+`operator-runtime.test.ts`, `app.test.ts`, and `server.test.ts`, all around
+background-task state. The recorded history claimed 174/174, so this was a
+latent bug newly surfaced by this environment's process timing.
+
+**Root cause (a genuine production bug, not a test artifact):** `shellQuote()`
+in `src/harness/background-tasks.ts` escaped embedded single quotes with the
+sequence `"'"'"'`, which is **not a valid POSIX escape**. Any value containing a
+single quote (command, cwd, or the JSON state payload) was corrupted. The
+launch script then either wrote **invalid JSON** to `state.json` or failed its
+`python3`/`json.loads` init silently (detached, stderr ignored). When
+`readJsonFile` later read a torn/corrupt state file it threw a bare
+`SyntaxError` with no file path — crashing status/recovery/inventory. Tests only
+passed historically because they overwrite state via explicit `writeState`,
+masking the launch script's silent failure. Two secondary defects compounded it:
+the initial state write used a fragile `printf | sed "s/\"$$\"/$$/g"` pipeline
+whose quoting collapsed under bash expansion (leaving `pid` as the literal
+`"$$"`), and both the shell redirect and python `write_text` were **non-atomic**,
+so concurrent reads could catch torn writes.
+
+**Changed (all additive/reversible, `src/harness/background-tasks.ts` +
+`src/shared/fs.ts`):**
+- **`shellQuote`** now uses the canonical `'\''` escape (close-quote, escaped
+  quote, reopen-quote). Verified against `echo 'hi'`, `it's a test`, mixed
+  `"d" 'q' $x`, etc. — all round-trip exactly through bash.
+- **Initial state write** rewritten from `printf | sed` to a `python3` heredoc
+  (`renderStateInitializerPython`) that parses the JSON payload from `argv`,
+  injects the real numeric `pid` (`$$`) + timestamps, and writes **atomically**
+  (temp file + `os.replace`). No more sed munging; `pid` is now a real number.
+- **Completion writer** (`renderStateWriterPython`) now also writes atomically
+  (temp + `os.replace`) instead of `pathlib.write_text`.
+- **`readJsonFile`** now wraps `JSON.parse` and, on failure, throws an error that
+  names the offending file path + a bounded (512-byte) content preview — the
+  missing context that made this bug hard to locate.
+- **Test hermeticity** (`server.test.ts`): the platform-breaker test injected
+  `isProcessRunning: () => false` while launching *real* detached processes, so a
+  launched task's initial "running" state could race an inventory check and be
+  miscounted as an extra automatic failure (flaky 4/5). Added a no-op
+  `backgroundTaskSpawnProcess` so state is fully test-controlled — this is a
+  test-only race (production uses a real `isProcessRunning`, so a just-launched
+  process correctly reads as running).
+- **New regression test**: actually *executes* the generated launch script for a
+  quote-heavy command and asserts `state.json` parses and carries a numeric pid.
+
+**Test results:** `npm test` **175/175** (was 174 + 1 new test), stable across
+3 full runs and 6 isolated runs of the previously-flaky tests. `npm run build`
+✅. `npm run typecheck:src` ✅ (exit 0). Full `tsc` test-file debt unchanged
+(~125, tracked separately).
+
+**New idea:** the `writeJsonAtomic` helper in `src/shared/fs.ts` is the one true
+atomic-write primitive, yet the launch script re-implements atomic writes in
+inline bash/python. Extract a single `renderAtomicJsonWrite(varName)` python
+snippet (or better, a tiny embedded writer script) shared by the initializer and
+both completion writers, so the atomic-write contract lives in exactly one place
+and can't drift. Longer term: add a `verify` script (`typecheck:src && build &&
+test`) and have the engine run it as the canonical pre-push gate each cycle so a
+red suite like this one is caught *before* a human sees it.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

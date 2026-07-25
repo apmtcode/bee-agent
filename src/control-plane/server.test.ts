@@ -1019,6 +1019,11 @@ describe("OperatorControlPlaneServer", () => {
     const breakerRuntime = new StandaloneOperatorRuntime({
       rootDir: breakerRootDir,
       backgroundTaskIsProcessRunning: () => false,
+      // Hermetic spawn: don't launch real detached processes. Otherwise a
+      // launched task's initial "running" state can land before an inventory
+      // check and, combined with the always-false isProcessRunning mock, be
+      // miscounted as an extra automatic failure — a test-only race.
+      backgroundTaskSpawnProcess: () => ({ pid: 4321, unref() {} }),
     });
     const breakerServer = new OperatorControlPlaneServer({ runtime: breakerRuntime });
     const breakerOne = await breakerServer.handle({

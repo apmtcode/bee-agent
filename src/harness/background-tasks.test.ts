@@ -370,4 +370,39 @@ describe("BackgroundTaskExecutionService", () => {
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
   });
+
+  it("executes the launch script and writes valid state JSON for quote-heavy commands", async () => {
+    const rootDir = await makeTempDir();
+    // Real spawn: run the generated launch script so we exercise the actual
+    // shell/python state-writing pipeline, not a mock.
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"));
+    // A command containing single quotes previously corrupted the emitted JSON
+    // (the printf|sed pipeline mangled quoting) — this is the regression guard.
+    const task = await store.start({
+      title: "Quote heavy",
+      command: "printf '%s\\n' 'a'\\''b' \"c d\"",
+      cwd: rootDir,
+      kind: "task",
+    });
+
+    const statePath = path.join(rootDir, task.execution.stateFile);
+    // Poll until the detached launch script has finished writing terminal state.
+    let state: BackgroundTaskExecutionState | undefined;
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      const raw = await fs.readFile(statePath, "utf8").catch(() => undefined);
+      if (raw) {
+        state = JSON.parse(raw) as BackgroundTaskExecutionState; // must never throw
+        if (state.status !== "running") {
+          break;
+        }
+      }
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+
+    expect(state).toBeDefined();
+    expect(state?.status).toBe("completed");
+    expect(typeof state?.pid).toBe("number");
+    expect(state?.command).toBe("printf '%s\\n' 'a'\\''b' \"c d\"");
+    expect(state?.taskId).toBe(task.id);
+  });
 });

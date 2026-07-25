@@ -45,6 +45,23 @@ unchecked items are queued. Keep this richer than you found it each run.
       have the engine run it as a per-run pre-push self-check.
 - [ ] Add a minimal CI workflow mirroring `verify` for human-opened PRs.
 
+## Reliability / correctness
+- [x] **Fix broken `shellQuote` in `src/harness/background-tasks.ts`** (2026-07-25,
+      run 9). Its `"'"'"'` escape was not valid POSIX and corrupted any
+      background-task command/cwd/state payload containing a single quote →
+      invalid `state.json` (or silent `python3` init failure) → `readJsonFile`
+      throwing bare `SyntaxError` in status/recovery/inventory. Replaced with the
+      canonical `'\''` escape; rewrote initial state write from `printf|sed` to an
+      atomic `python3` heredoc; made the completion writer atomic; made
+      `readJsonFile` errors name the file + a bounded content preview. Suite went
+      from flaky-red to 175/175 stable.
+- [ ] Extract the atomic-JSON-write contract into one shared snippet used by the
+      launch script's initializer + both completion writers (currently duplicated
+      inline), so it can't drift from `writeJsonAtomic`.
+- [ ] Add a `verify` npm script (`typecheck:src && build && test`) and run it as
+      the engine's pre-push gate so a red suite is caught before push (this run's
+      failures were only found by running the suite manually).
+
 ## Capability parity (audit reference agents → port gaps)
 - [ ] Build a "capability inventory" generator: enumerate bee-agent's exported
       RPC/tool surface (`src/index.ts`) and diff it against `openclaw`,

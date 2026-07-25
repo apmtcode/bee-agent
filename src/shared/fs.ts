@@ -14,7 +14,13 @@ export async function readJsonFile<T>(filePath: string, fallback: T): Promise<T>
       }
       return JSON.parse(JSON.stringify(fallback)) as T;
     }
-    return JSON.parse(raw) as T;
+    try {
+      return JSON.parse(raw) as T;
+    } catch (parseError) {
+      const message = parseError instanceof Error ? parseError.message : String(parseError);
+      const preview = raw.length > 512 ? `${raw.slice(0, 512)}…(+${raw.length - 512} bytes)` : raw;
+      throw new Error(`Failed to parse JSON at ${filePath}: ${message}. Contents: ${preview}`);
+    }
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
       if (fallback === undefined) {
