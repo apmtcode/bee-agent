@@ -6,6 +6,58 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-25 (run 9) — 🔴→🟢 Eliminated background-task test flakiness (verification gate restored)
+
+**Audited:** The verification gate itself. On a clean checkout `npm test` was
+**non-deterministic** — 1–4 of 174 tests failed at random across runs (measured
+3/4/3 failing in three back-to-back runs). Since the engine's entire push
+decision (step 5–7) hinges on a green `npm test`, a flaky suite is the single
+highest-value thing to fix: it can both **block good pushes** and **hide real
+regressions**. All failures clustered in the background-task subsystem
+(`app.test.ts`, `server.test.ts`, `operator-runtime.test.ts`).
+
+**Root cause (one bug, four symptoms):** these tests call
+`runtime.startBackgroundTask({ command: "sleep 5" | "printf ok" | ... })`, which
+**actually spawns a real detached subprocess** via the launch script. That
+subprocess asynchronously (a) writes a `status:"running"` **execution state
+file** and (b) appends command output — both racing the test's later assertions:
+- control-state check (`server.ts:2174`) reads the state file; if the subprocess
+  wrote `running` before the check but its launch-wrapper pid already exited
+  (`isProcessRunning=false`), the remote flipped to `degraded:missing-process` →
+  platform aggregate `mixed`→`degraded`/`paused`, breaker `failureCount` 2↔3.
+- `background-view`/`watch-task` read output before `printf ok` had flushed → the
+  `toContain("ok")` assertions failed intermittently.
+
+**Changed (additive, test-hermeticity — same pattern as the run-2 `configHome`
+fix):**
+- `src/cli/app.ts` (source): threaded two optional overrides
+  `backgroundTaskSpawnProcess` / `backgroundTaskIsProcessRunning` through
+  `OperatorCliAppOptions` into the runtime (production leaves them undefined →
+  real spawn unchanged). This is the only source change.
+- Injected a **no-op spawn stub** (`() => ({ pid, unref(){} })`) into every
+  background-task-touching test runtime so no real subprocess ever writes a
+  competing state/output file — the tests now drive state **explicitly** via
+  `writeState`/`writeOutput` (the pattern half of them already used):
+  `operator-runtime.test.ts` (1 runtime), `server.test.ts` (3 runtimes, via a
+  shared `noopSpawnProcess` helper), `app.test.ts` (2 apps). Pinned
+  `isProcessRunning` per test to match its intent (false where a dead-pid task
+  must sync to failed; true where a task must stay active for `watch-active`).
+  Added an explicit `writeOutput(task,"ok\n")`+`writeState` to the `app.test.ts`
+  background half so `background-view` reads deterministic output.
+
+**Test results:** `npm test` now **174/174 passing, 10/10 consecutive runs
+green** (was 1–4 random failures). `npm run build` ✅. `npm run typecheck:src` ✅
+(exit 0, source stays clean). Full `tsc` **125** (unchanged — no regression).
+
+**New idea:** add a **flake sentinel** to the engine's pre-push self-check — run
+`vitest run` **twice** (or `--retry=0` with a repeat) each cycle and refuse to
+treat green as green unless *both* pass. Cheap insurance that a newly-introduced
+race can't slip through a single lucky run, exactly the failure mode this run
+paid down. Bigger: a lint that flags `startBackgroundTask`/real-`spawn` calls in
+`*.test.ts` that don't inject a spawn stub, so this class of flake can't return.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

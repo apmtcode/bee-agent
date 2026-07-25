@@ -8,6 +8,18 @@ unchecked items are queued. Keep this richer than you found it each run.
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`
       (2026-06-22).
+- [x] **Eliminate background-task test flakiness** (2026-07-25, run 9) — the
+      suite was non-deterministic (1–4/174 random failures) because
+      `startBackgroundTask` spawned real subprocesses whose async state/output
+      writes raced assertions. Threaded `backgroundTaskSpawnProcess` /
+      `backgroundTaskIsProcessRunning` through `OperatorCliAppOptions` and
+      injected no-op spawn stubs into all background-task tests. Now 10/10
+      consecutive green. Restores the engine's verification gate.
+- [ ] **Flake sentinel in the pre-push self-check**: run `vitest run` twice each
+      cycle and only treat the suite as green if *both* pass — a single lucky run
+      must not gate a push (the exact failure mode run 9 fixed).
+- [ ] **Test-spawn lint**: flag `startBackgroundTask` / real `spawn` in `*.test.ts`
+      that don't inject a spawn stub, so subprocess-race flakiness can't return.
 - [ ] **Pay down typecheck debt** (surfaced by the `typecheck` script). Full
       `tsc --noEmit` count was **397** on 2026-06-22; now **125**. 🎯 ALL source
       (`src/**` non-test) files typecheck clean since run 7; remaining 125 errors
