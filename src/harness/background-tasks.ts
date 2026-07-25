@@ -734,27 +734,35 @@ function renderLaunchScript(task: BackgroundTaskRecord): string {
   const quotedOutputFile = shellQuote(task.execution.outputFile);
   const quotedCwd = shellQuote(task.cwd);
   const quotedCommand = shellQuote(task.command);
-  const quotedStatePayload = shellQuote(
+  // Encode the initial "running" state as base64 so it can be embedded in the
+  // launch script without any shell/JSON quoting hazards. The previous
+  // `printf | sed` approach corrupted the payload for commands containing
+  // single quotes or newlines, producing invalid JSON that then crashed the
+  // Python completed/failed writers (they json.loads() this file first).
+  const runningStatePayloadB64 = Buffer.from(
     JSON.stringify({
       version: 1,
       taskId: task.id,
       kind: task.kind,
       status: "running",
-      pid: "$$",
-      startedAt: "__OPENCLAW_STARTED_AT__",
-      updatedAt: "__OPENCLAW_STARTED_AT__",
+      pid: 0,
+      startedAt: "",
+      updatedAt: "",
       outputFile: task.execution.outputFile,
       cwd: task.cwd,
       command: task.command,
     }),
-  );
+    "utf8",
+  ).toString("base64");
 
   return [
     "#!/usr/bin/env bash",
     "set -euo pipefail",
     `mkdir -p $(dirname ${quotedStatePath}) $(dirname ${quotedOutputFile})`,
     "started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-    `printf '%s' ${quotedStatePayload} | sed "s/__OPENCLAW_STARTED_AT__/$started_at/g; s/\"\$\$\"/$$/g" > ${quotedStatePath}`,
+    `python3 - ${quotedStatePath} $$ "$started_at" <<'PY'`,
+    ...renderRunningStateWriterPython(runningStatePayloadB64),
+    "PY",
     `printf '%s\n' "starting ${task.kind} ${task.id}" >> ${quotedOutputFile}`,
     `if cd ${quotedCwd} && bash -lc ${quotedCommand} >> ${quotedOutputFile} 2>&1; then`,
     "  completed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
@@ -771,6 +779,23 @@ function renderLaunchScript(task: BackgroundTaskRecord): string {
     "fi",
     "",
   ].join("\n");
+}
+
+function renderRunningStateWriterPython(payloadBase64: string): string[] {
+  return [
+    "import base64",
+    "import json",
+    "import pathlib",
+    "import sys",
+    "state_path = pathlib.Path(sys.argv[1])",
+    "pid = int(sys.argv[2])",
+    "timestamp = sys.argv[3]",
+    `state = json.loads(base64.b64decode('${payloadBase64}').decode('utf-8'))`,
+    "state['pid'] = pid",
+    "state['startedAt'] = timestamp",
+    "state['updatedAt'] = timestamp",
+    "state_path.write_text(json.dumps(state, indent=2) + '\\n')",
+  ];
 }
 
 function renderStateWriterPython(status: BackgroundTaskExecutionState["status"]): string[] {
@@ -794,5 +819,9 @@ function renderStateWriterPython(status: BackgroundTaskExecutionState["status"])
 }
 
 function shellQuote(value: string): string {
-  return `'${value.replaceAll(`'`, `"'"'"'`)}'`;
+  // POSIX single-quote escaping: a literal single quote is written by closing
+  // the quoted run, emitting an escaped quote, then reopening it — `'\''`.
+  // (The previous `"'"'"'` form injected a spurious double quote, corrupting
+  // any command that contained a single quote, e.g. `printf 'x'`.)
+  return `'${value.replaceAll(`'`, `'\\''`)}'`;
 }

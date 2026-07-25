@@ -6,6 +6,61 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-25 (run 9) — 🐛 Two real background-task launch bugs fixed; suite 174→175 green + de-flaked
+
+**Audited:** The baseline itself. Before touching anything, `npm test` revealed
+**3 deterministically-failing tests** (operator-runtime, server, app) — a
+regression prior runs' "174/174" claims had not caught. Root-caused to **two
+genuine production bugs** in the background-task launch subsystem
+(`src/harness/background-tasks.ts`), not test bugs.
+
+**Bug 1 — corrupt initial-state JSON (`printf | sed`).** The initial "running"
+state was written by shell-quoting a JSON payload and substituting placeholders
+with `sed`. Two defects: (a) the pid substitution `s/\"\$\$\"/$$/g` *broke out*
+of bash's double-quoted sed arg — bash expanded `$$` early, so the pattern
+became `s/<PID>/<PID>/g` and the `"$$"` placeholder was never replaced; (b) the
+whole embed-JSON-via-shell-quoting approach corrupted the payload for commands
+containing single quotes + newlines. The Python completed/failed writer then
+`json.loads()`ed that corrupt file, crashed, and left invalid JSON on disk — so
+`readState()` threw a `SyntaxError`. **Fix:** write the initial state via a
+**base64-encoded payload** decoded by `python3` (base64 is quote/shell-safe),
+injecting pid + timestamp as argv. Removes the `sed` entirely.
+
+**Bug 2 — broken `shellQuote` (affected every quoted command).** `shellQuote`
+escaped a literal `'` as `"'"'"'` (6 chars, spurious leading `"`) instead of the
+POSIX `'\''`. So `bash -lc '<command>'` received a malformed command for **any**
+command containing a single quote (e.g. `printf 'x'`) → non-zero exit. Masked
+until now because most test commands had no single quotes. **Fix:** correct the
+escape to `'\''`.
+
+**Test isolation.** The 3 failing tests spawned **real detached processes** that
+raced with the state they write manually. Injected the idiomatic no-op spawn mock
+(`() => ({ pid, unref() {} })` — the established pattern in
+`background-tasks.test.ts`) at every runtime construction that drives state
+manually (operator-runtime ×1, server ×3 — main/drifting/breaker, app ×1). To
+enable the app fix, added a production testability seam: `OperatorCliApp` now
+accepts `backgroundTaskSpawnProcess` / `backgroundTaskIsProcessRunning`
+(mirrors the existing `configHome` injectable + the runtime's own options).
+
+**New coverage.** Added a **real-launch integration test** in
+`background-tasks.test.ts` that launches an actual process with a
+single-quote + newline command and asserts the state file is valid JSON, reaches
+`completed`, and round-trips the command byte-for-byte — it fails on either bug
+above. Guarded on `bash`+`python3` availability so minimal CI stays green.
+
+**Test results:** **174 → 175** tests, all passing. Stable across **5 full-suite
+runs** + **8 isolated `server.test` runs** (was 1/8 → now 8/8). Build ✅.
+`typecheck:src` exit 0 (source stays clean). Full `tsc` **125** (unchanged — no
+new debt; all remaining errors are pre-existing test-file typings).
+
+**New idea:** This class of bug (a single green run masking a race/flake) argues
+for a **flake-aware pre-push gate**: run the suite N× (e.g. 3) and treat any
+non-deterministic failure as a blocker, plus append a per-run health metric
+(pass count, flaky count, wall-clock) to a metrics file. Separately: the launch
+script still embeds `command`/`cwd`/paths via `shellQuote`; **base64-encoding
+all embedded values** into the Python writers would eliminate the entire
+shell-quoting bug class at the source, not just the two instances fixed here.
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

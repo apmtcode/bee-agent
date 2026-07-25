@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -370,4 +371,43 @@ describe("BackgroundTaskExecutionService", () => {
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
   });
+
+  // Regression: the initial "running" state used to be written via a
+  // `printf | sed` pipeline that corrupted the JSON when the command contained
+  // single quotes AND newlines. The Python completed/failed writer then
+  // `json.loads()`ed that corrupt file, crashed, and left invalid JSON on disk
+  // — so readState() threw a SyntaxError. The base64 payload write fixes it.
+  it("writes valid state JSON when launching a real process with quotes and newlines", async () => {
+    if (!realLaunchToolsAvailable()) {
+      return; // integration test needs bash + python3 (present in production/CI)
+    }
+    const rootDir = await makeTempDir();
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"));
+    // Single quotes + real newlines: the exact historic corruption case.
+    const command = "printf 'line-a\nline-b\n'";
+    const task = await store.start({ title: "quoted", command, cwd: rootDir, kind: "task" });
+
+    const deadline = Date.now() + 8000;
+    let state: BackgroundTaskExecutionState | undefined;
+    while (Date.now() < deadline) {
+      // readState must never throw — the state file stays valid JSON throughout.
+      state = await store.executionService.readState(task);
+      if (state && state.status !== "running") {
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+
+    expect(state).toBeDefined();
+    expect(state?.status).toBe("completed");
+    // The command survives the base64 round-trip byte-for-byte.
+    expect(state?.command).toBe(command);
+    expect(typeof state?.pid).toBe("number");
+  });
 });
+
+function realLaunchToolsAvailable(): boolean {
+  const bash = spawnSync("bash", ["-c", "true"]);
+  const python = spawnSync("python3", ["--version"]);
+  return bash.status === 0 && python.status === 0;
+}

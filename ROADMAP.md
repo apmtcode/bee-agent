@@ -4,6 +4,21 @@ Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
 ## Foundations / DX
+- [x] **Fix background-task launch bugs + de-flake suite** (2026-07-25, run 9).
+      Two real production bugs in `src/harness/background-tasks.ts`: the
+      `printf|sed` initial-state write produced invalid JSON (base64 payload now);
+      `shellQuote` escaped `'` as `"'"'"'` instead of POSIX `'\''` (broke every
+      single-quoted command). Added a real-launch integration test + a spawn seam
+      on `OperatorCliApp`; injected no-op spawn mocks so tests stop racing real
+      detached processes. Suite 174→175, stable.
+- [ ] **Flake-aware pre-push gate:** run the suite N× (e.g. 3) in the engine's
+      self-check and block on any non-deterministic failure; append per-run health
+      metrics (pass/flaky counts, duration) to a metrics file. Motivated by run 9,
+      where a single green run masked a launch-subsystem race.
+- [ ] **Base64 all launch-script embeds:** `renderLaunchScript` still embeds
+      `command`/`cwd`/state paths via `shellQuote`. Encoding every embedded value
+      as base64 decoded inside the Python writers would kill the whole
+      shell-quoting bug class at the source (run 9 fixed two instances).
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`
