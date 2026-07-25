@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -7,6 +8,35 @@ import {
   FileBackgroundTaskStore,
   type BackgroundTaskExecutionState,
 } from "./background-tasks.js";
+
+function hasLaunchToolchain(): boolean {
+  for (const tool of ["bash", "python3"]) {
+    try {
+      execFileSync(tool, ["--version"], { stdio: "ignore" });
+    } catch {
+      return false;
+    }
+  }
+  return true;
+}
+
+async function waitForTerminalState(
+  service: BackgroundTaskExecutionService,
+  task: { execution: { stateFile: string } } & Parameters<BackgroundTaskExecutionService["readState"]>[0],
+  timeoutMs = 8000,
+): Promise<BackgroundTaskExecutionState> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    // readState throws if the launch script wrote invalid JSON — surfacing the
+    // exact escaping regression this suite guards against.
+    const state = await service.readState(task);
+    if (state && state.status !== "running") {
+      return state;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  throw new Error("background task did not reach a terminal state in time");
+}
 
 const tempDirs: string[] = [];
 
@@ -369,5 +399,41 @@ describe("BackgroundTaskExecutionService", () => {
     await expect(fs.readFile(path.join(rootDir, task.execution.launchScript), "utf8")).resolves.toContain("bash -lc");
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
+  });
+});
+
+// End-to-end validation of the real launch pipeline (bash + python3). These
+// guard the state-file writer against shell/JSON escaping regressions: the
+// launch script used to build state.json via `printf | sed`, which left `pid`
+// the literal string "$$" and produced invalid JSON for any command containing
+// quotes or newlines. Runs to a terminal state, so there is no race.
+describe.skipIf(!hasLaunchToolchain())("FileBackgroundTaskStore launch pipeline (real spawn)", () => {
+  it("writes a valid, correctly-escaped state file for commands with quotes and newlines", async () => {
+    const rootDir = await makeTempDir();
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"));
+    const command = `printf 'a"b\nc\n' && echo done`;
+    const task = await store.start({ sessionId: "sess-real", title: "Nasty", command, cwd: rootDir, kind: "task" });
+
+    const state = await waitForTerminalState(store.executionService, task);
+    expect(state.status).toBe("completed");
+    expect(typeof state.pid).toBe("number");
+    expect(state.exitCode).toBe(0);
+    // The command round-trips exactly — proof the JSON was never corrupted.
+    expect(state.command).toBe(command);
+    expect(await store.executionService.readOutput(task)).toContain(`a"b`);
+  });
+
+  it("executes commands containing embedded single quotes and records non-zero exits", async () => {
+    const rootDir = await makeTempDir();
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"));
+    const command = `echo 'it'\\''s alive' && exit 3`;
+    const task = await store.start({ sessionId: "sess-real", title: "Quoted", command, cwd: rootDir, kind: "task" });
+
+    const state = await waitForTerminalState(store.executionService, task);
+    expect(state.status).toBe("failed");
+    expect(state.exitCode).toBe(3);
+    expect(state.command).toBe(command);
+    // Embedded single quote survives shell quoting and the command actually ran.
+    expect(await store.executionService.readOutput(task)).toContain("it's alive");
   });
 });

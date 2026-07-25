@@ -70,6 +70,23 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Generalization eval harness: measure replay fidelity on held-out but
       related synthetic trajectories.
 
+## Reliability / correctness
+- [x] **Fix background-task shell/JSON escaping** (2026-07-25, run 9). `shellQuote`
+      used a mis-ordered single-quote escape (`"'"'"'` → `'\''`) and the launch
+      script wrote `state.json` via `printf | sed` (left `pid` the string `"$$"`,
+      produced invalid JSON for commands with quotes/newlines). Replaced the sed
+      pipeline with a `python3` initializer; added deterministic integration
+      tests. Suite is now green (176/176) and de-flaked.
+- [ ] **Test-hermeticity guard** (run 9 idea): prevent real-`spawn` flakiness from
+      returning — a shared `makeApp()/makeRuntime()` test factory that requires an
+      explicit spawn, or a runtime flag that throws when the default real `spawn`
+      is used under `NODE_ENV==="test"`. Construction-time failure beats a
+      timing-dependent heisenbug.
+- [ ] Sweep for other `printf | sed`-style JSON assembly across `src/` (esp. the
+      terminal-state writers already use python — confirm no other shell-built
+      JSON exists) and prefer `python3`/`node` writers for anything embedding
+      user-controlled strings.
+
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in

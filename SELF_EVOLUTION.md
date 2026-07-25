@@ -6,6 +6,56 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-25 (run 9) — Fix background-task shell/JSON escaping bugs; de-flake the suite
+
+**Audited:** The build/test gate itself. On a clean checkout the suite was **red**
+(3–4 flaky failures across `operator-runtime.test.ts`, `server.test.ts`,
+`app.test.ts`) — a hard blocker for the "don't push unless green" rule. Traced
+every failure to one seam: these tests construct runtimes with the **default
+real `spawn`**, forking detached `bash` background processes whose async
+lifecycle races the assertions (control state read as `degraded`/`missing`
+instead of `active`, and a `readState` JSON parse crash). Prior runs' "174/174"
+held only because a slower machine lost the race; this container wins it.
+
+**Two genuine production bugs found & fixed in `src/harness/background-tasks.ts`:**
+1. **`shellQuote` mis-ordered its single-quote escape** — it emitted `"'"'"'`
+   where POSIX requires `'"'"'` (i.e. `'\''`), injecting a spurious `"` into any
+   value containing a single quote. This corrupted **both** the executed command
+   (`bash -lc <cmd>`) and the JSON state payload for every command with a `'`.
+   Verified via bash round-trip: `a'b` reconstructed as `a"'b`. Fixed to `'\''`.
+2. **The launch script built `state.json` via `printf | sed`** — `sed`'s
+   `s/"$$"/<pid>/` never matched (`$` is a regex anchor), so `pid` persisted as
+   the literal **string** `"$$"`; and the pipeline mangled JSON escaping for
+   commands with quotes/newlines, yielding **invalid JSON** that made
+   `readState` throw and broke background-task recovery. Replaced it with a
+   `python3` initializer (`renderStateInitPython`) that parses the correctly
+   `JSON.stringify`'d base payload and injects real `pid`/`startedAt` — `pid` is
+   now a number and the file is valid for any command.
+
+**Tests (174 → 176, all green, deterministic ×3):**
+- Added **2 deterministic integration tests** (real `bash`+`python3`, run to a
+  terminal state so there's no race; `describe.skipIf` guards on toolchain
+  presence) proving: valid JSON + numeric `pid` + exact command round-trip for
+  quotes/newlines; embedded single quotes actually execute; non-zero exit is
+  recorded as `failed` with the right `exitCode`.
+- Made the 3 flaky tests **hermetic** via an injected deterministic
+  `backgroundTaskSpawnProcess` mock. Added that seam (plus
+  `backgroundTaskIsProcessRunning`) to `OperatorCliAppOptions`, threaded into the
+  runtime — the one app test that asserts on *real* `printf ok` output keeps the
+  real spawn (documented inline).
+
+**Results:** `npm test` **176/176** (3 consecutive clean runs). `npm run build`
+✅. `npm run typecheck:src` exit 0. Full `tsc` unchanged at **125** (test-only
+debt; this run added zero new type errors).
+
+**New idea:** add a **test-hermeticity guard** so real-`spawn` flakiness can't
+creep back — e.g. a shared `makeApp()/makeRuntime()` test factory that requires
+an explicit spawn, or a runtime flag that throws if the default real `spawn` is
+used while `NODE_ENV==="test"`. Turns "someone forgot the mock" into a loud
+failure at construction instead of a heisenbug months later.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
