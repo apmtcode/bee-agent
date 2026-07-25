@@ -9,6 +9,14 @@ import type { ReviewedExportManifest } from "../training/export-manifest.js";
 
 const tempDirs: string[] = [];
 
+// A no-op background-task spawn: returns a pid without launching the real
+// detached shell script. Tests that drive task state via explicit writeState()
+// plus an injected `backgroundTaskIsProcessRunning` use this so the launch
+// script's own asynchronous "running"/"failed" state.json writes can't race the
+// controlled setup and flake recovery assertions.
+let fakeSpawnPid = 40000;
+const noopSpawnBackgroundProcess = () => ({ pid: (fakeSpawnPid += 1), unref() {} });
+
 async function makeTempDir(): Promise<string> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "operator-runtime-"));
   tempDirs.push(dir);
@@ -531,6 +539,7 @@ describe("StandaloneOperatorRuntime", () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
       backgroundTaskIsProcessRunning: () => false,
+      backgroundTaskSpawnProcess: noopSpawnBackgroundProcess,
     });
     const session = await runtime.startSession({ title: "Tasks", agentId: "main" });
 

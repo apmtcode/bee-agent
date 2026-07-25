@@ -166,6 +166,16 @@ export class BackgroundTaskExecutionService {
       encoding: "utf8",
       mode: 0o700,
     });
+    // Write the initial "running" state to a *seed* file so the command string
+    // (which may contain quotes, newlines, or backslashes) is JSON-encoded by
+    // the Node runtime, not hand-rendered in the shell — the previous
+    // printf|sed approach corrupted state.json for any such command. The launch
+    // script reads this seed, stamps its own pid/timestamps, and writes
+    // state.json exclusively through Python's json round-trip + atomic replace.
+    // Seeding (rather than writing state.json directly) preserves the prior
+    // contract that state.json only materialises once the launch script runs.
+    const seedPath = path.join(this.rootDir, `${task.execution.stateFile}.seed`);
+    await writeJsonAtomic(seedPath, createRunningExecutionState(task, 0));
   }
 
   async launch(task: BackgroundTaskRecord): Promise<{ pid: number }> {
@@ -731,30 +741,25 @@ function applyExecutionState(task: BackgroundTaskRecord, state: BackgroundTaskEx
 
 function renderLaunchScript(task: BackgroundTaskRecord): string {
   const quotedStatePath = shellQuote(task.execution.stateFile);
+  const quotedSeedPath = shellQuote(`${task.execution.stateFile}.seed`);
   const quotedOutputFile = shellQuote(task.execution.outputFile);
   const quotedCwd = shellQuote(task.cwd);
   const quotedCommand = shellQuote(task.command);
-  const quotedStatePayload = shellQuote(
-    JSON.stringify({
-      version: 1,
-      taskId: task.id,
-      kind: task.kind,
-      status: "running",
-      pid: "$$",
-      startedAt: "__OPENCLAW_STARTED_AT__",
-      updatedAt: "__OPENCLAW_STARTED_AT__",
-      outputFile: task.execution.outputFile,
-      cwd: task.cwd,
-      command: task.command,
-    }),
-  );
 
   return [
     "#!/usr/bin/env bash",
     "set -euo pipefail",
     `mkdir -p $(dirname ${quotedStatePath}) $(dirname ${quotedOutputFile})`,
     "started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-    `printf '%s' ${quotedStatePayload} | sed "s/__OPENCLAW_STARTED_AT__/$started_at/g; s/\"\$\$\"/$$/g" > ${quotedStatePath}`,
+    // The initial state was seeded by the Node runtime (writeArtifacts) with the
+    // command string JSON-encoded safely. Here we read that seed, stamp the real
+    // pid ($$) and start timestamp, and materialise state.json — mutating it
+    // exclusively through Python's json round-trip + atomic replace, never
+    // hand-rendered shell JSON (which corrupts on commands containing
+    // quotes/newlines/backslashes).
+    `python3 - ${quotedSeedPath} ${quotedStatePath} $$ "$started_at" <<'PY'`,
+    ...renderStartStateWriterPython(),
+    "PY",
     `printf '%s\n' "starting ${task.kind} ${task.id}" >> ${quotedOutputFile}`,
     `if cd ${quotedCwd} && bash -lc ${quotedCommand} >> ${quotedOutputFile} 2>&1; then`,
     "  completed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
@@ -773,9 +778,45 @@ function renderLaunchScript(task: BackgroundTaskRecord): string {
   ].join("\n");
 }
 
+// Emitted Python shared by every state writer: read the current state, apply
+// the caller's mutations, then write atomically (temp file + os.replace, atomic
+// on POSIX and Windows) so a concurrent readState never observes a torn file.
+function renderAtomicStateWrite(): string[] {
+  return [
+    "tmp_path = state_path.with_name(state_path.name + f'.{os.getpid()}.tmp')",
+    "tmp_path.write_text(json.dumps(state, indent=2) + '\\n')",
+    "os.replace(tmp_path, state_path)",
+  ];
+}
+
+function renderStartStateWriterPython(): string[] {
+  return [
+    "import json",
+    "import os",
+    "import pathlib",
+    "import sys",
+    "seed_path = pathlib.Path(sys.argv[1])",
+    "state_path = pathlib.Path(sys.argv[2])",
+    "pid = int(sys.argv[3])",
+    "timestamp = sys.argv[4]",
+    "state = json.loads(seed_path.read_text())",
+    "state['status'] = 'running'",
+    "state['pid'] = pid",
+    "state['startedAt'] = timestamp",
+    "state['updatedAt'] = timestamp",
+    ...renderAtomicStateWrite(),
+    // Drop the seed once state.json exists; ignore if already gone.
+    "try:",
+    "    seed_path.unlink()",
+    "except FileNotFoundError:",
+    "    pass",
+  ];
+}
+
 function renderStateWriterPython(status: BackgroundTaskExecutionState["status"]): string[] {
   return [
     "import json",
+    "import os",
     "import pathlib",
     "import sys",
     "state_path = pathlib.Path(sys.argv[1])",
@@ -789,7 +830,7 @@ function renderStateWriterPython(status: BackgroundTaskExecutionState["status"])
     "state['completedAt'] = timestamp",
     "state['exitCode'] = exit_code",
     `state['error'] = None if '${status}' == 'completed' else f'background task exited non-zero ({exit_code})'`,
-    "state_path.write_text(json.dumps(state, indent=2) + '\\n')",
+    ...renderAtomicStateWrite(),
   ];
 }
 

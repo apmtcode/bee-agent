@@ -70,6 +70,23 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Generalization eval harness: measure replay fidelity on held-out but
       related synthetic trajectories.
 
+## Reliability
+- [x] **Atomic, corruption-proof background-task state files** (2026-07-25, run
+      9). The launch script no longer hand-renders `state.json` via
+      `printf|sed` (which corrupted the file for commands containing
+      newlines/quotes and allowed torn reads). State is seeded by the Node
+      runtime and mutated only through Python's `json` round-trip + atomic
+      `os.replace`. Fixed a red+flaky suite → 175/175 stable. Regression test
+      added.
+- [ ] **Flake-gate the pre-push self-check.** Run the suite N× (≥3) and push to
+      `main` only if *all* pass; record pass counts to the metrics file. A
+      single green run is not proof of determinism — run 9's bug hid behind
+      exactly that gap.
+- [ ] **Shared `FakeBackgroundSpawn` test helper in `src/`.** Both
+      `server.test.ts` and `operator-runtime.test.ts` now hand-roll a no-op
+      `backgroundTaskSpawnProcess`. Promote it to a documented test seam so
+      future runtime tests stay hermetic without re-rolling it.
+
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in

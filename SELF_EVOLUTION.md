@@ -6,6 +6,69 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-25 (run 9) — Fix background-task state-file corruption; suite now deterministic (171→175 stable)
+
+**Audited:** The engine's own verification gate. On a clean checkout of `main`,
+`npm test` was **red and flaky** (2–3 failing tests, count varying run to run) —
+meaning the required "don't push if tests fail" gate was effectively unusable and
+the previous run had pushed a red suite to `main`. Three files were implicated:
+`operator-runtime.test.ts`, `cli/app.test.ts`, `control-plane/server.test.ts`.
+
+**Root cause (real reliability bug, not a test bug):** the background-task
+**launch script rendered the initial `state.json` in the shell** via
+`printf '%s' <json> | sed …-substitution… > state.json`. Two defects:
+1. **JSON corruption.** The JSON payload embedded the task's `command` verbatim.
+   Any command containing literal newlines or double quotes (e.g. the test's
+   `printf 'line-1\nline-2\n'`) leaked raw newlines/quotes into the file, so
+   `readState` threw `SyntaxError: … in JSON` and crashed
+   `recoverBackgroundTasks`. (The `sed` `s/"$$"/…/` substitution was itself
+   broken — the un-escaped `"` closed the shell quote — but that only left `pid`
+   as a harmless string; the newline/quote leak was the corrupting fault.)
+2. **Torn reads.** `> state.json` truncates then streams bytes, so a concurrent
+   `readState` could observe a half-written file even for benign commands.
+
+**Changed (additive, in `src/harness/background-tasks.ts`):**
+- `writeArtifacts` now **seeds** the initial state via the Node runtime
+  (`writeJsonAtomic` → `state.json.seed`), so the `command` is JSON-encoded by
+  the runtime, never hand-rendered in the shell. Seeding (vs. writing
+  `state.json` directly) preserves the prior contract that `state.json` only
+  materialises once the launch script actually runs.
+- The launch script's start step now reads the seed in **Python**, stamps the
+  real pid/timestamps, and writes `state.json` through `json.dumps` +
+  `os.replace` (**atomic** on POSIX/Windows), then unlinks the seed. The
+  completion/failure writers share the same atomic-write helper. No shell JSON
+  rendering remains anywhere — an arbitrary command can no longer corrupt state.
+- Extracted `renderAtomicStateWrite()` shared by all three Python writers.
+
+**Test determinism (test-only):** three runtime tests drove background-task
+health purely through explicit `writeState()` + an injected
+`backgroundTaskIsProcessRunning`, but still launched the **real** detached
+scripts, whose async "running" state writes raced the controlled setup (e.g.
+inflating the platform-breaker failure count 2/2 → 3/3). Injected the existing
+`backgroundTaskSpawnProcess` option with a **no-op spawn** (returns a pid, starts
+nothing) in `server.test.ts` (×3 runtimes) and `operator-runtime.test.ts`, so
+`state.json` is written only by the test. These simulate OS behaviour and keep
+the cloud suite hermetic per the guardrails.
+
+**New regression test** (`background-tasks.test.ts`): starts a real task whose
+`command` contains newlines and double quotes and asserts the on-disk
+`state.json` is valid JSON with the command round-tripped byte-for-byte — the
+exact input that used to corrupt the file.
+
+**Test results:** `npm run build` ✅. `npm run typecheck:src` ✅ (exit 0). Suite
+**175/175 passing, 6/6 consecutive full runs clean** (was 171–174 flaky, 0
+clean). +1 new regression test.
+
+**New idea (logged to ROADMAP):** a **flake-gate** — the pre-push self-check
+should run the suite N times (e.g. 3×) and only push to `main` if *all* pass,
+recording pass counts to the metrics file. A single green run is not proof of
+determinism; this run's bug hid behind exactly that gap. Bigger idea: make
+`backgroundTaskSpawnProcess` injection a documented test seam and add a tiny
+`FakeBackgroundSpawn` helper to `src/` so future runtime tests don't each
+re-roll a no-op spawn.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

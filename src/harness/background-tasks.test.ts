@@ -370,4 +370,35 @@ describe("BackgroundTaskExecutionService", () => {
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
   });
+
+  // Regression: the launch script used to hand-render the initial state.json via
+  // `printf '%s' <json> | sed ... > state.json`. A command containing literal
+  // newlines or double quotes broke that JSON (raw newlines/quotes leaked into
+  // the file), so readState threw `SyntaxError: ... in JSON`. The state is now
+  // seeded by the Node runtime and only ever mutated through Python's json
+  // round-trip, so any command survives intact. Uses the real detached launch
+  // script (default spawn) to exercise the full write path end to end.
+  it("writes a valid state file for commands containing newlines and quotes", async () => {
+    const rootDir = await makeTempDir();
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"));
+    const command = "printf 'a\nb \"quoted\" c\n'";
+    const task = await store.start({ title: "Nasty command", command, cwd: rootDir, kind: "task" });
+
+    let state: BackgroundTaskExecutionState | undefined;
+    for (let attempt = 0; attempt < 200; attempt += 1) {
+      state = await store.executionService.readState(task);
+      if (state && (state.status === "completed" || state.status === "failed")) {
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+
+    // The launch script reached a terminal state (exit code is irrelevant here).
+    expect(state?.status === "completed" || state?.status === "failed").toBe(true);
+    // The command round-trips byte-for-byte through the seed + Python writers.
+    expect(state?.command).toBe(command);
+    // And the on-disk file is valid JSON (the corruption this test guards).
+    const raw = await fs.readFile(path.join(rootDir, task.execution.stateFile), "utf8");
+    expect(() => JSON.parse(raw) as unknown).not.toThrow();
+  });
 });
