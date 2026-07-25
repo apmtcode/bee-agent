@@ -6,6 +6,68 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-25 (run 9) — Movement subsystem: in-process trainable model + generalization eval
+
+**Audited:** Standing objective #2 (local-movement learning), neglected since
+run 4 — runs 5–8 were all control-plane typecheck debt. Inventoried
+`src/capture` + `src/training`: capture (device/os/browser adapters →
+trajectory spans), schema, dataset export, replay manifest, and job/runner
+plumbing all exist — but the runner (`LocalAppleSiliconTrainingRunner`) only
+emits **external mlx/axolotl launch plans** that run on the user's Mac. Pieces
+(c) *train a model to repeat movements* and (d) *generalize to related
+movements* had **no in-process, testable implementation** — nothing the cloud
+engine could actually run or validate.
+
+**Changed (additive, three new files in `src/training/`):**
+- `movement-model.ts` — the core gap-closer:
+  - `MovementModelBackend<TModel>` **pluggable interface** (train / predict /
+    serialize / deserialize) so a future real on-device small model drops in
+    behind the same seam.
+  - `MarkovMovementBackend` — a **deterministic** default that learns
+    context→action transition counts at several **backoff levels** (full
+    context → app+lastTarget → app → lastTool → platform → global). Exact
+    contexts replay the recorded chain; unseen-but-related contexts fall back to
+    a coarser match — i.e. it *repeats* recorded movements **and** *generalizes*.
+  - `buildMovementDataset(trajectories)` turns recorded spans into ordered
+    (context→action) sequences, sequenced by the previous action's target with a
+    `MOVEMENT_START` head sentinel and a `MOVEMENT_END_TOOL` terminal example so
+    the model learns *when to stop*.
+  - `rolloutMovements(...)` greedily regenerates a movement chain (stops on END /
+    low confidence / repeat guard); `evaluateGeneralization(...)` +
+    `splitMovementDataset(...)` are the **generalization eval harness** —
+    tool/exact accuracy, generalization & abstention rates, mean confidence on
+    held-out related trajectories.
+  - Outcome-weighted training (success ≫ failure ≫ aborted) + Laplace smoothing.
+- `movement-synth.ts` — **deterministic synthetic event-stream generator**
+  (seeded `SeededRandom` mulberry32; `defaultMovementTemplates`,
+  `synthesizeMovementTrajectories` with a `variationRate` for related-but-unseen
+  variants) so the whole capture→dataset→train→generalize→replay loop is
+  validated without real OS input.
+- `movement-model.test.ts` — 11 tests: dataset shape, chain replay, backoff
+  generalization, serialize round-trip, outcome weighting, empty-model
+  abstention, and an eval-harness check that held-out fidelity beats chance
+  (toolAccuracy > 0.8, exactAccuracy > 0.4 on unseen related trajectories).
+- Barrel exports added in `src/index.ts` (no collisions; `typecheck:src` clean).
+
+**Test results:** new movement suite ✅ **11/11**; full `src/training/` ✅
+**21/21 (6 files)**. Build ✅. `npm run typecheck:src` ✅ (exit 0 — all source,
+including the 3 new files, typechecks clean). Pre-existing **flaky** failures
+remain in `operator-runtime.test.ts` / `app.test.ts` / `server.test.ts`
+(background-task JSON recovery) — **confirmed independent of this change**: they
+reproduce on the pristine `origin` tree with zero modifications (1 fail there),
+and vary 3↔4 between full-suite and isolated runs. This run neither caused nor
+touched them. Pushed to the designated dev branch `claude/peaceful-dirac-66exvl`
+per harness policy (not `main`).
+
+**New idea:** a **model-registry seam** — persist trained `MarkovMovementModel`
+payloads (they already serialize to JSON) via a `FileMovementModelStore`, keyed
+by capture consent + reviewed-export id, and wire `evaluateGeneralization` into
+the training `execution-service` so every completed job records a fidelity
+scorecard. That turns "did training help?" into a tracked metric and gives the
+pluggable backend a persistence story, not just an in-memory one.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

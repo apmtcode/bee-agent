@@ -59,16 +59,32 @@ unchecked items are queued. Keep this richer than you found it each run.
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
 (exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
-      objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Inventory what `src/capture` + `src/training` already implement vs. the
+      objective's five pieces (run 9). Gap found: capture→schema→dataset→replay
+      exist; the runner only emits **external** mlx/axolotl launch plans, so
+      pieces (c) train + (d) generalize had no in-process/testable form.
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      for a real on-device small model (run 9 — `MovementModelBackend` +
+      `MarkovMovementBackend` in `src/training/movement-model.ts`).
+- [x] Synthetic event-stream generator to validate capture→dataset→replay
+      round-trips without real OS input (run 9 — seeded `SeededRandom` +
+      `synthesizeMovementTrajectories` in `src/training/movement-synth.ts`).
+- [x] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories (run 9 — `evaluateGeneralization` +
+      `splitMovementDataset`; test asserts >0.8 tool / >0.4 exact on unseen
+      related trajectories).
+- [ ] **Wire a real on-device backend** behind `MovementModelBackend` (mlx small
+      model) that trains from the same `MovementDataset` the Markov backend uses,
+      and have `LocalAppleSiliconTrainingRunner` emit it as an alternative to the
+      external launch plan.
+- [ ] **Movement model persistence + scorecards:** `FileMovementModelStore` for
+      serialized `MarkovMovementModel` payloads (keyed by reviewed-export id) and
+      wire `evaluateGeneralization` into `training/execution-service` so each
+      completed job records a fidelity scorecard (see run 9 idea).
+- [ ] Feed **real captured trajectories** (from `FileTrajectoryStore`, approved
+      only) through `buildMovementDataset` in the exporter path, so training runs
+      on reviewed captures rather than only synthetic streams.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
