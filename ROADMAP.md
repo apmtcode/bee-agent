@@ -70,6 +70,27 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Generalization eval harness: measure replay fidelity on held-out but
       related synthetic trajectories.
 
+## Reliability / correctness
+- [x] **Fix malformed POSIX single-quote escaping** in
+      `harness/background-tasks.ts` `shellQuote` (was `"'"'"'`, now `'"'"'`) —
+      corrupted the launch-script state file for any command containing a `'`
+      (2026-07-25, run 9). Added a launch-script-execution regression test.
+- [x] **Make background-task tests hermetic** — inject a no-op
+      `backgroundTaskSpawnProcess` so tests never spawn real detached OS
+      processes that race state writes; threaded the option through
+      `OperatorCliApp` too (2026-07-25, run 9). Suite went 3-failing+2-flaky →
+      **175/175 stable across 5 runs**.
+- [ ] **"No real spawn in tests" guard** — a shared `noopSpawn(pid)` helper +
+      a Vitest global setup that stubs `child_process.spawn` to throw, so any
+      test constructing a runtime/app without injecting a spawner fails loudly
+      instead of silently spawning detached processes (prevents regressing the
+      flake fixed in run 9).
+- [ ] **Harden the launch-script state writer** — replace the fragile
+      `printf | sed | python3` pipeline (three tools, hand-rolled shell escaping,
+      non-atomic `>` redirect) with a single `python3` heredoc that writes the
+      initial state atomically (`os.replace`) and updates it on exit, removing
+      the sed-escaping surface entirely.
+
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in

@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -107,6 +108,39 @@ describe("FileBackgroundTaskStore", () => {
       status: "completed",
       execution: { exitCode: 0 },
     });
+  });
+
+  it("generates a launch script that writes valid JSON state for single-quote commands", async () => {
+    // Regression: the shell state writer must POSIX-escape single quotes so the
+    // rendered launch script produces parseable JSON. A malformed escape corrupts
+    // the state file and crashes the in-script python json.loads on completion.
+    const rootDir = await makeTempDir();
+    const filePath = path.join(rootDir, "background-tasks.json");
+    let launchScriptAbsPath = "";
+    const store = new FileBackgroundTaskStore(
+      filePath,
+      (command) => {
+        launchScriptAbsPath = command; // capture but do not launch
+        return { pid: 4242, unref() {} };
+      },
+      () => false,
+    );
+
+    const task = await store.start({
+      title: "Quoted command",
+      command: "printf '%s' 'quoted-ok'",
+      cwd: rootDir,
+      kind: "task",
+    });
+
+    // Run the generated launch script to completion synchronously (the printf
+    // exits immediately), then assert the resulting state file is valid JSON.
+    execFileSync("bash", [launchScriptAbsPath], { cwd: rootDir, stdio: "ignore" });
+    const raw = await fs.readFile(path.join(rootDir, task.execution.stateFile), "utf8");
+    const parsed = JSON.parse(raw) as BackgroundTaskExecutionState;
+    expect(parsed.status).toBe("completed");
+    expect(parsed.command).toBe("printf '%s' 'quoted-ok'");
+    expect(typeof parsed.pid).toBe("number");
   });
 
   it("cancels running tasks and records cancelled state", async () => {

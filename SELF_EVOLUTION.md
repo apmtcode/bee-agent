@@ -6,6 +6,61 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-25 (run 9) — Fix a real shell-quoting bug corrupting background-task state; make background-task tests hermetic
+
+**Audited:** The build/test baseline. Found the suite was **RED in this
+environment** — 3 tests failing (`operator-runtime`, `server`, `app`) despite
+run 8 logging 174/174. Root-caused two distinct issues, one a genuine product
+bug.
+
+**Product bug fixed (`src/harness/background-tasks.ts`):** `shellQuote()` used a
+**malformed POSIX single-quote escape** — it replaced `'` with `` "'"'"' `` (6
+chars) instead of the correct `` '"'"' `` (5 chars: close-quote, quoted literal
+`'`, reopen). Any background-task **command containing a single quote** (e.g.
+`printf 'x'`, `git commit -m 'msg'`) therefore rendered a launch script whose
+initial `printf | sed` state write produced **invalid JSON**. On completion the
+in-script `python3 json.loads(state)` then crashed on the corrupt file, leaving
+the task's execution state permanently unparseable. This was deterministic
+(`SyntaxError … position 311`), not flaky. The sibling `shellQuote` in
+`training/runner.ts` already used the correct sequence — this one had drifted.
+
+**Test hermeticity (reliability):** the fix unmasked an underlying race — the
+`operator-runtime`/`server`/`app` tests build a real `StandaloneOperatorRuntime`
+**without** injecting `backgroundTaskSpawnProcess`, so `startBackgroundTask`
+spawned **real detached OS processes** whose async state writes clobbered the
+state the tests set via `writeState`. The runtime already supported spawn
+injection; the CLI app did not. Changes:
+- Threaded `backgroundTaskSpawnProcess` / `backgroundTaskIsProcessRunning`
+  through `OperatorCliAppOptions` → the runtime (additive; production still uses
+  the real `spawn`).
+- Injected a no-op spawner (`() => ({ pid, unref(){} })`) into the four affected
+  tests, mirroring the pattern `background-tasks.test.ts` already uses. The
+  `app` background/monitor test additionally seeds the task's output/state (as
+  its monitor half already did) with `isProcessRunning: () => true` so
+  watch-active stays deterministic.
+
+**Regression test added (`background-tasks.test.ts`):** a new test *executes*
+the generated launch script (`execFileSync bash …`) for a single-quote command
+and asserts the resulting state file is valid JSON with the command preserved.
+Verified it **fails with the old escape and passes with the fix**. Previously no
+test executed the launch script at all, so the bug had zero coverage.
+
+**Test results:** **175/175 passing, 5/5 full-suite runs** (previously 3 failing
++ 2 flaky). Build ✅. `typecheck:src` ✅ (exit 0). Full `tsc` **125 → 125** (no
+regression). Focused, reviewable diff: +2 source lines of real fix, the rest
+test hardening.
+
+**New idea:** add a tiny **"no real spawn in tests" guard** — a shared test
+helper `noopSpawn(pid)` plus a lint/grep check (or a Vitest global setup that
+stubs `child_process.spawn` to throw) so any future test that constructs a
+runtime/app without injecting a spawner fails loudly instead of silently
+spawning detached OS processes and reintroducing this class of flake. Bigger:
+the `printf | sed | python3` launch-script state writer is fragile (three tools,
+manual shell escaping, non-atomic `>` redirect); consider replacing it with a
+single `python3` heredoc that both writes the initial state atomically (temp +
+`os.replace`) and updates it on exit, eliminating the sed-escaping surface
+entirely.
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
