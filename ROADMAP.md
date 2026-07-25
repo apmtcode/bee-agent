@@ -58,17 +58,43 @@ unchecked items are queued. Keep this richer than you found it each run.
 ## Local-movement learning subsystem
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
-(exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
+(exporter, job store/manifest, runner, execution service, **movement-model**).
+Next increments:
+- [x] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
-      deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      — DONE run 9. Gap was pieces (c) train + (d) generalize: the pipeline
+      stopped at emitting a Mac-only training *command*, nothing could train/run
+      a model in-sandbox.
+- [x] Pluggable local-model backend interface (`MovementModelBackend`) with a
+      deterministic reference backend (`MarkovMovementBackend`, back-off Markov —
+      cloud/CI-safe) and a documented seam for a real on-device small model —
+      DONE run 9 (`src/training/movement-model.ts`).
+- [x] Synthetic event-stream generator to validate capture→dataset→replay→train
+      round-trips without real OS input — DONE run 9 (in the movement-model test:
+      "open menu → click item → confirm" synthetic trajectories).
+- [x] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories — DONE run 9 (`evaluateMovementModel`:
+      teacher-forced accuracy + exact-replay count).
+- [ ] Intent-conditioned generalization: prepend a `goal:<slug>` seed token
+      (derived from trajectory outcome/summary) so the model synthesizes a
+      movement for a related-but-unseen *goal*, not just an unseen prefix.
+- [ ] Fidelity-vs-order sweep in the eval harness to auto-select the Markov
+      order that maximizes held-out accuracy.
+- [ ] Wire the trained `MovementModel` into `replay-service`/`execution-service`
+      so a promoted skill can *drive* replay from the model instead of a fixed
+      manifest (bridges model → replay engine).
+
+## 🔴 Blocking / regressions (do first)
+- [ ] **Restore green baseline (regressed since run 8's 174/174).** 3 tests fail
+      with `SyntaxError: Expected ',' or '}' after property value in JSON at
+      position 311` from `readJsonFile` (`src/shared/fs.ts:17`) via
+      `BackgroundTaskExecutionService.readState` →
+      `FileBackgroundTaskStore.reconcileTask`/`recoverBySession`. Failing files:
+      `operator-runtime.test.ts` ("starts, syncs, recovers…"),
+      `server.test.ts`, `app.test.ts`. A background-task `state.json` is read
+      back malformed on the recover path. Highest-value fix — unblocks the
+      "push to main only if green" gate. (Diagnosed run 9; unrelated to the
+      movement-model change, which is green.)
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

@@ -6,6 +6,75 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-25 (run 9) — 🧠 Trainable local movement model (objective #2 pieces c & d) + backend seam
+
+**Audited:** The local-movement learning subsystem end-to-end (`src/capture/*`,
+`src/training/*`). Finding: the pipeline could *record* trajectories, build a
+*replay manifest*, *export* a reviewed dataset, and *emit* a real Apple-Silicon
+training command (`runner.ts` → `mlx_lm.lora` / `axolotl`) — but nothing could
+actually **train and run** a model inside the cloud sandbox. So objective #2
+pieces (c) "post-train a local model to repeat the recorded movements" and
+(d) "generalize to new but related movements" were entirely untestable — the
+whole subsystem stopped at "here is the shell command a Mac would run."
+
+**Changed (additive, new files only):**
+- **`src/training/movement-model.ts`** — the model layer that closes that gap:
+  - Tokenizers: `tokenizeTrajectory` / `tokenizeReplayManifest` /
+    `buildMovementDataset` / `buildMovementDatasetFromReplays` turn recorded
+    spans and exporter replay manifests into ordered movement-token sequences
+    (`obs:<source>` / `act:<tool>`, timestamp-ordered).
+  - **Pluggable `MovementModelBackend` seam** — `train(dataset, config)` returns
+    a `MovementModel` (`predict` / `distribution` / `generate` / `toJSON`). The
+    real on-device small-model backend drops in behind this interface; the
+    `runner.ts` MLX/axolotl plan is the production seam.
+  - **Reference backend `MarkovMovementBackend`** — a deterministic,
+    dependency-free back-off Markov model. Counts transitions at every context
+    width 0..k so an unseen k-context degrades to shorter contexts (this is what
+    gives piece (d): it predicts `b` after a *novel* prefix because the
+    sub-movement `a→b` is attested). Ties broken lexicographically ⇒ reproducible
+    in CI. `generate()` rolls from BOS and reproduces recorded movements exactly
+    (piece (c)); `loadMovementModel(json)` reloads a trained model for
+    inference-only use.
+  - **Generalization eval harness** `evaluateMovementModel(model, heldOut)` —
+    teacher-forced next-token accuracy + exact-replay fidelity on held-out
+    (but related) synthetic trajectories. This is the roadmap's eval-harness item.
+- **`src/training/movement-model.test.ts`** — 9 tests driven entirely by a
+  *synthetic* "open menu → click item → confirm" event generator (no real OS
+  input, per the guardrail): exact replay, deterministic distribution,
+  back-off generalization on an unseen prefix, EOS termination,
+  serialize/reload round-trip, and both eval scenarios.
+- Barrel exports for the full movement-model surface in `src/index.ts`.
+
+**Test results:** new suite **9/9 green**. `npm run typecheck:src` ✅ (exit 0 —
+source stays clean; fixed one `ReplayTimelineEvent` narrowing on the transcript
+variant during the gate). Build ✅ (tsdown, 5 files). Full `npm test`: **180
+passed / 3 failed** — the 3 failures are **pre-existing and unrelated** to this
+change (confirmed identical on a clean `git stash` tree; none of them touch
+`src/training`). See the blocker note below.
+
+**⚠️ Pre-existing regression found (logged, not fixed this run to keep the diff
+focused):** `operator-runtime.test.ts` ("starts, syncs, recovers…"),
+`server.test.ts`, and `app.test.ts` fail with a JSON parse error —
+`SyntaxError: Expected ',' or '}' after property value in JSON at position 311`
+thrown from `readJsonFile` (`src/shared/fs.ts:17`) via
+`BackgroundTaskExecutionService.readState` → `FileBackgroundTaskStore`
+`reconcileTask`/`recoverBySession`. A background-task `state.json` is being read
+back as malformed JSON during the recover path. The suite was 174/174 at run 8,
+so this regressed since then. **This is the single highest-value fix for next
+run** — it restores a green baseline and unblocks the "push to main only if
+green" gate.
+
+**New idea:** give the movement model an *intent-conditioned* generalization
+path — tag each training sequence with a coarse goal token (derived from the
+trajectory outcome/summary) and prepend it as the generation seed, so the model
+can synthesize a plausible movement for a *related-but-unseen goal* rather than
+only continuing a seen prefix. Cheap to add on top of the current tokenizer
+(goal token = `goal:<slug>` prepended to each sequence) and directly advances
+piece (d). Also worth: a fidelity-vs-order sweep in the eval harness to
+auto-select the Markov order that maximizes held-out accuracy.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
