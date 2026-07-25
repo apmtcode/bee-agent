@@ -71,16 +71,36 @@ unchecked items are queued. Keep this richer than you found it each run.
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
 (exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
-      objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
-      deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+- [~] Inventory what `src/capture` + `src/training` already implement vs. the
+      objective's five pieces (capture → schema → dataset → replay → train/infer).
+      As of run 10: capture ✅ (`src/capture/` adapters+recorder), schema ✅
+      (`trajectory.ts`/`replay.ts`), dataset ✅ (`movement-model.ts` +
+      `exporter.ts`), replay ✅ (`replay-service.ts`), train/infer ✅
+      (`movement-model.ts` n-gram backend). Remaining: connect
+      generated movements back through the executor (see below).
+- [x] **Pluggable local-model backend interface + deterministic mock backend**
+      (2026-07-25, run 10) — `src/training/movement-model.ts`:
+      `MovementModelBackend`/`TrainedMovementModel` interface,
+      `MovementModelBackendRegistry`, and a deterministic dependency-free
+      `NgramMovementBackend` (order-k Markov w/ backoff) that trains in-process
+      so cloud/CI validates train→infer. Serialize/restore round-trips the
+      post-trained artifact. Real on-device small model plugs in under the same
+      interface.
+- [x] **Synthetic event-stream generator to validate round-trips** (2026-07-25,
+      run 10) — tests drive capture→dataset→train→replay on simulated movement
+      streams (no real OS). `buildMovementDatasetFrom{Trajectories,Replays}`.
+- [x] **Generalization eval harness** (2026-07-25, run 10) —
+      `evaluateMovementModel` scores held-out related sequences and reports
+      `accuracy` + `generalizationRate` (share of correct predictions from
+      backoff, i.e. genuine transfer).
+- [ ] **Replay-fidelity → executor bridge**: feed `generate()` output back
+      through `ReplayService`/executor so a post-trained model can drive a (mock,
+      then real) device adapter — closes capture→train→act end-to-end.
+- [ ] **Noise/perturbation option** for the synthetic stream (drop/duplicate/
+      reorder actions) to measure how gracefully backoff degrades — a robustness
+      metric for the eval harness.
+- [ ] **Second movement backend** (e.g. embedding-similarity retriever) behind
+      the same interface to A/B generalization against the n-gram baseline.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

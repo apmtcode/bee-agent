@@ -6,6 +6,70 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-25 (run 10) — 🧠 Pluggable local-movement model backend (train → repeat → generalize)
+
+**Audited:** The local-movement learning subsystem (standing objective #2) and
+its ROADMAP gaps. `src/capture/` records movements into trajectories/replays and
+`src/training/` (exporter, runner, execution-service) prepares a *reviewed
+export* and an *external* MLX/axolotl launch plan — but there was **no
+in-process model layer**: nothing that actually post-trains on the recorded
+dataset and does inference. So objective #2 parts (c) "train a local model to
+repeat recorded movements" and (d) "generalize to new but related movements"
+were unvalidated in the cloud, and the ROADMAP's "pluggable local-model backend
+interface with a deterministic mock backend" + "generalization eval harness"
+were still open.
+
+**Changed (additive, new module `src/training/movement-model.ts`):**
+- **Dataset layer.** `movementTokenFromAction` canonicalizes an action into a
+  stable token (`tool::summary`, lower-cased, whitespace-collapsed).
+  `buildMovementDatasetFromTrajectories` / `buildMovementDatasetFromReplays`
+  turn recorded spans/replay manifests into ordered token sequences (sorted by
+  `ts`, terminated with an `<end>` token, empty spans dropped) plus a sorted
+  vocabulary. Replay builder takes **only `action` events** (motor movements),
+  not transcript/observation context.
+- **Pluggable backend interface.** `MovementModelBackend` (`train`/`restore`)
+  and `TrainedMovementModel` (`predictNext`/`generate`/`serialize`) are the seam
+  for a real on-device small model later. `MovementModelBackendRegistry` holds
+  named backends (seeded with the default) so a local backend registers under
+  the same interface without touching call sites.
+- **Deterministic n-gram backend** (`NgramMovementBackend`, id `ngram-local`):
+  counts context→next-token transitions at every order 0..k, predicts by
+  deterministic argmax (highest count, lexicographic tie-break) over the longest
+  matching context suffix, **backing off** to shorter suffixes when the full
+  context is unseen. No OS access, no external process, no randomness — the
+  whole train→infer loop runs in cloud/CI. **Repetition (2c):** rolling out from
+  a recorded seed reproduces the recorded movement. **Generalization (2d):**
+  backoff yields a prediction for a *new* context that shares a suffix with
+  training data (`prediction.generalized` flags it).
+- **Generalization eval harness.** `evaluateMovementModel` scores a trained
+  model on held-out sequences (next-token accuracy) and isolates
+  `generalizationRate` — the share of correct predictions that came from backoff
+  (genuine transfer, not verbatim recall).
+- **Persistence.** `serialize()`/`registry.restore()` round-trip a post-trained
+  model so the artifact can be saved and reloaded with identical predictions.
+- Exported all of the above from `src/index.ts`.
+
+**Test results:** new `src/training/movement-model.test.ts` — **12 tests**
+covering canonicalization, dataset construction (trajectory + replay + empty),
+recorded-movement repetition, frequency-weighted deterministic tie-break,
+suffix-backoff generalization, the eval harness, serialize/restore round-trip,
+registry behavior, a custom pluggable backend, and a synthetic capture→dataset→
+train→replay round-trip. `npm test` **174 → 186/186** (2 consecutive green runs).
+`npm run build` ✅. `npm run typecheck:src` ✅ (exit 0 — source stays clean). Full
+`tsc` **125** (unchanged — no new debt; new files are clean).
+
+**New idea:** a **replay-fidelity → executor bridge** — feed
+`TrainedMovementModel.generate()` output back through the existing
+`ReplayService`/executor so a post-trained model can *drive* a (mock, then real)
+device adapter, closing the capture→train→act loop end-to-end. Add a
+noise/perturbation option to the synthetic stream generator (drop/duplicate/
+reorder actions) to measure how gracefully backoff degrades — a cheap robustness
+metric for the eval harness. Longer term: a second backend (e.g. a tiny
+embedding-similarity retriever) behind the same interface to A/B generalization
+against the n-gram baseline.
+
+---
+
 ## 2026-07-25 (run 9) — 🔴→🟢 Eliminated background-task test flakiness (verification gate restored)
 
 **Audited:** The verification gate itself. On a clean checkout `npm test` was
