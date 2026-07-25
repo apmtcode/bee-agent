@@ -6,6 +6,72 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-25 (run 9) — Local-movement model backend (train → repeat → generalize) + fixed 2 latent launch-script bugs
+
+**Audited:** The movement-learning subsystem (`src/capture` + `src/training`)
+against standing objective #2. `src/training/runner.ts` builds real
+Apple-Silicon (mlx/axolotl) training *plans* but nothing could actually
+post-train or infer a model in the cloud — objective #2(c/d) ("post-train a
+local model to repeat recorded movements" and "generalize to new-but-related
+movements") had no runnable implementation. This was the top-queued
+movement item after the inventory.
+
+**Changed — new `src/training/movement-model.ts` (headline):** a pluggable
+local-model backend that runs entirely in-process (no native deps, cloud-safe):
+- `MovementModelBackend` interface (`train(dataset) -> TrainedMovementModel`) —
+  the seam: swap the mock for an MLX/GGUF backend and the pipeline is unchanged.
+- `MarkovMovementBackend` — a deterministic **order-k Markov model with
+  stupid-backoff**. It memorizes recorded transitions (so it **replays recorded
+  movements exactly** — #2c) and backs off to shorter contexts for unseen
+  prefixes (so it **generalizes to new-but-related movements** — #2d).
+- `buildMovementDataset(replays)` — tokenizes reviewed replay-manifest `action`
+  events into a backend-agnostic dataset (`tool:slug(summary)` tokens).
+- `generateSyntheticMovementDataset(...)` — seeded (LCG, no `Math.random`)
+  synthetic event-stream generator to validate the capture→dataset→train→
+  replay/generalize round-trip without real OS input.
+- `serialize()`/`deserializeMovementModel()` — persist/reload a trained model
+  (mirrors loading a GGUF), stable-sorted for a deterministic on-disk form.
+- Exported the full surface from `src/index.ts`. **11 new tests** cover
+  tokenization, exact replay, frequency-ranked prediction, backoff
+  generalization, end-to-end synthetic completion, and serialization round-trip.
+
+**Fixed — 2 real latent bugs in `src/harness/background-tasks.ts`** (surfaced
+because this cloud machine actually *executes* the spawned launch script, unlike
+run 8's host — the 3 "pre-existing" failures at run start traced here, not to my
+change):
+- **`shellQuote` typo:** the single-quote escape was `"'"'"'` (6 chars, malformed
+  — it never closes the opening `'`) instead of the correct POSIX `'"'"'`
+  (which `src/training/runner.ts` already had). Any `task.command` containing a
+  single quote (e.g. `printf 'line-1\nline-2\n'`) had its quotes turned into `"`,
+  producing **invalid JSON** in the initial state file → `readState` threw
+  mid-recovery.
+- **Broken pid capture:** the initial state was written via
+  `printf '%s' <json> | sed "…; s/\"\$\$\"/$$/g"`, but `$$` in a sed *regex* is
+  two end-anchors, so the pid was never substituted (`pid` stayed the string
+  `"$$"`). Replaced the fragile printf|sed with a `python3` json writer (already
+  a script dependency via the completion writer) that fills `startedAt`/`pid`
+  correctly and writes atomically (temp + `replace`).
+- **De-flaked** the affected tests by injecting an inert
+  `backgroundTaskSpawnProcess` — they already inject `isProcessRunning: () =>
+  false` and drive state via `writeState`, so a real detached bash subprocess
+  racing those writes was never intended.
+
+**Test results:** **185/185 passing** (was 182/185 with 3 pre-existing failures;
++11 new movement tests, −3 fixed), **green across 3 consecutive full runs**
+(the fixed tests are now deterministic). Build ✅. `typecheck:src` ✅ (exit 0).
+Full `tsc` stays **125** (all new code adds zero errors).
+
+**New idea:** a **generalization eval harness** — now unblocked by the trained-
+model API. Hold out synthetic trajectories, prompt the model with a shared
+prefix, and score `generate()` against ground truth (token edit distance /
+first-divergence index) to get a single "replay fidelity" number per training
+run. Wire it into the metrics file so movement-model regressions are caught
+automatically. (Also: `runner.ts`'s launch script has the same latent
+`s/"$$"/$$/g` pid-substitution bug — its `shellQuote` is correct so no JSON
+corruption, but the pid is never recorded; queue a follow-up.)
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

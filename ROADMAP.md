@@ -62,13 +62,28 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      for a real on-device small model. **DONE run 9** —
+      `src/training/movement-model.ts`: `MovementModelBackend` interface +
+      `MarkovMovementBackend` (order-k, stupid-backoff) that trains, replays
+      recorded movements exactly, and generalizes to new-but-related ones;
+      `serialize`/`deserialize` = the on-device persist/reload seam.
+- [x] Synthetic event-stream generator to validate capture→dataset→replay
+      round-trips without real OS input. **DONE run 9** —
+      `generateSyntheticMovementDataset` (seeded LCG) + `buildMovementDataset`
+      tokenizer, exercised end-to-end by the movement-model tests.
+- [ ] **Generalization eval harness** (next movement increment, now unblocked):
+      hold out synthetic trajectories, prompt `generate()` with a shared prefix,
+      and score against ground truth (token edit distance / first-divergence
+      index) for a single "replay fidelity" number per run; feed the metrics file.
+- [ ] Port the movement dataset into the real `runner.ts` training plan (write
+      the tokenized dataset alongside the mlx/axolotl launch artifacts) so the
+      on-device runtime consumes the same schema the mock trains on.
+- [ ] Fix the twin latent bug in `src/training/runner.ts`'s launch script
+      (`s/"$$"/$$/g` never substitutes the pid — regex end-anchors); its
+      `shellQuote` is already correct so no JSON corruption, but pid is unrecorded.
+      Mirror run 9's python-json initial-state writer used in `background-tasks.ts`.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
