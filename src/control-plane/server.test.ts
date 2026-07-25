@@ -952,6 +952,10 @@ describe("OperatorControlPlaneServer", () => {
     const driftingRootDir = await makeTempDir();
     const driftingRuntime = new StandaloneOperatorRuntime({
       rootDir: driftingRootDir,
+      // Stub the spawn so execution state is controlled solely by the explicit
+      // writeState calls below; a real launch script would race them by writing
+      // its own initial "running" state.
+      backgroundTaskSpawnProcess: () => ({ pid: 4321, unref() {} }),
       backgroundTaskIsProcessRunning: () => false,
     });
     const driftingServer = new OperatorControlPlaneServer({ runtime: driftingRuntime });
@@ -1018,6 +1022,10 @@ describe("OperatorControlPlaneServer", () => {
     const breakerRootDir = await makeTempDir();
     const breakerRuntime = new StandaloneOperatorRuntime({
       rootDir: breakerRootDir,
+      // Stub the spawn so the circuit-breaker sequence is driven only by the
+      // explicit writeState calls; a real launch script would race them by
+      // writing its own initial "running" state and skew the failure counts.
+      backgroundTaskSpawnProcess: () => ({ pid: 4321, unref() {} }),
       backgroundTaskIsProcessRunning: () => false,
     });
     const breakerServer = new OperatorControlPlaneServer({ runtime: breakerRuntime });

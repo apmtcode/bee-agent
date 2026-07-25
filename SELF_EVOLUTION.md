@@ -6,6 +6,58 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-25 (run 9) — 🐛 Background-task state corruption fixed; flaky suite made deterministic
+
+**Audited:** The test suite health as the pre-push gate. On a clean checkout the
+suite was **red, not green** — 3–4 tests failed and the count *varied between
+runs* (classic flakiness). Traced every failure to one root cause in the
+real-OS background-task subsystem (`src/harness/background-tasks.ts`).
+
+**Root-cause bug found (real, not test-only):** the launch script that a spawned
+background task runs wrote its initial `running` state by hand-building a JSON
+string in TypeScript, shell-quoting it, and rewriting it in bash with
+`printf '%s' … | sed`. That pipeline **produced invalid JSON** for any command
+containing quotes or newlines: e.g. `printf 'line-1\nline-2\n'` serialized to
+`…"command":"printf "'line-1<NL>line-2<NL>"'"}` — an unescaped `"` terminated the
+string early and raw newlines split the value across lines. It also left the
+`"pid":"$$"` placeholder **unsubstituted**. Any later `readState`/reconcile
+(recovery, sync, circuit-breaker) then threw `SyntaxError: … in JSON`, crashing
+recovery of real background tasks — a latent production defect, surfaced by tests.
+
+**Changed (additive, in `src/harness/background-tasks.ts`):**
+- Replaced the `printf|sed` initial-state write with a **python writer that
+  receives every value via `argv`** (task id, kind, output file, cwd, command,
+  pid, timestamp) and builds the JSON with `json.dumps`. No JSON is ever embedded
+  in a shell string, so quotes/newlines/`$` in commands can't corrupt it, and the
+  pid comes from the shell's real `$$`.
+- Made **both** state writers (initial + completed/failed) **atomic** via a shared
+  `PYTHON_ATOMIC_WRITE` (`write_text(tmp)` + `os.replace`), so a concurrent reader
+  can never observe a torn write.
+- Deleted the now-dead `quotedStatePayload`/sed construction.
+
+**Flaky circuit-breaker/drift tests made deterministic (`server.test.ts`):** with
+the JSON now valid & readable, two tests that drive the remote-control circuit
+breaker purely through explicit `writeState` calls started racing the *real*
+`sleep 5` launch script's initial `running` write (which the old corruption had
+been silently masking). Fixed by injecting the already-supported
+`backgroundTaskSpawnProcess: () => ({ pid, unref(){} })` no-op spawn so execution
+state is controlled solely by the tests — no real process, no race.
+
+**Test results:** suite **red→green and stable**: `npm test` **174/174**,
+verified deterministic across **3 consecutive full runs** (was 3–4 failing,
+non-deterministic). `npm run build` ✅. `npm run typecheck:src` ✅ (exit 0). Full
+`tsc` unchanged at **125** (all test-file debt; no regression).
+
+**New idea:** the whole class of "bash hand-builds JSON" bug is grep-able —
+`printf …| sed` / heredocs that emit JSON. Add a tiny guard test that spawns a
+real background task whose *command contains quotes, a newline, a `$`, and a
+backslash*, then asserts `readState` round-trips it — a permanent regression net
+for the serializer. Longer term, factor the state (de)serialization into a single
+`renderStateWriterPython` helper used by every write path so there is exactly one
+JSON-encoding site to audit.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

@@ -70,6 +70,19 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Generalization eval harness: measure replay fidelity on held-out but
       related synthetic trajectories.
 
+## Reliability / correctness
+- [x] **Background-task state serializer** (`src/harness/background-tasks.ts`) —
+      DONE run 9. The launch script built the initial `running` state via
+      `printf|sed`, producing invalid JSON for commands with quotes/newlines and
+      leaving `"$$"` unsubstituted → every later `readState` threw. Rewrote as a
+      python argv writer + made both writers atomic (`os.replace`). Fixed a real
+      recovery-crash bug and turned a red/flaky suite green & deterministic.
+- [ ] **Serializer regression guard:** spawn a real background task whose command
+      contains quotes, a newline, a `$`, and a backslash, then assert `readState`
+      round-trips it — a permanent net against the "bash hand-builds JSON" class.
+- [ ] Factor state (de)serialization into a single helper used by every write
+      path so there is exactly one JSON-encoding site to audit.
+
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in
