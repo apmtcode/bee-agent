@@ -59,16 +59,39 @@ unchecked items are queued. Keep this richer than you found it each run.
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
 (exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
-      objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Inventory what `src/capture` + `src/training` already implement vs. the
+      objective's five pieces (2026-07-25, run 9). Gap found: capture→schema→
+      dataset→replay + external training-plan emitter existed, but **no in-process
+      model** for parts (c) train / (d) generalize — the biggest gap. Closed below.
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      for a real on-device small model — DONE run 9 (`src/training/movement-model.ts`:
+      `MovementModelBackend` seam + registry + `DeterministicNgramBackend`
+      variable-order Markov w/ stupid-backoff, serialize/load).
+- [x] Synthetic event-stream generator to validate capture→dataset→replay
+      round-trips without real OS input — DONE run 9 (`generateSyntheticCorpus`,
+      seeded mulberry32, template library w/ slots + optional steps).
+- [x] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories — DONE run 9 (`evaluateMovementModel`:
+      teacher-forced top-1 / recall / mean-confidence / backoff rate + `splitCorpus`).
+- [ ] `MovementReplayPolicy`: turn a `TrainedMovementModel` into a *guarded*
+      executor — gate each generated step on `confidence >= threshold` and on the
+      capture-side consent/denylist checks (`isSensitiveApp`) before replaying it
+      against the real OS. Closes objective #2(d) → safe autonomous execution.
+- [ ] Register a real small on-device model behind `MovementModelBackend` (e.g. a
+      tiny MLX/GGUF next-token model), wired via `LocalAppleSiliconTrainingRunner`
+      so `movement-model` snapshots feed the launch-script pipeline.
+
+## Reliability / test health
+- [ ] **De-flake the real-subprocess tests** (surfaced run 9). `server.test.ts` /
+      `app.test.ts` / a monitor test start a real `sleep 5` via
+      `startBackgroundTask({command:"sleep 5"})` and assert on liveness via
+      `process.kill(pid,0)`; when the suite runs slower than 5s to the assertion the
+      state flips "active"→"missing-process"→"degraded" and the test fails
+      non-deterministically (observed 4 then 3 failures on back-to-back runs). Fix:
+      inject a deterministic `isProcessRunning` into the test runtime (the
+      `BackgroundTaskExecutionService` already accepts one) and drop real `sleep`s,
+      so remote-status derivation is tested without a wall-clock race.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

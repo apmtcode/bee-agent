@@ -6,6 +6,66 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-25 (run 9) — 🧠 Pluggable movement-model backend: on-device learning that trains + generalizes (objective #2 c/d)
+
+**Audited:** The local-movement learning subsystem (standing objective #2) and its
+three top-queued roadmap items. Found the pipeline had capture → schema → dataset →
+replay and a *training-plan emitter* (`LocalAppleSiliconTrainingRunner` writes
+mlx/axolotl launch scripts), but **no in-process model** that could actually (c)
+post-train on a movement dataset or (d) generalize to new-but-related movements.
+Those external trainers can't run in Anthropic's cloud, so parts (c)/(d) of the
+objective were entirely unexercised — the single biggest movement-subsystem gap.
+
+**Changed (additive, two new modules + barrel exports):**
+- `src/training/movement-model.ts` — the pluggable backend seam:
+  - Movement event schema (`MovementStep`/`MovementSequence`) + tokenizer
+    (`tap:submit-button`, `swipe:down`, `scroll:list:up`) over the existing
+    `DeviceGestureKind` capture vocabulary.
+  - `MovementModelBackend` / `TrainedMovementModel` interfaces (train, predictNext,
+    generate, serialize/load) — the documented seam for a real on-device small
+    model — plus a name-keyed **registry** (`registerMovementBackend` /
+    `getMovementBackend` / `listMovementBackends`).
+  - `DeterministicNgramBackend`: a variable-order Markov model with stupid-backoff.
+    It **learns** next-movement distributions from the dataset and **generalizes**
+    to unseen contexts by backing off to shorter ones (`backoffOrder` surfaces
+    exactly when generalization kicked in). 100% deterministic (stable tie-breaks,
+    no RNG) so CI is reproducible. Auto-registered as `deterministic-ngram`.
+- `src/training/movement-eval.ts` — validates the pipeline with *synthetic* data
+  (no real OS input needed):
+  - `generateSyntheticCorpus` — seeded mulberry32 PRNG (no `Math.random`) over a
+    template library (login / search / compose) with slot-filled targets and
+    optional steps, so variants stay related but differ.
+  - `splitCorpus` (deterministic train/held-out) + `evaluateMovementModel` — a
+    teacher-forced generalization harness reporting top-1 accuracy, recall,
+    mean-confidence, and backoff (generalization) rate.
+
+**Test results:** **16 new tests** across `movement-model.test.ts` (9) +
+`movement-eval.test.ts` (7) — **16/16 green**,
+covering memorized-flow prediction, generalization-via-backoff, full-sequence
+generation, serialize/load round-trip, corpus determinism, held-out eval
+(>0.5 top-1 on unseen related flows), and empty-model/empty-corpus edges.
+`typecheck:src` ✅ (source stays fully green). `build` ✅ (tsdown, 5 files).
+
+**⚠️ Pre-existing flaky tests (NOT caused by this change):** full `npm test` shows
+3–4 failures that **vary run-to-run** (4 then 3 on back-to-back runs) and reproduce
+identically with this run's changes stashed. Root cause: `server.test.ts` /
+`app.test.ts` start a **real `sleep 5` subprocess** (`startBackgroundTask({command:
+"sleep 5"})`) and assert on its liveness via `process.kill(pid, 0)` — a wall-clock /
+process-group race that tips "active" → "missing-process" → "degraded" when the
+suite runs slower than 5s to the assertion. Date/machine/load-dependent, orthogonal
+to the movement work. My new tests add **0** failures. Logged a de-flake item to
+ROADMAP (inject a deterministic `isProcessRunning` + avoid real sleeps).
+
+**New idea:** add a `MovementReplayPolicy` layer that turns a `TrainedMovementModel`
+into a *guarded* action executor — before replaying each generated step against the
+real OS, gate it on `confidence >= threshold` and on the same consent/denylist
+checks the capture side enforces (`isSensitiveApp`), so a learned policy can only
+autonomously repeat movements it's confident about and is contractually allowed to
+touch. This closes the loop from objective #2(d) (generalize) to safe autonomous
+execution, and is fully unit-testable with the deterministic backend.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
