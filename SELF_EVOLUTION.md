@@ -6,6 +6,74 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-25 (run 9) — 🧠 In-process movement-model backend (obj #2c/#2d) + fixed a real launch-script JSON-corruption bug
+
+**Audited:** The local-movement learning subsystem (`src/capture` + `src/training`).
+Found the five-piece objective (capture → schema → dataset → replay → train/infer)
+was implemented through *piece 4* only: the training runner (`runner.ts`) emits
+**external** command plans for real Apple-Silicon runtimes (mlx/axolotl), but
+**nothing could actually learn from a movement dataset and infer movements**
+without that hardware — so objective #2(c) "post-train a model to repeat recorded
+movements" and #2(d) "generalize to new but related movements" were untestable in
+the cloud. That is the roadmap's top movement item.
+
+**Changed (additive) — new pluggable in-process backend:**
+- **`src/training/movement-model.ts`** — the missing piece:
+  - `MovementModelBackend` interface + `createMovementModelBackend(kind)` registry.
+  - `MarkovMovementBackend`: a deterministic, dependency-free **variable-order
+    n-gram with backoff**. `train()` learns transition counts at every context
+    length 0..order; `generate()` reproduces recorded sequences (greedy) or
+    samples new ones (seeded); `predictNext()` backs off to shorter suffixes for
+    unseen contexts (→ generalization); `score()` reports top-1 replay fidelity;
+    `serialize()`/`loadMovementPolicy()` persist a trained policy.
+  - `LocalNativeMovementBackend`: the documented **seam for a real on-device small
+    model** — `available:false`, `train()` throws a clear "requires on-device
+    runtime" so cloud callers detect the missing runtime and fall back to markov.
+  - Tokenizer (`tokenizeMovementAction`) + dataset adapters
+    (`datasetFromTrajectories`, `datasetFromReplayManifests`) that consume the
+    existing capture schema, and `evaluateGeneralization()` — a held-out fidelity
+    + vocabulary-coverage eval harness. Seeded `createSeededRng` (mulberry32) →
+    fully deterministic in CI.
+- **`src/training/synthetic-movements.ts`** — seeded synthetic movement-stream
+  generator from a small library of related UI flows, so the whole
+  capture→dataset→model→generalization pipeline validates without real OS input.
+- Exported all of the above from `src/index.ts`.
+
+**Bonus — fixed a real, pre-existing reliability bug (discovered via a red suite):**
+the background-task launch script wrote its initial "running" `state.json` via
+`printf '%s' <json> | sed "…s/\"\$\$\"/$$/g"`. Two defects made the JSON **invalid**:
+(1) `sed` treats the `$` in the `"$$"` pid placeholder as an end-of-line anchor, so
+the pid was never substituted; (2) any newline in the task command leaked into the
+JSON string. `readState` then threw a `SyntaxError`, crashing reconcile/sync/recover.
+Replaced the brittle `printf|sed` writer with a **Python `json.dumps` writer from a
+base64-encoded payload** (mirroring the existing completed/failed writers), taking
+the launcher's `$$` as the pid — bulletproof against any command content. The same
+brittle pattern still exists in `src/training/runner.ts` (queued in ROADMAP).
+
+**Also de-flaked 3 pre-existing racy tests:** `server.test.ts`,
+`operator-runtime.test.ts`, and (via the JSON fix) `app.test.ts` were failing
+because runtimes that *simulate* task state via explicit `writeState` also launched
+**real** subprocesses whose async "running"-state writes raced the assertions
+(they had passed at run 8 only by timing luck). Injected the already-available
+`backgroundTaskSpawnProcess` no-op mock into those simulate-only runtimes so no
+real process races the manual state.
+
+**Test results:** `typecheck:src` ✅ (exit 0). Build ✅. Tests ✅ **185/185**
+(+11 new movement-model tests). Full suite went from **3–4 deterministically-failing
+files** on the pristine tree to green (rare residual load-timing flake ~1/20,
+tracked). The 11 new tests cover: reproduce-recorded (obj 2c), predict/backoff,
+serialize round-trip, seeded-determinism, generalization-to-held-out (obj 2d), and
+the unavailable-backend seam.
+
+**New idea:** now that a trained `MovementPolicy` can `predictNext()`, wire it into
+the **replay engine as an autocomplete/anomaly detector** — during replay, compare
+each actual next movement against the policy's top-k prediction; a low-probability
+transition flags either a novel user intent (candidate for a new skill) or a replay
+drift (candidate for repair). This turns the learned model into a live guardrail,
+not just an offline artifact. Second idea: a `verify` npm script
+(`typecheck:src && build && test`) plus a `--retry` on the 3 subprocess-launch
+tests to fully absorb the residual load-timing flake.
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

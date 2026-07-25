@@ -15,6 +15,12 @@ async function makeTempDir(): Promise<string> {
   return dir;
 }
 
+// This test simulates background-task state/output via explicit writeState/
+// writeOutput calls. A real subprocess launch would asynchronously write its own
+// "running" state and race those assertions, so use a no-op spawn that returns a
+// pid without executing anything.
+const noopBackgroundSpawn = () => ({ pid: 4242, unref() {} });
+
 function buildHookCaptureCommand(outputFile: string): string {
   const script = [
     "import fs from 'node:fs';",
@@ -530,6 +536,7 @@ describe("StandaloneOperatorRuntime", () => {
   it("starts, syncs, recovers, lists, and cancels background tasks", async () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
+      backgroundTaskSpawnProcess: noopBackgroundSpawn,
       backgroundTaskIsProcessRunning: () => false,
     });
     const session = await runtime.startSession({ title: "Tasks", agentId: "main" });

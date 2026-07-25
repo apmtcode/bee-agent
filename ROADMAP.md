@@ -59,16 +59,32 @@ unchecked items are queued. Keep this richer than you found it each run.
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
 (exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
-      objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Inventory what `src/capture` + `src/training` already implement vs. the
+      objective's five pieces (2026-07-25, run 9): pieces 1–4 (capture → schema →
+      dataset → replay) existed; the runner only emitted **external** mlx/axolotl
+      command plans, so **piece 5 (in-process train/infer)** was the gap.
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      for a real on-device small model — DONE run 9 (`src/training/movement-model.ts`:
+      `MovementModelBackend` + `createMovementModelBackend`, deterministic
+      `MarkovMovementBackend`, `LocalNativeMovementBackend` seam).
+- [x] Synthetic event-stream generator to validate capture→dataset→replay
+      round-trips without real OS input — DONE run 9
+      (`src/training/synthetic-movements.ts`, seeded flow grammar).
+- [x] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories — DONE run 9 (`evaluateGeneralization`).
+- [ ] Wire `MovementPolicy.predictNext()` into the replay engine as a live
+      autocomplete/anomaly detector: flag low-probability transitions as either a
+      novel-intent (new-skill candidate) or a replay-drift (repair candidate).
+- [ ] Real on-device backend behind the `local-native` seam (MLX/ONNX small
+      policy) with `available` gated on runtime detection; keep markov as the
+      cloud/CI fallback.
+- [ ] Port the base64+Python `state.json` writer fix into
+      `src/training/runner.ts` — it still uses the same brittle `printf | sed`
+      pattern that produces invalid JSON (unsubstituted `$$`, leaked newlines).
+- [ ] Absorb the residual subprocess-launch test flake: add a `verify` script
+      and `--retry` (or convert the 3 launch tests to fully mocked spawn) so the
+      full suite is deterministically green even under heavy parallel CPU load.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
