@@ -83,6 +83,13 @@ describe("OperatorControlPlaneServer", () => {
     const rootDir = await makeTempDir();
     const runtime = new StandaloneOperatorRuntime({
       rootDir,
+      // Mock the spawn so background tasks never launch a real OS process. The
+      // remote-status/diagnostics assertions below depend on the background
+      // task having no execution state written yet; a real `sleep 5` process
+      // would race the launch-script state write against these assertions and
+      // (with isProcessRunning mocked false) surface a spurious "missing-process"
+      // diagnostic, flipping the resumed control state from active to degraded.
+      backgroundTaskSpawnProcess: () => ({ pid: 4242, unref() {} }),
       backgroundTaskIsProcessRunning: () => false,
       delivery: new OperatorDeliveryService(rootDir, {
         sendBrowserPush: async () => {},
@@ -952,6 +959,10 @@ describe("OperatorControlPlaneServer", () => {
     const driftingRootDir = await makeTempDir();
     const driftingRuntime = new StandaloneOperatorRuntime({
       rootDir: driftingRootDir,
+      // Mock spawn: the diagnostics assertions below rely on explicit
+      // writeState calls being the only source of background-task state. A real
+      // process would race those writes and skew the derived control state.
+      backgroundTaskSpawnProcess: () => ({ pid: 4242, unref() {} }),
       backgroundTaskIsProcessRunning: () => false,
     });
     const driftingServer = new OperatorControlPlaneServer({ runtime: driftingRuntime });
@@ -1018,6 +1029,11 @@ describe("OperatorControlPlaneServer", () => {
     const breakerRootDir = await makeTempDir();
     const breakerRuntime = new StandaloneOperatorRuntime({
       rootDir: breakerRootDir,
+      // Mock spawn: the breaker aggregate below is driven by explicit per-task
+      // writeState calls (only tasks 1 and 2 are marked missing-process). A real
+      // `sleep 5` process would write running state for task 3 too and tip the
+      // aggregate from "mixed" to "degraded".
+      backgroundTaskSpawnProcess: () => ({ pid: 4242, unref() {} }),
       backgroundTaskIsProcessRunning: () => false,
     });
     const breakerServer = new OperatorControlPlaneServer({ runtime: breakerRuntime });

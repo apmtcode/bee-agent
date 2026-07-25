@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -369,5 +370,38 @@ describe("BackgroundTaskExecutionService", () => {
     await expect(fs.readFile(path.join(rootDir, task.execution.launchScript), "utf8")).resolves.toContain("bash -lc");
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
+  });
+
+  it("generates a launch script that writes valid JSON state for single-quoted commands", async () => {
+    // Regression: shellQuote previously used a malformed single-quote escape
+    // ("'"'"' with a spurious leading double-quote), which corrupted the
+    // launch script's `printf | sed` state write for any command containing a
+    // single quote — the most common shape (`printf 'x'`, `echo 'hi'`,
+    // `grep 'p'`). The resulting state.json was invalid JSON, so recovery
+    // threw a SyntaxError instead of reconciling the task.
+    const rootDir = await makeTempDir();
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"), () => ({ pid: 2222, unref() {} }));
+    const command = "printf 'quoted-value\\n'";
+    const task = await store.start({ title: "Quoted command", command, cwd: rootDir, kind: "task" });
+
+    // The generated script must carry the sed program with backslashes intact
+    // (`s/\"\$\$\"/$$/g`). If the backslashes are lost to JS string parsing the
+    // emitted sed becomes `s/"$$"/$$/g`, whose shell-expanded pattern never
+    // matches, leaving the running-state pid as the literal string "$$".
+    const script = await fs.readFile(path.join(rootDir, task.execution.launchScript), "utf8");
+    expect(script).toContain(`s/\\"\\$\\$\\"/$$/g`);
+
+    // Execute the generated launch script directly (deterministic — no race
+    // against the harness). It writes the running state, runs the command, then
+    // writes the terminal state.
+    execFileSync("bash", [path.join(rootDir, task.execution.launchScript)], { cwd: rootDir });
+
+    const raw = await fs.readFile(path.join(rootDir, task.execution.stateFile), "utf8");
+    const state = JSON.parse(raw) as BackgroundTaskExecutionState; // must not throw
+    expect(state.status).toBe("completed");
+    expect(state.command).toBe(command);
+    expect(typeof state.pid).toBe("number"); // "$$" was substituted, not left literal
+    expect(state.exitCode).toBe(0);
+    await expect(fs.readFile(path.join(rootDir, task.execution.outputFile), "utf8")).resolves.toContain("quoted-value");
   });
 });

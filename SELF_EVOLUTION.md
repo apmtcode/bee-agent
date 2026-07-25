@@ -6,6 +6,64 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-25 (run 9) — Fix two real shell-quoting bugs in the background-task launch pipeline (flaky suite → 175/175 stable)
+
+**Audited:** The baseline test suite — found it was **failing 3–4 tests** (last
+run reported 174/174 on a different date), varying between runs → flakiness. Root
+cause was date/timing-dependent, not a code change (working tree was clean).
+Traced the dominant symptom (`SyntaxError: Expected ',' or '}' after property
+value in JSON` during background-task recovery) into the launch-script generator.
+
+**Two genuine source correctness bugs found & fixed** (not test bugs):
+1. **`shellQuote` malformed single-quote escape** (`src/harness/background-tasks.ts`).
+   It replaced `'` with `"'"'"'` (6 chars, spurious leading `"`) instead of the
+   correct POSIX `'"'"'` (5 chars). Any background-task command containing a
+   single quote — `printf 'x'`, `echo 'hi'`, `grep 'p'`, extremely common — got
+   its whole `printf | sed` state-write corrupted, writing **invalid JSON** to the
+   task's `state.json`. Recovery/reconcile then threw instead of reconciling.
+   Verified empirically: buggy escaping turns `printf 'hi'` → `printf "'hi"'`.
+2. **`sed` backslashes consumed by the JS template literal** (both
+   `src/harness/background-tasks.ts` and `src/training/runner.ts`). The author
+   wrote `s/\"\$\$\"/$$/g` intending the backslashes to reach sed, but a template
+   literal collapses `\"`→`"` and `\$`→`$`, emitting `s/"$$"/$$/g`. The shell then
+   expands *both* `$$` to the PID, so the pattern is `"<pid>"` and never matches
+   the literal `"$$"` in the payload — leaving the **running-state pid as the
+   string `"$$"`** forever (completed/failed states were fine only because a later
+   python step rewrote them). Fixed by doubling the backslashes (`s/\\"\\$\\$\\"/$$/g`)
+   so sed receives `\"\$\$\"`; verified: buggy → `"pid":"$$"`, fixed → `"pid":1944`.
+
+**Test determinism (additive):** four tests constructed a runtime/store with
+`backgroundTaskIsProcessRunning: () => false` but **no** `backgroundTaskSpawnProcess`
+mock, so they launched **real** `sleep 5` / `printf` OS processes that raced the
+tests' own explicit `writeState` calls — the true source of the flakiness. Injected
+a deterministic mock spawn (`() => ({ pid: 4242, unref() {} })`, matching the
+sibling `FileBackgroundTaskStore` unit tests) into the four sites
+(`operator-runtime.test.ts` ×1, `server.test.ts` ×3: RPC, drifting, breaker). The
+breaker/drifting tests *deliberately* write state for only some tasks to drive the
+missing-process aggregate; the stray real processes were polluting the rest.
+
+**New regression test** (`background-tasks.test.ts`): generates a launch script for
+a single-quoted command, asserts the script carries the correctly-escaped sed
+program, executes it with `bash`, and asserts the resulting `state.json` is **valid
+JSON** with the command preserved, a **numeric** pid, and `exitCode` 0. This
+directly guards both bugs deterministically (no process-timing race).
+
+**Test results:** suite **flaky (3–4 failing) → 175/175 passing, stable across 5+
+consecutive full runs** (+1 new regression test). `npm run build` ✅.
+`npm run typecheck:src` ✅ (exit 0). Full `tsc` total unchanged at **125** (no new
+type debt; touched-file counts are pre-existing test-only debt tracked in ROADMAP).
+
+**New idea:** add a tiny **test-hygiene guard** that flags any test constructing a
+runtime/store with `backgroundTaskIsProcessRunning` overridden but no
+`backgroundTaskSpawnProcess` — the exact "real spawn + mocked liveness" combo that
+races. Bigger structural idea: the launch script hand-rolls JSON via shell
+`printf | sed`, a fragile shell-in-JS-template that produced *both* bugs above.
+Replace the running-state write with a tiny `node -e`/`python -c` one-liner that
+`json.dumps` a dict (pid from `os.getpid()`), eliminating the entire class of
+shell-quoting/escaping bugs — and unit-test the renderer's output directly.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

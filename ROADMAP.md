@@ -45,6 +45,25 @@ unchecked items are queued. Keep this richer than you found it each run.
       have the engine run it as a per-run pre-push self-check.
 - [ ] Add a minimal CI workflow mirroring `verify` for human-opened PRs.
 
+## Reliability / correctness
+- [x] **Fix background-task launch-script shell-quoting bugs** (2026-07-25, run 9).
+      Two real source bugs: (1) `shellQuote` used a malformed single-quote escape
+      (`"'"'"'` instead of `'"'"'`) that wrote invalid JSON state for any command
+      containing a single quote; (2) `sed`'s protective backslashes were consumed
+      by the JS template literal, leaving the running-state pid as the literal
+      string `"$$"`. Fixed both in `harness/background-tasks.ts` +
+      `training/runner.ts`; added a deterministic regression test; de-flaked 4
+      tests that raced real OS processes against their own `writeState` calls.
+- [ ] **Test-hygiene guard:** flag any test constructing a runtime/store with
+      `backgroundTaskIsProcessRunning` overridden but no
+      `backgroundTaskSpawnProcess` mock — the "real spawn + mocked liveness" combo
+      that races the launch-script state write and caused the run-9 flakiness.
+- [ ] **Replace shell-in-JS launch-script JSON writes** with a tested renderer or
+      a `node -e`/`python -c` `json.dumps` one-liner (pid from `os.getpid()`),
+      eliminating the whole class of shell-quoting/escaping bugs found in run 9.
+      Same fragile `printf | sed` pattern still lives in `training/runner.ts`'s
+      completed/failed paths — port them too.
+
 ## Capability parity (audit reference agents → port gaps)
 - [ ] Build a "capability inventory" generator: enumerate bee-agent's exported
       RPC/tool surface (`src/index.ts`) and diff it against `openclaw`,
