@@ -71,16 +71,32 @@ unchecked items are queued. Keep this richer than you found it each run.
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
 (exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
-      objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
-      deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+- [x] Inventory what `src/capture` + `src/training` already implement vs. the
+      objective's five pieces (2026-07-25, run 10). Gap found: capture→schema→
+      dataset→replay existed; **train/infer had no in-process model** — only
+      external mlx/axolotl launch scripts. Closed by the movement-model backend.
+- [x] **Pluggable local-model backend interface** with a deterministic mock
+      backend (2026-07-25, run 10) — `src/training/movement-model.ts`:
+      `MovementModelBackend` seam + `NgramMovementBackend` (stupid-backoff n-gram)
+      that trains on a movement dataset, repeats recorded movements exactly, and
+      generalizes to novel recombinations. Fully in-process/deterministic → green
+      in cloud/CI. Real on-device model implements the same interface.
+- [x] **Synthetic event-stream generator** (2026-07-25, run 10) —
+      `synthesizeMovementSequences` + `splitMovementDataset` build related
+      train/holdout streams with no real OS input.
+- [x] **Generalization eval harness** (2026-07-25, run 10) —
+      `evaluateNextTokenAccuracy` scores top-1/top-k next-movement prediction
+      (including END) on held-out sequences. Next: score full replay-manifest
+      reconstruction fidelity, not just next-token.
+- [ ] **Wire the movement backend into the training runner** as the default
+      cloud/mock runtime beside mlx/axolotl, so a reviewed export yields a real
+      serialized model artifact (end-to-end capture→train→replay green in CI).
+- [ ] **Replay-fidelity metric**: feed a trained model back through the
+      `ReplayManifest` timeline and score how faithfully `generate()` reconstructs
+      the recorded action stream — makes "did training help?" a tracked number.
+- [ ] Conditioned/labelled generation: `MovementSequence.label` is carried but
+      unused — let backends condition next-movement prediction on task/skill so
+      the model can target a *goal*, not just continue a prefix.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

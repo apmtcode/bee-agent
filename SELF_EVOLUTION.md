@@ -6,6 +6,66 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-25 (run 10) — 🧠 Movement-learning: pluggable model backend that trains + generalizes
+
+**Audited:** Standing objective #2 (local-movement learning) and its roadmap
+backlog. Runs 2–9 were almost entirely DX/typecheck/flake work; the *movement
+subsystem's core learning loop had never been built*. `src/capture/` records
+trajectories and `src/training/` builds launch **scripts** that shell out to
+external `mlx`/`axolotl` — but there was **no in-process model** that actually
+(c) trains on a movement dataset to repeat movements or (d) generalizes to new
+ones. Everything ran outside the process, so none of it was testable in the
+cloud. This is the #1 queued movement item ("pluggable local-model backend …
+with a deterministic mock backend") and the highest-value parity gap.
+
+**Changed (additive, new module `src/training/movement-model.ts`):**
+- **Dataset seam:** `MovementToken`/`MovementSequence`/`MovementDataset` types +
+  `deriveMovementDataset(trajectories)` which sorts each trajectory's actions by
+  `ts` and tokenizes them (default `tokenizeAction` honors an explicit
+  `metadata.movement`, else the tool name) — connects the model to the *real*
+  recorded-trajectory format, not a bespoke one.
+- **Pluggable backend interface** `MovementModelBackend` (`train(dataset) ->
+  Promise<TrainedMovementModel>`) — the documented seam a real on-device small
+  model implements. `TrainedMovementModel` exposes `predictNext` (ranked
+  next-movement candidates), `generate` (deterministic continuation), and
+  `serialize`.
+- **Deterministic in-process backend** `NgramMovementBackend`: an (order+1)-gram
+  Markov model with **stupid-backoff** — counts every context length 0..order
+  (START-padded), and prediction uses the longest *observed* context suffix.
+  That backoff is exactly what gives both **repeat** (seen prefix → exact recorded
+  sequence) and **generalize** (unseen long context → shorter seen one). Ties
+  break by token order → fully reproducible, no `Math.random`/timestamps.
+- **Generalization eval harness** `evaluateNextTokenAccuracy(model, holdout, {k})`
+  (top-1 / top-k, scores END so "knowing when to stop" counts) +
+  `splitMovementDataset` (deterministic train/holdout split) +
+  `synthesizeMovementSequences` (synthetic streams for cloud validation) +
+  `deserializeMovementModel` (persistable artifact).
+- Exported the whole surface from `src/index.ts`.
+
+**Tests (`movement-model.test.ts`, 12 new):** tokenizer precedence; dataset
+derivation (ts-ordering + min-length drop); **exact repeat** of a recorded
+sequence; backoff prediction + END-stop; **generalization to a novel sequence
+built from learned transitions** (top-k > 0.8 on an unseen recombination);
+determinism (same dataset → identical predictions & serialization);
+serialize/deserialize round-trip; topK truncation; zeroed-eval edge case;
+synthetic variant determinism + split partitioning.
+
+**Test results:** `npm test` **186/186 passing** (was 174; +12), **2/2
+consecutive runs green** (flake sentinel). `npm run typecheck:src` ✅ exit 0
+(source stays clean). `npm run build` ✅. Full `tsc` **125** (unchanged — new
+source + test files are both clean, no regression).
+
+**New idea:** wire this backend into the training **runner** as the default
+"cloud/mock" runtime alongside `mlx`/`axolotl` — so `LocalAppleSiliconTrainingRunner`
+can produce a *real trained artifact* (the serialized n-gram model) from a
+reviewed export even when no GPU/Apple-silicon toolchain is present, giving the
+whole capture→export→train→replay pipeline an end-to-end green path in CI.
+Bigger: a **replay-fidelity metric** that feeds the trained model back through
+the `ReplayManifest` timeline and scores how faithfully `generate()` reconstructs
+the recorded action stream — turning "did training help?" into a tracked number.
+
+---
+
 ## 2026-07-25 (run 9) — 🔴→🟢 Eliminated background-task test flakiness (verification gate restored)
 
 **Audited:** The verification gate itself. On a clean checkout `npm test` was
