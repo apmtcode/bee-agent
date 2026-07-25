@@ -6,6 +6,69 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-25 (run 10) — 🧠 Pluggable local movement-model backend (objective #2 c+d: post-train to repeat & generalize movements)
+
+**Audited:** Standing objective #2 (local-movement learning) vs. what
+`src/capture` + `src/training` actually implement. Runs 2–9 were almost entirely
+typecheck/test-hygiene debt; the *movement subsystem itself* hadn't gained a real
+capability in a while. Inventory: capture (recorder, adapters, consent,
+ingestion, trajectory schema, replay manifest) and training (reviewed **exporter**,
+job store/manifest, **runner**) exist — but the runner only emits *external*
+MLX/axolotl **launch scripts**. There was **no in-process model that actually
+learns from the dataset and can predict/generalize movements** — i.e. objective
+#2 parts (c) "post-train a local model to repeat the recorded movements" and (d)
+"generalize to new but related movements" had no code, only shell-command
+scaffolding. Also the top queued movement item: "Pluggable local-model backend
+interface … with a deterministic mock backend (so cloud/CI tests pass)".
+
+**Changed (additive, new module `src/training/movement-model.ts`):**
+- **Pluggable backend seam** — `MovementModelBackend` (`train`/`load`) and
+  `TrainedMovementModel` (`predict`/`rollout`/`serialize`) interfaces. The real
+  on-device small model swaps in behind this; nothing else changes.
+- **Deterministic reference backend** `NGramMovementBackend` — a Markov policy
+  with **stupid back-off** that learns, for every context of length 0..order, the
+  next-tool frequencies + a representative replayable summary. Pure (no clock, no
+  RNG, no I/O): same dataset in → byte-identical model out, so cloud/CI tests are
+  hermetic. This is the piece objective #2 asks to *simulate* in the cloud while
+  real on-device training runs locally.
+  - **Repeats recorded movements**: `rollout(seed, n)` autoregressively
+    reproduces a recorded sequence exactly (verified).
+  - **Generalizes**: an unseen-but-related prefix backs off to a shorter context
+    and still predicts a plausible next movement (verified — order-2 miss →
+    order-1 hit).
+  - **Learned termination**: a trailing END sentinel teaches the model where
+    sequences stop; `predict` returns `undefined` only when termination strictly
+    dominates the best real continuation (so a repeated-tool context doesn't
+    dead-end on a tie).
+- **Dataset builder** `buildMovementDataset(trajectories)` — derives ordered
+  movement sequences from reviewed (redacted) actions, falling back to raw,
+  sorted by ts; drops empty trajectories. This is the dataset-format piece
+  connecting capture → training.
+- **Generalization eval harness** `evaluateMovementModel(model, heldOut)` —
+  token-level accuracy + exact-sequence reproduction on held-out sequences
+  (roadmap "generalization eval harness" increment, delivered early).
+- Exported the surface from `src/index.ts`.
+
+**Test results:** new `movement-model.test.ts` (12 tests) covers dataset
+ordering/redaction/fallback, exact replay, summary recovery, learned
+termination, back-off generalization, frequency tie-breaks, determinism,
+serialize/load round-trip, empty-model safety, and both eval paths. `npm test`
+**186/186** (was 174; +12), **green on 2/2 consecutive runs**. `npm run build` ✅.
+`npm run typecheck:src` ✅ (exit 0 — source stays clean). Full `tsc` **125**
+(unchanged — new files add zero errors).
+
+**New idea:** now that a trained model can `rollout` movements, wire a
+**closed-loop fidelity gate** into the training runner: after a (mock or real)
+job completes, auto-train the reference backend on the same reviewed dataset and
+assert `evaluateMovementModel` clears a minimum token-accuracy/exact-match
+threshold before the job is marked `completed` — a cheap, deterministic
+regression guard that a dataset actually produces a replayable policy, catching
+corrupt/empty exports *before* a real on-device run wastes compute. Bigger:
+add a second backend (e.g. a prefix-tree / suffix-automaton policy) behind the
+same interface and cross-check their rollouts to detect over/under-fitting.
+
+---
+
 ## 2026-07-25 (run 9) — 🔴→🟢 Eliminated background-task test flakiness (verification gate restored)
 
 **Audited:** The verification gate itself. On a clean checkout `npm test` was

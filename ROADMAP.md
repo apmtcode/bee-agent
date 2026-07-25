@@ -71,16 +71,35 @@ unchecked items are queued. Keep this richer than you found it each run.
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
 (exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
-      objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
-      deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
+- [x] Inventory what `src/capture` + `src/training` already implement vs. the
+      objective's five pieces (2026-07-25, run 10). Gap found: capture + reviewed
+      export exist, but the runner only emitted external MLX/axolotl launch
+      scripts — no in-process model that learns/predicts/generalizes movements.
+- [x] **Pluggable local-model backend interface + deterministic mock**
+      (2026-07-25, run 10) — `src/training/movement-model.ts`:
+      `MovementModelBackend`/`TrainedMovementModel` interfaces +
+      `NGramMovementBackend` (pure back-off Markov policy: repeats recorded
+      movements via `rollout`, generalizes to related prefixes via back-off,
+      learns termination). Serializable, deterministic, cloud-hermetic. This is
+      the documented seam for a real on-device small model.
+- [x] **Dataset builder** `buildMovementDataset(trajectories)` (run 10) — derives
+      ordered movement sequences from reviewed/redacted (else raw) actions.
+- [x] **Generalization eval harness** `evaluateMovementModel` (run 10) —
+      token-accuracy + exact-sequence reproduction on held-out sequences.
+- [ ] **Closed-loop fidelity gate**: after a training job completes, auto-train
+      the reference backend on the same reviewed dataset and require
+      `evaluateMovementModel` to clear a min token-accuracy/exact-match threshold
+      before marking the job `completed` — cheap deterministic guard that a
+      dataset yields a replayable policy before a real on-device run burns compute.
+- [ ] **Second movement backend** (prefix-tree / suffix-automaton) behind the
+      same interface; cross-check rollouts to detect over/under-fitting.
 - [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      round-trips at the raw-event (mouse/keyboard/window) level — the movement
+      model now consumes trajectory *actions*; still want a generator that
+      produces raw OS-event streams feeding the recorder/ingestion path.
+- [ ] Wire `buildMovementDataset` + a backend into the exporter/runner so a
+      reviewed export can emit a trained reference model artifact alongside the
+      MLX/axolotl launch plan.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
