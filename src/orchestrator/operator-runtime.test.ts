@@ -531,6 +531,11 @@ describe("StandaloneOperatorRuntime", () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
       backgroundTaskIsProcessRunning: () => false,
+      // Stub the launcher so the detached shell script never runs: this test drives
+      // execution state entirely through explicit writeState() calls, and a real
+      // detached process would race those writes (writing "running"/"completed"
+      // asynchronously) and make recovery assertions flaky.
+      backgroundTaskSpawnProcess: () => ({ pid: 4242, unref: () => {} }),
     });
     const session = await runtime.startSession({ title: "Tasks", agentId: "main" });
 

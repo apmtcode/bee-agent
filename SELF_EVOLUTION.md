@@ -6,6 +6,56 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-25 (run 9) — 🐛 Fixed corrupt/non-atomic background-task state writer (green + flake-free)
+
+**Audited:** The green gate itself. `npm test` came up **4 failed / 170 passed**
+at HEAD (`3c7b7236`) even though run 8 recorded 174/174 — a real regression
+surfaced by this environment's process scheduling. Traced all four failures to
+one root cause in the background-task / training **launch scripts**.
+
+**Root cause (two real bugs in `renderLaunchScript`):**
+1. **Command-quote corruption.** The detached bash launcher wrote its initial
+   "running" state by piping a JSON payload through `printf '%s' <shell-quoted>
+   | sed …`. When the task's `command` contained single quotes (e.g. `printf
+   'line-1\nline-2\n'`), the shell-quoting + sed pipeline mangled them into
+   invalid JSON (`"command":"printf "'line-1…"'"`), so a later `readState`
+   threw `SyntaxError: Expected ',' or '}'`. Dumped the on-disk file to confirm.
+2. **Non-atomic writes.** Both the initial `> stateFile` redirect and the
+   python completion writer's `state_path.write_text(...)` truncate-then-write in
+   place, so a concurrent reader could observe a partially-written file. The TS
+   side already uses `writeJsonAtomic` (temp + rename); the shell side did not.
+
+**Changed (additive, both launch scripts):**
+- `src/harness/background-tasks.ts` and `src/training/runner.ts`: the running
+  state is now handed to python **base64-encoded** (no shell-quoting hazard) and
+  written **atomically** (`tmp` file + `os.replace`). python injects the real
+  pid/timestamps. The completion/failure writer now also writes via
+  `tmp` + `os.replace` instead of in-place `write_text`. python was already a
+  hard dependency of these scripts, so no new dependency.
+- Test isolation: the two cases that drive execution state through explicit
+  `writeState()` calls **and** immediately recover/read it
+  (`operator-runtime.test.ts` background-task recovery; `server.test.ts`
+  breaker/drift cases) now inject a no-op `backgroundTaskSpawnProcess`, so the
+  real detached process can't race the manual writes. They already stubbed
+  `backgroundTaskIsProcessRunning`; this completes the launcher isolation.
+- Updated `runner.test.ts` to assert the atomic writer (`python3 - '<state>'` …
+  `os.replace(tmp_path, state_path)`) instead of the removed `> stateFile`.
+
+**Test results:** `npm run build` ✅. `npm run typecheck:src` ✅ (source stays
+green). `npm test` ✅ **174/174**, and — because the bug was a race — verified
+**stable across 5 consecutive full-suite runs** (0 flakes), plus 6× isolated
+reruns of each previously-flaky file. `typecheck` (incl. tests) unchanged at 125.
+
+**New idea:** the atomic-write shell/python snippet is now duplicated verbatim in
+two launch-script renderers and could drift. Extract a shared
+`renderAtomicJsonStateWriter()` (or a tiny reusable python module string) used by
+both, and add a **launcher-hermeticity guard** — a lint/test asserting no unit
+test constructs a runtime with the *real* `spawn` (require an injected
+`spawnProcess` in tests) so this class of "real detached process races the test"
+flake can never reappear. Bigger: give `FileBackgroundTaskStore` a pluggable
+`Launcher` interface with an in-memory launcher for tests, so the shell script is
+exercised only by a single dedicated integration test.
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

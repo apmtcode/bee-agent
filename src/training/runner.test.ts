@@ -112,9 +112,13 @@ describe("LocalAppleSiliconTrainingRunner", () => {
       runtime: "mlx",
       replayEvalPath: `training-jobs/${job.id}/replay-eval.json`,
     });
+    // The running state is written atomically by python (temp file + os.replace)
+    // rather than a non-atomic `> stateFile` redirect, so assert on the atomic write
+    // targeting the state path.
     await expect(runner.readLaunchScript({ ...job, execution })).resolves.toEqual(
-      expect.stringContaining(`> '${execution.stateFile}'`),
+      expect.stringContaining(`python3 - '${execution.stateFile}'`),
     );
+    await expect(runner.readLaunchScript({ ...job, execution })).resolves.toContain("os.replace(tmp_path, state_path)");
     await expect(runner.readLaunchScript({ ...job, execution })).resolves.toContain("mlx_lm.lora");
     await expect(fs.readFile(path.join(rootDir, execution.datasetDir, "manifest.json"), "utf8")).resolves.toContain(
       '"reviewedBy": "operator"',

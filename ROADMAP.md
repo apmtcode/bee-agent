@@ -4,6 +4,20 @@ Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
 ## Foundations / DX
+- [x] **Fix corrupt/non-atomic background-task launch-script state writer**
+      (2026-07-25, run 9). The detached bash launcher corrupted JSON for commands
+      containing quotes (`printf | sed` + shell-quoting) and wrote state
+      non-atomically, causing 4 flaky test failures. Now writes state via python
+      base64 + `os.replace` (atomic) in both `background-tasks.ts` and
+      `training/runner.ts`; recovery tests stub the launcher. Green + stable
+      across 5 full-suite runs.
+- [ ] **Launcher hermeticity guard + shared atomic-writer.** Extract the
+      duplicated atomic-write python snippet into one
+      `renderAtomicJsonStateWriter()` used by both launch-script renderers, and
+      add a lint/test that fails if any unit test constructs a runtime using the
+      real `spawn` (require an injected `spawnProcess`). Longer term: a pluggable
+      `Launcher` interface on `FileBackgroundTaskStore` with an in-memory launcher
+      for tests, exercising the real shell script in one dedicated integration test.
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`
