@@ -59,16 +59,40 @@ unchecked items are queued. Keep this richer than you found it each run.
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
 (exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
-      objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
-      deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+- [x] Inventory what `src/capture` + `src/training` already implement vs. the
+      objective's five pieces (2026-07-25, run 9). capture → schema → dataset →
+      replay were done; **train/infer had no in-process implementation** — only
+      external mlx/axolotl launch-script generation. That gap is what run 9 filled.
+- [x] Pluggable local-model backend interface with a deterministic backend
+      (2026-07-25, run 9). `src/training/movement-model.ts`:
+      `MovementModelBackend`/`MovementModel` interfaces, `MarkovMovementBackend`
+      (order-k Markov + Katz backoff — learns, repeats, generalizes; deterministic),
+      `MovementBackendRegistry` as the swap-in seam for a real on-device model,
+      and `toJSON`/`deserializeMovementModel` persistence.
+- [x] Generalization eval harness (2026-07-25, run 9): `evaluateReplayFidelity`
+      (2c — exact-replay ratio + perplexity) and `evaluateGeneralization` (2d —
+      held-out coverage + next-token accuracy).
+- [ ] **State-conditioned movement model:** fold a coarse observation/context
+      token (active app, UI target class) into tokenization so the policy learns
+      "click *this kind of* target", and add a hold-out-whole-apps eval — the real
+      bridge to cross-app generalization (2d).
+- [ ] Synthetic event-stream *generator* module (a reusable seeded generator of
+      related trajectories) to drive the eval harness at scale, and wire a trained
+      `movement-model` artifact into the `LocalAppleSiliconTrainingRunner` output
+      (persist `toJSON()` beside the launch script as the cloud-verifiable baseline).
+
+## Project health / robustness
+- [ ] **Portable background-task launch (pre-existing test blocker, found run 9).**
+      3 suite tests fail on a clean checkout in the cloud container
+      (`operator-runtime.test.ts`, `app.test.ts`, `server.test.ts`, background-task
+      path). `startBackgroundTask` spawns a real shell launch script whose `sed`
+      PID substitution (`s/\"\$\$\"/$$/g`, `renderLaunchScript` in
+      `src/harness/background-tasks.ts:757`) doesn't resolve in this shell/sed,
+      leaving a placeholder that corrupts the state JSON → `SyntaxError` in
+      `readJsonFile` during recovery. Fix: replace the shell-`sed` state writer with
+      a Node/`node -e` stamper (or write resolved JSON from the parent before
+      `unref`) so launch is portable and the suite is hermetic across containers.
+      The same fragile pattern exists in `training/runner.ts` `renderLaunchScript`.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

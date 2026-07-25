@@ -6,6 +6,71 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-25 (run 9) — 🧠 In-process movement-model backend: learn → repeat → generalize (objective 2c/2d)
+
+**Audited:** The local-movement learning subsystem (standing objective #2). Runs
+2–8 were entirely typecheck-debt paydown; the *distinctive* objectives (movement
+learning, capability parity) had not advanced. Inventoried `src/capture` (capture
+→ trajectory → replay manifest → reviewed export) and `src/training`. Finding:
+the training pipeline (`runner.ts` + `execution-service.ts`) only **generates
+external launch scripts** (mlx/axolotl on Apple Silicon) and shells out — there
+was **no in-process, cloud-runnable code that actually learns from recorded
+movements and generalizes**. So objective #2 parts (c) "post-train a model to
+repeat the recorded movements" and (d) "generalize to related movements" had
+zero runnable/testable implementation.
+
+**Changed (additive):** new `src/training/movement-model.ts` — a dependency-free,
+deterministic movement-model subsystem that runs end-to-end in the cloud/CI:
+- **Schema + tokenization:** `MovementToken`/`MovementSequence`/`MovementDataset`,
+  plus `buildMovementSequenceFromTrajectory`, `buildMovementSequencesFromReplay`
+  (derive ordered token runs from `TrajectorySpan.actions` / `ReplayManifest`
+  action events), and `buildMovementDataset` (sorted, de-duplicated vocab).
+- **Pluggable backend seam:** `MovementModelBackend` interface + `MovementModel`
+  (predictNext / generate / scoreSequence / toJSON) + `MovementBackendRegistry`
+  and `createDefaultMovementBackendRegistry()`. A real on-device neural backend
+  implements the same interface and registers alongside the built-in one.
+- **Deterministic model:** `MarkovMovementBackend` — an order-k Markov chain with
+  Katz-style backoff. It genuinely *learns* transition counts. **Repetition (2c):**
+  greedy argmax over the longest matched context reproduces recorded runs exactly.
+  **Generalization (2d):** an unseen full-order context backs off to a shorter
+  seen context, so new-but-related movements still get a plausible in-vocab
+  continuation. Deterministic throughout (lexicographic tie-break; no RNG/clock —
+  which the sandbox forbids anyway). Add-one smoothing keeps scores finite.
+- **Eval harness:** `evaluateReplayFidelity` (2c — exact-replay ratio + perplexity)
+  and `evaluateGeneralization` (2d — held-out coverage + next-token accuracy).
+- **Persistence:** `toJSON()` / `deserializeMovementModel` round-trip a trained
+  model (documented seam for saving alongside training artifacts).
+- Barrel-exported all of the above from `src/index.ts`.
+
+**Test results:** new `src/training/movement-model.test.ts` — **14/14 pass**
+(tokenization, exact replay, first-move prediction, likelihood ordering, replay
+fidelity=1.0, generalization coverage=1.0 / next-token accuracy, explicit backoff,
+empty-model undefined, JSON round-trip, registry swap). `npm run typecheck:src`
+✅ (source stays clean). `npm run build` ✅.
+
+**Pre-existing blocker (NOT introduced this run):** 3 suite tests fail on a
+**clean checkout** in this container — `operator-runtime.test.ts`,
+`app.test.ts`, `server.test.ts`, all in the background-task/cron path. Root cause:
+`startBackgroundTask` spawns a **real** shell launch script whose `sed` PID
+substitution (`s/\"\$\$\"/$$/g` in `renderLaunchScript`,
+`src/harness/background-tasks.ts:757`) does not resolve in this shell/sed, leaving
+an unsubstituted placeholder that corrupts the state JSON — later read by
+`recoverBackgroundTasks` → `SyntaxError` in `readJsonFile`. Confirmed pre-existing
+by stashing this run's work and re-running (4 failures on bare HEAD). It's a
+non-hermetic real-process test dependency, not a movement-model regression. Logged
+to ROADMAP as a robustness item. My increment is fully green in isolation; pushed
+to the designated feature branch.
+
+**New idea:** make the movement model *state-conditioned*, not just action-order
+conditioned — extend tokenization to fold in a coarse observation/context token
+(active app, UI target class) so the policy learns "click *this kind of* target",
+which is the real bridge to objective 2(d) generalization across apps. Pair it
+with a "situation → next-action" eval that holds out whole apps. Second idea (the
+blocker): replace the fragile shell-`sed` state writer in `renderLaunchScript`
+with a tiny Node/`node -e` state stamper (or write the resolved JSON directly from
+the parent before `unref`), making background-task launch portable and the suite
+hermetic across containers.
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
