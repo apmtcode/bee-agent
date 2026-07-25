@@ -6,6 +6,68 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-25 (run 9) — 🐛 Real bug: `shellQuote` corrupted background-task state JSON (suite 4→2 red in cloud)
+
+**Audited:** Ran the suite in *this* cloud environment (prior runs logged 174/174,
+but that held only in the dev env). Found **4 tests red at baseline on a clean
+tree** — all surfacing as `SyntaxError: Expected ',' or '}' … in JSON` while
+reading a background-task `state.json`. This silently blocks the engine's
+push-to-main gate for *every* cloud run, so I root-caused it instead of adding a
+feature.
+
+**Root cause (two genuine production bugs in `src/harness/background-tasks.ts`):**
+1. **`shellQuote` was malformed.** It escaped `'` as `"'"'"'` (leading `"`)
+   instead of the correct POSIX `'"'"'`. When a task `command` contained a quote
+   (e.g. `printf 'line-1\nline-2\n'`), the stray `"` leaked into the single-quoted
+   JSON payload, producing an unparseable `state.json`. The training runner's
+   `shellQuote` already had the *correct* form — this was a copy divergence.
+2. **The pid placeholder never substituted.** `sed "s/\"\$\$\"/$$/g"` treats the
+   `$` as regex end-anchors, so `"pid":"$$"` was never replaced with a number.
+   Switched to a `$`-free token: payload emits `"pid":"__OPENCLAW_PID__"`, sed
+   does `s/\"__OPENCLAW_PID__\"/$$/g` (replacement `$$` still expands to the pid).
+
+**Also hardened (defensive, additive):** made the shell-side state writes
+**atomic** — the initial write renders to `state.json.tmp.$$` then `mv -f`, and the
+Python terminal writer uses a temp file + `os.replace`. A bare `>` redirect /
+`write_text` truncates-then-writes, so a concurrent reader (reconcile/recover)
+could observe a partial file even after the JSON was well-formed. Applied the
+same fixes to `src/training/runner.ts` (identical pattern).
+
+**Tests:**
+- New **`background-tasks.test.ts` regression test**: executes the *real* rendered
+  launch script and asserts `state.json` is valid JSON, the single-quoted command
+  round-trips byte-for-byte, the pid is a real integer, and no `.tmp` file
+  survives the commit. Passes deterministically.
+- **`operator-runtime.test.ts`** made hermetic: injected a no-op
+  `backgroundTaskSpawnProcess` so no real detached child races the test's explicit
+  `writeState`/`writeOutput` calls. Now green.
+- Added a `backgroundTaskSpawnProcess` / `backgroundTaskIsProcessRunning`
+  passthrough to **`OperatorCliApp`** (`src/cli/app.ts`) — the seam the next run
+  needs to hermeticize the two remaining mega-tests.
+
+**Result:** `npm run build` ✅. Suite **4 → 2 red** (175 tests, +1 new; the
+shellQuote fix also greened app.test's "background and monitor" block). Because
+2 tests still fail, per procedure I push to my working branch, **not** main.
+
+**Remaining blocker (documented for next run):** the two failures are single
+*mega* `it` blocks — `server.test.ts` "handles session…" and `app.test.ts`
+"supports session lifecycle…". They are **internally timing-inconsistent** on one
+shared runtime: they assert a `sleep 5` task is "active" (needs
+`isProcessRunning:true`) *and* that a stateless task is `NOT_FOUND` (needs
+reconcile to *not* fabricate a running state, i.e. `isProcessRunning:false`).
+They only ever passed via specific real-child timing in the dev env. Cleanly
+greening them requires **splitting each mega-test** into focused cases with
+per-case spawn/liveness injection (the `app.ts` seam is now in place). I advanced
+`server.test` through ~7 chained assertions before hitting this and reverted the
+partial edit to keep the diff focused on the verified fix.
+
+**New idea:** add a tiny **`hermetic-background-tasks` test lint** — fail CI if any
+test constructs a `StandaloneOperatorRuntime`/`OperatorCliApp` that calls
+`startBackgroundTask` without injecting `backgroundTaskSpawnProcess`. Real
+detached children in tests are the entire source of this class of cloud-only
+flakiness; making the injection mandatory prevents regressions and forces the
+mega-test split above.
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

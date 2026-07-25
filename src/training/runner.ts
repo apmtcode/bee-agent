@@ -171,7 +171,7 @@ function renderLaunchScript(execution: LocalTrainingExecution, plan: TrainingJob
       version: 1,
       jobId: plan.jobId,
       status: "running",
-      pid: "$$",
+      pid: "__OPENCLAW_PID__",
       startedAt: "__OPENCLAW_STARTED_AT__",
       updatedAt: "__OPENCLAW_STARTED_AT__",
       logFile: execution.logFile,
@@ -185,7 +185,12 @@ function renderLaunchScript(execution: LocalTrainingExecution, plan: TrainingJob
     "set -euo pipefail",
     `mkdir -p ${shellQuote(execution.artifactDir)} $(dirname ${quotedLogFile}) $(dirname ${quotedStatePath})`,
     "started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-    `printf '%s' ${quotedStatePayload} | sed "s/__OPENCLAW_STARTED_AT__/$started_at/g; s/\"\$\$\"/$$/g" > ${quotedStatePath}`,
+    // Atomic initial-state write (temp + rename): a bare `>` redirect truncates
+    // then writes, so a concurrent reader can observe a partial, unparseable file.
+    // `$`-free pid placeholder: a bare `$$` in the regex is an anchor and never
+    // matches. The unquoted `$$` in the replacement still expands to the pid.
+    `printf '%s' ${quotedStatePayload} | sed "s/__OPENCLAW_STARTED_AT__/$started_at/g; s/\"__OPENCLAW_PID__\"/$$/g" > ${quotedStatePath}.tmp.$$`,
+    `mv -f ${quotedStatePath}.tmp.$$ ${quotedStatePath}`,
     `printf '%s\n' "starting ${plan.mode} training for ${plan.jobId}" >> ${quotedLogFile}`,
     `if ${quotedCommand} >> ${quotedLogFile} 2>&1; then`,
     "  completed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
@@ -207,6 +212,7 @@ function renderLaunchScript(execution: LocalTrainingExecution, plan: TrainingJob
 function renderStateWriterPython(status: TrainingExecutionState["status"]): string[] {
   return [
     "import json",
+    "import os",
     "import pathlib",
     "import sys",
     "state_path = pathlib.Path(sys.argv[1])",
@@ -220,7 +226,10 @@ function renderStateWriterPython(status: TrainingExecutionState["status"]): stri
     "state['completedAt'] = timestamp",
     "state['exitCode'] = exit_code",
     `state['error'] = None if '${status}' == 'completed' else 'training process exited non-zero'`,
-    "state_path.write_text(json.dumps(state, indent=2) + '\\n')",
+    // Atomic terminal-state write (temp + os.replace) to avoid partial reads.
+    "tmp_path = state_path.with_name(state_path.name + f'.tmp.{pid}')",
+    "tmp_path.write_text(json.dumps(state, indent=2) + '\\n')",
+    "os.replace(tmp_path, state_path)",
   ];
 }
 

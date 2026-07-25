@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -369,5 +370,58 @@ describe("BackgroundTaskExecutionService", () => {
     await expect(fs.readFile(path.join(rootDir, task.execution.launchScript), "utf8")).resolves.toContain("bash -lc");
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
+  });
+
+  // Regression: the launch script must write state.json atomically. A bare `>`
+  // redirect (or python write_text) truncates-then-writes, so a reader that runs
+  // concurrently with a detached child observes a partial, unparseable document
+  // — the source of intermittent "Expected ',' or '}' after property value in
+  // JSON" failures under the real (unmocked) spawn path. This runs the actual
+  // rendered script and asserts the resulting state is always valid, with no
+  // temp file left behind.
+  it("runs the rendered launch script and writes a valid, atomically-committed state file", async () => {
+    const rootDir = await makeTempDir();
+    // start() writes the real launch script to disk; the mock spawn keeps launch()
+    // from firing so we can execute the script ourselves and observe its output.
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"), () => ({
+      pid: 4321,
+      unref() {},
+    }));
+    const task = await store.start({
+      title: "Emit lines",
+      command: "printf 'line-1\nline-2\n'",
+      cwd: rootDir,
+      kind: "task",
+    });
+
+    const scriptPath = path.join(rootDir, task.execution.launchScript);
+    const exitCode = await new Promise<number>((resolve, reject) => {
+      const child = spawn("bash", [scriptPath], { cwd: rootDir, stdio: "ignore" });
+      child.on("error", reject);
+      child.on("close", (code) => resolve(code ?? -1));
+    });
+    expect(exitCode).toBe(0);
+
+    const statePath = path.join(rootDir, task.execution.stateFile);
+    const raw = await fs.readFile(statePath, "utf8");
+    // Must parse: the whole point of the atomic write.
+    const parsed = JSON.parse(raw) as BackgroundTaskExecutionState;
+    expect(parsed).toMatchObject({
+      taskId: task.id,
+      status: "completed",
+      exitCode: 0,
+    });
+    // The single-quoted command must round-trip byte-for-byte through the
+    // shell-quoting + JSON embedding — the shellQuote regression that injected
+    // stray double quotes broke exactly this.
+    expect(parsed.command).toBe("printf 'line-1\nline-2\n'");
+    // The placeholder pid must have been substituted to a real integer.
+    expect(typeof parsed.pid).toBe("number");
+    expect(Number.isInteger(parsed.pid)).toBe(true);
+
+    // No temp file should survive the temp-then-rename commit.
+    const stateDir = path.dirname(statePath);
+    const leftovers = (await fs.readdir(stateDir)).filter((name) => name.includes(".tmp."));
+    expect(leftovers).toEqual([]);
   });
 });

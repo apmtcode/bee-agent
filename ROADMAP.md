@@ -4,6 +4,22 @@ Prioritized backlog for the self-evolution engine. Checked items are done;
 unchecked items are queued. Keep this richer than you found it each run.
 
 ## Foundations / DX
+- [x] **Fix background-task `state.json` corruption** (2026-07-25, run 9) —
+      `shellQuote` in `background-tasks.ts` used a malformed single-quote escape
+      (`"'"'"'` vs `'"'"'`) that injected stray `"` into the JSON payload; the pid
+      `sed` never matched (`$` = regex anchor). Both fixed; shell state writes made
+      atomic (temp + `mv`/`os.replace`). New launch-script regression test. Suite
+      4→2 red in the cloud env.
+- [ ] **Split the two background-task mega-tests** (`server.test.ts` "handles
+      session…", `app.test.ts` "supports session lifecycle…") into focused cases
+      with per-case `backgroundTaskSpawnProcess`/`backgroundTaskIsProcessRunning`
+      injection. They are internally timing-inconsistent on one shared runtime
+      (assert a `sleep 5` task "active" **and** a stateless task `NOT_FOUND`) and
+      only passed via real-child timing in the dev env — the last 2 red tests.
+      The `OperatorCliApp` injection seam landed in run 9.
+- [ ] **Test lint: mandatory spawn injection** — fail if a test starts a
+      background task without injecting `backgroundTaskSpawnProcess`; real detached
+      children are the sole source of the cloud-only JSON/liveness flakiness.
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
 - [x] Make config loading hermetic in tests via an injectable `configHome`
