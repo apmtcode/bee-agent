@@ -71,16 +71,30 @@ unchecked items are queued. Keep this richer than you found it each run.
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
 (exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
-      objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [~] Inventory what `src/capture` + `src/training` already implement vs. the
+      objective's five pieces (capture → schema → dataset → replay → train/infer).
+      Partial: run 10 mapped the train/infer gap — the runner only emitted an
+      mlx/axolotl launch *plan*, with no in-process train/infer. Still todo: a
+      written per-piece gap list for capture/schema/dataset/replay.
+- [x] **Pluggable local-model backend interface** for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
+      for a real on-device small model — DONE run 10 (`model-backend.ts`):
+      `MovementModelBackend` interface + `MarkovMovementBackend` (n-gram backoff
+      policy: repeats recorded movements, generalises via suffix backoff) +
+      registry + dataset builders + 16 tests.
+- [ ] **Wire the runner to the backend in simulate mode**: when no Apple-Silicon
+      runtime is present (always, in the cloud), `LocalAppleSiliconTrainingRunner`
+      falls back to `MarkovMovementBackend.train()` on the exported dataset and
+      writes a real `model.json` + replay-eval report, so
+      `prepare→launch→collect→evaluate` completes end-to-end in tests rather than
+      only emitting a shell script.
 - [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      round-trips without real OS input (mouse/keyboard/window events →
+      trajectories), so the full loop can be fuzzed.
+- [~] Generalization eval harness: measure replay fidelity on held-out but
+      related trajectories. Started run 10 (`evaluateMovementModel`: per-example
+      accuracy + exact-match + mean). Next: a noise/perturbation eval (inject
+      unseen tokens / reorder sub-movements) to quantify transfer distance.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

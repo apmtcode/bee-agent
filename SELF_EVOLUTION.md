@@ -6,6 +6,67 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-25 (run 10) — 🧠 Pluggable in-process movement-model backend (train + infer + generalise, cloud-validatable)
+
+**Audited:** The local-movement learning subsystem (objective #2), specifically
+`src/training/` — the post-train + inference path. Found the critical gap: the
+training runner (`runner.ts`) only emits an **mlx/axolotl launch plan** — a shell
+script that runs *only on the user's Apple-Silicon machine*. There was **no
+in-process backend that actually trains a model or performs inference**, so
+objective #2(c) "post-train a local model to repeat recorded movements" and
+#2(d) "generalise to new-but-related movements" were entirely **unvalidatable in
+the cloud** — no code path exercised training→inference at all.
+
+**Changed (additive, new module `src/training/model-backend.ts`):**
+- **`MovementModelBackend` interface** — the pluggable seam. `train()` (async,
+  real on-device training is async) + `predictNext()`/`generate()` (sync
+  inference against a loaded model). A real gguf/mlx backend implements the same
+  interface and is swapped in via the registry; nothing downstream changes.
+- **`MarkovMovementBackend`** — a deterministic, dependency-free reference
+  backend that is a genuine *small local model*: an n-gram (Markov) movement
+  policy with a **Katz-style backoff transition table** (contexts of every
+  length 0..order). Exact high-order context → **reproduces a recorded movement
+  verbatim** (memorisation); partial-suffix match → **generalises** to a related
+  movement; unigram bottom → sensible global fallback. Fully deterministic
+  (count-desc, lexical tie-break) so cloud tests are reproducible. Trains with an
+  `<eos>` sentinel so `generate` stops at the natural movement length. Model is a
+  plain JSON object → persists as a training artifact and reloads without the
+  backend resident.
+- **`MovementModelBackendRegistry`** + `createDefaultMovementBackendRegistry()`
+  (ships the reference backend; real backends `.register()` at startup).
+- **Dataset builders** `createMovementDatasetFromReplays` /
+  `...FromExport` — turn reviewed-export replay manifests into movement sequences
+  (action events grouped per trajectory, ts-ordered), with a **pluggable
+  tokenizer** (default = tool name; custom can encode targets/coords).
+- **`evaluateMovementModel`** — a fidelity/generalisation eval harness: regenerate
+  each movement from its first token, report per-example accuracy + exact-match +
+  mean accuracy. Against training data it measures memorisation; against held-out
+  related sequences it measures transfer. (Down-payment on the roadmap's
+  "generalization eval harness" item.)
+- Exported the whole surface from `src/index.ts`.
+
+**Test results:** new `model-backend.test.ts` — **16 tests** covering
+determinism, JSON round-trip, exact repeat, next-token prediction, EOS never
+leaking, **backoff generalisation**, unigram fallback, empty-model safety,
+maxLength/includeSeed, registry pluggability (incl. a custom backend), dataset
+grouping/tokenizer, and eval fidelity + generalisation. `npm test` **190/190**
+(was 174; +16), green on **2/2 consecutive runs**. `npm run build` ✅.
+`npm run typecheck:src` ✅ (source stays clean). Full `tsc` **125** (unchanged —
+no regression; new files error-free).
+
+**New idea:** now that a real backend can be dropped behind
+`MovementModelBackend`, wire the **training runner to invoke a registered backend
+in a "simulate" mode** — when no Apple-Silicon runtime is present (i.e. always in
+the cloud), `LocalAppleSiliconTrainingRunner` should fall back to
+`MarkovMovementBackend.train()` on the exported dataset and write a real
+`model.json` artifact + a replay-eval report, so `prepare→launch→collect→evaluate`
+completes end-to-end in tests instead of only emitting a shell script. Bigger:
+add a **noise/perturbation generalisation eval** (inject unseen tokens or reorder
+sub-movements into held-out sequences) to quantify how far the policy transfers,
+and a **synthetic movement-stream generator** (mouse/keyboard/window events →
+trajectories) so the whole capture→dataset→train→replay loop can be fuzzed
+without real OS input.
+
 ## 2026-07-25 (run 9) — 🔴→🟢 Eliminated background-task test flakiness (verification gate restored)
 
 **Audited:** The verification gate itself. On a clean checkout `npm test` was
