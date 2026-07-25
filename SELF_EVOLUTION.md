@@ -6,6 +6,64 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-25 (run 9) — 🐛 Fix corrupt background-task launch script (broken `shellQuote`) + de-flake two racy tests
+
+**Audited:** Started with the required build+test gate and found the suite was
+**not** actually green on this environment: `npm test` failed 2–4 tests
+*non-deterministically* (the "174/174" recorded in run 8 held only on a
+faster/differently-timed machine). Traced the deterministic failure in
+`operator-runtime.test.ts` to a real production bug in the background-task
+launch script.
+
+**Root cause (genuine bug, `src/harness/background-tasks.ts`):** `shellQuote()`
+escaped a single quote as `"'"'"'` (6 chars, starting with `"`). The correct
+POSIX escape is `'"'"'` (5 chars, starting with `'`) — the sibling
+`shellQuote` in `src/training/runner.ts` already had it right. The wrong variant
+corrupts **any** command containing a single quote: e.g. `printf 'x'`
+round-trips through bash as `printf "'x"'`. This produced **invalid JSON** in
+the task's running-`state.json` (so recovery/`readState` threw
+`SyntaxError: Expected ',' …`) and mangled the actual `bash -lc <command>`
+invocation. A second latent bug: the running-state was built with a `"$$"` pid
+placeholder rewritten by `sed`, but the sed program's escaping *also* collapsed
+in the JS template literal (`\"\$\$\"` → `"$$"`), so the substitution was a
+no-op `s/<pid>/<pid>/` and the pid stayed the literal string `"$$"`.
+
+**Changed (additive, reversible):**
+- `src/harness/background-tasks.ts`: fixed `shellQuote` to the correct POSIX
+  escape. Replaced the fragile `printf … | sed` running-state writer with a
+  `python3` writer (`renderRunningStateWriterPython`) that receives the base
+  payload + `$$` + `$started_at` as argv and emits JSON via `json.dumps` — the
+  same robust pattern the completion/failure writers already use. No more
+  placeholder substitution, guaranteed-valid JSON regardless of command chars.
+- `src/harness/background-tasks.test.ts`: **new regression test** that runs the
+  *real* launch script (default spawn) for a command containing single quotes
+  **and** newlines, then asserts the resulting `state.json` is valid, the
+  `command` round-trips exactly, `pid` is a real integer (placeholder replaced),
+  and `startedAt` is a real timestamp.
+- De-flaked the two racy tests that construct a real runtime with
+  `backgroundTaskIsProcessRunning: () => false` and then drive state via
+  `writeState`: they were racing the detached launch script's async state write.
+  Injected a documented `backgroundTaskSpawnProcess: noopBackgroundSpawn` stub
+  (the established pattern in `background-tasks.test.ts`) in
+  `operator-runtime.test.ts` (bg-task lifecycle) and the three affected
+  constructions in `server.test.ts` (main, drifting-remote, breaker). Real
+  end-to-end launch-script coverage is preserved by the new dedicated test.
+
+**Test results:** `npm run build` ✅. `npm test` ✅ **175/175** (174 prior + 1
+new regression), now **deterministic across 4 consecutive full runs** (was
+2–4 flaky failures per run before). `typecheck:src` ✅ (source still clean).
+Full `tsc` unchanged at **125** (test-file debt only).
+
+**New idea:** add a tiny CI-style *flake gate* to the engine's pre-push
+self-check — run the suite 3× (or `vitest --retry=0 --sequence.shuffle`) and
+fail if results differ between runs. Today's bug was masked for 8 runs precisely
+because the suite was run once on a favorable timing; a shuffle+repeat gate
+would have surfaced it immediately. Bonus: a lint that flags divergent copies of
+the same helper (two `shellQuote`s that disagree) so a fixed util can't rot in
+one module while staying broken in another.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

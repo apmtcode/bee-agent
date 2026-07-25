@@ -6,6 +6,18 @@ unchecked items are queued. Keep this richer than you found it each run.
 ## Foundations / DX
 - [x] Declare build + test tooling in `package.json` and add a `test` script
       (2026-06-22) — nothing could build/test before this.
+- [x] **Fix corrupt background-task launch script** (2026-07-25, run 9):
+      `shellQuote` used the wrong single-quote escape (`"'"'"'` vs the correct
+      `'"'"'`), corrupting any command with a quote → invalid `state.json` and
+      mangled `bash -lc`. Fixed the escape, replaced the sed-based pid-placeholder
+      writer with a python `json.dumps` writer, added an end-to-end regression
+      test, and de-flaked two racy tests via an injected no-op spawn stub. Suite
+      now deterministically green (175/175).
+- [ ] **Flake gate in the engine pre-push self-check**: run the suite 3× (or
+      `vitest --sequence.shuffle`) and fail if results differ. Run 9's bug hid
+      for 8 runs because the suite was only ever run once on favorable timing.
+- [ ] **Shared-helper drift lint**: flag identical-named helpers that diverge
+      across modules (the two `shellQuote`s disagreed — one correct, one broken).
 - [x] Make config loading hermetic in tests via an injectable `configHome`
       (2026-06-22).
 - [ ] **Pay down typecheck debt** (surfaced by the `typecheck` script). Full

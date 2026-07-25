@@ -370,4 +370,45 @@ describe("BackgroundTaskExecutionService", () => {
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
   });
+
+  it("executes the real launch script and writes a valid running/terminal state for commands with quotes and newlines", async () => {
+    const rootDir = await makeTempDir();
+    // Default (real) spawn so the generated bash+python launch script actually runs.
+    const store = new FileBackgroundTaskStore(path.join(rootDir, "background-tasks.json"));
+    // A command containing single quotes AND newlines — the exact shape that broke
+    // the previous `printf | sed` state writer (it produced invalid JSON and never
+    // substituted the `$$` pid placeholder).
+    const command = "printf 'line-1\nline-2\n'";
+    const task = await store.start({
+      sessionId: "sess-launch",
+      title: "Real launch",
+      command,
+      cwd: rootDir,
+      kind: "task",
+    });
+    const service = store.executionService;
+
+    // Poll until the launch script writes a terminal state (it completes quickly).
+    let state: BackgroundTaskExecutionState | undefined;
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      state = await service.readState(task);
+      if (state && (state.status === "completed" || state.status === "failed")) {
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+
+    expect(state).toBeDefined();
+    // The state file must be valid JSON that round-trips the command faithfully.
+    expect(state?.command).toBe(command);
+    expect(state?.taskId).toBe(task.id);
+    expect(state?.status).toBe("completed");
+    // The `$$` pid placeholder must have been replaced by a real numeric pid.
+    expect(typeof state?.pid).toBe("number");
+    expect(Number.isInteger(state?.pid)).toBe(true);
+    expect(state?.pid).toBeGreaterThan(0);
+    // startedAt must be a real ISO timestamp, not the placeholder.
+    expect(state?.startedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    expect(state?.exitCode).toBe(0);
+  });
 });

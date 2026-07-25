@@ -15,6 +15,11 @@ async function makeTempDir(): Promise<string> {
   return dir;
 }
 
+// A spawn stub that reports a fake pid but never launches the detached launch
+// script. Tests that drive background-task state explicitly via writeState use
+// this so their assertions don't race the real script's async state writes.
+const noopBackgroundSpawn = () => ({ pid: 424242, unref() {} });
+
 function buildHookCaptureCommand(outputFile: string): string {
   const script = [
     "import fs from 'node:fs';",
@@ -531,6 +536,7 @@ describe("StandaloneOperatorRuntime", () => {
     const runtime = new StandaloneOperatorRuntime({
       rootDir: await makeTempDir(),
       backgroundTaskIsProcessRunning: () => false,
+      backgroundTaskSpawnProcess: noopBackgroundSpawn,
     });
     const session = await runtime.startSession({ title: "Tasks", agentId: "main" });
 
