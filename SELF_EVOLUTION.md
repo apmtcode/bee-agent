@@ -6,6 +6,62 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-25 (run 9) — 🐛 Fix 3 real launcher bugs; suite deterministically green (175/175)
+
+**Audited:** The actual `npm test` result (not just typecheck). Found the suite
+was **red** — 4 tests failing, some flaky (2–3 failures per run, varying) — all
+tracing to the background-task launcher (`src/harness/background-tasks.ts`)
+spawning **real detached OS processes** whose writes raced with test-controlled
+state and wall-clock-sensitive diagnostics. Prior runs' "174/174" claims held
+only when the environment's timing happened to be favorable.
+
+**Root-caused and fixed 3 genuine product bugs** (not just test issues), each
+masked by the one before it:
+1. **Wrong POSIX single-quote escape in `shellQuote`.** It emitted `"'"'"'`
+   (6 chars, leading `"`) instead of the correct `'"'"'` (5 chars). Any
+   background-task command containing a `'` (e.g. `printf 'x'`) was corrupted —
+   both in its persisted `state.json` (breaking recovery: `JSON.parse` threw
+   `Expected ',' or '}' at position N`) **and** in the actual executed command
+   line. One-line fix + explanatory comment.
+2. **`pid` never substituted.** The initial running-state wrote `"pid":"$$"` and
+   relied on `sed s/"$$"/.../` which can't fire (nested shell quotes + regex `$`
+   anchors), so the running-state `pid` stayed the literal string `"$$"`.
+   Since `pid: number` and liveness needs `Number.isFinite(pid)`, **crash
+   recovery after a restart could never verify a live task's process.** Fixed
+   with quote-free placeholder tokens (`__OPENCLAW_PID__`, emitted unquoted so
+   the result is a JSON number) substituted via separate `sed -e` expressions.
+3. **Non-atomic state writes.** The launcher wrote `state.json` via
+   `printf|sed > file` and Python `write_text` — a concurrent reader could see a
+   truncated file. Now both write to a pid-scoped temp then `mv`/`os.replace`
+   (atomic rename), matching `writeJsonAtomic`.
+
+**Determinism (new test seam, aligned with the OS-interaction guardrail):** added
+`src/harness/background-testing.ts` with three reusable simulated spawns
+(`createNoopBackgroundSpawn`, `createSynchronousBackgroundSpawn`,
+`createRunningWithOutputBackgroundSpawn`) and a `backgroundTaskSpawnProcess` /
+`backgroundTaskIsProcessRunning` pass-through on `OperatorCliApp`. Wired the four
+flaky tests to inject a deterministic spawn matching each test's intent (stay
+running / run-to-completion / logged-output-but-still-running) instead of
+depending on OS scheduling. Added a **regression test** that executes the real
+launcher with a quote+newline command and asserts valid JSON state, an intact
+round-tripped command, and a numeric pid.
+
+**Test results:** suite went from **4 failing / flaky → 175/175 passing**,
+verified green across **3 consecutive full runs** plus per-file 3× reruns.
+`typecheck:src` ✅ clean. Build ✅. Full `tsc` (incl. tests) unchanged at **125**
+(new files add zero errors).
+
+**New idea:** the launcher is a hand-rolled bash+python+sed script — fragile
+exactly where these bugs lived (quoting, substitution, atomicity). Extract a
+tiny, unit-testable `renderLaunchScript` golden-file test (snapshot the rendered
+script for a set of adversarial commands: quotes, `$`, backticks, newlines,
+unicode) so future edits to the script are caught at authoring time rather than
+via a flaky integration test. Longer term, consider replacing the sed/heredoc
+templating with a single `python3 -c` state writer that receives all fields as
+argv (no shell-quoting of JSON at all), eliminating this whole bug class.
+
+---
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184

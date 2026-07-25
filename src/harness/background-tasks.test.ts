@@ -7,6 +7,7 @@ import {
   FileBackgroundTaskStore,
   type BackgroundTaskExecutionState,
 } from "./background-tasks.js";
+import { createSynchronousBackgroundSpawn } from "./background-testing.js";
 
 const tempDirs: string[] = [];
 
@@ -369,5 +370,32 @@ describe("BackgroundTaskExecutionService", () => {
     await expect(fs.readFile(path.join(rootDir, task.execution.launchScript), "utf8")).resolves.toContain("bash -lc");
     await service.writeOutput(task, "alpha\nbeta\ngamma\n");
     await expect(service.readOutput(task, { lineLimit: 1 })).resolves.toBe("gamma");
+  });
+
+  // Regression: the launcher must persist VALID JSON even when the command
+  // contains shell-significant characters (single quotes, newlines), and must
+  // substitute a numeric pid rather than the literal "$$" string. Both were
+  // broken previously — a wrong POSIX single-quote escape corrupted the state
+  // JSON, and the `"$$"` sed substitution never fired — so recovery could not
+  // parse the state file or verify liveness.
+  it("persists valid JSON state (numeric pid, intact command) for commands with quotes and newlines", async () => {
+    const rootDir = await makeTempDir();
+    const store = new FileBackgroundTaskStore(
+      path.join(rootDir, "background-tasks.json"),
+      createSynchronousBackgroundSpawn(),
+    );
+    const command = "printf 'line-1\nline-2\n'";
+    const task = await store.start({ title: "Quoted", command, cwd: rootDir, kind: "task" });
+
+    // The synchronous launcher has already run to completion and written state.
+    const stateRaw = await fs.readFile(path.join(rootDir, task.execution.stateFile), "utf8");
+    const state = JSON.parse(stateRaw) as BackgroundTaskExecutionState;
+    expect(state.command).toBe(command);
+    expect(typeof state.pid).toBe("number");
+    expect(Number.isFinite(state.pid)).toBe(true);
+    expect(state.status).toBe("completed");
+
+    const service = new BackgroundTaskExecutionService(rootDir);
+    await expect(service.readOutput(task, {})).resolves.toContain("line-1");
   });
 });

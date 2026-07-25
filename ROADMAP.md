@@ -38,8 +38,22 @@ unchecked items are queued. Keep this richer than you found it each run.
     `skills.executable.*`, `push.subscriptions.*`, `trajectories.*`, `replays.*`,
     `cron.runs`/misc — plus a few genuine test-only typings. Map the rest, then
     fix residual test-only typings.
+- [x] **Make the test suite deterministically green** (run 9, 2026-07-25). The
+      suite was flakily red (4 failing) because the background-task launcher
+      spawned real detached OS processes racing with test state. Fixed 3 real
+      launcher bugs (shellQuote escape, pid substitution, atomic state writes)
+      and added a `backgroundTaskSpawnProcess` seam + simulated spawns so tests
+      are hermetic. Now 175/175 across repeated runs.
 - [ ] Add a `verify` npm script (`typecheck && build && test`) and have the
       engine run it as a pre-push self-check each cycle.
+- [ ] **Launcher golden-file test.** `renderLaunchScript` is a hand-rolled
+      bash+sed+python template — the source of the run-9 bug class (quoting,
+      substitution, atomicity). Add a snapshot test over a set of adversarial
+      commands (single/double quotes, `$`, backticks, embedded newlines,
+      unicode, paths with spaces) so script edits are caught at authoring time,
+      not via a flaky integration test. Stretch: replace sed/heredoc templating
+      with a single `python3 -c` writer that takes fields via argv (no shell
+      quoting of JSON), eliminating the bug class entirely.
 - [x] Interim **source-only typecheck gate** — DONE run 7. `tsconfig.src.json`
       (excludes `**/*.test.ts`) + `typecheck:src` script; passes (exit 0). Next:
       have the engine run it as a per-run pre-push self-check.

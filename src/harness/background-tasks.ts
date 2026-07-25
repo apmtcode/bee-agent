@@ -734,37 +734,54 @@ function renderLaunchScript(task: BackgroundTaskRecord): string {
   const quotedOutputFile = shellQuote(task.execution.outputFile);
   const quotedCwd = shellQuote(task.cwd);
   const quotedCommand = shellQuote(task.command);
+  // The initial "running" state is a template: dynamic values (the real pid and
+  // the start timestamp) are quote-free placeholder tokens that the launch
+  // script substitutes at runtime. The pid placeholder is emitted UNQUOTED so
+  // the substituted value is a JSON number (`"pid":123`), matching the schema's
+  // `pid: number` — a quoted `"$$"` string would fail liveness checks on
+  // recovery. Placeholders are `[A-Z_]+` so they never collide with regex
+  // metacharacters or shell quoting the way the old `"$$"` sed pattern did.
   const quotedStatePayload = shellQuote(
     JSON.stringify({
       version: 1,
       taskId: task.id,
       kind: task.kind,
       status: "running",
-      pid: "$$",
+      pid: "__OPENCLAW_PID__",
       startedAt: "__OPENCLAW_STARTED_AT__",
       updatedAt: "__OPENCLAW_STARTED_AT__",
       outputFile: task.execution.outputFile,
       cwd: task.cwd,
       command: task.command,
-    }),
+    }).replace('"__OPENCLAW_PID__"', "__OPENCLAW_PID__"),
   );
 
   return [
     "#!/usr/bin/env bash",
     "set -euo pipefail",
-    `mkdir -p $(dirname ${quotedStatePath}) $(dirname ${quotedOutputFile})`,
+    `state_path=${quotedStatePath}`,
+    `mkdir -p $(dirname "$state_path") $(dirname ${quotedOutputFile})`,
     "started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-    `printf '%s' ${quotedStatePayload} | sed "s/__OPENCLAW_STARTED_AT__/$started_at/g; s/\"\$\$\"/$$/g" > ${quotedStatePath}`,
+    // Write the initial "running" state atomically: render to a pid-scoped temp
+    // file, then rename into place. A rename is atomic on the same filesystem,
+    // so a concurrent reader (recovery/diagnostics) never observes a truncated
+    // or half-written JSON document.
+    'state_tmp="$state_path.$$.tmp"',
+    // Substitute the placeholder tokens with separate `-e` expressions. Both
+    // patterns are quote-free `[A-Z_]+` tokens, so neither the shell (inside the
+    // double-quoted expressions) nor sed's regex engine treats them specially.
+    `printf '%s' ${quotedStatePayload} | sed -e "s/__OPENCLAW_STARTED_AT__/$started_at/g" -e "s/__OPENCLAW_PID__/$$/g" > "$state_tmp"`,
+    'mv -f "$state_tmp" "$state_path"',
     `printf '%s\n' "starting ${task.kind} ${task.id}" >> ${quotedOutputFile}`,
     `if cd ${quotedCwd} && bash -lc ${quotedCommand} >> ${quotedOutputFile} 2>&1; then`,
     "  completed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-    `  python3 - ${quotedStatePath} $$ "$completed_at" 0 <<'PY'`,
+    `  python3 - "$state_path" $$ "$completed_at" 0 <<'PY'`,
     ...renderStateWriterPython("completed"),
     "PY",
     "else",
     "  exit_code=$?",
     "  completed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-    `  python3 - ${quotedStatePath} $$ "$completed_at" "$exit_code" <<'PY'`,
+    `  python3 - "$state_path" $$ "$completed_at" "$exit_code" <<'PY'`,
     ...renderStateWriterPython("failed"),
     "PY",
     '  exit "$exit_code"',
@@ -789,10 +806,21 @@ function renderStateWriterPython(status: BackgroundTaskExecutionState["status"])
     "state['completedAt'] = timestamp",
     "state['exitCode'] = exit_code",
     `state['error'] = None if '${status}' == 'completed' else f'background task exited non-zero ({exit_code})'`,
-    "state_path.write_text(json.dumps(state, indent=2) + '\\n')",
+    // Atomic terminal-state write: render to a pid-scoped temp file and replace
+    // the target in one rename so readers never see a partially rewritten file.
+    "tmp_path = state_path.with_name(state_path.name + '.' + str(pid) + '.tmp')",
+    "tmp_path.write_text(json.dumps(state, indent=2) + '\\n')",
+    "tmp_path.replace(state_path)",
   ];
 }
 
 function shellQuote(value: string): string {
-  return `'${value.replaceAll(`'`, `"'"'"'`)}'`;
+  // POSIX single-quote escaping: a literal single quote is written by closing
+  // the quoted run, emitting a double-quoted quote, then reopening — i.e. each
+  // `'` becomes `'"'"'` (close-quote, "'", reopen-quote). The whole value is
+  // wrapped in an outer pair of single quotes. (The previous sequence started
+  // with a double quote, which injected a spurious `"` and corrupted any value
+  // containing a single quote — both in the persisted state JSON and in the
+  // executed command line.)
+  return `'${value.replaceAll(`'`, `'"'"'`)}'`;
 }
