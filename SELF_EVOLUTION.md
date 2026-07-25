@@ -6,6 +6,58 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-25 (run 10) — 🧠 Pluggable in-process movement-model backend (learn → replay → generalize, cloud-testable)
+
+**Audited:** The local-movement learning subsystem (objective 2), specifically
+the train/infer piece 2(c)/(d). `src/capture/` already covers capture → schema →
+dataset → replay, and `src/training/` has the reviewed exporter, job store, and
+`LocalAppleSiliconTrainingRunner`. But the *only* training path emitted external
+`mlx`/`axolotl` shell commands that can execute solely on the user's Mac — so the
+core loop "post-train a local model and have it repeat + generalize movements"
+had **no in-process implementation and no way to be validated in the cloud/CI**.
+That was the biggest untested gap in the project's reason-for-existing.
+
+**Changed (additive, new module — zero edits to existing runtime):**
+- `src/training/movement-model.ts`: a pluggable movement-model seam.
+  - `MovementModelBackend` interface (`train(dataset) → MovementModel`) +
+    `MovementModel` (`predictNext`, `generate`) so a real on-device small model
+    can be dropped in later without touching callers, dataset, or tests.
+  - `MarkovMovementBackend` — a deterministic, dependency-free order-k Markov
+    n-gram reference backend with stupid-backoff and context-vs-global models.
+    Two properties it guarantees (both asserted): **exact replay** (2c) — a
+    single-sequence context regenerates verbatim; **generalization** (2d) — a
+    novel token combination completes via lower-order backoff to sub-movements
+    learned in *other* recorded flows. Fully deterministic (count-desc then
+    lexicographic tie-break, no `Date`/random), so runs reproduce.
+  - `buildMovementDataset(trajectories)` turns recorded `TrajectorySpan`s into
+    training sequences; `tokenizeMovementAction` canonicalizes gesture metadata
+    (mouse/keyboard/UI) into stable tokens; `movementContextForTrajectory`
+    derives the app/source context. Registry + `trainMovementModel(...)` helper.
+  - Barrel exports added to `src/index.ts`.
+- `src/training/movement-model.test.ts`: 13 tests — tokenization, dataset build
+  (ts-ordering, context derivation, empty-trajectory skip), verbatim replay,
+  deterministic prediction w/ confidence, END-terminated + maxSteps-bounded
+  rollout, cross-sequence generalization via order-1 backoff, global backoff for
+  unseen contexts, empty-model null prediction, unknown-backend error, and a
+  determinism check across repeated training runs.
+
+**Test results:** `npm run typecheck:src` ✅ (exit 0). `npm run build` ✅.
+`npm test` **187/187 passing** (was 174; +13 new), **run twice back-to-back,
+both green** (flake-sentinel discipline from run 9). Full `tsc` **125**
+(unchanged — no regression; all remaining errors are pre-existing test-only).
+
+**New idea:** a **generalization-fidelity eval harness** — hold out one recorded
+trajectory per context, train on the rest, and score how much of the held-out
+movement `generate()` reproduces (token-level edit distance / prefix-match rate).
+That turns "does it generalize?" from a hand-picked assertion into a measurable,
+regression-tracked metric per backend, and gives the eventual real on-device
+backend an apples-to-apples bar to clear against the Markov reference. Pair it
+with a **synthetic movement-stream generator** (parameterized flows with shared
+sub-paths + noise) so the harness has unlimited related-but-novel test data
+without any real OS capture.
+
+---
+
 ## 2026-07-25 (run 9) — 🔴→🟢 Eliminated background-task test flakiness (verification gate restored)
 
 **Audited:** The verification gate itself. On a clean checkout `npm test` was

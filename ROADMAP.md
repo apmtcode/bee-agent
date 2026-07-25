@@ -74,13 +74,27 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
+      for a real on-device small model. **(2026-07-25, run 10)** —
+      `src/training/movement-model.ts`: `MovementModelBackend`/`MovementModel`
+      interfaces + `MarkovMovementBackend` (deterministic order-k n-gram with
+      backoff). Proves exact replay (2c) and cross-sequence generalization (2d)
+      in-process; 13 tests. `buildMovementDataset`/`tokenizeMovementAction`
+      bridge recorded trajectories → training sequences.
 - [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
+      round-trips without real OS input. **Next up**: parameterized movement
+      flows with shared sub-paths + injectable noise, feeding both the replay
+      round-trip and the generalization eval below.
 - [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      related trajectories. **Design (run 10):** leave-one-trajectory-out per
+      context, train on the rest, score `generate()` vs. the held-out sequence
+      by prefix-match rate / token edit distance — a measurable per-backend
+      metric so the real on-device backend has a bar to clear vs. the Markov
+      reference. Pairs with the synthetic generator above.
+- [ ] Wire the movement-model backend into the training runner/execution path so
+      a reviewed export can be trained *and evaluated* in-process (mock backend)
+      before the runner ever shells out to `mlx`/`axolotl` on-device.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
