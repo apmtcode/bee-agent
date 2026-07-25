@@ -6,6 +6,57 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-25 (run 9) — 🐛 Real bug: `shellQuote` mangled single-quoted commands; suite back to green
+
+**Audited:** The test suite health on a full Linux runtime (bash + python3 + sed
+present). Prior logs claimed 174/174, but `npm test` here showed **3–4 failing**
+(`operator-runtime`, `control-plane/server`, `cli/app`) — all in the
+background-task subsystem. Traced them to a **genuine production bug**, not test
+flake.
+
+**Root cause (one real bug + one fragility):**
+1. **`shellQuote` in `src/harness/background-tasks.ts` used the wrong POSIX
+   single-quote escape** — `"'"'"'` (6 chars, leading `"`) instead of the
+   correct `'"'"'` (5 chars). The leading `"` fails to *close* the surrounding
+   single-quote before emitting the literal `'`, so any command containing a
+   single quote (e.g. `printf 'line-1\nline-2\n'`, `grep 'x'`, `echo 'y'`) was
+   corrupted in the launch script's state payload → the written `state.json` was
+   invalid JSON → `readState` threw `SyntaxError` during recovery/sync.
+   `src/training/runner.ts` already had the correct escape; the two had diverged.
+   **This bug silently broke every background/monitor task whose command
+   contained a single quote — extremely common.** Fixed + documented the escape.
+2. **The launch script wrote `state.json` non-atomically** (the `sed > state`
+   initial write and the python completion write both truncate-in-place), so a
+   concurrent reader could observe a torn file. Made both **atomic**
+   (`… > state.tmp.$$ && mv …`; python `write_text` → `tmp.replace(state)`),
+   matching the atomicity `writeState` already had on the TS side.
+
+**Test hermeticity (root of the "174/174 vs 3-failing" discrepancy):** the three
+failing tests construct the real runtime and spawn **real detached launch
+scripts** whose async state/output writes race the tests' own `writeState`. They
+passed only in a slower/restricted reference env where the subprocess never won
+the race. Made them deterministic by injecting the existing
+`backgroundTaskSpawnProcess` seam (a no-op/stub launcher):
+- `operator-runtime.test.ts`, `server.test.ts` (×3 runtimes): stub launcher →
+  no state file → the tests' explicit `writeState`/diagnostics drive state.
+- **Threaded `backgroundTaskSpawnProcess` + `backgroundTaskIsProcessRunning`
+  through `OperatorCliApp`** (additive, mirrors the run-1 `configHome` seam) so
+  `app.test.ts` can stub too — one test seeds `output.log` with `ok` and keeps
+  tasks running; the platform test keeps real `isProcessRunning` so its
+  `writeState(pid 999999)+sync` still exercises the degraded/missing-process path.
+
+**Test results:** `npm test` **174/174** (was 3–4 failing). `npm run build` ✅.
+`npm run typecheck:src` ✅ (clean). Full `tsc` unchanged at **125** (all in test
+files — no regression).
+
+**New idea:** add a tiny unit test for `shellQuote` (and any sibling copies) that
+round-trips values containing `'`, `"`, `$`, and spaces through `bash -c 'printf
+%s'` and asserts the output equals the input — a 5-line guard that would have
+caught this class of quoting bug immediately, and would flag the two divergent
+copies. Longer term: **de-duplicate `shellQuote` into one shared `src/shared`
+helper** so the harness and training runner can't drift again (there are already
+2 copies in `src/`, ~20 across the reference trees).
+
 ## 2026-06-23 (run 8) — Result map → orchestration families: test debt 229→125
 
 **Audited:** The remaining test-file typecheck debt. server.test.ts had 184
