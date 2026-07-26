@@ -6,6 +6,61 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-26 (run 10) — 🧠 In-process movement-policy model (objective 2c/2d: repeat + generalize)
+
+**Audited:** The local-movement learning subsystem (standing objective #2)
+against its five required pieces — capture → schema → dataset → replay →
+train/infer. `src/capture/` covers capture/schema/dataset/replay and
+`src/training/` builds *out-of-process* launch plans (`runner.ts` → mlx/axolotl
+Python), but pieces **(c) "post-train a local model to repeat the recorded
+movements"** and **(d) "generalize to new-but-related movements"** had **no
+in-process, cloud-testable code at all** — the runner only shells out to a real
+on-device trainer that can't run here. That's the biggest objective-#2 gap and
+matches the ROADMAP's queued "pluggable local-model backend + deterministic mock".
+
+**Changed (additive — one new module + tests, no existing code touched):**
+- `src/training/movement-model.ts` (new): a **pluggable local-model backend**
+  interface `MovementModelBackend` (`train` / `predictNext` / `generate`) so a
+  real on-device small model can be dropped in behind the same seam, plus a
+  bundled **deterministic mock** `MarkovMovementBackend` — an order-N n-gram
+  policy with **stupid-backoff**. Training counts every context of length
+  `0..order → next-token`; inference uses the longest context suffix seen in
+  training and backs off to shorter suffixes (down to the unigram), argmax with
+  a lexicographic tie-break. No clock, no RNG → fully reproducible in cloud/CI.
+  - **Repeat (2c):** greedy `generate()` from a recorded seed reproduces the
+    recorded continuation exactly.
+  - **Generalize (2d):** backoff resolves an *unseen* full context through a
+    shared shorter suffix — a novel prefix with a learned sub-movement tail still
+    predicts correctly instead of failing.
+  - Serializable JSON artifact (persists next to the export/replay manifests).
+  - Dataset bridges from existing capture data: `movementSequenceFromTrajectory`
+    (TrajectorySpan actions, ts-sorted), `movementSequenceFromReplay`
+    (ReplayManifest action timeline), `buildMovementDataset` (drops empties).
+  - `evaluateNextTokenAccuracy` — a generalization eval harness (accuracy +
+    mean confidence + backoff rate over held-out sequences).
+- `src/training/movement-model.test.ts` (new, 11 tests): trains on a synthetic
+  "save file" movement grammar, asserts exact replay, determinism, argmax
+  prediction, **generalization to a held-out related sequence (≥0.75 next-token
+  accuracy via backoff)**, empty-model safety, the dataset bridges, and the eval
+  harness (perfect recall on-distribution).
+- `src/index.ts`: barrel-exported the new surface (backend, bridges, eval, types).
+
+**Test results:** `npm test` **185/185 passing, 2/2 consecutive runs green**
+(was 174; +11 new). `npm run build` ✅. `npm run typecheck:src` ✅ (exit 0 —
+source stays clean; the new module and its barrel exports typecheck). Pushed to
+`main`.
+
+**New idea:** now that a trained policy is an in-process object, add a
+**closed-loop replay-fidelity harness**: feed the model's generated movement
+sequence back through the existing `replay-service` and score how far the
+*rolled-out* trajectory drifts from the recorded one under injected noise
+(dropped/reordered observations) — a real generalization metric, not just
+next-token accuracy. Bigger: a second backend (a tiny embedding-kNN policy) to
+prove the `MovementModelBackend` seam holds more than one implementation, and to
+A/B backends on the same dataset.
+
+---
+
 ## 2026-07-25 (run 9) — 🔴→🟢 Eliminated background-task test flakiness (verification gate restored)
 
 **Audited:** The verification gate itself. On a clean checkout `npm test` was

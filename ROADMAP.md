@@ -74,13 +74,26 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      for a real on-device small model. **(2026-07-26, run 10)** —
+      `src/training/movement-model.ts`: `MovementModelBackend` seam +
+      `MarkovMovementBackend` (n-gram/stupid-backoff, no clock/RNG). Repeats
+      recorded movements (2c) and generalizes via backoff (2d). 11 new tests.
+- [~] Synthetic event-stream generator to validate capture→dataset→replay
+      round-trips without real OS input. Run 10 added an *inline* synthetic
+      movement grammar in the movement-model test + dataset bridges
+      (`movementSequenceFromTrajectory/Replay`, `buildMovementDataset`). Next:
+      extract a reusable exported generator (parameterized grammars, noise
+      injection) so capture/replay tests can share it.
+- [~] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories. Run 10 shipped `evaluateNextTokenAccuracy`
+      (next-token accuracy + confidence + backoff rate). Next: a **closed-loop**
+      replay-fidelity metric — roll the trained policy out through
+      `replay-service` and score drift from the recorded trajectory under
+      injected noise (not just next-token match).
+- [ ] Second `MovementModelBackend` implementation (e.g. embedding-kNN policy)
+      to prove the seam holds >1 backend and enable A/B on the same dataset.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
