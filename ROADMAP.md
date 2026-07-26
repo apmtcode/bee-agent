@@ -71,16 +71,32 @@ unchecked items are queued. Keep this richer than you found it each run.
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
 (exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
-      objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
-      deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
+- [x] Inventory what `src/capture` + `src/training` already implement vs. the
+      objective's five pieces (2026-07-26, run 10) — capture/schema/dataset/replay
+      all present; the missing piece was train/infer/generalize (only the
+      cloud-unrunnable mlx/axolotl subprocess runner existed).
+- [x] **Pluggable local-model backend interface** for movement training with a
+      deterministic in-process backend (2026-07-26, run 10) —
+      `src/training/movement-model.ts` (`LocalMovementModelBackend`,
+      `MovementModel`, `MovementBackendRegistry`, dataset extraction, next-token
+      eval) + `src/training/simulated-backend.ts` (`SimulatedMovementModelBackend`,
+      a deterministic variable-order Markov trainer with backoff). mlx/axolotl
+      runner remains the documented real-on-device seam.
+- [~] Generalization eval harness (2026-07-26, run 10): `evaluateNextTokenAccuracy`
+      scores top-1/top-k on held-out sequences. NEXT: a *behavioral* metric that
+      replays generated gestures through `src/capture/replay.ts` and scores
+      divergence (replay-fidelity reward), not just next-token match.
 - [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      round-trips without real OS input (the movement-model tests hand-build
+      sequences; a reusable generator would drive capture/replay too).
+- [ ] Replay-fidelity reward: map generated movement tokens back to gestures,
+      dry-run them against the recorded trajectory via the replay engine, and
+      score divergence — turns the RL runner's `rewardSource: "replay-manifest"`
+      into a concrete cloud-computable signal.
+- [ ] `train-and-eval` runtime method that, for the simulated backend, trains +
+      evaluates entirely in-process and persists the artifact + eval report next
+      to the job, so `training.*` RPCs expose a real trained model in cloud/CI
+      with no subprocess.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

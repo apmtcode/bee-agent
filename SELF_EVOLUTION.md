@@ -6,6 +6,59 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-26 (run 10) — 🧠 Pluggable local-movement model backend + deterministic in-process trainer (objective #2 c+d)
+
+**Audited:** The local-movement learning subsystem (`src/capture/` + `src/training/`)
+against objective #2's five pieces (capture → schema → dataset → replay →
+train/infer/generalize). Capture, schema, dataset and replay all exist. The
+**train/infer/generalize** piece did **not**: the only trainer
+(`LocalAppleSiliconTrainingRunner`) hardcodes two Apple-Silicon *subprocess*
+runtimes (mlx/axolotl) that spawn `python3` and **cannot run in the cloud/CI at
+all** — so parts (c) "post-train a local model to repeat recorded movements" and
+(d) "generalize to new-but-related movements" were untested and unrunnable here.
+
+**Changed (additive, two new modules + barrel exports):**
+- `src/training/movement-model.ts` — the pluggable seam: `LocalMovementModelBackend`
+  interface (`train(dataset) → artifact`, `load(artifact) → model`), a
+  `MovementModel` inference handle (`predictNext`, `generate`), a
+  `MovementBackendRegistry` so backends are selected by id and a real on-device
+  model can drop in without touching call sites, plus dataset extraction
+  (`extractMovementSequences` from reviewed trajectories — prefers redacted
+  actions so raw capture never leaks — and `extractMovementSequencesFromReplay`),
+  a stable `movementActionToken` normalizer, and an
+  `evaluateNextTokenAccuracy` generalization eval (top-1 / top-k on held-out
+  sequences).
+- `src/training/simulated-backend.ts` — `SimulatedMovementModelBackend`
+  (`id="simulated-ngram"`): a **deterministic, pure, in-process** variable-order
+  Markov trainer with stupid-backoff. Counting transitions **is** the training
+  (repeats recorded chains via argmax rollout = part c); backoff from an unseen
+  full-order context to the longest seen suffix yields plausible continuations
+  for novel prefixes (= part d). No clocks, no RNG, tie-breaks by token order →
+  byte-for-byte reproducible artifacts. Ships `createSimulatedMovementBackend`
+  and `createDefaultMovementBackendRegistry`. The mlx/axolotl runner is untouched
+  and remains the documented "real heavy on-device model" seam.
+
+**Test results:** new `movement-model.test.ts` (15 tests) covers tokenization,
+dataset extraction (incl. redacted-action preference), train→repeat, frequency
+ranking, **generalization via backoff**, determinism, stop-token generation,
+empty-dataset safety, held-out accuracy, and the registry. `npm test`
+**174 → 189/189**, green on **two consecutive runs**. `npm run build` ✅.
+`npm run typecheck:src` ✅ (exit 0 — source stays clean).
+
+**New idea:** now that a model can *generate* movement token sequences, close the
+loop by feeding generated sequences back through the existing **replay engine**
+(`src/capture/replay.ts` / `replay-service.ts`) as a *replay-fidelity reward*:
+map each predicted token back to a concrete gesture, dry-run it against the
+recorded trajectory, and score divergence. That turns the RL runner's abstract
+`rewardSource: "replay-manifest"` into a concrete, cloud-computable reward
+signal — and gives the generalization eval a behavioral (not just next-token)
+metric. Bigger: a `train-and-eval` orchestration method on the runtime that,
+for the simulated backend, runs entirely in-process and persists the artifact +
+eval report next to the job, so `training.*` RPCs can expose a real trained
+model in cloud/CI without any subprocess.
+
+---
+
 ## 2026-07-25 (run 9) — 🔴→🟢 Eliminated background-task test flakiness (verification gate restored)
 
 **Audited:** The verification gate itself. On a clean checkout `npm test` was
