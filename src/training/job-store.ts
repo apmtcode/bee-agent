@@ -18,6 +18,7 @@ import {
   LocalAppleSiliconTrainingRunner,
   type TrainingJobPlan,
 } from "./runner.js";
+import type { LocalTrainingBackend } from "./backends.js";
 
 export type TrainingJobStoreShape = {
   version: 1;
@@ -50,9 +51,9 @@ export class FileTrainingJobStore {
   private readonly runner: LocalAppleSiliconTrainingRunner;
   readonly executionService: LocalTrainingExecutionService;
 
-  constructor(private readonly filePath: string) {
+  constructor(private readonly filePath: string, backend?: LocalTrainingBackend) {
     const rootDir = path.dirname(filePath);
-    this.runner = new LocalAppleSiliconTrainingRunner(rootDir);
+    this.runner = new LocalAppleSiliconTrainingRunner(rootDir, backend);
     this.executionService = new LocalTrainingExecutionService(rootDir);
   }
 

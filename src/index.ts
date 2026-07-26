@@ -400,6 +400,25 @@ export type {
   LocalTrainingRuntime,
   TrainingJobPlan,
 } from "./training/runner.js";
+export {
+  AppleSiliconTrainingBackend,
+  MockLocalTrainingBackend,
+  trainMockMovementModel,
+  predictNextMovement,
+  replayMovementSequence,
+} from "./training/backends.js";
+export type {
+  LocalTrainingBackend,
+  TrainingBackendContribution,
+  MockMovementModel,
+} from "./training/backends.js";
+export {
+  runMockTrainer,
+} from "./training/mock-trainer.js";
+export type {
+  MockMovementDataset,
+  MockTrainerResult,
+} from "./training/mock-trainer.js";
 export type {
   ExportedMemoryReference,
   ExportedPromotedSkill,

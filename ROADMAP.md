@@ -74,13 +74,32 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
-      deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
+- [x] **Pluggable local-model backend interface** for the training runner with a
+      deterministic mock backend (2026-07-26, run 10). Added
+      `src/training/backends.ts` (`LocalTrainingBackend` interface,
+      `AppleSiliconTrainingBackend` = extracted original behaviour,
+      `MockLocalTrainingBackend` = portable node runner). Runner + job-store take
+      an optional injected backend (default = Apple Silicon, behaviour
+      unchanged). The mock backend ships a real tiny on-device model — a
+      first-order Markov movement policy (`trainMockMovementModel` /
+      `predictNextMovement` / `replayMovementSequence`) plus a runnable
+      `mock-trainer` CLI — so the full train→infer seam is exercisable in the
+      cloud with zero external deps. 12 new tests.
 - [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
+      round-trips without real OS input — should emit the `movements.json`
+      dataset shape (`{version, sequences: string[][]}`) the mock trainer now
+      consumes, closing the capture→dataset→train loop.
 - [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      related synthetic trajectories. (The Markov model already demonstrates
+      first-order generalization in tests; the harness should quantify it —
+      e.g. edit-distance between replayed and held-out sequences.)
+- [ ] Movement token schema: define the canonical token grammar (e.g.
+      `kind:detail` like `mousedown:left`, `key:Enter`, `window:focus`) and a
+      `movementTokensFromReplayEvents()` adapter so real capture output feeds
+      the mock trainer directly, not just synthetic `movements.json`.
+- [ ] Higher-order / backoff movement model: extend the Markov policy to
+      n-gram context with backoff, so `predictNextMovement` uses more than the
+      last token — improves fidelity on longer recorded workflows.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

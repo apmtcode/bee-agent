@@ -6,6 +6,58 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-26 (run 10) — 🧩 Pluggable local-model training backend + real on-device movement model (objective #2)
+
+**Audited:** The local-movement learning subsystem (`src/training/`). The
+training runner (`LocalAppleSiliconTrainingRunner`) hardcoded a single backend —
+Apple-Silicon MLX/Axolotl with `python3` commands that **cannot run in the cloud
+or CI**, so the train→infer half of objective #2 had no executable path off a
+real Mac. The objective explicitly calls for a *pluggable* model backend, and
+the ROADMAP queued exactly this. Highest-value increment: introduce the backend
+seam and a deterministic mock backend so the pipeline is testable everywhere.
+
+**Changed (additive, backward-compatible):**
+- **New `src/training/backends.ts`** — `LocalTrainingBackend` interface
+  (`describe(job, execution) → {runtime, targetPlatform, outputFileName,
+  command, environment}`). Two implementations:
+  - `AppleSiliconTrainingBackend` — the original mlx/axolotl logic **extracted
+    verbatim** (same command, same `OPENCLAW_*` env, same `.gguf` outputs).
+  - `MockLocalTrainingBackend` — portable, dependency-free: a `node`-run
+    `mock-trainer` command targeting `portable`/`.json` artifacts, for cloud/CI.
+- **A genuine tiny on-device model** (not a stub): a first-order Markov movement
+  policy — `trainMockMovementModel(sequences)`, `predictNextMovement(model,
+  context)`, `replayMovementSequence(model)`. Deterministic, zero-dep, and it
+  demonstrably **repeats** recorded movements *and* **generalizes** to related
+  unrecorded paths (composing `settings→menu→logout` from two disjoint
+  recordings via the shared `menu` state — covered by a test).
+- **New `src/training/mock-trainer.ts`** — `runMockTrainer({datasetDir, outPath,
+  mode})` reads a `movements.json` dataset (`{version, sequences}`), trains, and
+  persists the model; plus a guarded CLI entry so the mock backend's `node`
+  command actually runs on-device. Absent dataset → valid empty model (no throw).
+- **Runner + job-store** now take an optional injected backend
+  (`LocalAppleSiliconTrainingRunner(rootDir, backend?)`,
+  `FileTrainingJobStore(filePath, backend?)`), defaulting to Apple Silicon so
+  all existing behaviour and tests are unchanged. Widened `TrainingJobPlan`'s
+  `runtime`/`targetPlatform` from literals to `string` (a pure widening).
+- Barrel exports added for all new symbols.
+
+**Test results:** `npm test` **186/186 passing** (was 174; +12 across
+`backends.test.ts` and `mock-trainer.test.ts`), **green on 2 consecutive runs**.
+`npm run build` ✅. `npm run typecheck:src` ✅ (source stays clean). Full `tsc`
+**125** (unchanged — no regression).
+
+**New idea:** now that the trainer consumes a concrete `movements.json` dataset
+shape, the next natural increment is a **synthetic event-stream generator** that
+emits that shape directly from simulated OS events — closing the
+capture→dataset→train→replay loop entirely in the cloud — followed by a
+**generalization eval harness** that scores replay fidelity (edit-distance)
+against held-out related trajectories. Bigger: an n-gram-with-backoff upgrade to
+the movement model so prediction uses richer context than the last token, and a
+`movementTokensFromReplayEvents()` adapter so *real* capture output feeds the
+same trainer.
+
+---
+
 ## 2026-07-25 (run 9) — 🔴→🟢 Eliminated background-task test flakiness (verification gate restored)
 
 **Audited:** The verification gate itself. On a clean checkout `npm test` was
