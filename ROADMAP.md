@@ -70,17 +70,34 @@ unchecked items are queued. Keep this richer than you found it each run.
 ## Local-movement learning subsystem
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
-(exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
-      objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
-      deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+(exporter, job store/manifest, runner, execution service, **movement-model**).
+- [x] Inventory `src/capture` + `src/training` vs. the objective's five pieces
+      (2026-07-26, run 10). Result: **capture, schema, dataset, replay all exist**;
+      the gap was an in-process **train→infer** model for pieces (c) repeat and
+      (d) generalize.
+- [x] **Pluggable local-model backend + deterministic mock** (2026-07-26, run 10).
+      `src/training/movement-model.ts`: `MovementModelBackend` interface (the seam
+      for a real on-device model) + `NgramMovementBackend` mock (Markov n-gram,
+      specific/generic two-level index → exact repeat + tool-level generalization,
+      fully deterministic). `rolloutMovement` replay driver + trajectory/replay
+      adapters. 12 tests.
+- [ ] **Generalization eval harness** (now cheap to build on the n-gram backend):
+      split synthetic trajectory *families* into train/held-out, roll the policy
+      out from held-out seeds, score predicted-vs-ground-truth action fidelity as a
+      single `generalizationScore ∈ [0,1]`. Makes "does it generalize?" a tracked
+      regression metric and lets mock vs. future on-device backends be compared on
+      equal footing.
+- [ ] **Synthetic event-stream generator**: parametric generator of trajectory
+      families (shared pattern, varied instances) to feed both the model tests and
+      the eval harness without real OS input. Extract the `fileEditSequence`-style
+      helpers from `movement-model.test.ts` into a reusable `src/training/synthetic`
+      module.
+- [ ] Wire a trained `MovementPolicy` into the runtime as an **action-suggestion
+      provider** — surface predict-next-action (with confidence + `source`) to the
+      operator so learned movements assist live sessions, not just offline replay.
+- [ ] Second concrete backend behind `MovementModelBackend` (e.g. a
+      frequency-smoothed or embedding-nearest-neighbour policy) to prove the
+      interface is genuinely pluggable and give the eval harness a comparison point.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

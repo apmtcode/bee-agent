@@ -6,6 +6,70 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-26 (run 10) — 🧠 In-process movement model: pluggable backend that repeats + generalizes recorded movements
+
+**Audited:** Standing objective #2 (local-movement learning subsystem) end-to-end.
+Runs 2–9 were all infrastructure (typecheck debt, test hermeticity) — no new
+capability in nine runs — so this run pivots to the actual objective. Inventoried
+`src/capture` + `src/training` against the objective's five pieces: **(a) capture,
+(b) schema, (c) dataset, (d) replay all exist** (recorder, device/os/browser
+adapters, consent store, `TrajectorySpan` schema, `ReplayManifest` dataset,
+`ReplayRuntimeService`). The gap was pieces **(c) post-train a model to *repeat*
+movements** and **(d) *generalize* to related movements**: the training
+`runner.ts` only emits external-tool command plans (MLX/Axolotl launch scripts) —
+there was **no in-process model** bee-agent could train and query. Objective 2
+explicitly asks us to build "the code, schema, pipelines, simulations, and tests"
+and validate with "synthetic/simulated event streams" — exactly buildable in the
+cloud.
+
+**Changed (additive, dependency-free, deterministic) — new `src/training/movement-model.ts`:**
+- **`MovementModelBackend` interface** — the pluggable seam. A real on-device
+  small model plugs in behind the same contract (`train(sequences) → policy`;
+  `policy.predict(context) → prediction`). This is the "make the model backend
+  pluggable" requirement.
+- **`NgramMovementBackend`** — a deterministic mock backend (Markov n-gram policy,
+  configurable `order`, default 3) so the whole capture→dataset→**train→infer**
+  →replay loop is exercisable/testable in the cloud with no real OS or GPU. It
+  learns a two-level model per context window: a **specific** index (tool + exact
+  summary) and a **generic** index (tool/source only). Prediction tries
+  specific-context match first → *reproduces the recorded movement exactly*
+  (`source: "exact"`); backs off to shorter windows; then generic-context match →
+  *generalizes the learned pattern to a new-but-related instance*
+  (`source: "generalized"`, e.g. learns open→edit→save on `alpha.ts`/`beta.ts`,
+  then predicts `save` for the never-seen `gamma.ts`); finally the global `prior`.
+  Fully deterministic: `argmax` tie-breaks lexicographically, so results never
+  depend on Map insertion order (no `Date`/`Math.random`, honoring the sandbox
+  constraint that forbids them).
+- **`rolloutMovement(policy, seed)`** — greedy in-process replay driver (the
+  analogue of "replay the recorded movements"): predicts, appends, re-predicts;
+  stops at `maxSteps`, below `minConfidence`, or on a `prior` fallback (the natural
+  end of a learned movement — `allowPrior` overrides).
+- **Adapters** `sequenceFromTrajectory` / `sequenceFromReplayManifest` bridge the
+  existing recorded formats (`TrajectorySpan`, `ReplayManifest`) into training
+  sequences, so the model trains directly on already-captured data.
+- Exported the full surface from `src/index.ts`.
+
+**Test results:** new `movement-model.test.ts` — **12 tests** covering exact
+repeat, generalization to a novel instance, n-gram backoff, prior fallback,
+determinism/tie-break stability, stats, rollout (full reproduction + maxSteps +
+minConfidence stop), and both adapters (incl. an end-to-end train-on-trajectory
+case). `npm test` **186/186 passing** (was 174; +12), **2/2 consecutive runs
+green**. `npm run build` ✅. `npm run typecheck:src` ✅ (exit 0 — source stays
+clean; the new module adds zero typecheck debt).
+
+**New idea:** a **generalization eval harness** (already queued) is now cheaply
+buildable on this backend — split synthetic trajectory families into
+train/held-out, train the policy, roll it out from held-out seeds, and score
+replay fidelity (predicted-action sequence vs. ground truth) as a single
+`generalizationScore ∈ [0,1]`. That turns "does it generalize?" into a **regression
+metric** the engine can track across runs and compare backends (mock n-gram vs. a
+future on-device model) on equal footing. Bigger: wire the trained policy into the
+runtime as an **action-suggestion provider** (predict-next-action surfaced to the
+operator with its confidence + `source`), so the learned movements assist live
+sessions, not just offline replay.
+
+---
+
 ## 2026-07-25 (run 9) — 🔴→🟢 Eliminated background-task test flakiness (verification gate restored)
 
 **Audited:** The verification gate itself. On a clean checkout `npm test` was
