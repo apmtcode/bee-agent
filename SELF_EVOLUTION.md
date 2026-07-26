@@ -6,6 +6,69 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-26 (run 10) — 🧠 Movement model: pluggable backend that actually learns, reproduces & generalises
+
+**Audited:** Standing objective #2 (local-movement learning subsystem). The
+capture pipeline (`src/capture/`) and the training *plumbing* (`src/training/`)
+were solid — recorder, adapters, consent, reviewed export, job store, and a
+runner that emits `mlx`/`axolotl` launch commands. But the runner only writes a
+**launch script for a real Mac**; there was **no in-process trainable/inferable
+model at all**. Objective #2 pieces (c) *post-train a model on the dataset* and
+(d) *generalise to new-but-related movements* were entirely unbuilt and thus
+un-validatable in the cloud. That's the single biggest capability gap in the
+subsystem, so this run built it end-to-end.
+
+**Changed (all additive, new `src/training/movement-model/` module):**
+- **`dataset.ts`** — `buildMovementDataset(trajectories, {order})` turns recorded
+  trajectories into a sliding-window supervised dataset. `tokenizeAction`
+  reduces each action to a canonical, replayable movement token
+  (`device:tap:submit-button`), preferring structured gesture/target/direction
+  metadata and falling back to the summary; `deriveAppContext` conditions on
+  app/screen so the model can generalise across trajectories in the same app.
+  Honours a `requireApproved` gate for the reviewed-export path.
+- **`backend.ts`** — the **pluggable seam**: `MovementModelBackend`
+  (`train`/`load`), `TrainedMovementModel` (`predict`/`serialize`), and the
+  `MovementContext`/`MovementPrediction` types. A real on-device small model
+  (MLX/llama.cpp policy) can implement this interface without touching capture or
+  dataset code.
+- **`markov-backend.ts`** — a deterministic, dependency-free
+  context-conditioned n-gram policy with **stupid-backoff**. Learns
+  `P(next movement | app context, last k movements)` at every k ≤ order; at
+  inference it uses the longest seen context and backs off to shorter (finally
+  app-agnostic unigram) prefixes for novel sequences. `backoffOrder` on each
+  prediction makes generalisation observable. Optional additive smoothing.
+  Fully serialisable → a trained model is a persistable artifact.
+- **`eval.ts`** — `evaluateMovementModel` scores top-1 / top-k accuracy plus a
+  `generalizationRate` (fraction of predictions that required backoff) against
+  held-out trajectories — the roadmap's "generalization eval harness".
+- **`synthetic.ts`** — a seedable (LCG, no `Math.random`) synthetic
+  event-stream generator: `generateWorkflowTrajectories` (approved, reviewable
+  trajectories for training) and `generateRelatedTrajectory` (a
+  shares-a-prefix-then-diverges held-out probe). Lets the full
+  capture→dataset→train→infer→generalise loop run in the cloud with zero real OS
+  input, exactly as objective #2 requires.
+- Exported the whole surface via `src/training/movement-model/index.ts` and the
+  root barrel `src/index.ts`.
+
+**Test results:** two new test files, **+15 tests** (dataset tokenisation/window
+/approval-gate; backend reproduction fidelity=1.0 with 0 backoff, partial-history
+prediction, generalisation on a held-out related trajectory with backoff,
+unseen-app unigram fallback, empty-model undefined, serialize/load prediction
+equality, smoothing keeps argmax). `npm test` **189/189** (was 174), green on
+**two consecutive runs** (flake-sentinel). `npm run typecheck:src` ✅ exit 0
+(source stays clean). Full `tsc` **125** (unchanged — new errors: 0). Build ✅.
+
+**New idea:** now that a trained `MovementModel` exists, close the loop back into
+the **replay engine** — add a `PolicyDrivenReplayer` that, given a partial
+`ReplayManifest` prefix, *predicts and appends* the next movements from the
+trained model instead of only replaying recorded events, then scores predicted
+vs. actual as an online-generalisation metric. Bigger: a second backend
+(feature/embedding nearest-neighbour over token n-grams) behind the same seam so
+we can A/B backends on the eval harness and pick per-app — the pluggable
+interface already makes this a drop-in.
+
+---
+
 ## 2026-07-25 (run 9) — 🔴→🟢 Eliminated background-task test flakiness (verification gate restored)
 
 **Audited:** The verification gate itself. On a clean checkout `npm test` was

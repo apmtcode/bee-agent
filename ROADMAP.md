@@ -71,16 +71,33 @@ unchecked items are queued. Keep this richer than you found it each run.
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
 (exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
-      objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
-      deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+- [x] Inventory what `src/capture` + `src/training` already implement vs. the
+      objective's five pieces (2026-07-26, run 10). Gap found: capture + training
+      *plumbing* existed, but there was **no in-process trainable/inferable
+      model** — the runner only emitted mlx/axolotl launch scripts. Pieces (c)
+      post-train and (d) generalise were unbuilt. Addressed below.
+- [x] **Pluggable local-model backend interface** (2026-07-26, run 10) —
+      `MovementModelBackend`/`TrainedMovementModel` seam in
+      `src/training/movement-model/backend.ts` with a deterministic in-process
+      `MarkovMovementBackend` (context-conditioned n-gram + stupid-backoff) that
+      trains, predicts, generalises, and serialises. A real on-device small model
+      drops in behind the same interface.
+- [x] **Synthetic event-stream generator** (2026-07-26, run 10) —
+      `movement-model/synthetic.ts`, seedable (LCG, no `Math.random`), emits
+      approved training trajectories + a held-out "related" probe. Validates the
+      capture→dataset→train→infer→generalise loop in the cloud.
+- [x] **Generalization eval harness** (2026-07-26, run 10) —
+      `evaluateMovementModel` scores top-1/top-k accuracy + a `generalizationRate`
+      (backoff fraction) on held-out trajectories.
+- [ ] **Dataset builder integration**: wire `buildMovementDataset` into the
+      reviewed-export/runner path so a trained `MovementModel` artifact is emitted
+      alongside the mlx/axolotl plan (currently the model layer is standalone).
+- [ ] **`PolicyDrivenReplayer`**: given a `ReplayManifest` prefix, predict+append
+      next movements from the trained model and score predicted-vs-actual as an
+      online generalisation metric — closes the model back into the replay engine.
+- [ ] **Second backend** (feature/embedding nearest-neighbour over token n-grams)
+      behind the same `MovementModelBackend` seam, to A/B backends on the eval
+      harness and pick per-app.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
