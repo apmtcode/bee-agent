@@ -70,17 +70,38 @@ unchecked items are queued. Keep this richer than you found it each run.
 ## Local-movement learning subsystem
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
-(exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
-      objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
-      deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+(exporter, job store/manifest, runner, execution service, **policy** module as of
+run 10). Next increments:
+- [x] Inventory `src/capture` + `src/training` vs. the objective's five pieces
+      (2026-07-26, run 10): capture ✅ (adapters+recorder), schema ✅ (trajectory/
+      replay), dataset ⬆️ (was only the *reviewed-export* manifest; now a real
+      `(context→action)` training dataset via `policy/dataset.ts`), replay ✅
+      (`replay.ts` + new `rolloutMovements`), train/infer ⬆️ (was launch-script-only;
+      now an in-process trainable/inferable policy).
+- [x] **Pluggable local-model backend interface** — DONE run 10.
+      `src/training/policy/model.ts` `MovementModelBackend<TState>` +
+      deterministic default `NgramMovementBackend` (`ngram-nn@1`) with exact→
+      generalized→prior inference. Documented seam for a real on-device mlx/gguf
+      model behind the same interface.
+- [x] **Synthetic event-stream generator** — DONE run 10.
+      `policy/synthetic.ts` `generateSyntheticTrajectories` + `mailComposeFlow`
+      (deterministic `{v}` variant substitution), validates
+      capture→dataset→predict→rollout without real OS input.
+- [x] **Generalization eval harness** — DONE run 10. `evaluateMovementModel`
+      scores held-out-variant next-action accuracy, split by exact/generalized/
+      prior. Tests prove the shared terminal action is recovered on wholly unseen
+      variants.
+- [ ] **`hybrid` backend**: consult a real on-device model when present, fall back
+      to the deterministic n-gram policy on low confidence / when the model is
+      absent — graceful degradation + always-on baseline.
+- [ ] **End-to-end round-trip integration test**: drive a synthetic OS/device event
+      stream through the *real* recorder + consent store (not hand-built spans),
+      then dataset→train→rollout→replay, proving the whole objective-#2 pipeline.
+- [ ] **Reward-weighted eval**: weight eval accuracy by trajectory reward so the
+      harness measures *useful* movement recall, not just raw next-token hits.
+- [ ] Wire the policy backend into the training runner/execution service so a
+      reviewed export can produce a trained `MovementModel` artifact (in-process
+      for cloud, mlx launch-script for on-device) behind one call.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

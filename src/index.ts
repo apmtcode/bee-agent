@@ -431,3 +431,50 @@ export type {
   FailTrainingJobParams,
   TrainingJobStoreShape,
 } from "./training/job-store.js";
+export {
+  actionKey,
+  contextKey,
+  normalizeTokens,
+  parseActionKey,
+} from "./training/policy/model.js";
+export type {
+  MovementActionLabel,
+  MovementContext,
+  MovementDataset,
+  MovementModelBackend,
+  MovementPrediction,
+  MovementPredictionMethod,
+  MovementScoredAction,
+  MovementTrainingExample,
+  MovementTrainOptions,
+  TrainedMovementModel,
+} from "./training/policy/model.js";
+export {
+  buildMovementDataset,
+  labelAction,
+  observationTokens,
+  tokenizeSummary,
+  trajectoryToExamples,
+} from "./training/policy/dataset.js";
+export {
+  NGRAM_BACKEND_ID,
+  NgramMovementBackend,
+  rolloutMovements,
+} from "./training/policy/ngram-backend.js";
+export type {
+  MovementRolloutOptions,
+  MovementRolloutStep,
+  NgramModelState,
+} from "./training/policy/ngram-backend.js";
+export {
+  evaluateMovementModel,
+  generateSyntheticTrajectories,
+  mailComposeFlow,
+} from "./training/policy/synthetic.js";
+export type {
+  GenerateSyntheticParams,
+  MovementEvalMethodBreakdown,
+  MovementEvalResult,
+  SyntheticFlow,
+  SyntheticFlowStep,
+} from "./training/policy/synthetic.js";

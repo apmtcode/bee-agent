@@ -6,6 +6,73 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-26 (run 10) — 🧠 Movement-policy subsystem: pluggable local model + train→predict→generalize loop
+
+**Audited:** Standing objective #2 (local-movement learning) against `src/capture`
+(recorder, adapters, trajectory/replay schema) and `src/training` (exporter,
+job-store, runner). Finding: the training code only emits **launch scripts** for
+external `mlx`/`axolotl` tools (`runner.ts` → `TrainingJobPlan` + bash) — there was
+**no in-process, cloud-testable model** that actually learns from recorded
+movements, predicts the next action, and generalizes. Pieces (c) post-train and
+(d) generalize existed only as shell-outs that can't run or be validated in the
+cloud. This is the exact gap the roadmap queued ("pluggable local-model backend
+with a deterministic mock backend", "synthetic event-stream generator",
+"generalization eval harness").
+
+**Changed (additive — new `src/training/policy/` module, nothing existing touched):**
+- **`model.ts`** — the backend-agnostic seam: `MovementContext`,
+  `MovementActionLabel`, `MovementDataset`, `MovementPrediction`,
+  `TrainedMovementModel<TState>`, and the `MovementModelBackend` interface
+  (`train`/`predict`/`serialize`/`deserialize`). A real on-device small model
+  (mlx/gguf) implements the same interface without changing call sites. Stable
+  `actionKey`/`contextKey`/`normalizeTokens` helpers.
+- **`dataset.ts`** — bridges capture → training: `buildMovementDataset` featurizes
+  recorded `TrajectorySpan`s into `(context → next-action)` examples. Context =
+  observation summary/metadata tokens since the last action + a `prev:<action>`
+  token (captures sequence with no fixed n-gram width); action labels prefer
+  gesture/target/direction metadata, else a slug of the summary. Positive outcome
+  rewards become example weights.
+- **`ngram-backend.ts`** — the deterministic default backend (`NgramMovementBackend`,
+  id `ngram-nn@1`): exact context recall → **idf-weighted token-overlap
+  nearest-neighbour** generalization → global prior fallback → `none`. No RNG, no
+  clock, deterministic lexical tie-break, so cloud/CI runs are reproducible. Plus
+  `rolloutMovements` for autoregressive replay of a learned action chain.
+- **`synthetic.ts`** — deterministic synthetic trajectory generator
+  (`generateSyntheticTrajectories`, `mailComposeFlow`) with `{v}` variant
+  substitution, and `evaluateMovementModel` — the **generalization eval harness**
+  that scores next-action accuracy on held-out variants, broken down by
+  exact/generalized/prior.
+- Barrel exports added to `src/index.ts`.
+- **23 new tests** covering featurization, exact recall, generalization to unseen
+  variants, prior/none fallbacks, serialize round-trip, rollout, and the eval
+  harness (train on `[compose,reply,archive,flag]`, recover the shared terminal
+  `tap:send` on wholly unseen variants `forward`/`snooze`/`pin`).
+
+**Bugs caught while building (both would have been silent nondeterminism):**
+1. My two `actionKey`/`parseActionKey` space separators were written as **NUL
+   bytes** — the model would key actions on `\x00`. Caught by a byte-scan +
+   assertion; replaced with real spaces.
+2. `buildTrajectorySpan` stamps `createdAt` from the **wall clock**, so two
+   generator calls straddling a millisecond boundary produced unequal trajectories
+   (passed in isolation, flaked only under full-suite load). Fixed by stamping a
+   deterministic `createdAt` derived from the flow timestamps — synthetic data is
+   now byte-identical across calls.
+
+**Test results:** `npm test` **197/197 passing, 2/2 consecutive runs green** (was
+174; +23). `npm run build` ✅. `npm run typecheck:src` ✅ (exit 0, source stays
+clean). Full `tsc` **125** (unchanged — my 7 new files add 0 errors).
+
+**New idea:** add a **`hybrid` backend** that consults a real on-device model
+(when present) and falls back to this deterministic n-gram policy when confidence
+is low or the model is unavailable — giving graceful degradation and an always-on
+baseline. Bigger: a **capture→dataset→train→rollout→replay round-trip integration
+test** that drives a synthetic OS/device event stream through the *real* recorder +
+consent store (not just hand-built spans), proving the whole objective-#2 pipeline
+end to end. Also: reward-weighted eval (weight accuracy by trajectory reward) so
+the harness measures *useful* movement recall, not just raw next-token hits.
+
+---
+
 ## 2026-07-25 (run 9) — 🔴→🟢 Eliminated background-task test flakiness (verification gate restored)
 
 **Audited:** The verification gate itself. On a clean checkout `npm test` was
