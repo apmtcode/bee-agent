@@ -6,6 +6,70 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-26 (run 10) — 🧠 Movement-model backend: the first *learnable* model (objective #2 pieces c + d)
+
+**Audited:** The local-movement learning subsystem (`src/capture/` + `src/training/`)
+against standing objective #2's five pieces. Runs 2–9 were all typecheck-debt
+paydown; objective #2 had been untouched since the scaffolding landed. Inventory:
+capture (recorder + device/os/browser adapters + consent + ingestion) ✅, event
+schema (`trajectory.ts`) ✅, dataset/export (`exporter.ts`) ✅, replay
+(`replay.ts`) ✅, training **plan/launch-script** runner (`runner.ts`) ✅ — **but
+piece (c) "post-train a model to *repeat* recorded movements" and (d) "*generalize*
+to new related movements" were entirely absent.** `runner.ts` only emits a MLX/
+axolotl shell command + launch script; it produces no in-process model, can't run
+in the cloud, and nothing tests that a learned policy actually reproduces a
+movement. This is the single biggest capability gap in the subsystem.
+
+**Changed (additive — two new files, one barrel edit; no existing code touched):**
+- **`src/training/movement-model.ts`** — the missing learnable layer, dependency-free
+  and fully deterministic so it stays green in cloud/CI:
+  - `MovementModelBackend` interface = the **pluggable backend seam** (the roadmap's
+    queued item). A real on-device small model drops in behind the same interface;
+    the reference/mock backend ships now.
+  - `tokenizeAction` / `tokenizeObservation` — turn trajectory actions (gesture,
+    direction, target metadata) and window/app observations into stable movement
+    tokens (e.g. `device:swipe:up:photo-grid`). Reads both the `gesture` and the
+    device-adapter's `kind` metadata keys.
+  - `buildMovementDataset(trajectories, {includeObservations?})` — assembles a
+    model-ready `MovementDataset` (ts-ordered token sequences + sorted vocabulary)
+    from `TrajectorySpan[]`; can interleave window-context observations.
+  - `NgramMovementModelBackend` — a Katz-style **backoff n-gram** policy. Full-order
+    context match ⇒ **exact recall** of recorded movements (piece c, *repeat*);
+    unseen full context ⇒ shorter-suffix **backoff** ⇒ plausible related movement
+    (piece d, *generalize*). Zero randomness: ties break by count then token name,
+    so identical input ⇒ identical output.
+  - `MOVEMENT_END` sentinel — training records where sequences terminate, so
+    `generate()` stops instead of looping and the unigram fallback prefers "stop
+    here" over hallucinating a random action for a truly novel context.
+  - `generate(seed, {steps, stopToken?})` rolls a seed forward into a full predicted
+    movement sequence; `loadMovementModel(json)` rehydrates without retraining.
+  - `evaluateMovementModel(model, heldOut)` — the **generalization eval harness**
+    (also queued): next-movement accuracy on held-out sequences, with a
+    `generalizedCorrect` counter for hits that required a backoff (real
+    generalization, not memorized recall).
+- **`src/training/movement-model.test.ts`** — 15 tests: tokenization (structured +
+  summary-fallback + `kind` key), dataset ordering/vocab/observation-interleave,
+  **exact repeat**, **backoff generalization** (novel prefix, shared suffix →
+  correct next movement), tie-determinism, empty-model safety, stop-token +
+  end-sentinel halting, serialization round-trip, and eval scoring.
+- **`src/index.ts`** — exported the new surface.
+
+**Test results:** `npm test` **189/189** (was 174; +15), **2/2 consecutive green**.
+`npm run typecheck:src` ✅ (exit 0, source stays clean). `npm run build` ✅. Full
+`tsc` **125** (unchanged — the new files, incl. the test, typecheck clean; no
+regression).
+
+**New idea:** now that a model can *repeat* and *generalize* movements, close the
+loop — a **replay→act bridge** that takes a `generate()`d token sequence and drives
+it back through the existing replay/execution surface (mapping tokens → concrete
+device gestures via the adapters), so a trained policy can actually *perform* a
+new-but-related task end-to-end in simulation. Pair it with a **synthetic
+event-stream generator** (queued) that emits parametric trajectories (e.g. "compose
+mail in app X") so the generalization harness can measure fidelity on held-out
+*parameterizations*, not just held-out orderings — the true test of piece (d).
+
+---
+
 ## 2026-07-25 (run 9) — 🔴→🟢 Eliminated background-task test flakiness (verification gate restored)
 
 **Audited:** The verification gate itself. On a clean checkout `npm test` was

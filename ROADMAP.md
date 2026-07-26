@@ -71,16 +71,31 @@ unchecked items are queued. Keep this richer than you found it each run.
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
 (exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
-      objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
-      deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+- [x] Inventory what `src/capture` + `src/training` already implement vs. the
+      objective's five pieces (2026-07-26, run 10). Gap found: pieces (c) *repeat*
+      and (d) *generalize* were absent — `runner.ts` only emitted a MLX/axolotl
+      launch script, no in-process learnable model.
+- [x] **Pluggable local-model backend interface + deterministic mock backend**
+      (2026-07-26, run 10) — `src/training/movement-model.ts`:
+      `MovementModelBackend` interface (the pluggable seam) +
+      `NgramMovementModelBackend` (Katz-style backoff: exact recall = *repeat*,
+      suffix backoff = *generalize*). Fully deterministic, cloud/CI-green. A real
+      on-device small model drops in behind the same interface.
+- [x] **Generalization eval harness** (2026-07-26, run 10) —
+      `evaluateMovementModel` scores next-movement accuracy on held-out sequences
+      with a `generalizedCorrect` counter for backoff (non-memorized) hits.
+- [ ] **Replay→act bridge**: map a `generate()`d movement token sequence back to
+      concrete device gestures via the adapters and drive it through the replay/
+      execution surface, so a trained policy can *perform* a new-but-related task
+      end-to-end in simulation.
+- [ ] Synthetic event-stream generator: emit *parametric* trajectories (e.g.
+      "compose mail in app X") so the generalization harness measures fidelity on
+      held-out parameterizations, not just held-out orderings (the true piece-(d)
+      test), and to validate capture→dataset→replay round-trips without real OS
+      input.
+- [ ] Alternative movement backends behind `MovementModelBackend`: a smoothed /
+      interpolated n-gram (Kneser–Ney) and a tiny embedding-nearest-neighbour
+      policy, compared on the eval harness — proves the seam is truly pluggable.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
