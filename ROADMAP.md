@@ -71,16 +71,36 @@ unchecked items are queued. Keep this richer than you found it each run.
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
 (exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
-      objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
-      deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+- [x] Inventory what `src/capture` + `src/training` already implement vs. the
+      objective's five pieces (2026-07-26, run 10). Findings: capture (recorder,
+      os/device/browser adapters, consent), schema (`TrajectorySpan`), dataset
+      (reviewed export manifest) and replay (`ReplayManifest`) existed; the
+      **train/infer** piece was only *plan generation* (mlx/axolotl launch
+      scripts) — no cloud-runnable policy model. That gap is now filled ↓.
+- [x] Pluggable local-model backend interface with a deterministic mock backend
+      (2026-07-26, run 10) — `MovementPolicyBackend<Model>` +
+      `NgramMovementPolicyBackend` (variable-order Markov + backoff) in
+      `src/training/movement-policy.ts`. Repeats seen contexts verbatim,
+      generalizes novel ones via backoff. Documented seam for a real on-device
+      small model.
+- [x] Synthetic event-stream generator to validate the loop without real OS
+      input (2026-07-26, run 10) — `generateSyntheticMovementDataset` (seeded
+      mulberry32, whole-motif concatenation).
+- [x] Generalization eval harness (2026-07-26, run 10) — `evaluateMovementPolicy`
+      splits accuracy into seen-context (repeat) vs novel-context (generalize)
+      buckets + mean confidence; backend-agnostic.
+- [ ] **Replay-guard**: in `ReplayRuntimeService`, ask the trained policy for the
+      expected next move before re-executing a recorded action; flag a step as
+      *drifted* when the actual move diverges from a high-confidence prediction or
+      forced a deep backoff, and require re-confirmation. Turns the learned model
+      into a live safety check on automated replay (catches a UI that changed).
+- [ ] **Online/incremental training loop**: incrementally fold each newly-approved
+      trajectory into the n-gram counts (already additive + serializable) so the
+      local policy improves continuously without a full retrain; persist the model
+      via a `MovementModelStore`.
+- [ ] Richer movement tokenizer: fold coarse action metadata (target region,
+      key/gesture) into the token so the policy captures *what* not just *which
+      tool*, and can generalize across similar targets.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

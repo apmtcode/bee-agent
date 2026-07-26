@@ -425,6 +425,24 @@ export type {
 export {
   FileTrainingJobStore,
 } from "./training/job-store.js";
+export {
+  NgramMovementPolicyBackend,
+  buildMovementDataset,
+  evaluateMovementPolicy,
+  generateSyntheticMovementDataset,
+  movementSequenceFromReplay,
+  movementSequenceFromTrajectory,
+  type MovementCandidate,
+  type MovementDataset,
+  type MovementEvalBucket,
+  type MovementEvalResult,
+  type MovementPolicyBackend,
+  type MovementPrediction,
+  type MovementSequence,
+  type MovementToken,
+  type NgramMovementModel,
+  type TrainMovementPolicyOptions,
+} from "./training/movement-policy.js";
 export type {
   CompleteTrainingJobParams,
   CreateTrainingJobParams,

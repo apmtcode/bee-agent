@@ -6,6 +6,70 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-26 (run 10) — 🧠 Movement-policy learning: pluggable local backend + deterministic n-gram model + generalization eval
+
+**Audited:** The local-movement learning subsystem (standing objective #2)
+against what `src/capture/` + `src/training/` actually implement. Found the
+pipeline covers capture → reviewed export → *training-plan generation*
+(`runner.ts` emits mlx/axolotl launch scripts for on-device execution), but the
+**heart of objective #2(d) was entirely missing**: there was no in-process,
+cloud-safe *policy model* that trains on recorded movements, **repeats** them,
+and **generalizes** to related ones. The runner only produces shell scripts that
+run on the user's machine — nothing the engine can train and evaluate in the
+cloud to validate the learn→repeat→generalize loop. This is the exact gap the
+roadmap queued as "pluggable local-model backend + deterministic mock backend"
+and "generalization eval harness."
+
+**Changed (additive; new module `src/training/movement-policy.ts`):**
+- **`MovementPolicyBackend<Model>` interface** — the pluggable seam: `train(dataset)`,
+  `predict(model, context)`, `hasContext(model, context)`. A real on-device small
+  model (mlx-trained policy) can drop in behind this contract without touching
+  callers.
+- **`NgramMovementPolicyBackend`** — a deterministic reference/mock backend: a
+  variable-order Markov chain with stupid-backoff. For a **seen** full-order
+  context it reproduces the recorded next movement verbatim (repeat, `fromBackoff:
+  false`); for a **novel** context it backs off to the longest shared shorter
+  context, and finally to the global next-move frequency (generalize,
+  `fromBackoff: true`, `contextOrder` reports the backoff depth). Serializable,
+  deterministic tie-break (count desc, then token asc).
+- **Dataset extraction** from the existing schema: `movementSequenceFromTrajectory`
+  (honors review redactions so only reviewed movements train), `buildMovementDataset`,
+  and `movementSequenceFromReplay` (pulls action tokens off a `ReplayManifest`).
+- **`evaluateMovementPolicy`** — generalization eval harness that splits next-move
+  accuracy into **seen-context** (repeat fidelity) and **novel-context**
+  (generalization) buckets, plus mean confidence, so the two capabilities are
+  tracked independently. Backend-agnostic (a trivial constant backend is used in a
+  test to prove it).
+- **`generateSyntheticMovementDataset`** — seeded (mulberry32, no `Math.random`)
+  synthetic movement-stream generator: sequences are concatenations of whole
+  disjoint-token "motifs" (reusable UI sub-routines), giving strong repeatable
+  intra-motif structure plus novel boundary recombinations — validating the
+  capture→train→replay loop with zero real-OS access, exactly as the objective
+  requires in the cloud.
+- Exported all of the above from `src/index.ts`.
+
+**Test results:** new `movement-policy.test.ts` (12 tests) covering extraction,
+redaction-honoring, exact-repeat, backoff-generalization, unigram fallback,
+deterministic ranking, empty-model, seeded-determinism, motif learning (measured
+seen-context acc **0.89**, overall **0.89**, novel-context acc **0.90** on the
+pinned seeds — margins well clear of thresholds and stable across 3 back-to-back
+runs), and backend-pluggability. `npm test` **174 → 186/186**. `npm run build`
+✅. `npm run typecheck:src` ✅ (source stays clean).
+
+**New idea:** now that a policy can *predict* the next movement with a confidence
+and a backoff depth, wire a **replay-guard** into `ReplayRuntimeService`: before
+re-executing a recorded action during replay, ask the trained policy for the
+expected next move; if the actual move diverges from a high-confidence prediction
+(or the context forced a deep backoff), flag the step as *drifted* and require
+re-confirmation. That turns the learned model into a live safety check on
+automated replay — catching a UI that changed under the recording — rather than
+only an offline eval. Bigger: an **online/aggregation training loop** where each
+newly-approved trajectory incrementally updates the n-gram counts (the model is
+already additive/serializable), so the local policy improves continuously without
+a full retrain.
+
+---
+
 ## 2026-07-25 (run 9) — 🔴→🟢 Eliminated background-task test flakiness (verification gate restored)
 
 **Audited:** The verification gate itself. On a clean checkout `npm test` was
