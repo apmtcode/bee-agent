@@ -74,13 +74,25 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
-      deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+- [x] **Pluggable local-model backend interface** with a deterministic mock
+      backend (2026-07-26, run 10) — `src/training/movement-policy.ts`:
+      `MovementPolicyBackend` + registry + default `NGramMovementBackend`.
+      Trains/infers fully in-cloud; documented seam
+      (`registerMovementPolicyBackend`) for a real on-device small model.
+- [~] Synthetic event-stream generator to validate capture→dataset→replay
+      round-trips. Run 10 validates train→infer→replay with synthetic movement
+      sequences in tests; a *reusable* generator helper (parametric noise,
+      branching) is still worth extracting.
+- [x] **Generalization eval harness** (2026-07-26, run 10) —
+      `evaluateNextMovementAccuracy` measures next-movement accuracy on held-out
+      sequences; `rolloutMovements` reproduces/extends recorded movements.
+- [ ] Wire the n-gram policy into `LocalAppleSiliconTrainingRunner` as a
+      pre-flight dry-run: train on the reviewed export's replay events, record
+      next-movement accuracy into the job manifest as a *trainability signal*,
+      and gate degenerate datasets before a human spends GPU hours.
+- [ ] Extract a reusable synthetic movement-stream generator (branching paths,
+      target families, injectable noise) to stress the policy backends and feed
+      the eval harness.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

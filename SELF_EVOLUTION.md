@@ -6,6 +6,59 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-26 (run 10) — 🧠 In-cloud trainable movement-policy backend (objective #2 train/infer)
+
+**Audited:** The local-movement learning subsystem (standing objective #2)
+against its five required pieces — capture → schema → dataset → replay →
+**train/infer**. `src/capture/` covers capture/schema/dataset/replay and
+`src/training/` (exporter, job-store, runner) covers dataset export and
+**launch-script generation** for real on-device MLX/Axolotl training. The gap:
+pieces (c) *post-train a model to repeat recorded movements* and (d)
+*generalize to new-but-related movements* had **no in-cloud implementation** —
+the runner only emits a bash script for a real Apple-Silicon box, so the
+train→infer→replay loop could never be exercised or tested in the cloud, and
+there was no pluggable model backend (the objective explicitly asks for one).
+
+**Changed (additive, pure — no OS/GPU/fs deps):** new
+`src/training/movement-policy.ts` + full test suite:
+- **Pluggable backend interface** `MovementPolicyBackend` (`train`/`predictNext`)
+  with a registry (`createMovementPolicyBackend` / `registerMovementPolicyBackend`
+  / `listMovementPolicyBackends`) — the documented seam for a real on-device
+  small model; the deterministic **n-gram backend** ships as the default/mock.
+- **Movement schema + tokenization**: `MovementToken` (tool/gesture/target/
+  direction) normalized from captured `TrajectoryAction`s
+  (`movementTokenFromAction`, `extractMovementSequence`,
+  `movementSequenceFromReplayEvents`), with a full-fidelity `movementKey` and a
+  target-agnostic `movementFeatureKey` that is the basis for generalization.
+- **`NGramMovementBackend`**: learns transition counts up to `maxOrder`, plus a
+  parallel *feature* (target-dropped) model. `predictNext` does exact
+  token-sequence backoff (→ **repeats** recorded movements faithfully), then
+  coarse feature backoff (→ **generalizes** to new-but-related movements it never
+  saw in that exact context, flagged `generalized:true`), then a global
+  most-frequent fallback. Learns an end sentinel (`MOVEMENT_END`) so rollouts
+  stop. JSON-serializable model + `loadMovementPolicyModel` round-trip guard.
+- **`rolloutMovements`** (autoregressive replay/extend, capped to avoid loops)
+  and **`evaluateNextMovementAccuracy`** (the generalization eval harness the
+  roadmap asked for) — both validated with **synthetic** movement streams.
+- Exported the whole surface from `src/index.ts`.
+
+**Test results:** `movement-policy.test.ts` **19/19** (memorized-sequence exact
+replay, target generalization across rows, stop-learning, empty-model, registry,
+persistence round-trip). Full suite **174 → 193/193**, green on **2/2**
+consecutive runs (flake sentinel). `npm run build` ✅. `typecheck:src` ✅ (source
+stays clean). Full `tsc` **125** (unchanged — new files contribute 0 errors).
+
+**New idea:** wire this backend into `LocalAppleSiliconTrainingRunner` as a
+**pre-flight "dry-run" evaluator** — before emitting the MLX/Axolotl launch
+script, train the n-gram policy on the reviewed export's replay events and
+compute next-movement accuracy, writing it into the job manifest as a cheap
+*trainability signal* (is this dataset even learnable? does it just memorize?).
+That turns the eval harness into a gate that catches degenerate datasets before
+a human spends GPU hours, and gives the real neural backend a deterministic
+baseline to beat.
+
+---
+
 ## 2026-07-25 (run 9) — 🔴→🟢 Eliminated background-task test flakiness (verification gate restored)
 
 **Audited:** The verification gate itself. On a clean checkout `npm test` was
