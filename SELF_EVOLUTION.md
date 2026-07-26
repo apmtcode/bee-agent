@@ -6,6 +6,59 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-26 (run 10) — 🧠 In-process trainable movement model (objective #2: train + generalize)
+
+**Audited:** The local-movement learning subsystem (standing objective #2) against
+its five required pieces — capture → schema → dataset → replay → **train/infer**.
+`src/capture/` covers capture/schema/replay and `src/training/{exporter,runner}.ts`
+covers reviewed-export + external-training *planning*. But the runner only emits
+mlx/axolotl **shell plans** that require a real Apple-Silicon machine — so pieces
+**(c) post-train a local model** and **(d) generalize to new movements** had **no
+in-process, cloud-testable implementation at all**. That gap is exactly the
+roadmap's "pluggable local-model backend with a deterministic mock backend" +
+"generalization eval harness" items.
+
+**Changed (additive — one new source module + tests, no existing code touched):**
+- `src/training/movement-model.ts`:
+  - **Pluggable backend seam** `MovementModelBackend` (`train(dataset, config) →
+    TrainedMovementModel`) so a real on-device small model can drop in behind the
+    same interface as the reference backend.
+  - **`NgramMovementBackend`** — a deterministic n-gram sequence model with
+    Katz-style **backoff**. Trains fully in-process (no deps, no GPU, no
+    randomness), so identical dataset ⇒ identical serialized model. It (c)
+    **repeats** learned motifs (`generate()` rolls out the recorded sequence and
+    terminates on a learned `<end>`) and (d) **generalizes** to novel-but-related
+    prefixes by backing off to the longest previously-seen context suffix.
+  - **Dataset builders** `buildMovementDataset(trajectories)` /
+    `buildMovementDatasetFromReplays(manifests)` + `movementTokenFromAction()`
+    that normalizes recorded gestures into stable structured tokens
+    (`device/swipe/down`), tying capture-schema → dataset.
+  - **Persistence** `toJSON()` / `loadMovementModel()` (post-trained model is
+    saveable/reloadable), and **`evaluateMovementModel()`** — the generalization
+    eval harness: reports next-token accuracy, mean log-prob, and a
+    **generalizationRate** (share of correct predictions that required backoff,
+    i.e. were generalized rather than memorized).
+- `src/training/movement-model.test.ts`: 12 tests incl. a **synthetic
+  event-stream generator** (motif trajectories) validating the full
+  capture→dataset→train→repeat→generalize→persist round-trip with no real OS
+  input. Determinism, end-sentinel prediction, backoff-generalization, and eval
+  fidelity all asserted.
+- `src/index.ts`: exported the new surface.
+
+**Test results:** `npm test` **174 → 186** passing (+12), **2/2 consecutive runs
+green** (flake sentinel). `npm run typecheck:src` ✅ (exit 0, source stays clean).
+`npm run build` ✅. Full `tsc` **125** (unchanged — new files add 0 errors).
+
+**New idea:** wire this backend into the training *runner* as a selectable
+`runtime: "ngram-local"` so the existing job-store/execution-service lifecycle can
+drive an in-process train→eval→persist run end-to-end (today they only orchestrate
+external mlx/axolotl shell jobs). That would give bee-agent a **complete local
+train+infer loop that actually executes in CI**, and a baseline the real
+on-device model must beat on the `evaluateMovementModel` metrics — turning the
+eval harness into a regression gate for model quality, not just code correctness.
+
+---
+
 ## 2026-07-25 (run 9) — 🔴→🟢 Eliminated background-task test flakiness (verification gate restored)
 
 **Audited:** The verification gate itself. On a clean checkout `npm test` was

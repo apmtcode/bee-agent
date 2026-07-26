@@ -71,16 +71,28 @@ unchecked items are queued. Keep this richer than you found it each run.
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
 (exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
-      objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
-      deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+- [x] Inventory what `src/capture` + `src/training` already implement vs. the
+      objective's five pieces (2026-07-26, run 10). Gap found: capture/schema/replay
+      + external-training *planning* existed, but pieces **(c) train** and **(d)
+      generalize** had no in-process/cloud-testable implementation — the runner
+      only emits mlx/axolotl shell plans needing a real machine.
+- [x] Pluggable local-model backend interface for the training runner with a
+      deterministic mock backend (2026-07-26, run 10) — `MovementModelBackend`
+      seam + `NgramMovementBackend` (deterministic n-gram w/ Katz backoff) in
+      `src/training/movement-model.ts`. Documented seam for a real on-device model.
+- [x] Synthetic event-stream generator to validate capture→dataset→replay
+      round-trips without real OS input (2026-07-26, run 10) — motif-trajectory
+      generator in `movement-model.test.ts` drives the full
+      capture→dataset→train→repeat→generalize→persist loop.
+- [x] Generalization eval harness (2026-07-26, run 10) — `evaluateMovementModel`
+      reports next-token accuracy, mean log-prob, and a `generalizationRate`
+      (share of correct predictions that came from backoff, i.e. generalized).
+- [ ] **Wire `NgramMovementBackend` into the training runner** as a selectable
+      `runtime: "ngram-local"` so the job-store/execution-service lifecycle can
+      drive a complete in-process train→eval→persist run in CI (today it only
+      orchestrates external mlx/axolotl shell jobs). Use `evaluateMovementModel`
+      as both a baseline the real on-device model must beat and a model-quality
+      regression gate.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
