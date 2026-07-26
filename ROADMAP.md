@@ -74,13 +74,25 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
-      deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+- [x] **Pluggable local-model backend interface** for training with a
+      deterministic reference backend — DONE run 10 (`src/training/movement-model.ts`:
+      `MovementModelBackend` + `NGramMovementBackend` with backoff + feature
+      generalization layer, serializable artifacts, `rolloutMovements` inference,
+      and schema adapters). A real on-device small model = implement the interface.
+- [x] **Synthetic event-stream generator** to validate the train→infer loop
+      without real OS input — DONE run 10 (`generateSyntheticMovementCorpus`,
+      mulberry32-seeded/deterministic, in `src/training/movement-eval.ts`).
+- [x] **Generalization eval harness**: measure replay fidelity on held-out but
+      related synthetic sequences vs a majority-class baseline — DONE run 10
+      (`evaluateMovementFidelity` + `splitMovementDataset`).
+- [ ] **Close the learning loop**: have `exporter.ts` emit a
+      `movement-dataset.json` (`MovementDataset` format) in the reviewed export,
+      and have `runner.ts` train `NGramMovementBackend` as a fast local
+      pre-flight whose fidelity report gates whether the expensive mlx/axolotl
+      job is worth launching.
+- [ ] **Second movement backend** (embedding-KNN / tiny logistic over movement
+      features) behind the same `MovementModelBackend` interface, plus an A/B in
+      the eval harness to pick the best backend per dataset.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

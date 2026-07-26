@@ -6,6 +6,59 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-26 (run 10) — 🧠 In-process movement-learning backend: train → infer → generalize (objective #2 core)
+
+**Audited:** The local-movement learning subsystem (standing objective #2) and
+`src/training/`. Found the critical gap: `runner.ts` only *shells out* to
+mlx/axolotl to produce a training plan + launch script — there was **no
+in-process model backend at all**. So objective #2(c)/(d) ("post-train a local
+model to *repeat* the recorded movements, and *generalize* to new but related
+movements") could not be exercised, tested, or demonstrated in the cloud. The
+whole learning loop terminated at "write a shell script"; nothing actually
+learned from a movement dataset or predicted a next movement.
+
+**Changed (additive — two new source modules + barrel exports, zero edits to
+existing behaviour):**
+- `src/training/movement-model.ts`: a **pluggable movement-model backend
+  interface** (`MovementModelBackend`) plus a deterministic reference backend
+  (`NGramMovementBackend`) — a variable-order n-gram model with stupid backoff
+  **and a feature-conditioned generalization layer**. It exactly reproduces
+  recorded movement sequences (longest exact-context match), and for
+  *unseen-but-related* contexts backs off to the app+channel feature
+  distribution, then the global prior — so it always emits a calibrated
+  prediction with a `level` tag (`ngram-<k>` / `feature` / `prior` / `empty`).
+  Artifacts are plain serializable JSON (persist next to reviewed exports,
+  reload without the backend instance). Includes `rolloutMovements` (greedy
+  inference) and adapters from the existing schemas
+  (`movementsFromReplayEvents`, `movementFromDeviceInput`). Swapping in a real
+  on-device small model = implement the one interface.
+- `src/training/movement-eval.ts`: a **deterministic synthetic event-stream
+  generator** (mulberry32-seeded, no `Math.random` nondeterminism in the
+  corpus) that stands in for real OS recordings, plus a train/test splitter and
+  a **generalization eval harness** (`evaluateMovementFidelity`) that scores
+  next-movement replay fidelity on held-out sequences and reports the
+  **majority-class baseline** alongside, so "it generalizes" is a measured
+  claim, not a vibe.
+
+**Test results:** `npm test` **174 → 188 passing** (+14: 11 model, 3 eval),
+**green on 2/2 consecutive runs**. `npm run build` ✅. `npm run typecheck:src` ✅
+(exit 0 — source stays clean). Key assertions: exact recorded sequence
+reproduced via rollout; unseen `scroll:up` context still predicts the right next
+movement via the feature layer; on a 60-sequence synthetic corpus held-out
+accuracy **> baseline + 0.20 and > 0.6** with real ngram hits on held-out data.
+
+**New idea:** now that a movement dataset can be *scored*, close the loop by
+having the reviewed-export path (`exporter.ts`) emit a `movement-dataset.json`
+in the canonical `MovementDataset` format and have `runner.ts` train the
+reference backend as a **fast local pre-flight** — producing a fidelity report
+that gates whether the expensive mlx/axolotl job is even worth launching (skip
+training a dataset the reference model already can't learn). Bigger: a
+**second backend** (e.g. a tiny logistic/embedding-KNN over movement features)
+behind the same interface, and an A/B in the eval harness to pick the backend
+per dataset — the pluggability is now real, so this is a drop-in.
+
+---
+
 ## 2026-07-25 (run 9) — 🔴→🟢 Eliminated background-task test flakiness (verification gate restored)
 
 **Audited:** The verification gate itself. On a clean checkout `npm test` was
