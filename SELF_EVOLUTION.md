@@ -6,6 +6,68 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-26 (run 10) — 🧠 In-process movement-learning model: train → repeat → generalize (objective 2c/2d)
+
+**Audited:** Standing objective #2 (local-movement learning subsystem) and
+`src/training/`. Runs 2–9 were entirely toolchain/typecheck/flake hardening; the
+*model* half of the objective was untouched. Found the pipeline goes
+capture → trajectory → reviewed export → `runner.ts` **but the runner only emits
+MLX/axolotl launch shell scripts** — real on-device trainers that never run in
+the cloud. So bee-agent had **no in-process, testable model** that actually
+learns from recorded movements to (c) repeat and (d) generalize them. That is the
+single biggest capability gap in the whole subsystem and the exact thing the
+objective says to build with simulated event streams.
+
+**Changed (additive, new module `src/training/movement-model.ts`, 0 edits to
+existing behaviour):** a pluggable, fully deterministic movement-learning model:
+- **`MovementModelBackend` interface** (pluggable seam) + default
+  **`MarkovMovementBackend`** — a variable-order Markov policy with **Katz-style
+  backoff**. High-order context reproduces recorded movements *exactly*
+  (**repeat**, 2c); an unseen high-order context backs off to shorter contexts,
+  which is where **generalization to related movements** comes from (2d). A
+  `resolveMovementBackend(id)` registry is the documented seam for a real
+  on-device small model.
+- **Deterministic by construction:** argmax with a lexicographic tie-break, a
+  seeded LCG for synthesis, no `Math.random`/`Date.now` — so tests are
+  reproducible and no randomness leaks into replay.
+- **Dataset seam:** `movementSequencesFromTrajectories` /
+  `movementSequencesFromReplays` tokenize the *existing* trajectory-span and
+  reviewed-export replay shapes (collision-safe control-char separators);
+  `buildMovementDataset` adds a sorted vocabulary. Token is `tool + summary`
+  (normalized) via a pluggable `MovementTokenizer`.
+- **Inference:** `predictNext(context)` (returns token, probability, the backoff
+  order used, and ranked candidates) + `generate(prefix, steps)` greedy rollout.
+- **Persistence:** `serialize()` / `backend.load()` round-trip (stable key order).
+- **Generalization eval harness:** `evaluateMovementModel` runs teacher-forced
+  next-movement prediction over held-out sequences and reports top-1 accuracy
+  overall **and per backoff order** (so exact recall vs. generalization is
+  visible), plus exact-match-sequence count — the roadmap's eval-harness item.
+- **Synthetic event-stream generator:** `synthesizeMovementSequences` emits
+  related-but-not-identical trajectories (seeded adjacent-step swap) so the whole
+  capture→dataset→train→infer→eval loop is validated with **no real OS input** —
+  the roadmap's synthetic-generator item.
+- Exported the surface from `src/index.ts`.
+
+**Test results:** new `movement-model.test.ts` = **13 tests** covering tokenize,
+exact repeat, backoff generalization (unseen trigram → correct backed-off move),
+unigram fallback, empty-model guard, determinism, serialize/load round-trip, and
+the eval harness (perfect recall on seen data; >0.5 top-1 on perturbed held-out
+vs ~0.17 chance, with the backoff path provably exercised). `npm test`
+**187/187** (was 174; +13), **green on two consecutive runs**. `npm run build` ✅.
+`npm run typecheck:src` ✅ (source stays clean). Full `tsc` **125** (unchanged —
+no regression; the two new files are type-clean).
+
+**New idea:** wire this model into an *inference-side capability* — a
+`MovementSuggestionService` that, given a live partial trajectory, calls
+`predictNext` to propose the operator's likely next movement (an
+autocomplete/co-pilot for recorded workflows), gated behind the same consent tier
+as capture. Bigger: a **round-trip fidelity metric in the runner** — after a real
+MLX/axolotl job, load its exported policy through a `MovementModelBackend` adapter
+and run `evaluateMovementModel` against held-out reviewed trajectories, so
+on-device training quality is measured with the *same* harness the mock uses.
+
+---
+
 ## 2026-07-25 (run 9) — 🔴→🟢 Eliminated background-task test flakiness (verification gate restored)
 
 **Audited:** The verification gate itself. On a clean checkout `npm test` was

@@ -71,16 +71,31 @@ unchecked items are queued. Keep this richer than you found it each run.
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
 (exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
-      objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
-      deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+- [x] Inventory what `src/capture` + `src/training` already implement vs. the
+      objective's five pieces (2026-07-26, run 10). Found capture→trajectory→
+      reviewed-export→**launch-script** was complete, but the **train/infer** piece
+      was delegated entirely to external MLX/axolotl scripts — no in-process model.
+- [x] **Pluggable local-model backend interface with a deterministic mock**
+      (2026-07-26, run 10) — `MovementModelBackend` + `MarkovMovementBackend`
+      (variable-order Markov w/ Katz backoff) in `src/training/movement-model.ts`.
+      `resolveMovementBackend(id)` registry is the seam for a real on-device model.
+      Trains in-process, predicts (repeat, 2c) and generalizes via backoff (2d).
+- [x] **Synthetic event-stream generator** (2026-07-26, run 10) —
+      `synthesizeMovementSequences` (seeded, deterministic) emits related-but-not-
+      identical trajectories so the full loop is validated with no real OS input.
+- [x] **Generalization eval harness** (2026-07-26, run 10) —
+      `evaluateMovementModel` reports top-1 accuracy overall + per backoff order +
+      exact-match-sequence count on held-out trajectories.
+- [ ] **`MovementSuggestionService`** (inference-side capability): given a live
+      partial trajectory, call `predictNext` to propose the operator's likely next
+      movement (workflow autocomplete/co-pilot), gated behind the capture consent
+      tier. Wire it into the control-plane RPC surface.
+- [ ] **Round-trip fidelity metric in the runner**: after a real MLX/axolotl job,
+      load the exported policy through a `MovementModelBackend` adapter and run
+      `evaluateMovementModel` vs. held-out reviewed trajectories — so on-device
+      training quality is measured with the *same* harness the mock uses.
+- [ ] Richer tokenizer/backend: an n-gram+smoothing or tiny embedding backend for
+      better generalization than pure Markov backoff, behind the same interface.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
