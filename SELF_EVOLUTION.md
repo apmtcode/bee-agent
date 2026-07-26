@@ -6,6 +6,72 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-26 (run 10) — 🧠 Movement-learning model: pluggable backend + generalization (objective #2 c/d)
+
+**Audited:** Standing objective #2 (local-movement learning) against what
+`src/capture` + `src/training` actually implement. Findings: pieces (a) capture,
+(b) dataset, and the (c)/(d) *plumbing* existed — the training runner
+(`runner.ts`) only ever emits **command plans for external tools** (mlx/axolotl)
+and the execution service shells out to a launch script. There was **no
+in-process, testable model layer** — so "post-train a model to repeat recorded
+movements" and "generalize to new but related movements" (objective #2 c & d)
+could not be exercised at all in the cloud. That's the biggest on-mission gap and
+was already queued in ROADMAP (pluggable backend + synthetic generator +
+generalization eval). Recent runs (2–9) were all typecheck/flakiness debt; time
+to advance the actual movement subsystem.
+
+**Changed (additive, 3 new source modules + 3 test files, ~950 LOC, all new):**
+- `src/training/movement-model.ts` — the model layer:
+  - **Movement token schema** derived faithfully from captured actions
+    (`tokenizeAction` reads gesture metadata / falls back to the summary lead
+    word; `tokenizeReplayEvent` for replay streams) + `buildMovementDataset`
+    (time-ordered per-trajectory action sequences).
+  - **Pluggable backend interface** `MovementModelBackend`/`MovementModel` and a
+    `MovementBackendRegistry` — the documented seam so a real on-device small
+    model (MLX/llama.cpp) drops in by name without touching callers.
+  - **`MarkovMovementBackend`** — a deterministic, dependency-free reference
+    backend that actually **learns** next-movement distributions at every order
+    1..N with a **dual concrete/abstract index** and **abstraction backoff**
+    (concrete → target-agnostic → unigram). A **start-of-sequence anchor** makes
+    the first movement predictable and gives free rollouts a real seed. This is
+    what lets a model trained on one target set *perform the same movements
+    against targets it never saw*. Snapshot serialize/`fromSnapshot` so a trained
+    model persists and reloads on-device.
+- `src/training/synthetic-movements.ts` — seedable synthetic stream generator
+  (`mulberry32` PRNG, no `Math.random`) that emits byte-stable `TrajectorySpan`s
+  from small **movement grammars** (`FORM_FILL_GRAMMAR`, `NAV_MENU_GRAMMAR`).
+  `withNovelTargets` builds a structurally-identical held-out set with a disjoint
+  target pool — the generalization case. Validates capture→dataset→replay with
+  **no real OS input** (the cloud constraint).
+- `src/training/generalization-eval.ts` — eval harness: teacher-forced
+  **next-action accuracy** (structural tool+action vs exact incl. target, plus an
+  `abstractionRate` showing how often the generalization path fired) and free
+  **replay fidelity** via normalized-LCS rollout overlap.
+- Barrel exports for all three in `src/index.ts`.
+
+**Headline result (proven by tests):** train on `FORM_FILL_GRAMMAR`, evaluate on
+`withNovelTargets(FORM_FILL_GRAMMAR)` — **structuralAccuracy = 1.0** (every
+movement predicted correctly against brand-new targets), `abstractionRate > 0`
+(it used the backoff path), and **exactAccuracy = 0.0** (an *honest* signal:
+novel concrete targets aren't memorized, only the movement structure transfers).
+On the training distribution: structural = 1.0, replay-fidelity overlap > 0.7.
+
+**Test results:** `npm test` **199/199** (was 174; +25 new), green on **2/2**
+consecutive runs (flake sentinel). `npm run build` ✅. `typecheck:src` ✅ (exit
+0 — source stays clean). Full `tsc` **125** (unchanged; **0** errors in the 3 new
+modules or their tests).
+
+**New idea:** add an **online/continual increment** to the model — an
+`update(sequence)` method on `MovementModel` that folds a freshly-captured
+trajectory into the counts without a full retrain, so bee-agent learns a new
+movement the moment the user demonstrates it (few-shot on-device adaptation).
+Pair it with a **confidence-gated executor** that only auto-replays a predicted
+movement when `prediction.confidence` and `orderUsed` clear a threshold, and asks
+for confirmation (or records a fresh demo) otherwise — closing the
+capture→learn→act→capture loop safely.
+
+---
+
 ## 2026-07-25 (run 9) — 🔴→🟢 Eliminated background-task test flakiness (verification gate restored)
 
 **Audited:** The verification gate itself. On a clean checkout `npm test` was

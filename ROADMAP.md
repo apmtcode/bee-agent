@@ -70,17 +70,37 @@ unchecked items are queued. Keep this richer than you found it each run.
 ## Local-movement learning subsystem
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
-(exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
-      objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
-      deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+(exporter, job store/manifest, runner, execution service, **movement-model**,
+**synthetic-movements**, **generalization-eval**). Next increments:
+- [x] Inventory `src/capture` + `src/training` vs. the objective's five pieces
+      (2026-07-26, run 10). Gap found: (a) capture, (b) dataset, and the (c)/(d)
+      *plumbing* existed, but the runner only emitted external-tool command plans
+      — there was no in-process model layer, so learn/generalize were untestable
+      in the cloud. Addressed below.
+- [x] **Pluggable local-model backend interface + deterministic reference
+      backend** (2026-07-26, run 10). `MovementModelBackend`/`MovementModel` +
+      `MovementBackendRegistry` in `src/training/movement-model.ts`;
+      `MarkovMovementBackend` learns next-movement distributions with
+      concrete/abstract dual-index backoff + start anchor + snapshot
+      persistence. Documented seam for a real on-device model (register by name).
+- [x] **Synthetic event-stream generator** (2026-07-26, run 10).
+      `src/training/synthetic-movements.ts`: seeded mulberry32 PRNG,
+      grammar-based byte-stable trajectory generation, `withNovelTargets` for
+      held-out sets. Validates capture→dataset→replay with no real OS input.
+- [x] **Generalization eval harness** (2026-07-26, run 10).
+      `src/training/generalization-eval.ts`: teacher-forced next-action accuracy
+      (structural vs exact + abstractionRate) and free-rollout replay fidelity
+      (normalized LCS). Held-out novel-target eval hits structuralAccuracy = 1.0.
+- [ ] **Online/continual `update(sequence)`** on `MovementModel`: fold a freshly
+      captured trajectory into the counts without a full retrain (few-shot
+      on-device adaptation the moment the user demonstrates a new movement).
+- [ ] **Confidence-gated movement executor**: auto-replay a predicted movement
+      only when `prediction.confidence`/`orderUsed` clear a threshold; otherwise
+      ask for confirmation or record a fresh demo — closes the
+      capture→learn→act→capture loop safely.
+- [ ] Wire the movement model into the training runner/execution-service so a
+      reviewed export can `train` an in-process model artifact (snapshot) as a
+      cloud-runnable alternative to the external mlx/axolotl command plan.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
