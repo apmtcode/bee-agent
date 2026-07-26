@@ -71,16 +71,32 @@ unchecked items are queued. Keep this richer than you found it each run.
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
 (exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
-      objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
-      deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+- [x] Inventory what `src/capture` + `src/training` already implement vs. the
+      objective's five pieces (2026-07-26, run 10) — capture→schema→dataset→
+      replay were covered; the missing piece was an in-process learn/replay/
+      generalize model. See run-10 SELF_EVOLUTION entry.
+- [x] **Pluggable local-model backend interface** with a **deterministic mock**
+      (2026-07-26, run 10) — `MovementModelBackend` + registry +
+      `MarkovMovementBackend` (order-N n-gram, backoff, no randomness) in
+      `src/training/movement-model.ts`. Real on-device backends implement the same
+      seam. Movement dataset/tokenizer in `src/training/movement-dataset.ts`.
+- [x] **Synthetic event-stream generator** (2026-07-26, run 10) —
+      `src/training/synthetic-movements.ts` (mulberry32, deterministic) emits both
+      labeled sequences and `TrajectorySpan`s via `sequenceToTrajectory`, the
+      exact inverse of the tokenizer; capture↔dataset round-trip is test-verified.
+- [x] **Generalization eval harness** (2026-07-26, run 10) —
+      `evaluateReplayFidelity` + `evaluateGeneralization` (top-1/top-k + backoff
+      rate) in `src/training/movement-trainer.ts`. Measured held-out top-k 0.91.
+- [ ] **Beam-search replay executor** over the backend (top-b cumulative
+      log-prob rollouts) with a pluggable **action guard** that vetoes any
+      candidate movement whose target hits the capture policy denylist — higher
+      fidelity + a safety interlock (never replay into a password/bank window).
+- [ ] **Second concrete backend** (frequency-weighted prefix-tree /
+      suffix-automaton) registered alongside `markov`, to prove the pluggable
+      seam with ≥2 real implementations and let the eval harness A/B them.
+- [ ] Wire a movement-model `train`/`replay`/`generalize` RPC family into the
+      control plane so the pipeline is drivable from the CLI/control surface, not
+      just the library API.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
