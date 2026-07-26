@@ -6,6 +6,68 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-26 (run 10) — 🧠 Movement-policy model: in-process train → recall → generalize (objective #2c/#2d)
+
+**Audited:** The local-movement learning subsystem (`src/capture/` + `src/training/`)
+against objective #2's five pieces (capture → schema → dataset → replay →
+**train/infer**). Runs 2–9 were all DX/typecheck/flakiness work; the movement
+subsystem's *model* half had never been built. `src/training/runner.ts` only
+emits **external** `mlx`/`axolotl` commands + a launch shell script — there was
+**no in-process, trainable model at all** (not even a mock), so objective
+#2(c) "post-train a local model to repeat the recorded movements" and #2(d)
+"generalize to new but related movements" had **zero cloud-testable
+implementation**. That was the highest-value gap: the whole train/infer stage
+was un-exercisable in CI.
+
+**Changed (additive — one new module + barrel export, no existing code touched):**
+- **`src/training/movement-policy.ts`** — a pluggable movement-policy learning
+  subsystem that runs anywhere (no GPU / no OS input):
+  - `MovementPolicyBackend` interface (`train(dataset) → model`, `load(serialized)
+    → model`) + `MovementPolicyModel` (`predict(context) → prediction`,
+    `toJSON()`), so real on-device backends drop in behind the same seam the
+    mlx/axolotl runner will eventually target.
+  - `NearestNeighborMovementBackend` (default, **deterministic** — no RNG, no
+    subprocess): exact-recall table keyed on full context for **repeating
+    recorded movements** (`source:"recall"`, confidence 1.0), plus weighted
+    structural nearest-neighbor + **target/direction slot-filling** for
+    **generalizing** a learned gesture to an unseen-but-related target/direction
+    (`source:"generalized"`). Full certainty (1.0) is reserved for observed
+    recall; generalized predictions are capped by a `GENERALIZATION_PRIOR`
+    (0.95) discounted by neighbor distance × kind-agreement, so a consumer can
+    threshold "auto-execute vs confirm".
+  - `buildMovementDataset(trajectories)` — reconstructs `MovementSample`
+    (context → gesture) pairs from exactly the observation/action metadata that
+    `DeviceCaptureAdapter` writes (appName/platform/screenTitle + gesture/target/
+    direction), threading prior-gesture-kind for sequence context. Closes the
+    capture → dataset → train loop end-to-end.
+  - `evaluateMovementPolicy(model, heldOut)` — generalization eval harness
+    (kind/target/direction/exact accuracy, recall vs generalized counts, mean
+    confidence) for train/held-out splits.
+  - `MovementPolicyBackendRegistry` — the pluggable-backend seam (register/get/
+    list) seeded with the nearest-neighbor default.
+- **`src/index.ts`** — exported the new surface (6 values + 11 types).
+
+**Test results:** new `src/training/movement-policy.test.ts` (13 tests) covers
+recall, target-slot & direction-slot generalization, empty-model fallback,
+serialization round-trip (identical predictions), backend-mismatch rejection,
+dataset reconstruction (incl. ignoring gesture-less actions), and both eval
+paths. `npm test` **174 → 187/187**, green on **2/2** consecutive runs.
+`npm run typecheck:src` ✅ (exit 0). `npm run build` ✅. Full `tsc` unchanged at
+125 (all in pre-existing test files; new module + test add 0 errors).
+
+**New idea:** a **closed-loop fidelity gate** — feed each trained
+movement-policy model back through the existing `replay-service`/`ReplayManifest`
+so a model's predicted gesture stream is diffed against the recorded replay
+timeline, yielding a single "replay-fidelity" score per model artifact. Wire
+that score into `training/execution-service` state so a real on-device training
+run is only marked `completed` when its model reproduces the reviewed replay
+above a threshold — turning replay from a passive manifest into an automated
+acceptance test for the trained policy. Second idea: a **sequence backend**
+(n-gram over `priorGestureKind` chains) registered alongside nearest-neighbor,
+to benchmark multi-step-movement generalization against the single-step default.
+
+---
+
 ## 2026-07-25 (run 9) — 🔴→🟢 Eliminated background-task test flakiness (verification gate restored)
 
 **Audited:** The verification gate itself. On a clean checkout `npm test` was

@@ -71,16 +71,35 @@ unchecked items are queued. Keep this richer than you found it each run.
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
 (exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
-      objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
-      deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+- [x] Inventory what `src/capture` + `src/training` already implement vs. the
+      objective's five pieces (2026-07-26, run 10). Gap found: the **train/infer**
+      stage had no in-process model — `runner.ts` only emits external mlx/axolotl
+      commands. Closed below.
+- [x] **Pluggable local-model backend interface** (2026-07-26, run 10) —
+      `src/training/movement-policy.ts`: `MovementPolicyBackend`
+      (`train`/`load`) + `MovementPolicyModel` (`predict`/`toJSON`) with a
+      deterministic `NearestNeighborMovementBackend` default (recall + slot-fill
+      generalization) and a `MovementPolicyBackendRegistry` seam for real
+      on-device backends. `buildMovementDataset` reconstructs samples from
+      captured trajectory metadata.
+- [x] **Generalization eval harness** (2026-07-26, run 10) —
+      `evaluateMovementPolicy(model, heldOut)` scores kind/target/direction/exact
+      accuracy + recall-vs-generalized counts for train/held-out splits.
+- [ ] Synthetic event-stream generator (standalone helper): a seeded generator
+      that emits `DeviceCaptureInput`/trajectory streams so capture→dataset→
+      replay→train round-trips can be fuzzed at scale. (Run 10 validated the
+      round-trip with hand-built fixtures; a reusable generator is the next step.)
+- [ ] **Closed-loop replay-fidelity gate**: diff a trained model's predicted
+      gesture stream against the recorded `ReplayManifest` timeline to produce a
+      per-model fidelity score, and gate `execution-service` `completed` status on
+      it (replay becomes an automated acceptance test for the trained policy).
+- [ ] **Sequence backend** (n-gram over `priorGestureKind` chains) registered
+      alongside nearest-neighbor, to benchmark multi-step-movement generalization
+      against the single-step default.
+- [ ] Wire a movement-policy training path into `runner.ts`/`execution-service`
+      so a job can select `backend: "nearest-neighbor-v1"` and produce a
+      serialized model artifact in-process (cloud) as an alternative to the
+      external mlx/axolotl command path (on-device).
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
