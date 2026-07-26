@@ -6,6 +6,60 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-26 (run 10) — 🎯 Synthetic movement event-stream generator (objective #2)
+
+**Audited:** The local-movement learning subsystem (`src/capture/` + `src/training/`)
+against standing objective #2 and its ROADMAP backlog. The pipeline already had
+capture adapters (`device-adapter`, `os-observer`, `browser-adapter`), a recorder
+with consent gating, a trajectory schema, a replay-manifest builder, and a
+training exporter/runner. The **explicitly queued and missing** piece — and the
+one the task itself calls out ("Use synthetic/simulated event streams to
+validate your code", since the engine has no real machine) — was a **synthetic
+event-stream generator** to drive the capture→dataset→replay round-trip without
+real OS input. Nothing generated valid device/OS event streams; every test
+hand-authored a single input.
+
+**Changed (additive — one new module + tests, zero edits to working code):**
+- `src/capture/synthetic-stream.ts` (new):
+  - `createRng(seed)` — a seeded mulberry32 PRNG (no `Math.random`), so streams
+    are **byte-identical for a given (scenario, seed, startTs)**. Determinism is
+    the whole point: it lets a *family* of streams share a task structure while
+    varying targets/values by seed — the substrate a generalization eval needs.
+  - `generateSyntheticStream(options)` — emits `SyntheticStreamEvent[]` tagged
+    `{channel:"device"|"os", input}`, where each `input` is a fully-formed
+    `DeviceCaptureInput` / `OsObservationInput` ready to feed straight into the
+    real adapters. Monotonic jittered clock (deterministic default `startTs`).
+  - Four scenarios (`edit-file`, `web-search`, `switch-and-copy`, `run-command`),
+    each built so its **action *shape* is seed-invariant** while concrete
+    targets/values (editor, file, query, snippet) are drawn from pools by seed.
+  - `generateSyntheticStreamFamily({scenario,count,baseSeed})` — a contiguous
+    seed range = the natural train/held-out split.
+  - `streamActionSignature(stream)` — compact seed-invariant `channel:kind`
+    fingerprint; the building block for a future generalization eval (a model
+    that reproduces the signature on a held-out seed has learned the structure).
+- `src/capture/synthetic-stream.test.ts` (new, 9 tests): PRNG determinism/range,
+  stream reproducibility, per-scenario seed-invariant signatures, terminal-only
+  outcome, unknown-scenario error, family split, a **full round-trip** feeding a
+  generated stream through the real `DeviceCaptureAdapter`/`OsCaptureObserver`
+  into a `FileTrajectoryStore` and rebuilding a `ReplayManifest` (asserting
+  event-count preservation + global time-ordering), and consent-gating.
+- `src/index.ts`: exported the new surface.
+
+**Test results:** `npm test` **183/183** (was 174; +9), **2/2 consecutive runs
+green**. `npm run typecheck:src` ✅ (source stays clean). `npm run build` ✅.
+
+**New idea:** with a seed-invariant `streamActionSignature` in hand, the next
+increment is a **generalization eval harness**: train the (mock) backend on a
+stream family's seeds `[0..n)`, then score inferred replays on held-out seeds
+`[n..m)` by (a) signature match (did it reproduce the movement *shape*?) and (b)
+a targeting-accuracy metric over the concrete slots. That turns "generalize to
+new but related movements" (objective #2d) into a numeric, regression-trackable
+score. Bigger: make scenarios *composable* (a grammar of steps) so the generator
+can synthesize novel task shapes, not just parameter-vary four fixed ones —
+stress-testing generalization beyond memorized structures.
+
+---
+
 ## 2026-07-25 (run 9) — 🔴→🟢 Eliminated background-task test flakiness (verification gate restored)
 
 **Audited:** The verification gate itself. On a clean checkout `npm test` was

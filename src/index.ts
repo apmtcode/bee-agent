@@ -262,6 +262,18 @@ export {
   type ReplayTimelineEvent,
 } from "./capture/replay.js";
 export {
+  createRng,
+  generateSyntheticStream,
+  generateSyntheticStreamFamily,
+  listSyntheticScenarios,
+  streamActionSignature,
+  SYNTHETIC_STREAM_DEFAULT_START_TS,
+  type Rng,
+  type SyntheticStream,
+  type SyntheticStreamEvent,
+  type SyntheticStreamOptions,
+} from "./capture/synthetic-stream.js";
+export {
   ReplayRuntimeService,
 } from "./capture/replay-service.js";
 export {

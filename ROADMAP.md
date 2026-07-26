@@ -77,10 +77,21 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
       for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+- [x] **Synthetic event-stream generator** (2026-07-26, run 10) —
+      `src/capture/synthetic-stream.ts`: seeded mulberry32 PRNG,
+      `generateSyntheticStream`/`generateSyntheticStreamFamily`, four seed-invariant
+      scenarios, and `streamActionSignature`. Events are real `DeviceCaptureInput`/
+      `OsObservationInput` shapes; a round-trip test drives them through the actual
+      adapters → trajectory store → replay manifest. Validates capture→dataset→replay
+      with no real OS input.
+- [ ] **Generalization eval harness** (next increment, now unblocked by the
+      generator): train the mock backend on a stream family's seeds `[0..n)`,
+      score inferred replays on held-out seeds `[n..m)` by (a) `streamActionSignature`
+      match and (b) a targeting-accuracy metric over concrete slots → a numeric,
+      regression-trackable generalization score (objective #2d).
+- [ ] **Composable scenario grammar**: let the generator synthesize *novel* task
+      shapes from a step grammar (not just parameter-vary four fixed scenarios), so
+      generalization can be stressed beyond memorized structures.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
