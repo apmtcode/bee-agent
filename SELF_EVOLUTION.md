@@ -6,6 +6,68 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-26 (run 10) — 🧠 Pluggable local-model training backend + deterministic mock (learns & generalizes movements in the cloud)
+
+**Audited:** Standing objective #2(d) and the top movement-subsystem roadmap item
+— *"Pluggable local-model backend interface for the training runner with a
+deterministic mock backend."* Inventoried `src/capture/` (recorder, os-observer,
+device/browser adapters, trajectory span schema, replay manifest, trajectory
+store, consent, ingestion) and `src/training/` (exporter → `ReviewedExportManifest`
+with `replays[]`, job-manifest/store, runner, execution-service). **The gap:** the
+whole pipeline stops at `LocalAppleSiliconTrainingRunner`, which only *emits a
+launch script* running real `mlx`/`axolotl` Python on Apple-Silicon hardware.
+Nothing consumes the reviewed replay event stream to actually **learn a policy
+and infer/generalize movements** — and none of it can run in the cloud/CI, so the
+"post-train a local model to repeat, then generalize to new-but-related
+movements" objective was completely untested.
+
+**Changed (additive — one new module + tests, runner untouched):**
+- `src/training/backend.ts` (new): a backend-agnostic seam plus a fully
+  deterministic, pure-TS reference backend.
+  - `buildMovementDataset(manifest)` — turns `ReviewedExportManifest.replays`
+    into supervised `(observation → action)` samples: each `action` event is
+    paired with the most recent preceding `observation` in its trajectory
+    (transcript fallback). Bridges capture-schema → trainable dataset.
+  - `MockLocalTrainingBackend` — "trains" a deterministic policy table keyed by
+    normalized observation; per key keeps the highest-support action (ties broken
+    lexicographically → reproducible). The `MovementModelArtifact` is the
+    serializable "weights".
+  - `inferMovement(artifact, query)` — pure inference: exact-key hit → confident
+    reproduction; else nearest known observation by **token Jaccard similarity**
+    (≥ threshold) → **generalization to a new-but-related movement**; else a
+    `none` match. This is the "repeat + generalize" capability, testable offline.
+  - `evaluateMovementModel(artifact, samples)` — a generalization eval harness
+    (accuracy + exact/generalized/none breakdown) → also advances that roadmap
+    item.
+  - `TrainingBackendRegistry` + `createDefaultTrainingBackendRegistry()` —
+    pluggable factory: `mock` (runs anywhere) plus `mlx`/`axolotl` as
+    `HardwareTrainingBackend` stubs that throw `TrainingBackendUnavailableError`
+    (loud, documented seam for the real on-device small-model trainer).
+- `src/index.ts`: barrel exports for the new surface (values + types).
+
+**Test results:** `src/training/backend.test.ts` (new, 14 cases): dataset
+extraction incl. transcript fallback, normalization/tokenization, deterministic
+policy learning + tie-break-by-support, exact inference, **generalization to
+unseen phrasing**, `none` match, eval harness (incl. empty-set no-divide-by-zero),
+registry default/unavailable/unknown/custom-plugin. `npm test` **188/188**
+(was 174; +14), **green on two consecutive runs** (flake sentinel). `npm run
+build` ✅. `npm run typecheck:src` ✅ (exit 0 — source stays clean). Full `tsc`
+**125** (unchanged — zero new errors, new module is fully typed).
+
+**New idea:** now that a real dataset→policy→infer loop exists, add a **synthetic
+movement-stream generator** (objective #2 validation without OS input): emit
+parameterized trajectories (e.g. "open app N, click target at (x,y), type S")
+with controllable noise/variation, then assert the mock backend's
+`evaluateMovementModel` accuracy on *held-out* variations stays above a floor —
+turning "does it generalize?" into a regression-gated metric. Bigger: a
+`policy-distillation` step that compresses the policy table (merge
+near-duplicate observation keys by similarity clustering) so the artifact scales
+to thousands of trajectories, and a `MovementModelArtifact` on-disk
+reader/writer so a cloud-trained mock policy can be handed to the local runner as
+a warm-start baseline.
+
+---
+
 ## 2026-07-25 (run 9) — 🔴→🟢 Eliminated background-task test flakiness (verification gate restored)
 
 **Audited:** The verification gate itself. On a clean checkout `npm test` was

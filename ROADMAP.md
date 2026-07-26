@@ -71,16 +71,34 @@ unchecked items are queued. Keep this richer than you found it each run.
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
 (exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
-      objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
-      deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
+- [x] Inventory what `src/capture` + `src/training` already implement vs. the
+      objective's five pieces (2026-07-26, run 10). Capture→schema→dataset→replay
+      all exist; the gap was **train/infer**: the runner only emitted a real
+      Apple-Silicon launch script — nothing consumed the replay stream to learn
+      or generalize, and none of it ran in the cloud.
+- [x] Pluggable local-model backend interface for the training runner with a
+      deterministic mock backend (2026-07-26, run 10). `src/training/backend.ts`:
+      `TrainingBackendRegistry` + `createDefaultTrainingBackendRegistry()`
+      (`mock` runs anywhere; `mlx`/`axolotl` are `HardwareTrainingBackend` stubs
+      = documented seam). `MockLocalTrainingBackend` learns a deterministic
+      policy table; `inferMovement` does exact + token-Jaccard **generalized**
+      inference; `buildMovementDataset` bridges `ReviewedExportManifest.replays`
+      → `(observation → action)` samples. 14 new tests, all green.
+- [ ] **Wire the backend into the runner/execution-service**: let a job select
+      `runtime: "mock"` to train+eval in-process (cloud path) vs. `mlx`/`axolotl`
+      to emit the launch script (hardware path), so the job lifecycle drives a
+      real backend instead of only writing artifacts.
 - [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      round-trips without real OS input — **now higher value**: feed it through
+      `buildMovementDataset` → `MockLocalTrainingBackend` → `evaluateMovementModel`
+      and gate on held-out generalization accuracy staying above a floor.
+- [x] Generalization eval harness: `evaluateMovementModel(artifact, samples)`
+      reports reproduction accuracy + exact/generalized/none breakdown
+      (2026-07-26, run 10). Next: run it over *synthetic held-out* trajectories
+      (needs the generator above) rather than hand-written samples.
+- [ ] `MovementModelArtifact` on-disk reader/writer + policy distillation
+      (cluster near-duplicate observation keys) so a cloud-trained mock policy
+      scales and can warm-start the local runner.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
