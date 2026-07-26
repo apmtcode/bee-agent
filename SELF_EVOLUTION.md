@@ -6,6 +6,63 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-26 (run 10) — 🧠 Movement-learning: pluggable local-model backend + inference (repeat & generalize)
+
+**Audited:** The local-movement learning subsystem (standing objective 2). Prior
+runs built capture → trajectory → reviewed-export → training-*plan* (the
+mlx/axolotl launch-script generator in `src/training/runner.ts`). But there was
+**no actual model backend, no inference path, and no deterministic in-process
+trainer** — nothing that could post-train a local model to *repeat* recorded
+movements (objective 2c) or *generalize* to new-but-related ones (2d), and
+nothing that runs in the cloud without native deps. That is the top queued
+roadmap item ("Pluggable local-model backend … with a deterministic mock
+backend"), and it unblocks the generalization-eval and round-trip-validation
+items too. Highest value this run.
+
+**Changed (additive, one new module + tests):**
+- `src/training/movement-model.ts` (new, ~370 lines):
+  - **Tokenizer** `deriveMovementToken` — collapses captured actions into stable
+    tokens (`device:tap:submit`, `browser:click`, `bash:run`). Collapsing is what
+    enables generalization: the same gesture in different apps shares a token.
+  - **Dataset builders** `buildMovementDatasetFromTrajectories` (rich, keeps
+    metadata + app context) and `buildMovementDatasetFromReplays` (from exported
+    replay timelines). Produce `{sequences, vocabulary}`.
+  - **Pluggable backend interface** `MovementModelBackend` (`train`/`restore`) +
+    `TrainedMovementModel` (`predictNext`/`generate`/`serialize`) +
+    `MovementBackendRegistry`. A real on-device small model drops in behind the
+    same seam later.
+  - **Default backend** `MarkovMovementBackend` — a fully deterministic
+    variable-order n-gram with BOS/EOS sentinels and "stupid" back-off. It
+    **repeats** recorded sequences exactly (highest-order context reproduces the
+    recorded path) and **generalizes** by backing off to shorter contexts when an
+    exact high-order match is absent — deterministic argmax (count, then
+    lexicographic tie-break), so cloud/CI runs are reproducible. Serializes to
+    plain JSON and restores identically.
+  - **Generalization eval** `evaluateMovementModel` — teacher-forced next-step
+    top-1 accuracy + back-off rate over held-out sequences.
+- `src/training/movement-model.test.ts` (new, 13 tests): tokenization, both
+  dataset builders, exact-repeat, seeded continuation, back-off generalization
+  after an unseen prefix, memorization-vs-generalization eval, and
+  serialize/restore round-trip. Validated entirely on synthetic/simulated event
+  streams (no real OS input), as required for cloud runs.
+- `src/index.ts`: exported the new public surface.
+
+**Test results:** `npm test` **187/187 passing** (was 174; +13), **green on two
+consecutive runs** (flake-sentinel). `npm run build` ✅. `npm run typecheck:src`
+✅ (exit 0). Full `tsc` **125** (unchanged — the new source + test files add zero
+typecheck debt).
+
+**New idea:** wire this backend into the training runner/execution-service so a
+"training job" whose `targetPlatform` isn't available locally (e.g. cloud CI)
+falls back to the deterministic `markov` backend and still produces a
+serialized, replay-evaluable model artifact — giving every reviewed export an
+end-to-end train→infer→eval smoke test in the same code path production uses.
+Bigger: add a **replay-driven reward/eval** that scores a generated movement
+sequence against the source trajectory's `outcome`, so RL-mode jobs have a
+concrete, in-process reward signal to validate against before touching a GPU.
+
+---
+
 ## 2026-07-25 (run 9) — 🔴→🟢 Eliminated background-task test flakiness (verification gate restored)
 
 **Audited:** The verification gate itself. On a clean checkout `npm test` was

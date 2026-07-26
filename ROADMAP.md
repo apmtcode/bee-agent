@@ -74,13 +74,29 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
-      deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+- [x] **Pluggable local-model backend interface** with a deterministic mock
+      backend (2026-07-26, run 10) — `src/training/movement-model.ts`:
+      `MovementModelBackend`/`TrainedMovementModel` + `MovementBackendRegistry`,
+      default `MarkovMovementBackend` (variable-order n-gram, BOS/EOS, back-off).
+      Trains in-process (no native deps → cloud tests pass), repeats recorded
+      movements exactly, generalizes via back-off, serializes to JSON. Real
+      on-device model drops in behind the same seam.
+- [~] Synthetic event-stream generator to validate capture→dataset→replay
+      round-trips without real OS input. Partially covered: run 10's tests drive
+      dataset→train→infer→eval on synthetic trajectories. Still want a reusable
+      *generator* (parameterized apps/gestures/noise) shared across tests.
+- [x] **Generalization eval harness** (2026-07-26, run 10) —
+      `evaluateMovementModel` measures teacher-forced next-step top-1 accuracy +
+      back-off rate on held-out sequences. Next: fidelity metric that scores a
+      full *generated* rollout against the source trajectory (edit distance),
+      not just per-step accuracy.
+- [ ] **Wire the backend into the training runner/execution-service**: when the
+      job's target platform isn't available locally (cloud CI), fall back to the
+      deterministic `markov` backend and still emit a serialized, replay-evaluable
+      artifact — end-to-end train→infer→eval smoke test in the production path.
+- [ ] **Replay-driven reward/eval**: score a generated movement sequence against
+      the source trajectory's `outcome`, giving RL-mode jobs a concrete in-process
+      reward signal before touching a GPU.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
