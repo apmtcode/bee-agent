@@ -6,6 +6,68 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-26 (run 10) — 🧠 Movement-learning: pluggable local-model backend + deterministic in-cloud trainer
+
+**Audited:** The movement-learning subsystem (standing objective #2) end-to-end —
+`src/capture/` (recorder, os-observer, device/browser adapters, trajectory schema,
+replay manifest, trajectory-store, ingestion, consent) and `src/training/`
+(exporter/dataset, job-store/manifest, runner, execution-service). Mapped what
+exists against the objective's five pieces: (a) capture ✅, (b) event schema ✅,
+(c) dataset format ✅ (`ReviewedExportManifest.replays`), (d) **train a local
+model to repeat movements — MISSING**, (e) **generalize to related movements —
+MISSING**. The `runner.ts` only emits a shell command for real MLX/axolotl
+hardware — there was **no code that actually learns from movement data or
+predicts/generalizes an action**, and nothing about pieces (d)/(e) could run or
+be tested in the cloud. That was the highest-value gap.
+
+**Changed (additive, one new self-contained module):**
+- **`src/training/movement-backend.ts`** — a backend-agnostic movement-learning
+  layer:
+  - `MovementModelBackend` interface (`train(dataset) → TrainedMovementModel`)
+    and a shared `SerializedMovementModel` schema, so on-device (MLX) and
+    in-cloud backends are a swap, not a rewrite. The real on-device seam is
+    documented in the module header; `runner.ts` remains the hardware path.
+  - `DeterministicMarkovBackend` — a dependency-free, fully reproducible mock
+    backend that trains a **context-conditioned next-action transition model**
+    (last-N actions × last observation) with **three backoff levels**
+    (action-only → observation-only → unigram). Same dataset ⇒ byte-identical
+    weights. This is the cloud/CI-runnable realization of pieces (d) + (e):
+    exact context ⇒ *repeat* the recorded movement; novel-but-related context ⇒
+    *generalize* via backoff (flagged `generalized:true`, `source:"backoff-*"`).
+  - `datasetFromReplays` / `datasetFromExport` adapters (canonical replay
+    timeline → normalized `MovementEvent` stream), `rolloutMovements`
+    (autoregressive replay of an action loop), `evaluateNextActionAccuracy`
+    (held-out fidelity + isolated generalization accuracy), `loadMovementModel`
+    (persist/rehydrate), and `trainMovementModelFromExport` (one-call from a
+    reviewed export).
+  - `generateSyntheticReplays` — a deterministic seeded (LCG, no `Math.random`)
+    synthetic movement-stream generator, so the whole capture→dataset→train→
+    infer→replay round-trip is validated without real OS input (also ticks the
+    roadmap's "synthetic event-stream generator" item).
+- Exported all of the above from `src/index.ts`.
+- **`src/training/movement-backend.test.ts`** — 10 tests: exact-context replay,
+  determinism (byte-identical weights), empty-model handling, **generalization
+  to a novel observation via action-backoff**, **held-out next-action accuracy
+  >0.8**, autoregressive rollout, serialize/load round-trip, and train-from-export.
+
+**Test results:** `npm test` **184/184 passing (was 174; +10 new), 2/2
+consecutive runs green**. `npm run build` ✅. `npm run typecheck:src` ✅ (source
+stays clean — new module contributes 0 type errors). Full `tsc` **125**
+(unchanged — no regression; all 125 remain in pre-existing test files).
+
+**New idea:** now that a model can *predict* a next action, add a **replay
+divergence guard** to the replay engine — before executing a predicted/generalized
+action on the real machine, compare the model's `confidence` and `source` against
+a policy threshold (e.g. refuse to auto-execute a `unigram`-sourced prediction, or
+one below N% confidence, without human confirmation). This turns the
+`generalized`/`confidence` signals the backend already emits into a concrete
+safety interlock for on-device autonomy, and is testable in the cloud with the
+synthetic streams. Bigger: a **second reference backend** (e.g. a k-NN over
+event embeddings) behind the same interface to prove the seam and give an
+ensemble/vote option.
+
+---
+
 ## 2026-07-25 (run 9) — 🔴→🟢 Eliminated background-task test flakiness (verification gate restored)
 
 **Audited:** The verification gate itself. On a clean checkout `npm test` was

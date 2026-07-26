@@ -71,16 +71,35 @@ unchecked items are queued. Keep this richer than you found it each run.
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
 (exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
-      objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
-      deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+- [x] Inventory what `src/capture` + `src/training` already implement vs. the
+      objective's five pieces (2026-07-26, run 10). Result: (a) capture, (b)
+      schema, (c) dataset all present; (d) train-to-repeat and (e) generalize
+      were missing — `runner.ts` only emitted a shell command for real hardware.
+- [x] **Pluggable local-model backend interface** for the training runner with a
+      deterministic mock backend and a documented on-device seam (2026-07-26,
+      run 10) — `src/training/movement-backend.ts`: `MovementModelBackend` +
+      shared `SerializedMovementModel`, `DeterministicMarkovBackend` (context
+      transition model with 3 backoff levels), adapters, rollout, eval, and
+      persist/load. Implements pieces (d) repeat + (e) generalize, runs in CI.
+- [x] **Synthetic event-stream generator** to validate capture→dataset→replay
+      round-trips without real OS input (2026-07-26, run 10) —
+      `generateSyntheticReplays` (deterministic seeded LCG).
+- [x] **Generalization eval harness**: measure replay fidelity on held-out but
+      related synthetic trajectories (2026-07-26, run 10) —
+      `evaluateNextActionAccuracy` reports overall accuracy + isolated
+      generalized accuracy; test asserts >0.8 on held-out related sequences.
+- [ ] **Replay divergence guard** (new, run 10): before executing a
+      predicted/generalized action on the real machine, gate on the backend's
+      `confidence` + `source` (e.g. never auto-execute a `unigram`-sourced or
+      sub-threshold prediction without confirmation). Turns the existing
+      `generalized`/`confidence` signals into an on-device safety interlock;
+      testable in the cloud with synthetic streams.
+- [ ] **Second reference backend** behind `MovementModelBackend` (e.g. k-NN over
+      event embeddings) to prove the interface seam and enable an ensemble/vote.
+- [ ] Wire a chosen `MovementModelBackend` into the training runner/execution
+      path so a job can produce a trained model artifact in-process when no
+      on-device runtime is configured (the interface exists; the runner still
+      only emits the MLX/axolotl shell command).
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
