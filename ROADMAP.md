@@ -71,16 +71,37 @@ unchecked items are queued. Keep this richer than you found it each run.
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
 (exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
-      objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
-      deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+- [x] Inventory what `src/capture` + `src/training` already implement vs. the
+      objective's five pieces (2026-07-26, run 10). Gap found: capture → schema →
+      dataset → replay-*manifest* → **train-plan** existed, but there was **no
+      in-process train/infer** — only a launch-script plan for real Apple-Silicon
+      MLX/axolotl runs, unrunnable in the cloud. That gap is now closed (below).
+- [x] **Pluggable local-model backend interface + deterministic mock backend**
+      (2026-07-26, run 10) — `src/training/movement-model.ts`:
+      `MovementModelBackend`/`TrainedMovementModel` + `MovementBackendRegistry`
+      (default `markov-backoff`); a dependency-free count-based Markov policy with
+      **prototype backoff** that trains, replays recorded movements exactly, and
+      generalizes to related-but-unseen contexts. Documented seam for real `mlx`/
+      `axolotl` backends. Serializable `MovementPolicy` + `loadMovementModel`.
+- [x] **Synthetic event-stream + dataset round-trip validation** (2026-07-26,
+      run 10) — `buildMovementDataset(TrajectorySpan[])` /
+      `buildMovementDatasetFromReplays(ReplayManifest[])` validated end-to-end in
+      `movement-model.test.ts` on synthetic mail-flow trajectories (no real OS).
+- [x] **Generalization eval harness** (2026-07-26, run 10) —
+      `evaluateMovementModel(model, heldOut)` reports exact-match rate (replay
+      fidelity), prototype-match rate (generalization), and `generalizedSteps`.
+- [ ] **Online/continual-learning seam** for the movement backend: `update(step)`
+      to fold new movements into the policy without full retrain, plus a
+      recency/decay weight so recent corrections outweigh stale ones.
+- [ ] **Active-capture loop**: use the eval harness to auto-flag trajectories with
+      low confidence / high backoff as the next recording targets (record →
+      predict → measure → target-next).
+- [ ] **Higher-order backend** (n-gram > 1) behind the same interface + an A/B
+      eval reporting which order generalizes best per app, so the registry can
+      select a backend per-context.
+- [ ] Wire the movement backend into the training runner/execution service so a
+      reviewed export can be trained by the mock backend as a dry-run before a
+      real on-device run (validates the dataset shape end-to-end pre-flight).
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

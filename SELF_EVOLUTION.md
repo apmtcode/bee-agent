@@ -6,6 +6,61 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-26 (run 10) — 🧠 Movement-learning: pluggable in-process model backend (train → replay → generalize)
+
+**Audited:** Standing objective #2 (local-movement learning subsystem) and its
+top queued ROADMAP item. Runs 5–9 had all been foundation/typecheck/flake work;
+the actual *capability* objectives had gone untouched for five runs. Inventoried
+`src/capture/` (recorder, replay, trajectory, device/os/browser adapters) and
+`src/training/` (exporter, job store/manifest, runner, execution service). The
+subsystem could capture, schema-ize, export a dataset, and emit a **launch plan**
+for real Apple-Silicon training (`LocalAppleSiliconTrainingRunner` → MLX/axolotl
+commands) — but **nothing actually trained or inferred in-process**, so objective
+2(c) "repeat recorded movements" and 2(d) "generalize to new but related
+movements" were completely unvalidated in the cloud (no Python/GPU here).
+
+**Changed (additive — one new module + barrel exports, zero edits to existing
+logic):** added `src/training/movement-model.ts`:
+- **Pluggable backend interface** `MovementModelBackend` + `TrainedMovementModel`
+  and a `MovementBackendRegistry` (get/require/list). Real on-device runtimes
+  (`mlx`, `axolotl`) register behind the same seam later; the mock is registered
+  by default as `markov-backoff` (`DEFAULT_MOVEMENT_BACKEND`).
+- **Deterministic reference backend** `MarkovBackoffMovementBackend`: a
+  dependency-free count-based Markov policy with **prototype backoff**. Learns
+  `context → next-action` transitions at two granularities — exact label context
+  and a coarse "prototype" (the gesture verb, e.g. `tapped`/`swiped`/`typed`).
+  At inference it tries exact recall (**replay**, objective 2c), backs off to the
+  prototype distribution for unseen-but-related contexts (**generalize**,
+  objective 2d), then to a global prior. Fully deterministic: argmax with
+  lexicographic tie-break, so cloud/CI runs are reproducible.
+- **Dataset builders** from recorded data: `buildMovementDataset(TrajectorySpan[])`
+  and `buildMovementDatasetFromReplays(ReplayManifest[])` (drops transcript
+  noise, orders obs+actions by ts). Serializable `MovementPolicy` artifact +
+  `loadMovementModel()` round-trip.
+- **Generalization eval harness** `evaluateMovementModel(model, heldOut)` →
+  exact-match rate (replay fidelity), prototype-match rate (generalization
+  fidelity), and `generalizedSteps` (how many predictions required backoff) —
+  a direct, numeric measurement of 2(d).
+
+**Test results:** new `movement-model.test.ts` (12 tests) drives the whole loop
+on **synthetic** trajectories (a mail compose→send flow) — replay reproduces the
+recorded sequence exactly; a held-out related-target flow is predicted via
+backoff and scored by the eval harness; serialize/reload and registry pluggability
+covered. `npm test` **174 → 186/186**, green on **2/2 consecutive runs**.
+`npm run build` ✅. `npm run typecheck:src` ✅ (exit 0 — source stays clean). Full
+`tsc` **125** (unchanged — no new debt).
+
+**New idea:** an **online/continual-learning seam** for the backend —
+`model.update(step)` to fold newly-recorded movements into the policy without a
+full retrain, plus a decay/recency weight so recent corrections outweigh stale
+ones. Combined with the eval harness this enables a closed loop: record → predict
+→ measure fidelity on held-out → auto-flag trajectories where confidence/backoff
+is low as the next capture targets. Bigger: a `sequence`-order backend (n-gram >1)
+behind the same interface and an A/B eval that reports which order generalizes
+best per app, so the registry can pick a backend per-context.
+
+---
+
 ## 2026-07-25 (run 9) — 🔴→🟢 Eliminated background-task test flakiness (verification gate restored)
 
 **Audited:** The verification gate itself. On a clean checkout `npm test` was
