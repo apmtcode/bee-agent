@@ -6,6 +6,63 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-26 (run 10) — 🧠 In-process movement learn→infer backend (objective #2 c+d)
+
+**Audited:** The local-movement learning subsystem (standing objective #2)
+against its five required pieces — capture → schema → dataset → replay →
+train/infer. Pieces 1–4 exist (`src/capture/*` recorder/adapters/trajectory/
+replay; `src/training/exporter.ts` reviewed dataset). Piece 5 (**train + infer**)
+was the gap: `runner.ts` only emits **MLX/axolotl launch plans** that must run on
+the user's Apple-silicon machine — nothing bee-agent can actually *execute in the
+cloud* to learn from recorded movements and predict new ones. Objective #2 parts
+(c) "post-train a local model to repeat the recorded movements" and (d)
+"generalize to new but related movements" had no runnable, testable path.
+
+**Changed (additive, two new source modules + barrel exports):**
+- `src/training/movement-policy.ts` — the missing in-process learn→infer path
+  behind a pluggable **`MovementPolicyBackend`** seam (the interface a real
+  on-device small model plugs into later). Ships the deterministic mock backend
+  **`MarkovMovementBackend`**: a variable-order back-off Markov model over a
+  **two-channel feature encoding** of recorded actions — a *specific* channel
+  (`tool|gesture|direction|@target`) and a *general* channel (target dropped).
+  Seen contexts replay the recorded next movement verbatim (obj #2c); novel-but-
+  related contexts (same gesture grammar, unseen target) miss the specific
+  channel and **back off to the general channel**, still predicting the right
+  *kind* of movement (obj #2d). Plus `buildMovementDataset` (ts-sorted windowing),
+  `rolloutMovementPolicy` (autoregressive replay/extend), and
+  `evaluateMovementPolicy` (held-out **generalization eval harness** scoring
+  specific/general/fallback hits). Fully deterministic (arg-max, lexicographic
+  tie-break) — no randomness, no OS access.
+- `src/training/movement-synthesis.ts` — deterministic **synthetic movement-
+  stream generator** (seeded mulberry32 PRNG, no `Math.random`) that instantiates
+  gesture *templates* over per-slot target vocabularies, so the whole pipeline is
+  validated in CI without real input capture. Holding out a vocabulary yields the
+  same grammar over unseen targets — the exact obj #2(d) case. Includes a
+  `DEFAULT_MOVEMENT_TEMPLATES` library.
+- `src/index.ts` — exported both modules' public surface.
+
+**Test results:** two new suites (`movement-policy.test.ts`,
+`movement-synthesis.test.ts`) — **13 tests**: feature encoding, ts-sorted
+dataset windowing, verbatim replay, rollout reproduction, general-channel
+generalization to unseen targets, eval-harness scoring, fallback, PRNG
+determinism, and a full **synthetic capture→dataset→train→infer round-trip** that
+generalizes to an all-novel held-out vocabulary at accuracy **1.0** (every hit
+via the general channel). `npm run build` ✅. `npm test` ✅ **187/187** (was 174),
+**run twice** green (flake sentinel). `npm run typecheck:src` ✅ (exit 0, source
+stays clean). Full `tsc` **125** (unchanged — no regression).
+
+**New idea:** three follow-ons now unlocked. (1) A **second pluggable backend** —
+a tiny neural/embedding policy (or a real on-device small model via a
+subprocess seam) validated against the *same* `evaluateMovementPolicy` harness,
+so the mock and a learned model share one metric. (2) **Smoothed back-off
+probabilities** (add-k / interpolation across orders) so `confidence` is
+calibrated, not just top-1. (3) Wire `MovementPolicyBackend` into the
+control-plane RPC surface (`movement.train` / `movement.predict`) so a locally-
+trained policy is queryable through the same gateway as the rest of bee-agent —
+turning this from a library into an operable capability.
+
+---
+
 ## 2026-07-25 (run 9) — 🔴→🟢 Eliminated background-task test flakiness (verification gate restored)
 
 **Audited:** The verification gate itself. On a clean checkout `npm test` was

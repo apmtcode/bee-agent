@@ -71,16 +71,32 @@ unchecked items are queued. Keep this richer than you found it each run.
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
 (exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
-      objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
-      deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+- [x] Inventory what `src/capture` + `src/training` already implement vs. the
+      objective's five pieces (2026-07-26, run 10). Pieces 1–4 (capture, schema,
+      dataset, replay) existed; **piece 5 (train/infer) was the gap** — `runner.ts`
+      only emits MLX/axolotl launch plans that run on the user's machine.
+- [x] **Pluggable local-model backend + deterministic mock** (2026-07-26, run 10)
+      — `MovementPolicyBackend` interface + `MarkovMovementBackend` (variable-order
+      back-off Markov, two-channel feature encoding) in
+      `src/training/movement-policy.ts`. Learns from recorded movements and predicts
+      new ones fully in-process (cloud/CI-safe); real on-device model plugs into the
+      same interface.
+- [x] **Synthetic event-stream generator** (2026-07-26, run 10) —
+      `src/training/movement-synthesis.ts` (seeded PRNG, gesture templates over
+      per-slot vocabularies) validates capture→dataset→train→infer round-trips
+      without OS input.
+- [x] **Generalization eval harness** (2026-07-26, run 10) —
+      `evaluateMovementPolicy` scores held-out fidelity (specific/general/fallback
+      hits); round-trip test generalizes to an all-novel vocabulary at accuracy 1.0.
+- [ ] **Second pluggable movement backend** — a learned embedding/neural policy
+      (or a real on-device small model behind a subprocess seam) scored against the
+      *same* `evaluateMovementPolicy` harness, so mock and learned model share one
+      metric.
+- [ ] **Smoothed back-off probabilities** (add-k / order interpolation) in the
+      Markov backend so `MovementPrediction.confidence` is calibrated, not raw top-1.
+- [ ] **Expose movement policy over the control-plane RPC surface**
+      (`movement.train` / `movement.predict`) so a locally-trained policy is
+      queryable through the same gateway as the rest of bee-agent.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
