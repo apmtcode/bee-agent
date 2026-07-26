@@ -71,16 +71,35 @@ unchecked items are queued. Keep this richer than you found it each run.
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
 (exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
-      objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
-      deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+- [x] Inventory what `src/capture` + `src/training` already implement vs. the
+      objective's five pieces (2026-07-26, run 10). Gap found: pipeline was
+      complete through capture→schema→dataset→export and the runner builds an
+      mlx/axolotl launch script, but the *learning* half (train/infer/generalize)
+      did not exist in-process and was untestable in the cloud.
+- [x] **Pluggable local-model backend interface** with a deterministic mock
+      backend (2026-07-26, run 10) — `src/training/movement-policy.ts`:
+      `LocalMovementModelBackend` seam + `NgramMovementModelBackend`
+      (stupid-backoff) that repeats recorded movements exactly (c) and
+      generalizes to related contexts (d). Documented as the seam a real
+      on-device small model implements later.
+- [x] **Synthetic event-stream generator** (2026-07-26, run 10) —
+      `generateSyntheticMovementSamples` (seeded mulberry32 over a workflow
+      grammar with skip/dup perturbations) validates train→infer without real OS
+      input.
+- [x] **Generalization eval harness** (2026-07-26, run 10) —
+      `evaluateMovementModel` reports next-token accuracy on held-out samples,
+      splitting exact vs. backed-off (generalizing) correct predictions.
+- [ ] **Round-trip fidelity gate**: record → train → `rolloutMovements` → assert
+      the emitted stream re-parses into a valid replay manifest matching the
+      source within an edit-distance threshold; wire as CI so any backend must
+      clear a measurable repeat-and-generalize bar, not just typecheck.
+- [ ] **Reward-aware backend**: weight n-gram counts by each trajectory's
+      `outcome.reward` so the policy prefers movements from *successful*
+      recordings — a lightweight offline-RL policy reusing the reward already in
+      the schema.
+- [ ] Wire the movement policy into the training runner/execution service so a
+      reviewed export can produce a real trained-model artifact (mock backend in
+      cloud, on-device backend locally) instead of only a launch script.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

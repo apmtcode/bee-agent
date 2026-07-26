@@ -6,6 +6,65 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-26 (run 10) — 🧠 Local movement-model backend: train + infer + generalize (objective #2 c/d)
+
+**Audited:** The local-movement learning subsystem (standing objective #2) end
+to end. The pipeline was complete through **capture → schema → dataset →
+export**, and `src/training/runner.ts` builds an mlx/axolotl **launch script** —
+but the actual *learning* half was missing: nothing in-process **trains a model
+on the recorded movements, runs inference, or generalizes**, and none of it was
+exercisable in the cloud (the runner just shells out to external GPU tooling).
+That is precisely objective #2 pieces **(c) post-train a local model to repeat
+recorded movements** and **(d) generalize to new-but-related movements**, and the
+ROADMAP flagged the *pluggable local-model backend + deterministic mock*, the
+*synthetic event-stream generator*, and the *generalization eval harness* as the
+next increments. Highest-value gap, fully testable without real OS input.
+
+**Changed (additive, one new module):** `src/training/movement-policy.ts`
+- **Pluggable backend seam** `LocalMovementModelBackend` (`train` / `predict`) —
+  the exact shape a real on-device small model (MLX/llama.cpp) implements later.
+- **Deterministic default backend** `NgramMovementModelBackend` — an n-gram model
+  with **stupid-backoff**. Training records next-token frequencies for every
+  context length `0..order`; prediction consults the longest observed context
+  suffix and backs off to shorter contexts, then the unigram prior. This gives
+  **(c)** exact reproduction of recorded sequences *and* **(d)** sensible moves
+  for novel contexts that share a tail with recorded ones. Ties break
+  lexicographically → same dataset always yields the same model + rollouts (no
+  `Math.random`/`Date` in the model path).
+- **Token extraction** from the existing timeline: `actionEventToToken`,
+  `replayToMovementSample`, `trajectoryToMovementSample`, `extractMovementSamples`
+  (coarse summary bucketing so near-identical recordings generalize instead of
+  being memorized). Capture → dataset → train → infer is now one coherent flow.
+- **Inference / replay generation** `rolloutMovements` — greedily emits a movement
+  sequence until `<end>`, `maxSteps`, or an unknown context (loop/dead-end guards).
+- **Generalization eval harness** `evaluateMovementModel` — next-token accuracy on
+  held-out samples, splitting **exact vs. backed-off (generalizing)** correct
+  predictions and mean confidence on the true token.
+- **Synthetic event-stream generator** `generateSyntheticMovementSamples` — a
+  seeded mulberry32 PRNG over a small workflow grammar with skip/duplicate
+  perturbations, so the whole pipeline is validated with reproducible datasets
+  and no real machine. Exported the full surface from `src/index.ts`.
+
+**Test results:** new `movement-policy.test.ts` (**14 tests**) covers extraction,
+exact reproduction, backoff generalization, prior fallback, determinism, the
+synthetic generator, the eval harness (related grammar scores > unrelated), and
+rollout guards. `npm test` **188/188** (was 174) — **green on 2/2 consecutive
+runs** (flake sentinel). `npm run build` ✅. `npm run typecheck:src` ✅ (exit 0,
+source stays clean). Full `tsc` **125** (unchanged — zero new debt; all remaining
+errors are pre-existing test-file typings).
+
+**New idea:** a **round-trip fidelity gate** for the subsystem — record a
+trajectory, train, roll out, and assert the emitted token stream re-parses into a
+valid replay manifest whose action sequence matches the source within an edit-
+distance threshold. Wire it as a CI check so any future backend (including the
+real on-device model) must clear a measurable repeat-and-generalize bar rather
+than just typecheck. Bigger: make the backend **reward-aware** — weight n-gram
+counts by each trajectory's `outcome.reward` so the policy prefers movements from
+*successful* recordings, turning the SFT-style repeater into a lightweight
+offline-RL policy that reuses the reward already in the schema.
+
+---
+
 ## 2026-07-25 (run 9) — 🔴→🟢 Eliminated background-task test flakiness (verification gate restored)
 
 **Audited:** The verification gate itself. On a clean checkout `npm test` was
