@@ -74,13 +74,33 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
-      deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+- [x] **Pluggable local-model backend interface for the training runner with a
+      deterministic mock backend** (2026-07-26, run 10) —
+      `src/training/movement-model.ts`: `LocalMovementModelBackend` interface +
+      dependency-free in-process `MarkovMovementBackend` (variable-order,
+      backoff-generalizing, end-of-movement aware, serializable). Trains and
+      infers in the cloud/CI; documented seam for a real on-device MLX/GGUF
+      model. 11 new tests, 185/185 green.
+- [~] Synthetic event-stream generator to validate capture→dataset→replay
+      round-trips without real OS input. Partial: `movement-model.test.ts`
+      builds synthetic trajectories and round-trips them through the model.
+      Still want a first-class generator that emits `TrajectorySpan`/replay
+      manifests (with realistic ts jitter, observation interleaving, branching)
+      so *all* capture/training suites can share it.
+- [~] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories. Partial: `evaluateNextActionAccuracy`
+      (accuracy + backoff rate) exists; next, a harness that trains on a
+      family of synthetic flows and reports fidelity on held-out variants as a
+      tracked metric.
+- [ ] Wire the movement backend into `LocalTrainingExecutionService` as a
+      `backend: "markov" | "mlx" | "axolotl"` selector so a reviewed export can
+      be trained in-cloud (Markov → serialized model + accuracy report artifact)
+      while the same manifest targets on-device runtimes locally. Gives every
+      job a pre-GPU "did the data teach anything?" smoke signal + a run-over-run
+      regression metric.
+- [ ] Observation-conditioned prediction: extend the Markov backend to key on
+      the most-recent observation as well as prior actions, so the model can
+      react to on-screen state, not just its own move history.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

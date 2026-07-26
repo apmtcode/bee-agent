@@ -6,6 +6,59 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-26 (run 10) — 🧠 In-process pluggable local-movement model backend (train + infer + generalize)
+
+**Audited:** The local-movement learning subsystem (standing objective 2) and
+its roadmap. `src/capture` already produces trajectories + replay timelines
+(observation/action tokens = "movements"), and `src/training` had an
+exporter, job manifest/store, and a `LocalAppleSiliconTrainingRunner` — but
+that runner only **shells out** to external `mlx`/`axolotl` Python. There was
+**no in-process model** that could actually *train and infer* in the cloud/CI,
+so objective 2(d) ("post-train a local model … and generalize to new but
+related movements") was entirely unvalidated. This was the roadmap's top
+movement item: *"Pluggable local-model backend interface for the training
+runner with a deterministic mock backend."*
+
+**Changed (additive) — new `src/training/movement-model.ts`:**
+- **`LocalMovementModelBackend` interface** (the pluggable seam): `train()` +
+  `restore()` returning a `MovementModel` with `predictNext()` + `serialize()`.
+  A real on-device small model (MLX/GGUF policy) can implement the same
+  interface later; nothing else in the pipeline has to change.
+- **`MarkovMovementBackend`** — a deterministic, dependency-free, in-process
+  backend: a smoothed **variable-order Markov next-action predictor** over the
+  action-token stream. Unseen high-order contexts **back off** to lower-order
+  statistics (down to a global prior), which is what lets it **generalize to
+  new-but-related movements**. It also learns an **end-of-movement** signal so
+  replay rollouts terminate naturally instead of looping forever. Fully
+  deterministic (lexical tie-breaks), JSON-serializable, round-trips through
+  `serialize`/`restore` with identical predictions.
+- **Dataset builders**: `buildMovementDatasetFromTrajectories`,
+  `trajectorySpanToTokens`, `replayEventsToMovementSequence` — turn captured
+  trajectories / replay manifests into the compact `MovementDataset`.
+- **Rollout + eval**: `generateMovementSequence` (repeat recorded movements from
+  a seed; generalize from a novel seed) and `evaluateNextActionAccuracy`
+  (teacher-forcing accuracy + backoff rate — a generalization signal on
+  held-out sequences).
+- Exported the full surface from `src/index.ts`.
+
+**Test results:** new `movement-model.test.ts` (11 tests) covers exact replay,
+deterministic tie-breaking, backoff generalization to novel contexts, global-
+prior fallback, serialize/restore fidelity, empty-model handling, held-out
+generalization accuracy, and interface pluggability. `npm run typecheck:src` ✅,
+`npm run build` ✅, `npm test` **185/185 (was 174), green on 2/2 consecutive
+runs**. No source regressions.
+
+**New idea:** wire this backend into `LocalTrainingExecutionService` as a
+`backend: "markov" | "mlx" | "axolotl"` selector so a *reviewed export* can be
+trained end-to-end **in the cloud** with the Markov backend (producing a
+serialized model + a next-action-accuracy report as an artifact) while the same
+job manifest targets a real on-device runtime when run locally. That gives every
+training job a cheap, always-available "did the data actually teach anything?"
+smoke signal before a GPU is ever involved — and a regression metric the engine
+can track run-over-run.
+
+---
+
 ## 2026-07-25 (run 9) — 🔴→🟢 Eliminated background-task test flakiness (verification gate restored)
 
 **Audited:** The verification gate itself. On a clean checkout `npm test` was
