@@ -74,13 +74,29 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
+      for a real on-device small model. **(2026-07-26, run 10)** —
+      `src/training/movement-model.ts`: `MovementModelBackend` interface +
+      deterministic `MarkovMovementBackend` (order-k + stupid-backoff) +
+      `createMovementModelBackend` factory seam. Trains, predicts, generates,
+      serializes; exact prefixes replay (2c), novel prefixes generalize (2d).
 - [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      round-trips without real OS input. (`movementDatasetFromReplays` now
+      derives datasets from replay manifests; still want a *generator* that
+      emits synthetic OS event streams end-to-end into the recorder.)
+- [x] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories. **(2026-07-26, run 10)** —
+      `evaluateMovementModel(model, heldOut)` reports per-sequence + aggregate
+      next-step accuracy.
+- [ ] **In-process "markov" training runtime** (run 10 idea): add a
+      `LocalTrainingRuntime` variant whose launch step trains the movement
+      backend in-process and writes the serialized model as the job artifact, so
+      the job-store/execution-service have an end-to-end success path testable in
+      CI (real on-device runtimes swap the backend behind the same interface).
+- [ ] **Temporal movement schema** (run 10 idea): extend `MovementStep` with
+      inter-step dwell-time buckets so the policy reproduces timing/rhythm, not
+      just ordering — needed for realistic mouse/keyboard replay.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

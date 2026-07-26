@@ -6,6 +6,70 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-26 (run 10) — 🧠 Movement-model backend: train + generalize (objective #2 c/d)
+
+**Audited:** The local-movement learning subsystem (standing objective #2) — the
+one objective runs 2–9 never advanced (they were all typecheck/flakiness DX
+debt). `src/capture/` records trajectories and `src/training/` can *export*
+reviewed data and *build launch plans* for real on-device mlx/axolotl training,
+but nothing actually **learns a movement policy or generalizes** — there was no
+model backend abstraction at all. That's precisely the ROADMAP's flagged next
+increment ("pluggable local-model backend interface … deterministic mock backend
+… generalization eval harness") and it delivers objective #2 parts **(c) repeat
+recorded movements** and **(d) generalize to new but related movements**.
+
+**Changed (additive — one new module + tests, nothing else touched):**
+- `src/training/movement-model.ts` (new): the pluggable movement-model seam.
+  - `MovementStep` / `MovementSequence` / `MovementDataset` — the replayable
+    dataset schema the model trains on.
+  - `MovementModelBackend` interface (`train` / `load`) + `TrainedMovementModel`
+    (`predictNext` / `generate` / `serialize`) — real on-device backends
+    (MLX/llama.cpp/ONNX) implement the same interface; the runner stays
+    backend-agnostic.
+  - `MarkovMovementBackend` — a fully in-process, **deterministic** order-k
+    Markov policy with stupid-backoff and START/STOP sentinels. Exact prefixes
+    replay the memorized continuation (objective 2c); a novel prefix that shares
+    a shorter suffix backs off to the matching context and still predicts the
+    right next step (objective 2d, reported via `matchedOrder`/`generalized`).
+    Argmax with a lexical tie-break → zero randomness, so the whole
+    capture→train→replay loop is exercisable in the cloud with no ML dep and no
+    real machine.
+  - `createMovementModelBackend(kind)` — the single factory seam where a real
+    local model is plugged in later; documented, defaults to `markov`.
+  - `movementDatasetFromReplays(replays)` — derives a dataset from the existing
+    reviewed-export `ReplayManifest` events (action events only → privacy-
+    preserving token stream), connecting the new model to the current pipeline.
+  - `evaluateMovementModel(model, heldOut)` — the generalization eval harness:
+    per-sequence + aggregate next-step accuracy on held-out synthetic
+    trajectories (ROADMAP "measure replay fidelity on held-out but related
+    synthetic trajectories").
+- `src/index.ts`: barrel-exported the new backend, helpers, and types.
+- `src/training/movement-model.test.ts` (new, 13 tests): memorized-replay,
+  exact-prefix confidence, backoff generalization, STOP/maxSteps termination,
+  determinism across re-training, serialize/load round-trip, stats,
+  factory (incl. unregistered-kind throw), replay→dataset derivation, and two
+  generalization-eval cases (training-distribution fidelity 7/8 — the one miss is
+  a minority branch's ambiguous cold-start, documented — and held-out
+  generalization ≥0.5).
+
+**Test results:** new suite **13/13**. Full `npm test` **187/187** (was 174;
++13), **green on 2/2 consecutive runs** (flake sentinel). `npm run build` ✅.
+`npm run typecheck:src` ✅ (exit 0, source stays clean). Full `tsc` **125**
+(unchanged — the new module + test are fully typed).
+
+**New idea:** now that a trained movement policy can `serialize()`, wire it into
+the training runner as a **cloud-executable "mock" training mode** — a
+`LocalTrainingRuntime` variant `"markov"` whose launch step trains the backend
+in-process and writes the serialized model as the job artifact (instead of only
+emitting an mlx/axolotl shell command that needs a real Mac). That gives the
+job-store/execution-service an end-to-end success path testable in CI, and a
+real on-device runtime just swaps the backend behind the same interface. Bigger:
+a **temporal movement schema** — today steps are `(tool, target)`; add
+inter-step dwell-time buckets so the policy can reproduce *timing/rhythm*, not
+just ordering, which matters for realistic mouse/keyboard replay.
+
+---
+
 ## 2026-07-25 (run 9) — 🔴→🟢 Eliminated background-task test flakiness (verification gate restored)
 
 **Audited:** The verification gate itself. On a clean checkout `npm test` was
