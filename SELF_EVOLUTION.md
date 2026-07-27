@@ -6,6 +6,58 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-27 (run 10) — 🧠 Pluggable local-movement model backend: learn → repeat → generalize (cloud-testable)
+
+**Audited:** `src/training/` and `src/capture/` against standing objective #2(d)
+— "post-train a local model on that dataset to repeat the recorded movements,
+and generalize to perform new but related movements." Recent runs (5–9) were all
+typecheck-debt paydown; the movement-learning subsystem had capture → schema →
+dataset → replay, but the *train/infer* piece existed only as
+`LocalAppleSiliconTrainingRunner`, which **emits an MLX/axolotl launch script**
+and cannot learn or infer anything in the cloud. So there was no way to validate
+objective #2(d) in tests — exactly the ROADMAP item "pluggable local-model
+backend with a deterministic mock backend."
+
+**Changed (additive, one new module + tests):** added
+`src/training/movement-model.ts` — a pluggable, on-device model interface plus a
+deterministic reference backend:
+- **`MovementModelBackend`** interface (`train(dataset) → TrainedMovementModel`,
+  `deserialize`) and **`TrainedMovementModel`** (`predictNext`, `generate`,
+  `serialize`) — the seam MLX/axolotl (and any future small local model) plug
+  into. **`MovementModelRegistry`** resolves backends by a `backend`
+  discriminator baked into the serialized model.
+- **`MarkovMovementBackend`** — a variable-order n-gram with stupid-backoff,
+  fully **deterministic** (argmax + lexicographic tie-break) so it passes in the
+  cloud. Trained on a recorded sequence, greedy `generate()` **reproduces** it
+  (repeat); given an unseen high-order context it **backs off** to shorter
+  contexts and still predicts the correct continuation (generalize).
+- **Tokenizer + dataset builders**: `tokenizeMovementEvents` canonicalizes
+  `ReplayTimelineEvent`s into discrete movement tokens
+  (`act:<tool>:<summary>` / `obs:<source>:<summary>` / `msg:<role>`);
+  `buildMovementDatasetFromReplays` / `buildMovementDatasetFromTrajectories`
+  turn the existing replay/trajectory schema into a replayable token dataset.
+  `movementSequenceFidelity` scores a rollout against a reference (seed for the
+  queued generalization eval harness). Exported all of it from `src/index.ts`.
+
+**Test results:** new `movement-model.test.ts` — **9 tests** covering repeat
+(exact reproduction + next-step prediction), generalize (backoff on unseen
+prefix + frequency ordering), serialization round-trip, registry resolution, and
+timestamp-ordered dataset building. `npm test` **174 → 183 passing** (42 files),
+**green on 2/2 consecutive runs** (flake sentinel). `npm run build` ✅.
+`npm run typecheck:src` ✅ (exit 0, source stays clean). Full `tsc` **125**
+(unchanged — both new files clean, no regression).
+
+**New idea:** now that a model can `generate()` movement token sequences, add a
+**generalization eval harness** that trains on N synthetic trajectories, holds
+out related-but-unseen ones, and reports mean `movementSequenceFidelity` — a
+single scalar the engine can track run-over-run to prove the subsystem is
+getting *better at generalizing*, not just at memorizing. Bigger: a
+**decoder** (`detokenizeMovement`) that maps generated tokens back into
+`DeviceCaptureInput` gestures so the replay engine can *execute* a
+model-authored sequence, closing the capture → train → **act** loop.
+
+---
+
 ## 2026-07-25 (run 9) — 🔴→🟢 Eliminated background-task test flakiness (verification gate restored)
 
 **Audited:** The verification gate itself. On a clean checkout `npm test` was

@@ -74,13 +74,25 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
+      for a real on-device small model. **DONE run 10** —
+      `src/training/movement-model.ts`: `MovementModelBackend` /
+      `TrainedMovementModel` interfaces + `MovementModelRegistry`, and a
+      deterministic `MarkovMovementBackend` (variable-order n-gram + backoff)
+      that learns to repeat recorded sequences and generalizes to unseen
+      related prefixes. Tokenizer + dataset builders bridge the existing
+      replay/trajectory schema. MLX/axolotl plug into the same interface.
 - [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
+      round-trips without real OS input. (Partially seeded run 10 — tests build
+      datasets from hand-written replays; still want a parameterized generator.)
 - [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      related synthetic trajectories. `movementSequenceFidelity` (run 10) is the
+      scoring primitive; wrap it in a train-on-N / hold-out-M harness that
+      reports a single mean-fidelity scalar the engine can track run-over-run.
+- [ ] Movement **decoder** (`detokenizeMovement`): map generated movement tokens
+      back into `DeviceCaptureInput` gestures so the replay engine can *execute*
+      a model-authored sequence — closes the capture → train → act loop.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
