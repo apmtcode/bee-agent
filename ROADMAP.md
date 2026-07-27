@@ -17,7 +17,9 @@ unchecked items are queued. Keep this richer than you found it each run.
       consecutive green. Restores the engine's verification gate.
 - [ ] **Flake sentinel in the pre-push self-check**: run `vitest run` twice each
       cycle and only treat the suite as green if *both* pass — a single lucky run
-      must not gate a push (the exact failure mode run 9 fixed).
+      must not gate a push (the exact failure mode run 9 fixed). Applied manually
+      run 10 and it caught a *second*, unrelated flake (gateway reconnect,
+      same-ms `ts` collision) — fixed at root in `event-bus.ts`. Worth codifying.
 - [ ] **Test-spawn lint**: flag `startBackgroundTask` / real `spawn` in `*.test.ts`
       that don't inject a spawn stub, so subprocess-race flakiness can't return.
 - [ ] **Pay down typecheck debt** (surfaced by the `typecheck` script). Full
@@ -74,13 +76,23 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
-      deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
+- [x] **Pluggable local-model backend interface + deterministic mock**
+      (2026-07-27, run 10) — `src/training/movement-backend.ts`:
+      `MovementModelBackend`/`MovementPolicy` seam + `DeterministicMockMovementBackend`
+      (nearest-neighbour repeat, entity-substitution generalize) +
+      `buildMovementDataset`/`datasetFromReviewedExport`. This is the
+      inference/policy side of objective #2 (c repeat + d generalize). 13 tests.
 - [ ] Synthetic event-stream generator to validate capture→dataset→replay
       round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+- [ ] Generalization eval harness (now unblocked — `MovementPolicy.predict`
+      exists): feed held-out synthetic goals to a loaded policy and score replay
+      fidelity (step-sequence edit-distance + entity-substitution correctness) so
+      "does it generalize?" is a tracked metric per dataset.
+- [ ] Real on-device backend implementing `MovementModelBackend` (mlx/axolotl)
+      behind the same interface as the mock; wire it to the runner's launch plan.
+- [ ] Opaque monotonic cursor: give the gateway reconnect path an offset/sequence
+      cursor instead of a wall-clock `ts`, so cursor correctness never depends on
+      the clock (run 10 fixed the immediate flake via monotonic `ts` in the bus).
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

@@ -6,6 +6,63 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-27 (run 10) — 🧠 Movement-model inference backend (repeat + generalize) + 🔴→🟢 gateway reconnect flake fixed at root
+
+**Audited:** The movement-learning subsystem (standing objective #2) end-to-end.
+Found the pipeline covered **capture → reviewed dataset → replay → training-*plan*
+generation** (runner.ts emits mlx/axolotl launch plans) but had **no
+inference/policy side** — nothing that loads a trained policy and predicts a
+movement sequence, i.e. no way to actually satisfy objective #2 (c) *repeat a
+recorded movement* or (d) *generalize to a new-but-related one*. This is the top
+unchecked item in the roadmap's movement section (pluggable local-model backend +
+deterministic mock).
+
+**Changed (additive) — new `src/training/movement-backend.ts`:**
+- `MovementModelBackend` / `MovementPolicy` interfaces — the pluggable seam so a
+  real on-device small model (mlx/axolotl) drops in later behind the same API.
+- `DeterministicMockMovementBackend` — a no-OS, no-real-model reference backend
+  that "learns" by indexing the dataset and infers by nearest-neighbour goal
+  matching (Jaccard over meaningful tokens): score ≥ threshold → **repeat** the
+  recorded steps verbatim; below → **generalize** by substituting the novel goal
+  entity into the matched steps (e.g. learned "open safari" → predicts "open
+  chrome"), with reduced confidence and `generalized:true`. Fully deterministic
+  given the same dataset+request → testable in the cloud.
+- `buildMovementDataset` / `datasetFromReviewedExport` — close the loop: turn the
+  reviewed export's `replays` (objective #2 b) into labelled `MovementExample`s
+  (goal from observations, ordered steps from actions). Barrel-exported.
+- 13 new tests (`movement-backend.test.ts`) covering tokenize/similarity, dataset
+  derivation + ordering, repeat, entity-substitution generalization, maxSteps,
+  determinism, empty dataset, custom threshold.
+
+**Also fixed (root cause) — gateway reconnect flake:** while running the suite
+twice (the flake-sentinel discipline from run 9), `gateway-transport.test.ts`
+("replays only missed events after reconnect cursor") failed ~1-in-2 under
+full-suite load. Root cause is a **real product bug**, not a test bug: every
+event is stamped `ts: Date.now()` (ms resolution) and the reconnect replay uses
+an **exclusive** `event.ts > afterTs` cursor, so two events emitted in the same
+millisecond share a `ts` and the later one is **silently dropped on resume**.
+Fixed at the source in `src/kernel/event-bus.ts`: `publish()` now enforces
+**strictly-increasing** timestamps (bump to `lastTs+1` on collision/regression),
+so every distinct event stays addressable by the cursor. Provided increasing
+timestamps pass through unchanged. +2 event-bus tests (collision → 100/101/102
+still both replayable; monotone input preserved).
+
+**Test results:** `npm test` **189/189**, green **4/4 consecutive full runs**;
+the previously-flaky gateway test **0 failures over 12 isolated runs** (was ~50%).
+`npm run build` ✅. `npm run typecheck:src` ✅ (source stays clean). Full `tsc`
+**125** (unchanged — no regression; new source + test files are type-clean).
+
+**New idea:** now that a `MovementPolicy` can predict a sequence, add a
+**generalization eval harness** (roadmap has the stub) that feeds held-out
+synthetic goals and scores replay fidelity (step-sequence edit-distance +
+entity-substitution correctness) — turning "does it generalize?" into a tracked
+metric per dataset. Bigger: promote the monotonic-ts guarantee into an explicit
+`EventTs` newtype + a bus-level invariant test, and give the reconnect cursor an
+opaque monotonic **offset** (not a wall-clock ts) so cursor correctness no longer
+depends on the clock at all.
+
+---
+
 ## 2026-07-25 (run 9) — 🔴→🟢 Eliminated background-task test flakiness (verification gate restored)
 
 **Audited:** The verification gate itself. On a clean checkout `npm test` was

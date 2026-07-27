@@ -16,6 +16,7 @@ export class OperatorEventBus<T extends OperatorEvent = OperatorEvent> {
   private readonly listeners = new Set<(event: T) => void>();
   private readonly waiters = new Set<() => void>();
   private closed = false;
+  private lastTs = 0;
 
   constructor(options: { replayLimit?: number } = {}) {
     this.replayLimit = options.replayLimit ?? 0;
@@ -24,6 +25,18 @@ export class OperatorEventBus<T extends OperatorEvent = OperatorEvent> {
   publish(event: T): void {
     if (this.closed) {
       return;
+    }
+    // Guarantee strictly-increasing timestamps across published events. Event
+    // producers stamp `ts: Date.now()` (millisecond resolution), so two events
+    // emitted in the same millisecond would otherwise share a `ts`. The gateway
+    // reconnect path replays with an exclusive `event.ts > afterTs` cursor, so a
+    // colliding `ts` silently drops the later event on resume. Nudging the ts
+    // forward on collision keeps every distinct event addressable by the cursor.
+    if (typeof event.ts === "number") {
+      if (event.ts <= this.lastTs) {
+        event.ts = this.lastTs + 1;
+      }
+      this.lastTs = event.ts;
     }
     if (this.replayLimit > 0) {
       this.replayEvents.push(event);
