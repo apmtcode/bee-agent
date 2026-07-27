@@ -74,13 +74,30 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
+      for a real on-device small model. **(2026-07-27, run 10)** —
+      `src/training/movement-backend.ts`: `MovementTrainingBackend` interface +
+      registry (`registerMovementBackend`/`createMovementBackend`) +
+      `NGramMovementBackend` (deterministic back-off n-gram) that trains,
+      predicts, generates, serializes to JSON. Real on-device model plugs into
+      the same contract.
 - [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      round-trips without real OS input. (Partial: `buildMovementDataset` +
+      `movementSequenceFromReplay/Trajectory` now tokenize real capture output
+      into training sequences; still want a *generator* that emits synthetic
+      device/OS event streams end-to-end through the recorder.)
+- [x] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories. **(2026-07-27, run 10)** —
+      `evaluateMovementModel` scores held-out next-token accuracy and separates
+      `generalizedCorrect` (back-off hits) from `memorizedCorrect`.
+- [ ] Close the learn→generate→replay loop: feed a backend-generated movement
+      sequence into `ReplayRuntimeService` and assert the emitted actions match
+      (end-to-end integration test).
+- [ ] Track a curriculum/generalization score across runs (train on N−1
+      trajectories, eval on the held-out one, log accuracy to a metrics file) to
+      watch learning-subsystem fidelity trend over time. Add a second mock
+      backend to prove the registry/interface abstracts backends.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

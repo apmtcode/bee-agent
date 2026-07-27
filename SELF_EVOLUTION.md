@@ -6,6 +6,68 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-27 (run 10) — 🧠 Movement-learning inference backend (train → predict → generate → generalize)
+
+**Audited:** Standing objective #2 (local-movement learning) against what
+`src/capture/` + `src/training/` already ship. Found a concrete gap: the
+pipeline could **capture → schema → dataset → replay** and could emit an
+external **on-device training command** (`runner.ts` → mlx/axolotl), but there
+was **nothing that actually trains a model and does inference/generalization in
+a deterministic, cloud-testable way** — parts (c) "post-train a local model to
+repeat the recorded movements" and (d) "generalize to new-but-related
+movements" existed only as a shell-command seam. This is also the top queued
+movement item in ROADMAP ("pluggable local-model backend + deterministic mock"
+and "generalization eval harness").
+
+**Changed (additive, new module — no existing code touched):**
+- `src/training/movement-backend.ts`:
+  - **`MovementTrainingBackend` interface** (`train` / `predict` / `generate`)
+    plus a **pluggable registry** (`registerMovementBackend` /
+    `createMovementBackend` / `listMovementBackends`) so a real on-device small
+    model drops in behind the same contract as the mock — the documented seam.
+  - **`NGramMovementBackend`** — a deterministic mock: an interpolated
+    **back-off n-gram / Markov model** over movement tokens. Training counts
+    next-token frequencies for every context length `order…1`, plus unigram and
+    start distributions, and appends an explicit `MOVEMENT_END_TOKEN` so
+    generation terminates. Prediction tries the longest matched context and
+    **backs off** to shorter ones → exact recorded prefixes are *repeated*
+    (memorization), unseen prefixes degrade to related movements
+    (*generalization*) instead of failing. `matchedOrder` on each prediction
+    reports whether it memorized or generalized. `generate()` is fully
+    deterministic argmax by default, or reproducible seeded sampling via a small
+    LCG (no `Math.random`/`Date`, so it's stable in tests). Weights are
+    JSON-serializable and reload without behavior change.
+  - **Dataset construction** wired to the real pipeline:
+    `movementSequenceFromReplay` / `movementSequenceFromTrajectory` /
+    `buildMovementDataset` tokenize `ReplayManifest` events and
+    `TrajectorySpan` actions (skipping transcript turns, sorting by `ts`).
+  - **`evaluateMovementModel`** — the generalization eval harness: held-out
+    next-token accuracy that separates `memorizedCorrect` from
+    `generalizedCorrect`, so replay fidelity on new-but-related trajectories is
+    measurable, not assumed.
+- `src/index.ts`: exported the full surface (12 values + 11 types).
+
+**Test results:** new `movement-backend.test.ts` — **14 tests** covering
+memorization, end-marker termination, context prediction probabilities,
+back-off generalization, unigram fallback, seeded-sampling reproducibility,
+seed-prefix conditioning, JSON round-trip, replay/trajectory tokenization,
+registry, and the eval harness (generalized-vs-memorized attribution).
+`npm test` **188/188** (was 174; +14), **green on 2/2 consecutive runs** (flake
+sentinel). `npm run typecheck:src` ✅ exit 0 (source stays clean).
+`npm run build` ✅.
+
+**New idea:** now that a backend can *generate* a movement sequence, close the
+loop with the existing **replay engine** — feed a generated sequence into
+`ReplayRuntimeService` and assert the emitted actions match, giving an
+end-to-end "learn → generate → replay" integration test. Bigger: a
+**curriculum/generalization score** tracked across runs (train on N−1
+trajectories, eval on the held-out one, log accuracy to a metrics file) so the
+engine can watch the learning subsystem's fidelity trend over time — and add a
+second mock backend (e.g. a frequency-weighted prefix-tree) to exercise that the
+registry/interface genuinely abstracts backends.
+
+---
+
 ## 2026-07-25 (run 9) — 🔴→🟢 Eliminated background-task test flakiness (verification gate restored)
 
 **Audited:** The verification gate itself. On a clean checkout `npm test` was
