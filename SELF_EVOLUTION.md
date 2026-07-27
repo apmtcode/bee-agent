@@ -6,6 +6,67 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-27 (run 10) — 🧠 In-process movement model: pluggable backend, learns + generalizes recorded movements (objective 2c/2d)
+
+**Audited:** The local-movement learning subsystem end-to-end (`src/capture/*` +
+`src/training/*`). Capture (consent, device/os/browser adapters → trajectory
+spans), the dataset **export** (`exporter.ts` → reviewed manifest), replay
+manifests, and the **runner** were all present — but the runner only *shells out*
+to MLX/axolotl (`runner.ts` builds a `python3 -m mlx_lm.lora …` launch script).
+That means objective 2's parts **(c) "post-train a local model to repeat the
+recorded movements"** and **(d) "generalize to new but related movements"** had
+**no in-process, testable implementation at all** — nothing that actually learns
+from a movement dataset or predicts a next movement in the cloud. That was the
+subsystem's single biggest gap.
+
+**Changed (additive, two new modules + tests + barrel exports):**
+- `src/training/movement-model.ts` — the missing model layer:
+  - **`MovementModelBackend` interface** (`train(dataset) → TrainedMovementModel`)
+    — the pluggable seam. The MLX runner is one (external) backend; a real
+    on-device small model is another; the reference below is a third.
+  - **`MarkovMovementBackend`** — a fully deterministic, dependency-free
+    variable-order Markov model with **stupid-backoff**. Reproduction (c): a
+    context seen verbatim resolves at full order, so recorded runs replay
+    exactly. Generalization (d): a novel long context matches on its longest
+    recorded *suffix* — the model backs off to shorter shared movement patterns
+    instead of failing. `predictNext` reports which `order` it used (full vs
+    backed-off) and ranked candidates; `generate` rolls the policy forward to an
+    `<end>` marker. `serialize()`/`deserialize()` persist a trained policy as an
+    artifact.
+  - **Tokenizers** (`tokenizeAction/tokenizeTrajectorySpan/tokenizeReplayManifest`)
+    map captured actions → canonical movement tokens, dropping volatile targets
+    by default so related runs share structure (target-inclusive mode available).
+  - **`evaluateMovementModel`** generalization eval harness: teacher-forced
+    top-1 next-movement accuracy + whole-sequence free-run reproduction rate +
+    an exact-context (non-backoff) rate, over held-out sequences.
+- `src/training/synthetic-movements.ts` — deterministic **synthetic movement
+  stream generator** (seeded mulberry32, grammar-driven workflows:
+  browser-search / file-edit / app-switch) + `splitMovementCorpus`. Lets the
+  whole train→infer→eval loop be validated with **no real OS input** — held-out
+  sequences are same-grammar-but-unseen, so the eval measures true
+  generalization.
+- Barrel exports added in `src/index.ts` for both modules.
+
+**Test results:** new `movement-model.test.ts` **20/20** (exact reproduction of a
+recorded sequence; deterministic argmax + lexicographic tie-break; **backoff
+generalization** to a novel prefix; serialize round-trip; tokenizer ordering;
+synthetic determinism/seed-variance/bounds; eval accuracy **>0.75 on held-out**
+related runs + perfect reproduction on a deterministic corpus + held-out ≤ train).
+Full suite **194/194** (was 174), green on **2/2** consecutive runs.
+`npm run build` ✅. `typecheck:src` ✅ (exit 0). Full `tsc` **125** (unchanged, no
+regression; new files add 0 errors).
+
+**New idea:** now that a trained policy `serialize()`s to a plain object, wire it
+into the training pipeline as the **mock backend artifact** — have
+`LocalTrainingExecutionService` write the serialized Markov model as `model.json`
+alongside the MLX plan, so a cloud run produces a *runnable* artifact the replay
+engine can execute (closing capture→train→**replay-with-model** without a real
+GPU). Bigger: an **entropy-weighted eval** — weight next-movement accuracy by the
+branch entropy of each context so the score isn't inflated by deterministic
+prefixes, giving an honest generalization number as workflows grow.
+
+---
+
 ## 2026-07-25 (run 9) — 🔴→🟢 Eliminated background-task test flakiness (verification gate restored)
 
 **Audited:** The verification gate itself. On a clean checkout `npm test` was

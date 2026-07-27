@@ -71,16 +71,36 @@ unchecked items are queued. Keep this richer than you found it each run.
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
 (exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
-      objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Inventory what `src/capture` + `src/training` already implement vs. the
+      objective's five pieces (2026-07-27, run 10). Present before run 10:
+      capture (consent + device/os/browser adapters → trajectory spans), event
+      schema (`trajectory.ts`), dataset export (`exporter.ts` reviewed manifest),
+      replay manifests (`replay.ts`), and an **external** MLX/axolotl runner.
+      **Missing:** any in-process, testable train→infer step (parts c/d) — the
+      runner only shelled out. Filled by run 10 (below).
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      for a real on-device small model (2026-07-27, run 10) —
+      `MovementModelBackend` + deterministic `MarkovMovementBackend`
+      (variable-order, stupid-backoff) in `src/training/movement-model.ts`.
+- [x] Synthetic event-stream generator to validate capture→dataset→replay
+      round-trips without real OS input (2026-07-27, run 10) —
+      `src/training/synthetic-movements.ts` (seeded, grammar-driven).
+- [x] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories (2026-07-27, run 10) —
+      `evaluateMovementModel` (teacher-forced next-movement accuracy +
+      whole-sequence reproduction + exact-context rate).
+- [ ] Wire the serialized Markov policy into the training pipeline as the mock
+      backend **artifact**: have `LocalTrainingExecutionService` write
+      `model.json` (from `TrainedMovementModel.serialize()`) alongside the MLX
+      plan, so a cloud run yields a *runnable* artifact — then let the replay
+      engine execute a trained model (capture→train→replay-with-model, no GPU).
+- [ ] Entropy-weighted eval: weight next-movement accuracy by each context's
+      branch entropy so deterministic prefixes don't inflate the generalization
+      score as the workflow grammar grows.
+- [ ] Second movement backend to prove the interface generalizes beyond Markov
+      (e.g. a tiny in-process neural/embedding-nearest-neighbour policy) sharing
+      the same `MovementModelBackend` contract and eval harness.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
