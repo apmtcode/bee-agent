@@ -71,16 +71,35 @@ unchecked items are queued. Keep this richer than you found it each run.
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
 (exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
-      objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
-      deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+- [x] Inventory `src/capture` + `src/training` vs. the objective's five pieces
+      (2026-07-27, run 10). Findings: capture ✅ (recorder/adapters/os-observer/
+      ingestion), schema ✅ (`trajectory.ts`, replay timeline events), dataset ✅
+      (`exporter.ts` → `ReviewedExportManifest`), replay ✅ (`replay*.ts`).
+      **Gap: train/infer** — `runner.ts` only emitted an external mlx/axolotl
+      launch plan; nothing learned from the data in-process. Closed this run.
+- [x] **Pluggable local-model backend interface** (2026-07-27, run 10) —
+      `MovementModelBackend` seam + deterministic in-process `MarkovMovementBackend`
+      (variable-order n-gram with stupid back-off) in `src/training/movement-model.ts`.
+      Trains on the recorded movement dataset, reproduces recorded movements
+      (`generate`) and generalizes to unseen-but-related prefixes via back-off. A
+      real on-device small model (mlx/axolotl) can implement the same interface
+      with no caller change.
+- [x] **Synthetic event-stream generator** (2026-07-27, run 10) —
+      `src/training/synthetic-movements.ts`: deterministic rule-based UI workflows
+      (mail/browser/files) → `MovementDataset`, no RNG/clock, to validate the
+      dataset→train→infer round-trip without real OS input.
+- [x] **Generalization eval harness** (2026-07-27, run 10) —
+      `src/training/generalization-eval.ts`: deterministic stride train/held-out
+      split; reports reproduction rate, teacher-forced held-out step accuracy,
+      generalization (back-off) rate, and full-sequence accuracy.
+- [ ] **Dataset builder → exporter wiring**: feed `ReviewedExportManifest.replays`
+      into `buildMovementDatasetFromReplay` and expose a control-plane RPC to
+      train + eval a movement model from a reviewed export (close the loop from
+      capture → reviewed export → trained model → eval report).
+- [ ] **Second backend for parity/robustness**: a smoothed (add-k / interpolated)
+      backend implementing `MovementModelBackend`, benchmarked against the Markov
+      backend on the same eval harness — proves the seam and gives a fidelity
+      baseline to beat.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

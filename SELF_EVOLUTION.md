@@ -6,6 +6,70 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-27 (run 10) — 🧠 Movement-model backend: the missing train/infer piece (objective #2c/#2d)
+
+**Audited:** The local-movement learning subsystem (standing objective #2)
+end-to-end against its five required pieces. Inventory of `src/capture` +
+`src/training`: capture ✅ (recorder, device/os/browser adapters, ingestion,
+consent), schema ✅ (`trajectory.ts`, `replay.ts` timeline events), dataset ✅
+(`exporter.ts` → `ReviewedExportManifest`), replay ✅ (`replay-service.ts`).
+**The one genuine gap: train/infer.** `training/runner.ts` only *emits an external
+mlx/axolotl launch plan* (a shell script the user runs on-device) — nothing in
+the codebase actually *learns from* the recorded movements or *generalizes*. So
+objective #2(c) "post-train a model to repeat the recorded movements" and #2(d)
+"generalize to new but related movements" had zero in-process, cloud-testable
+implementation. Highest-value increment, and the exact item the roadmap queued.
+
+**Changed (additive, three new source modules + barrel exports):**
+- `src/training/movement-model.ts` — the pluggable seam. `MovementModelBackend`
+  interface (`train(dataset) → TrainedMovementModel`); `TrainedMovementModel`
+  exposes `predictNext` (one-step, teacher-forced) and `generate` (roll-out).
+  Ships `MarkovMovementBackend`: a **fully deterministic, dependency-free**
+  variable-order n-gram model with **stupid back-off** — high orders give
+  faithful reproduction of recorded movements (#2c); backing off to a broader
+  context (app-only → global) is what lets it predict a plausible next movement
+  on an unseen-but-related prefix (#2d). No RNG/clock (tie-break: higher count,
+  then lexicographic), so training + inference are reproducible in the cloud. A
+  real on-device small model implements the same interface with **no caller
+  change** (documented seam to `LocalAppleSiliconTrainingRunner`). Also
+  `buildMovementDatasetFromTrajectories` / `buildMovementDatasetFromReplay`
+  converters wiring the existing capture artifacts into the model's dataset.
+- `src/training/synthetic-movements.ts` — deterministic rule-based UI-workflow
+  generator (mail/browser/files) producing a `MovementDataset` with no real OS
+  input, per the cloud guardrail, to validate the dataset→train→infer round-trip.
+- `src/training/generalization-eval.ts` — `evaluateGeneralization`: deterministic
+  stride split into train / held-out, reports **reproductionRate**,
+  **heldOutStepAccuracy** (teacher-forced top-1), **generalizationRate** (fraction
+  of predictions that required back-off), and **heldOutSequenceAccuracy**.
+- `src/index.ts` — barrel exports for all three modules.
+
+**One real bug caught by a test (not just green-washing):** the sequence-terminal
+token was tie-breaking *ahead* of real movements at broad back-off contexts, so
+generalization returned "sequence ends" instead of a movement. Fixed by making
+the terminal sentinel sort lexicographically last, so a tie prefers a real
+movement and termination only wins on a strict majority.
+
+**Test results:** two new test files, **+13 tests**. `npm test` **174 → 187
+passing**, run **twice back-to-back, both green** (flake sentinel). Eval on the
+learnable synthetic workflows: reproductionRate **1.0**, heldOutStepAccuracy
+**≥0.9**, and the harness *discriminates* — an unstructured-noise dataset scores
+held-out accuracy **<0.5**. `npm run build` ✅. `typecheck:src` ✅ (exit 0, new
+source clean). Full `tsc` **125** (unchanged — no regression; the 125 remain
+entirely in pre-existing test files).
+
+**New idea:** now that a movement model trains + evals in-process, add a
+**closed-loop control-plane RPC** — `movement.trainFromExport(exportPath)` — that
+reads a `ReviewedExportManifest`, builds the dataset from its `replays`, trains
+the backend, runs `evaluateGeneralization`, and persists the report next to the
+job manifest. That turns the whole capture → reviewed-export → train → eval chain
+into one operator-invokable action and gives every training job an automatic
+fidelity gate (refuse to promote a model whose held-out accuracy regresses).
+Bigger: a **second smoothed/interpolated backend** benchmarked on the same
+harness — the first real exercise of the pluggable seam and a fidelity baseline
+to beat.
+
+---
+
 ## 2026-07-25 (run 9) — 🔴→🟢 Eliminated background-task test flakiness (verification gate restored)
 
 **Audited:** The verification gate itself. On a clean checkout `npm test` was
