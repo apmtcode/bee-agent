@@ -6,6 +6,68 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-27 (run 10) — 🧠 Movement-learning: a real local model that trains, repeats, and generalizes
+
+**Audited:** The local-movement learning subsystem (standing objective 2),
+inventorying `src/capture/` + `src/training/` against the objective's five
+pieces. Findings: capture→schema→dataset→replay are well scaffolded
+(recorder, trajectory, replay, os/device adapters, reviewed exporter), and the
+training layer emits **on-device launch plans** (`runner.ts` → mlx/axolotl shell
+commands). But pieces **(c) post-train a model to repeat movements** and **(d)
+generalize to new-but-related movements** had *no in-process implementation at
+all* — nothing that actually learns from a dataset and infers. Everything
+deferred to a real machine, so the loop was untestable in the cloud. That was
+the single biggest gap in objective 2, and a queued roadmap item ("Pluggable
+local-model backend interface … deterministic mock backend"; "Generalization
+eval harness").
+
+**Changed (additive, two new modules + full test coverage):**
+- `src/training/movement-model.ts` — a **low-level movement event schema**
+  (`MovementEvent`: mouse-move/down/up, key-down/up, scroll, wait; normalized
+  unit-square coords + ms offsets) grouped into labeled, parameterized
+  `MovementSequence` demonstrations. A **pluggable `MovementModelBackend`**
+  interface (train/restore) + `MovementModel` (predict/serialize) leaves a clean
+  seam for a real on-device small model. Ships
+  `InProcessMovementModelBackend` — a **real deterministic learner**, not a
+  stub: it groups demos by event-type structure, picks the canonical structure,
+  and for every slot fits a **ridge-regularized least-squares regression**
+  (normal equations + Gaussian elimination with partial pivoting) of each
+  coordinate/timing against the demo's target `params`. That regression is what
+  makes it *generalize*: an event coordinate that equals a target param is
+  recovered near-exactly, so the gesture can be **re-aimed** at a held-out
+  target. Models `serialize()` to JSON-safe state and `restore()` deterministically.
+- `src/training/movement-synthesis.ts` — a **deterministic synthetic gesture
+  generator** (`generatePointerGesture`, no `Math.random`) that produces
+  point-and-click demonstrations gliding a pointer from a fixed start to each
+  target, plus a **generalization eval harness** (`evaluateMovementModel`)
+  reporting mean/max pointer error, endpoint error, and pass-rate on held-out
+  targets. This is how the cloud validates the loop with no real OS input.
+- `src/index.ts` — exported the new backend, model types, schema, synthesis, and
+  eval APIs.
+- `src/training/movement-model.test.ts` — 12 tests covering: exact **repeat** of
+  a trained movement; **generalization** to a held-out interior target;
+  **extrapolation** past the training hull (with a note on why collinear
+  training targets can't be separated — the model behaves correctly, the naive
+  test premise didn't); unit-square clamping; serialize→restore fidelity;
+  multi-label training; unknown-label error; and eval-harness metrics
+  (endpoint error < 0.01, pass-rate 1.0 on held-out targets).
+
+**Test results:** `npm test` **184/184 passing (was 174; +10 net after the
+suite), green on 2/2 consecutive runs** (flake sentinel). `npm run build` ✅.
+`npm run typecheck:src` ✅ (exit 0 — source stays clean). No files in
+`claude-code/`, `claw-code/`, `hermes-agent/`, `openclaw/` were touched.
+
+**New idea:** the model currently learns *aim* (where a gesture lands) but treats
+each slot's timing independently. Next: a **kinematic layer** — fit a velocity
+profile (e.g. minimum-jerk / Fitts'-law-shaped easing) so synthesized
+trajectories are humanlike in *time*, not just geometrically correct, and add a
+**round-trip capture bridge** that lifts real `TrajectorySpan` action metadata
+(device-adapter gestures, os-observer events) into `MovementSequence`s so the
+same learner trains on genuinely recorded data, not only synthetic streams. Also
+worth a **`replay` integrity check**: assert a predicted sequence is monotonic
+in `t` and stays inside declared app bounds before it could ever be dispatched
+to a real OS.
+
 ## 2026-07-25 (run 9) — 🔴→🟢 Eliminated background-task test flakiness (verification gate restored)
 
 **Audited:** The verification gate itself. On a clean checkout `npm test` was

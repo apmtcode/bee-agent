@@ -71,16 +71,33 @@ unchecked items are queued. Keep this richer than you found it each run.
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
 (exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
-      objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
-      deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+- [x] Inventory what `src/capture` + `src/training` already implement vs. the
+      objective's five pieces (2026-07-27, run 10). Capture→schema→dataset→replay
+      scaffolded; training emitted on-device launch plans (mlx/axolotl) but had
+      **no in-process learner** — pieces (c) repeat and (d) generalize were
+      entirely missing. That gap is what run 10 filled.
+- [x] Pluggable local-model backend interface with a deterministic mock backend
+      (2026-07-27, run 10). `MovementModelBackend`/`MovementModel` +
+      `InProcessMovementModelBackend` (real ridge-least-squares learner) in
+      `src/training/movement-model.ts`; documented seam for a real on-device
+      small model.
+- [x] Synthetic event-stream generator (2026-07-27, run 10) —
+      `generatePointerGesture` in `src/training/movement-synthesis.ts`,
+      deterministic (no `Math.random`), validates the full
+      capture→dataset→train→predict loop without real OS input.
+- [x] Generalization eval harness (2026-07-27, run 10) —
+      `evaluateMovementModel` reports pointer/endpoint error + pass-rate on
+      held-out but related synthetic targets (endpoint error < 0.01 in tests).
+- [ ] **Kinematic timing layer**: fit a velocity profile (minimum-jerk /
+      Fitts'-law easing) so synthesized trajectories are humanlike in *time*, not
+      just geometrically correct. The model currently learns aim, not motion.
+- [ ] **Round-trip capture bridge**: lift real `TrajectorySpan` action metadata
+      (device-adapter gestures, os-observer events) into `MovementSequence`s so
+      the learner trains on genuinely recorded data, not only synthetic streams.
+- [ ] **Replay integrity guard**: before a predicted sequence could dispatch to a
+      real OS, assert monotonic `t`, unit-square coords, and declared app bounds.
+- [ ] Wire the in-process backend into the training `runner`/`execution-service`
+      as the cloud/CI-default backend, with mlx/axolotl selected only on-device.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

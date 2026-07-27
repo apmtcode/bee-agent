@@ -431,3 +431,32 @@ export type {
   FailTrainingJobParams,
   TrainingJobStoreShape,
 } from "./training/job-store.js";
+export {
+  InProcessMovementModelBackend,
+  MOVEMENT_EVENT_TYPES,
+} from "./training/movement-model.js";
+export type {
+  MovementDataset,
+  MovementEvent,
+  MovementEventType,
+  MovementLabelTemplate,
+  MovementModel,
+  MovementModelBackend,
+  MovementModelState,
+  MovementPredictRequest,
+  MovementSequence,
+  MovementTrainingOptions,
+  PointerButton,
+} from "./training/movement-model.js";
+export {
+  buildMovementDataset,
+  evaluateMovementModel,
+  generatePointerGesture,
+} from "./training/movement-synthesis.js";
+export type {
+  MovementEvalCase,
+  MovementEvalOptions,
+  MovementEvalResult,
+  SyntheticGestureOptions,
+  SyntheticTarget,
+} from "./training/movement-synthesis.js";
