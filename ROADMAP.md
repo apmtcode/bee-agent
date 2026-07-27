@@ -71,16 +71,35 @@ unchecked items are queued. Keep this richer than you found it each run.
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
 (exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
-      objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
-      deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+- [x] Inventory what `src/capture` + `src/training` already implement vs. the
+      objective's five pieces (2026-07-27, run 10). Gap: capture→schema→dataset→
+      replay all existed, but *train/infer* was 100% deferred to on-device
+      mlx/axolotl launch scripts — nothing trained or inferred in-process.
+- [x] **Pluggable local-model backend interface** with a deterministic mock
+      backend (2026-07-27, run 10). `LocalMovementModelBackend` +
+      `DeterministicMovementBackend` (backoff n-gram, no RNG) +
+      `MovementBackendRegistry` in `src/training/movement-model.ts`;
+      `MovementLearningService` orchestrates train/persist/infer. Real on-device
+      small-model backend registers under its own id — documented seam, no
+      call-site changes.
+- [x] **Synthetic event-stream generator** (2026-07-27, run 10) —
+      `src/training/synthetic-movements.ts` (`generateSyntheticDataset`,
+      `relatedVariant`, `syntheticWorkflow`), deterministic, no OS input.
+- [x] **Generalization eval harness** (2026-07-27, run 10) —
+      `MovementLearningService.evaluateGeneralization` measures step- and
+      sequence-level reproduction fidelity on held-out sequences + counts
+      generalized (backed-off) steps.
+- [ ] **Replay-bridge**: map a `MovementPrediction` back into
+      `ReplayTimelineEvent[]`/device-adapter gestures so predicted movements can
+      dry-run through `src/capture/replay-service.ts` — closes
+      capture→train→infer→replay into one loop and gives on-device a
+      simulate-before-execute gate.
+- [ ] **Confidence-gated executor**: only auto-perform predicted steps above a
+      confidence threshold; escalate low-confidence/backed-off steps for human
+      confirmation. Safety seam for real OS actuation.
+- [ ] Real on-device backend implementing `LocalMovementModelBackend` (e.g. an
+      mlx/gguf small model) selectable via `MovementBackendRegistry`, wired to
+      the existing `LocalAppleSiliconTrainingRunner` artifacts.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

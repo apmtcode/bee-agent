@@ -6,6 +6,70 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-27 (run 10) — 🧠 Pluggable local-movement model backend + in-process train/infer (objective #2 d+e)
+
+**Audited:** The local-movement learning subsystem (standing objective #2) —
+untouched since runs 2–9 all went to typecheck/test hygiene. Inventoried
+`src/capture/**` (recorder, os-observer, device/browser adapters, trajectory,
+replay → `ReplayManifest` timeline events) and `src/training/**` (exporter,
+job-store/manifest, runner, execution-service). **Gap found:** every training
+path *defers to on-device execution* — `runner.ts` only emits an mlx/axolotl
+launch script and `execution-service.ts` spawns it. There was **no pluggable
+model backend and nothing that could actually train or run inference in the
+cloud/CI**, so objective #2 (d) "post-train a local model to repeat recorded
+movements" and (e) "generalize to new but related movements" were unfulfilled
+and untestable. This is exactly the top queued ROADMAP item ("pluggable
+local-model backend … deterministic mock backend so cloud/CI tests pass").
+
+**Changed (additive, three new source modules + barrel exports):**
+- `src/training/movement-model.ts`: the movement-learning core.
+  - `MovementStep` schema distilled from captured `TrajectoryAction`s (carries
+    `tool`/`gesture`/`target`/`direction`/`summary` — real mouse/keyboard/
+    window semantics), plus `MovementSequence`/`MovementDataset`.
+  - Dataset builders `buildMovementDataset(trajectories)` (ts-sorted, skips
+    empties) and `movementDatasetFromReplays(replays)` (consumes the reviewed-
+    export event format, grouped per trajectory).
+  - `LocalMovementModelBackend` **interface** (`train`/`predict`) + a JSON-
+    serializable `TrainedMovementModel` envelope — the pluggable seam.
+  - `DeterministicMovementBackend`: a backoff n-gram ("Markov") policy. **No
+    RNG** — ties break by token `localeCompare`, so training + prediction are
+    byte-for-byte reproducible (what the verification gate needs). Repeats
+    recorded movements when the full-order context matches; **generalizes via
+    backoff** (drops to shorter context) on novel-but-related prefixes, tagging
+    each step `recorded` vs `generalized`.
+  - `MovementBackendRegistry` so callers pick a backend by id — a real
+    on-device small-model backend registers under its own id with zero
+    call-site changes.
+- `src/training/movement-service.ts`: `MovementLearningService` ties the loop
+  end-to-end in-process — dataset build → train (any registered backend) →
+  save/load model JSON (atomic) → `predict` → **`evaluateGeneralization`**
+  (the queued generalization eval harness: seeds a prefix, measures step- and
+  sequence-level reproduction fidelity + counts generalized steps).
+- `src/training/synthetic-movements.ts`: the queued deterministic synthetic
+  event-stream generator (no OS input needed) — `generateSyntheticDataset`,
+  `relatedVariant`, `syntheticWorkflow` for validating round-trips + generalization.
+- `src/index.ts`: exported all of the above.
+
+**Test results:** two new suites, **+11 tests** (movement-model 10, movement-
+service ... total 174 → **185/185**). Coverage: dataset distillation/ordering,
+exact end-to-end reproduction from empty prefix, **determinism across repeated
+train+predict**, generalization via backoff on an unseen app, persist/reload
+round-trip predicting identically, and the eval harness scoring both held-out
+variants and exact in-distribution reproduction. `npm run build` ✅.
+`npm run typecheck:src` ✅ (exit 0 — source stays clean). `npm test` **185/185,
+green on 2/2 consecutive runs**.
+
+**New idea:** now that inference is real and in-process, add a **replay-bridge**
+that maps a `MovementPrediction` back into `ReplayTimelineEvent[]`/device-adapter
+gestures so a predicted movement can be *dry-run through the existing replay
+engine* (`src/capture/replay-service.ts`) — closing capture→train→infer→replay
+into one testable loop, and giving the eventual on-device model a safe
+simulate-before-execute gate. Bigger: a **confidence-gated executor** that only
+auto-performs predicted steps above a threshold and escalates low-confidence
+(backed-off) steps for human confirmation — the safety seam for real OS actuation.
+
+---
+
 ## 2026-07-25 (run 9) — 🔴→🟢 Eliminated background-task test flakiness (verification gate restored)
 
 **Audited:** The verification gate itself. On a clean checkout `npm test` was
