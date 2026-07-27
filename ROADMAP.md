@@ -74,13 +74,30 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
-      deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+- [x] **Pluggable local-model backend interface** with a deterministic backend
+      (2026-07-27, run 10) — `src/training/movement-model.ts`:
+      `MovementModelBackend` seam + `NgramMovementBackend` (order-k Markov,
+      stupid-backoff) that trains in-process, replays recorded movements
+      verbatim, and generalizes via backoff. `trainMovementModel()` is the
+      normalize→train→self-eval pipeline. Documented seam for a neural on-device
+      backend (swap the backend, same interface). 16 tests.
+- [x] **Synthetic event-stream generator** (2026-07-27, run 10) —
+      `generateSyntheticMovementSequences()` (deterministic LCG) validates
+      capture→dataset→train→replay round-trips and builds held-out sets, no OS.
+- [x] **Generalization eval harness** (2026-07-27, run 10) —
+      `evaluateMovementModel()` reports teacher-forced next-step accuracy +
+      backoff rate on held-out sequences; test asserts >0.5 on unseen synthetic
+      flows from the same patterns.
+- [ ] **Replay-fidelity regression gate**: snapshot `evaluateMovementModel`
+      accuracy/backoff on a fixed synthetic corpus to a baseline file; fail the
+      pre-push check if a backend/tokenizer change regresses held-out accuracy.
+      Gives the future neural backend a concrete bar to beat the n-gram baseline.
+- [ ] **Edit-distance replay scorer**: Levenshtein over rolled-out vs
+      ground-truth token streams so partial-match replay quality is measurable,
+      not just exact next-step hits.
+- [ ] **Real neural on-device backend** behind `MovementModelBackend` (e.g. a
+      tiny MLX/GGUF sequence model), wired into `LocalAppleSiliconTrainingRunner`
+      so the launch script trains the same dataset the n-gram baseline validates.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

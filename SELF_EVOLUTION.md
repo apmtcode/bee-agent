@@ -6,6 +6,64 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-27 (run 10) — 🧠 In-process movement learning: pluggable backend + n-gram trainer that repeats *and* generalizes
+
+**Audited:** Standing objective #2 (local-movement learning) and `src/training/`.
+The existing pipeline (`recorder`/adapters → `exporter` dataset → `runner`) only
+**emits an external launch script** for MLX/axolotl — there was no code path that
+actually *trains* on recorded movements or *infers* new ones, so parts (c)
+"post-train a local model to repeat movements" and (d) "generalize to related
+movements" of the objective were entirely un-exercised in the cloud. The
+ROADMAP's top movement item was exactly this: a **pluggable local-model backend
+with a deterministic mock** so the learn→replay→generalize loop is testable
+without a GPU or the user's machine.
+
+**Changed (additive — one new module + tests, no existing code touched):**
+- **`src/training/movement-model.ts`** — the movement-learning core:
+  - *Normalization:* `deriveMovementStep()` turns any capture action into a
+    canonical, vocabulary-stable token (`tool.action@target^direction`), handling
+    the device (`gesture`), browser (`action`), and os adapters' metadata shapes
+    with a summary fallback. `buildMovementSequences()` /
+    `buildMovementSequencesFromReplay()` / `buildMovementDataset()` assemble the
+    replayable dataset from `TrajectorySpan`s or `ReplayTimelineEvent`s.
+  - *Pluggable seam:* `MovementModelBackend` interface (`train` / `predict`) so a
+    real on-device neural backend drops in without touching the pipeline. A
+    `createMovementBackend()` registry resolves by name.
+  - *Deterministic backend:* `NgramMovementBackend` — an order-k Markov model
+    with **stupid-backoff**. Seeded with a recorded prefix it **repeats** the
+    movement verbatim (full confidence, no backoff); for unseen-but-related
+    contexts it **backs off** to shorter n-grams and predicts a plausible next
+    movement — i.e. it generalizes. Fully JSON-serializable.
+  - *Inference + eval:* `generateMovement()` rolls out a movement to `<end>`;
+    `evaluateMovementModel()` gives teacher-forced next-step accuracy + backoff
+    rate on held-out sequences (the generalization metric); `trainMovementModel()`
+    is the one-shot normalize→train→self-eval pipeline.
+  - *Synthetic streams:* `generateSyntheticMovementSequences()` (deterministic
+    LCG, no `Math.random`/`Date`) produces reproducible trajectories to validate
+    round-trips and build held-out generalization sets in CI. (Also ticks the
+    ROADMAP "synthetic event-stream generator" item.)
+- **`src/index.ts`** — exported the module's public surface (13 values + 13 types).
+
+**Test results:** new `movement-model.test.ts` **16 tests** covering
+normalization, dataset ordering/vocab, verbatim replay, trained-continuation
+confidence, `<end>` termination, **backoff generalization**, empty-model safety,
+perfect in-sample accuracy, **>0.5 held-out accuracy on unseen synthetic flows**,
+synthetic determinism, and serialized-model round-trip. `npm test` **190/190**
+(was 174; +16), green **2/2 consecutive** runs (flake sentinel). `npm run build`
+✅. `npm run typecheck:src` ✅ (source stays clean). Pushed to `main`.
+
+**New idea:** a **replay-fidelity regression gate** — snapshot
+`evaluateMovementModel` accuracy/backoff on a fixed synthetic corpus into a
+baseline file and fail the engine's pre-push check if a future backend swap (or a
+tokenizer change) drops held-out accuracy below the recorded bar. That turns
+"the local model still generalizes" into a machine-checked invariant, and gives
+the future neural backend a concrete target to beat the n-gram baseline on.
+Bigger: add an **edit-distance replay scorer** (Levenshtein over rolled-out vs
+ground-truth token streams) so partial-match quality is measurable, not just
+exact next-step hits.
+
+---
+
 ## 2026-07-25 (run 9) — 🔴→🟢 Eliminated background-task test flakiness (verification gate restored)
 
 **Audited:** The verification gate itself. On a clean checkout `npm test` was
