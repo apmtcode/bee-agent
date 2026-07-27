@@ -71,16 +71,25 @@ unchecked items are queued. Keep this richer than you found it each run.
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
 (exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
-      objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
-      deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
+- [x] Inventory what `src/capture` + `src/training` already implement vs. the
+      objective's five pieces (2026-07-27, run 10). Capture/schema/dataset/replay
+      exist; the **train/infer** piece was the gap — now filled (below).
+- [x] **Pluggable local-model backend interface + deterministic mock backend**
+      (2026-07-27, run 10) — `src/training/movement-model.ts`:
+      `MovementModelBackend` interface + `NgramMovementBackend` (order-k Markov
+      policy with Katz-style back-off) that learns from a movement dataset,
+      repeats recorded sequences, generalizes to novel-but-related ones, scores a
+      `MovementEvalReport`, and serializes to a portable JSON snapshot. Documented
+      seam for a real on-device neural backend. +16 tests; suite 174→190.
+- [ ] **Wire `NgramMovementBackend` into the training runner** as a
+      `runtime: "mock"` path so `training.runs.start` can run a real train+eval in
+      the cloud (result = `MovementEvalReport`) while mlx/axolotl stay on-device.
 - [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      round-trips without real OS input (run 10 tests build synthetic trajectories
+      inline; extract a reusable deterministic generator next).
+- [ ] Generalization eval harness: train on N synthetic trajectories, score
+      `nextTokenAccuracy` on held-out related ones, and ratchet fidelity over time
+      (the `evaluate()` metric now exists — wrap it in a per-run harness).
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

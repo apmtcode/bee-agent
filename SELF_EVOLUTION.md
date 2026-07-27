@@ -6,6 +6,58 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-27 (run 10) — 🧠 Pluggable movement-model backend that actually learns + generalizes (objective #2c/#2d)
+
+**Audited:** The local-movement learning subsystem (`src/capture/` + `src/training/`)
+against standing objective #2's five pieces (capture → schema → dataset → replay
+→ **train/infer**). Found the first four exist (recorder, trajectory schema,
+exporter/`ReviewedExportManifest`, `buildReplayManifest`/`ReplayRuntimeService`),
+but the fifth was a **gap**: `LocalAppleSiliconTrainingRunner` only *plans* an
+mlx/axolotl job and writes a launch script for the user's real machine — nothing
+in the cloud can actually learn from a movement dataset and repeat/generalize the
+movements. Objective #2(c) "post-train a local model to repeat the recorded
+movements" and #2(d) "generalize to new but related movements" had **zero runnable,
+testable implementation**, and the top-queued movement roadmap item ("pluggable
+local-model backend with a deterministic mock backend") was unstarted.
+
+**Changed (additive; new module only + barrel exports):** `src/training/movement-model.ts`
+— a pluggable movement-model layer, cloud-testable and deterministic:
+- `MovementModelBackend` interface (`train(dataset) → MovementModel`, `load(snapshot)`)
+  — the documented seam so a neural on-device backend can drop in later.
+- `NgramMovementBackend` (`id: "ngram-v1"`): a small order-k Markov policy over
+  movement tokens with **Katz-style back-off** — this is what makes it *learn* the
+  recorded sequences (repeat them exactly) **and generalize**: an unseen order-k
+  context backs off to the longest seen shorter context, so a novel-but-related
+  movement prefix still predicts the right next action.
+- `MovementModel`: `predictNext(context)` (with `probability`/`contextOrder`/`exact`),
+  `generate(prefix)` (greedy replay until the learned `end` sentinel),
+  `evaluate(heldOut)` (teacher-forced `nextTokenAccuracy` + `exactContextRate` +
+  `novelContextRate` — a real generalization metric), and `toSnapshot()` ⇄
+  `backend.load()` so a trained policy persists as a portable JSON artifact.
+- `tokenizeAction` / `buildMovementDataset`: derive stable movement tokens from
+  trajectory actions — prefers structured gesture metadata (from the device/
+  browser/os adapters) so semantically-equal gestures collapse to one token,
+  falls back to a tool+summary slug; honors reviewed/redacted actions. Fully
+  deterministic (no `Date`/random; ties broken by count-desc then lexical).
+
+**Test results:** `movement-model.test.ts` +16 tests (tokenize, dataset build,
+exact replay, **back-off generalization**, held-out accuracy=1.0, novel-context
+rate, determinism, lexical tie-break, snapshot round-trip, full
+trajectory→dataset→train→replay round-trip). `npm test` **174 → 190/190**, green
+on **2/2** consecutive runs (flake sentinel). `npm run build` ✅.
+`npm run typecheck:src` ✅ (source stays clean).
+
+**New idea:** wire `NgramMovementBackend` into `LocalAppleSiliconTrainingRunner`
+as the **`runtime: "mock"` path** so `training.runs.start` can execute a real
+train+eval in the cloud (returning a `MovementEvalReport` as the job result)
+while the mlx/axolotl paths stay on-device — giving the engine an end-to-end
+"train a movement model" RPC it can smoke-test every run. Bigger: a
+**generalization eval harness** that trains on N synthetic trajectories and
+scores `nextTokenAccuracy` on held-out related ones, ratcheting fidelity over
+time as the tokenizer/model improve.
+
+---
+
 ## 2026-07-25 (run 9) — 🔴→🟢 Eliminated background-task test flakiness (verification gate restored)
 
 **Audited:** The verification gate itself. On a clean checkout `npm test` was
