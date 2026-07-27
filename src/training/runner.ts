@@ -2,104 +2,31 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { ensureParentDir, readJsonFile, writeJsonAtomic } from "../shared/fs.js";
 import type { TrainingExecutionState } from "./execution-service.js";
-import type {
-  LocalTrainingExecution,
-  LocalTrainingJobManifest,
-  RlTrainingConfig,
-  SftTrainingConfig,
-} from "./job-manifest.js";
+import type { LocalTrainingExecution, LocalTrainingJobManifest } from "./job-manifest.js";
+import { TrainingBackendRegistry } from "./backends.js";
+import type { LocalTrainingRuntime, TrainingJobPlan } from "./backends.js";
 
-export type LocalTrainingRuntime = "mlx" | "axolotl";
-
-export type TrainingJobPlan = {
-  version: 1;
-  jobId: string;
-  mode: LocalTrainingJobManifest["mode"];
-  targetPlatform: "apple-silicon";
-  runtime: LocalTrainingRuntime;
-  datasetPath: string;
-  outputPath: string;
-  replayEvalPath: string;
-  statePath: string;
-  command: string[];
-  environment: Record<string, string>;
-};
+export type { LocalTrainingRuntime, TrainingJobPlan } from "./backends.js";
+export {
+  TrainingBackendRegistry,
+  MlxTrainingBackend,
+  AxolotlTrainingBackend,
+  MockTrainingBackend,
+} from "./backends.js";
+export type { TrainingBackend } from "./backends.js";
 
 export class LocalAppleSiliconTrainingRunner {
-  constructor(private readonly rootDir: string) {}
+  private readonly backends: TrainingBackendRegistry;
+
+  constructor(
+    private readonly rootDir: string,
+    backends: TrainingBackendRegistry = TrainingBackendRegistry.default(),
+  ) {
+    this.backends = backends;
+  }
 
   buildPlan(job: LocalTrainingJobManifest, execution: LocalTrainingExecution): TrainingJobPlan {
-    if (job.mode === "sft") {
-      const config = job.config as SftTrainingConfig;
-      return {
-        version: 1,
-        jobId: job.id,
-        mode: job.mode,
-        targetPlatform: "apple-silicon",
-        runtime: "mlx",
-        datasetPath: execution.datasetDir,
-        outputPath: path.posix.join(execution.artifactDir, "model.gguf"),
-        replayEvalPath: execution.replayEvalFile,
-        statePath: execution.stateFile,
-        command: [
-          "python3",
-          "-m",
-          "mlx_lm.lora",
-          "--train",
-          "--data",
-          execution.datasetDir,
-          "--adapter-path",
-          execution.artifactDir,
-          "--learning-rate",
-          String(config.learningRate),
-          "--batch-size",
-          String(config.batchSize),
-          "--iters",
-          String(config.epochs * 1000),
-        ],
-        environment: {
-          OPENCLAW_TRAINING_JOB_ID: job.id,
-          OPENCLAW_TRAINING_MODE: job.mode,
-          OPENCLAW_TARGET_PLATFORM: job.targetPlatform,
-          OPENCLAW_TRAINING_RUNTIME: "mlx",
-          OPENCLAW_REVIEWED_EXPORT_REQUIRED: "true",
-          OPENCLAW_RAW_CAPTURE_ALLOWED: "false",
-        },
-      };
-    }
-
-    const config = job.config as RlTrainingConfig;
-    return {
-      version: 1,
-      jobId: job.id,
-      mode: job.mode,
-      targetPlatform: "apple-silicon",
-      runtime: "axolotl",
-      datasetPath: execution.datasetDir,
-      outputPath: path.posix.join(execution.artifactDir, "policy.gguf"),
-      replayEvalPath: execution.replayEvalFile,
-      statePath: execution.stateFile,
-      command: [
-        "python3",
-        "-m",
-        "axolotl.cli.train",
-        execution.planFile,
-        "--reward-model",
-        "replay-manifest",
-        "--rollouts",
-        String(config.rolloutCount),
-        "--kl-penalty",
-        String(config.klPenalty),
-      ],
-      environment: {
-        OPENCLAW_TRAINING_JOB_ID: job.id,
-        OPENCLAW_TRAINING_MODE: job.mode,
-        OPENCLAW_TARGET_PLATFORM: job.targetPlatform,
-        OPENCLAW_TRAINING_RUNTIME: "axolotl",
-        OPENCLAW_REVIEWED_EXPORT_REQUIRED: "true",
-        OPENCLAW_RAW_CAPTURE_ALLOWED: "false",
-      },
-    };
+    return this.backends.resolve(job.mode).buildPlan(job, execution);
   }
 
   async writeArtifacts(job: LocalTrainingJobManifest, execution: LocalTrainingExecution): Promise<TrainingJobPlan> {

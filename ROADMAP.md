@@ -74,13 +74,24 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] **Pluggable local-model backend interface** for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
+      for a real on-device small model (2026-07-27, run 10). `src/training/backends.ts`:
+      `TrainingBackend` iface + `TrainingBackendRegistry` (`.default()` = MLX/Axolotl,
+      `.mock()` = deterministic node trainer). `MockTrainingBackend` runs end-to-end
+      in the cloud (real `execFileSync` test) to a reproducible `model.json`. Runner
+      + `FileTrainingJobStore` take an injectable registry.
 - [ ] Synthetic event-stream generator to validate capture→dataset→replay
       round-trips without real OS input.
 - [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      related synthetic trajectories. **Now unblocked** — the mock backend
+      produces a real (deterministic) artifact in-process, so the harness can
+      score whether `model.json`'s `trainedFrom`/`weightsDigest` reproduces a
+      held-out synthetic trajectory instead of only checking plan shape.
+- [ ] **`MockInferenceBackend`** companion to `MockTrainingBackend`: let
+      `execution-service` replay the mock model's decisions against a new-but-
+      related synthetic stream, validating objective #2(d) (generalize to related
+      movements) entirely in CI. Pairs with the pluggable-backend seam just added.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

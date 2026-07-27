@@ -6,6 +6,60 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-27 (run 10) — 🧩 Pluggable training backend seam + runnable deterministic mock backend
+
+**Audited:** The local-movement learning subsystem's train/infer stage
+(`src/training/`), standing objective #2(c–d). The training runner
+(`LocalAppleSiliconTrainingRunner`) **hardcoded** runtime selection inside
+`buildPlan` — `job.mode === "sft"` → an inline MLX (`mlx_lm.lora`) plan, else an
+inline Axolotl (`axolotl.cli.train`) plan. Two consequences: (1) no seam for the
+objective's "make the model backend pluggable" requirement, and (2) **every**
+planned training job shelled out to a Python ML toolchain, so no training job
+could actually run to completion in the cloud/CI — the pipeline was only ever
+*plan-shaped*, never *executed*, end-to-end. This was the roadmap's queued
+"pluggable local-model backend interface with a deterministic mock backend (so
+cloud/CI tests pass)" item.
+
+**Changed (additive, behaviour-preserving):**
+- **New `src/training/backends.ts`** — a `TrainingBackend` interface (`runtime`,
+  `supportedModes`, `buildPlan`) and a `TrainingBackendRegistry` (mode → backend,
+  `resolve`/`modes`, `.default()` / `.mock()` factories). Extracted the exact MLX
+  and Axolotl plan logic into `MlxTrainingBackend` / `AxolotlTrainingBackend`
+  (byte-identical output — existing `runner.test.ts` unchanged and still green).
+- **`MockTrainingBackend`** — a deterministic, **dependency-free** backend whose
+  plan is a self-contained `node -e` program (`MOCK_TRAINER_SOURCE`). It reads the
+  reviewed dataset manifest and emits a `model.json` artifact whose
+  `weightsDigest` is an FNV-1a hash of the dataset shape: identical dataset →
+  identical artifact, any dataset change → observable output. Runs anywhere Node
+  runs, so the full **plan → launch → state → artifact** flow is now executable
+  and assertable in the cloud with no ML toolchain. This is also the documented
+  seam a real on-device small model plugs into.
+- **`runner.ts`** now delegates `buildPlan` to an injectable `TrainingBackendRegistry`
+  (defaults to `.default()`), re-exporting the backend surface + `LocalTrainingRuntime`
+  / `TrainingJobPlan` (now widened with `"mock"`). **`FileTrainingJobStore`** takes an
+  optional registry param (defaults preserve production behaviour). Barrel
+  (`src/index.ts`) exports the new backend types.
+
+**Test results:** new `backends.test.ts` (7 cases) — default/mock resolution,
+unregistered-mode throw, dependency-free plan shape, and a real
+`execFileSync("node", ...)` run proving the mock backend **executes to a
+deterministic artifact** (re-run → same digest). `npm test` **179/179 passing,
+2/2 consecutive green** (was 174; +5 net). `npm run build` ✅.
+`npm run typecheck:src` ✅ (exit 0, source stays clean). Full `tsc` **125**
+(unchanged — no regression; new source + test files typecheck clean).
+
+**New idea:** now that a training job can genuinely run to completion in-process,
+add a **replay-fidelity eval that closes the loop**: after the mock backend
+produces `model.json`, feed its `trainedFrom`/`weightsDigest` back through the
+replay-eval file the runner already writes and score whether the "trained" model
+reproduces the held-out synthetic trajectory — turning the mock from a pipeline
+smoke test into a real generalization harness (roadmap "Generalization eval
+harness"). Bigger: a `MockInferenceBackend` companion so `execution-service` can
+*replay* the mock model's decisions against a new but related synthetic stream,
+validating objective #2(d) (generalize to related movements) entirely in CI.
+
+---
+
 ## 2026-07-25 (run 9) — 🔴→🟢 Eliminated background-task test flakiness (verification gate restored)
 
 **Audited:** The verification gate itself. On a clean checkout `npm test` was
