@@ -74,13 +74,28 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] **Pluggable local-model backend interface** for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
+      for a real on-device small model — DONE run 10.
+      `src/training/movement-backend.ts`: `LocalMovementBackend` interface,
+      deterministic `MarkovMovementBackend` (n-gram with context back-off —
+      reproduces recorded movements AND generalizes to novel prefixes),
+      `MovementBackendRegistry` (register a real `mlx` backend under the same
+      interface), tokenizers over the real replay/trajectory schema.
+- [ ] **Wire the registry into `LocalAppleSiliconTrainingRunner`**: add a
+      `backend` field to the job manifest so cloud runs resolve `markov-mock` and
+      actually produce + eval a model artifact end-to-end, while Apple Silicon
+      resolves the real `mlx` backend.
+- [ ] **Positional/temporal token backend**: model quantized cursor deltas +
+      inter-event dwell buckets (where/when), not just event *kind* — the next
+      fidelity rung toward replaying real mouse trajectories.
 - [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      round-trips without real OS input (tokenizers now consume the schema; a
+      generator would exercise capture→dataset→train→eval in one fixture).
+- [x] **Generalization eval harness**: measure replay fidelity on held-out but
+      related synthetic trajectories — DONE run 10 (`evaluateMovementFidelity`:
+      `tokenAccuracy` + `exactSequenceMatch`, scores reproduction AND
+      generalization with the same metric).
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

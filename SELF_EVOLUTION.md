@@ -6,6 +6,67 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-27 (run 10) — 🧠 Pluggable local-movement model backend (in-process train + infer + generalize)
+
+**Audited:** The local-movement learning subsystem (standing objective #2),
+specifically piece **(d) post-train a local model … and generalize**. Read
+`src/training/runner.ts` + `execution-service.ts` and found the gap: the *only*
+training path shells out to external `mlx_lm`/`axolotl` via a generated launch
+script. That code can never run in Anthropic's cloud (no `python3`/`mlx`, no real
+OS), so the objective's "train a model that repeats recorded movements and
+generalizes" had **no working, testable implementation** — only a plan emitter.
+The dataset already exists in a clean form: `ReviewedExportManifest.replays[]`
+are `ReplayTimelineEvent[]` (objective pieces a–c are built). What was missing was
+a backend that consumes that dataset in-process.
+
+**Changed (additive, one new module + barrel export):**
+- **`src/training/movement-backend.ts`** — a backend-agnostic
+  `LocalMovementBackend` interface (`train(dataset) → model`, `predict(model,
+  request) → continuation`) plus:
+  - **`MarkovMovementBackend`** (`"markov-mock"`): a fully **deterministic**
+    n-gram reference backend. Training builds weighted next-token distributions
+    for every context length `order..0`; prediction greedily picks the
+    highest-weight next token for the **longest matching context**, backing off
+    to shorter contexts when the full context is unseen. That single mechanism
+    delivers both required behaviours: full-context match ⇒ **reproduces**
+    recorded movements exactly; shorter-context match ⇒ **generalizes** to a
+    novel-but-related prefix. Ties break by token string ⇒ no RNG ⇒ identical
+    output in cloud and on-device. The trained model is plain JSON (persistable
+    next to job artifacts, reloadable without the backend instance).
+  - **`MovementBackendRegistry`** — the pluggable seam: `markov-mock` is the
+    default cloud/CI fallback; a real on-device backend (e.g. `mlx`-hosted small
+    model) registers under the same interface and is resolved transparently.
+  - **Tokenizers** (`tokenizeReplayEvents`, `tokenizeTrajectory`,
+    `buildMovementDataset`) — deterministically discretize the *real* replay/
+    trajectory schema into coarse `kind:label` movement tokens (learnable vocab,
+    movement structure preserved). Uses synthetic/simulated streams to validate,
+    exactly as the guardrails require.
+  - **`evaluateMovementFidelity`** — the generalization eval harness: seed the
+    model with a prefix, score the continuation token-by-token against ground
+    truth (`tokenAccuracy` + `exactSequenceMatch`). Same metric measures
+    reproduction (recorded prefixes) and generalization (held-out related ones).
+- **`src/index.ts`** — exported the new backend, registry, tokenizers, eval, and
+  all types.
+
+**Test results:** new `movement-backend.test.ts` (15 tests) covering train/
+serialize, exact reproduction, determinism, tie-breaking, back-off
+generalization, empty-model, maxTokens/end-sentinel, registry default/register/
+unknown, all three tokenizers, and fidelity scoring. `npm test` **189/189
+passing** (was 174; +15), **green on two consecutive runs** (flake sentinel).
+`npm run build` ✅. `npm run typecheck:src` ✅ (exit 0). Full `tsc` **125**
+(unchanged — the new source + test files add zero typecheck debt).
+
+**New idea:** wire the registry into `LocalAppleSiliconTrainingRunner` so a job's
+manifest carries a `backend` field: cloud/CI runs resolve `markov-mock` and
+actually produce + eval a model artifact (proving the whole capture→dataset→
+train→eval loop end-to-end in one test), while on Apple Silicon the same job
+resolves the real `mlx` backend. Bigger: a **positional/temporal token backend**
+that models *where* and *when* (quantized cursor deltas + inter-event dwell
+buckets), not just event *kind* — the next fidelity rung toward genuinely
+replaying mouse trajectories rather than action categories.
+
+---
+
 ## 2026-07-25 (run 9) — 🔴→🟢 Eliminated background-task test flakiness (verification gate restored)
 
 **Audited:** The verification gate itself. On a clean checkout `npm test` was
