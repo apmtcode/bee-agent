@@ -70,17 +70,36 @@ unchecked items are queued. Keep this richer than you found it each run.
 ## Local-movement learning subsystem
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
-(exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
-      objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
-      deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+(exporter, job store/manifest, runner, execution service, **movement-model,
+synthetic-events**). Next increments:
+- [x] Inventory the five pieces (capture → schema → dataset → replay →
+      train/infer) — DONE run 10. Pieces 1–4 existed; piece 5 (the model) was
+      absent in-process (runner only shells out to external mlx/axolotl).
+- [x] **Pluggable local-model backend interface + deterministic backend** —
+      DONE run 10. `MovementModelBackend` (pluggable seam) + `SequenceMovementBackend`
+      (variable-order Markov, no OS/GPU/randomness) in
+      `src/training/movement-model.ts`. Trains on recorded movements, **repeats**
+      (exact-context recall) and **generalizes** (back-off), reports which via
+      prediction `provenance`, serializes to JSON. Documented seam for a real
+      on-device small model.
+- [x] **Synthetic event-stream generator** — DONE run 10.
+      `src/training/synthetic-events.ts`: seedable (LCG, no `Math.random`)
+      train/held-out splits + `movementSequencesFromReplay` /
+      `movementStepFromDeviceGesture` bridges from real recorded data.
+- [x] **Generalization eval harness** — DONE run 10. `evaluateMovementModel`:
+      teacher-forced top-1 next-step + full-sequence accuracy + generalization
+      share over a held-out split (>0.8 step accuracy on synthetic held-out).
+- [ ] **Closed-loop replay-fidelity guard / active learning**: after training,
+      `generate` from each recorded trajectory's opening step, diff the roll-out
+      against the recorded continuation → per-trajectory reproducibility score;
+      trajectories the model can't reproduce become the capture layer's next
+      recording priorities.
+- [ ] **Second pluggable backend** (embedding-nearest-neighbour policy) behind the
+      same `MovementModelBackend` interface, so the seam is proven by two
+      implementations, not one.
+- [ ] Wire the movement model into the training runner/execution-service as a
+      selectable `backend: "sequence-markov" | "mlx" | "axolotl"` so a cloud/CI
+      run can train+eval in-process while a laptop run still launches mlx/axolotl.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

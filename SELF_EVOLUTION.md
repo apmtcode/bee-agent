@@ -6,6 +6,69 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-27 (run 10) — 🧠 In-process movement-model layer: train → repeat → generalize (objective #2 pieces c+d)
+
+**Audited:** The local-movement learning subsystem (`src/capture/` + `src/training/`)
+against objective #2's five pieces (capture → schema → dataset → replay →
+**train/infer**). Pieces 1–4 exist (recorder, device/os/browser adapters,
+trajectory + replay schema, exporter → `ReviewedExportManifest`, replay-service).
+**Piece 5 — the model — was entirely absent in-process:** `LocalAppleSiliconTrainingRunner`
+only emits *launch scripts* that shell out to external Python (`mlx_lm.lora` /
+`axolotl.cli.train`), so nothing about training-on-recorded-movements, repeating
+them, or generalizing could run or be validated in the cloud. That is exactly
+the gap the objective says to close with "code, schema, pipelines, simulations,
+and tests" driven by "synthetic/simulated event streams".
+
+**Changed (additive — two new source modules + barrel exports, zero edits to
+existing behaviour):**
+- **`src/training/movement-model.ts`** — the pluggable model layer:
+  - `MovementStep` / `MovementSequence` / `MovementDataset`: a compact discrete
+    schema for recorded movements (mouse / keyboard / gesture / window / tool).
+  - `MovementModelBackend` interface — the **pluggable seam** a real on-device
+    small model implements. Default `SequenceMovementBackend` is a
+    **deterministic variable-order Markov model with stupid-backoff** (no OS, no
+    GPU, no `Math.random`): builds orders 1..maxOrder plus an order-0 prior and a
+    per-context prime token.
+  - `TrainedMovementModel`: `predictNext` (with `provenance: recall |
+    generalization | prior` so callers can tell *repeat* from *generalize*),
+    `generate` (bounded roll-out with END-sentinel termination), and `serialize`
+    → plain JSON (`SequenceMovementModel.load` rehydrates). Deterministic argmax
+    (count, then token order).
+  - `evaluateMovementModel` — a **generalization eval harness**: teacher-forced
+    top-1 next-step accuracy + full-sequence accuracy + generalization share over
+    a held-out split.
+- **`src/training/synthetic-events.ts`** — validation without a real machine:
+  - `generateSyntheticDataset` — seedable (in-module LCG, no `Math.random`)
+    train/held-out splits over a library of realistic workflows, with controlled
+    per-step variation; the held-out split uses an offset seed so it is
+    *related-but-new*, the right target for measuring generalization.
+  - `movementSequencesFromReplay` / `movementStepFromDeviceGesture` — **bridges**
+    so the same model consumes real recorded `ReplayManifest` action events and
+    device gestures through one path.
+- `src/index.ts`: exported the new surface (types + values).
+
+**Test results:** two new suites (`movement-model.test.ts`,
+`synthetic-events.test.ts`) — **21 tests**: exact-recall repeat, back-off
+generalization, cold-start context priming, deterministic tie-breaking, JSON
+round-trip, held-out eval (>0.8 step accuracy on synthetic held-out), generate
+step-cap, and the replay/gesture bridges. `npm test` **195/195** (was 174),
+green on **2/2 consecutive runs** (flake sentinel). `npm run build` ✅.
+`npm run typecheck:src` ✅ (exit 0). Full `tsc` **125** (unchanged — new source
+*and* test files add zero errors).
+
+**New idea:** now that a movement plan is a first-class `MovementSequence`, wire
+the model into a **closed-loop replay-fidelity guard**: after training, run
+`generate` from each recorded trajectory's opening step and diff the roll-out
+against the recorded continuation, surfacing a per-trajectory "reproducibility
+score". Trajectories the model *can't* reproduce are the highest-value ones to
+capture more of — turning the eval harness into an active-learning signal that
+tells the capture layer what to record next. Bigger: a second pluggable backend
+(a tiny embedding-nearest-neighbour policy) behind the same
+`MovementModelBackend` interface, so the interface is proven by two
+implementations, not one.
+
+---
+
 ## 2026-07-25 (run 9) — 🔴→🟢 Eliminated background-task test flakiness (verification gate restored)
 
 **Audited:** The verification gate itself. On a clean checkout `npm test` was
