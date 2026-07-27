@@ -6,6 +6,74 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-27 (run 10) — 🧠 In-process movement model: train → repeat → generalize → eval (objective #2d)
+
+**Audited:** The local-movement learning subsystem (`src/capture/` + `src/training/`)
+against standing objective #2's five pieces (capture → schema → dataset → replay
+→ **train/infer**). Findings: capture (recorder, device/os/browser adapters,
+consent), schema (`TrajectorySpan`), dataset export (`LocalTrainingExporter`),
+and replay (`ReplayRuntimeService`) all exist. **The train/infer piece was the
+gap:** `LocalAppleSiliconTrainingRunner` only *emits an external launch plan*
+(mlx/axolotl command + bash script) — nothing in-process ever learns from a
+movement dataset, so objective #2's core promise ("post-train a local model to
+**repeat** recorded movements and **generalize** to new but related ones") was
+completely **untested in the cloud**. This is exactly the roadmap's "pluggable
+local-model backend with a deterministic mock" + "generalization eval harness".
+
+**Changed (additive, self-contained — new `src/training/movement-model.ts`, 0
+edits to existing source except the barrel):**
+- **Movement tokenizer** — `tokenizeMovementAction` maps a captured
+  `TrajectoryAction` to a stable low-cardinality token
+  (`device:tap:submit-button`), preferring the structured gesture/target/direction
+  metadata the adapters attach and falling back to the tool name so every action
+  tokenizes. `tokenizeTrajectory` orders actions chronologically and honors
+  review-redacted actions. `buildMovementDataset` builds sequences + a sorted
+  vocabulary from trajectory spans.
+- **Pluggable backend contract** — `MovementModelBackend` (`train(dataset) →
+  MovementModelArtifact`, `createPredictor(artifact) → MovementPredictor`) is the
+  documented seam a real on-device small model plugs into behind the same
+  interface. `MovementModelRegistry` resolves a predictor for an artifact by
+  `kind`.
+- **Deterministic mock backend** — `MarkovMovementBackend`: an order-N Markov
+  model over movement tokens with `<start>`/`<end>` sentinels. Records every
+  back-off context length 1..N. Prediction is greedy argmax with a stable
+  tie-break (prob desc, then token asc) so results are reproducible across
+  machines (safe cloud/CI default). *Repeat*: seeding a recorded prefix
+  reproduces that trajectory's tail exactly. *Generalize*: shared transitions
+  across trajectories let an unseen seed produce a plausible continuation, backing
+  off to shorter contexts when the full window was never seen.
+- **Generalization eval harness** — `evaluateMovementModel(predictor, heldOut)`
+  reports teacher-forced next-token accuracy, exact seeded-replay rate (the "did
+  it repeat the recorded movement" metric), and coverage over held-out
+  trajectories the model was not trained on.
+- **Persistence** — `saveMovementModel`/`loadMovementModel` (atomic JSON via
+  `shared/fs`) with a verified round-trip (identical predictions after reload).
+- Exported the surface from `src/index.ts`.
+
+**Tests:** new `movement-model.test.ts` — **19 tests** covering tokenization
+(structured/direction/fallback/redacted), dataset building, exact replay,
+generalization down a shared-then-divergent branch, context back-off, tie-break
+determinism, unknown-context `undefined`, sentinel stripping, eval metrics
+(perfect single-trajectory + branching), registry resolution/errors, and disk
+round-trip. Uses a **synthetic event-stream generator** (`syntheticTrajectory`)
+so the full capture→dataset→train→replay loop is validated with no real OS input.
+
+**Test results:** `npm test` **193/193** (was 174; +19), **green twice
+consecutively** (flake sentinel). `npm run build` ✅. `npm run typecheck:src` ✅
+(exit 0 — source stays clean).
+
+**New idea:** add a **higher-order n-gram + smoothing backend** (or a tiny
+in-process neural policy) as a second `MovementModelBackend` and use the eval
+harness as a *tournament*: train each backend on the same dataset, score on
+held-out synthetic trajectories, and have the training runner auto-select the
+backend with the best generalization score — turning the pluggable seam into an
+actual model-selection loop. Bigger: feed real captured `TrajectorySpan`s through
+`buildMovementDataset` in the operator runtime so the model trains on live
+reviewed data, and expose `movement.model.train`/`movement.model.generate` as
+control-plane RPCs so a caller can ask the agent to *replay a learned movement*.
+
+---
+
 ## 2026-07-25 (run 9) — 🔴→🟢 Eliminated background-task test flakiness (verification gate restored)
 
 **Audited:** The verification gate itself. On a clean checkout `npm test` was

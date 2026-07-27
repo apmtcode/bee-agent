@@ -71,16 +71,28 @@ unchecked items are queued. Keep this richer than you found it each run.
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
 (exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
-      objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
-      deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+- [x] Inventory what `src/capture` + `src/training` already implement vs. the
+      objective's five pieces (2026-07-27, run 10) — capture/schema/dataset-export/
+      replay all present; the **train/infer** piece was the gap (runner only emits
+      an external mlx/axolotl launch plan). See run 10 log.
+- [x] Pluggable local-model backend interface with a deterministic mock backend
+      (2026-07-27, run 10) — `MovementModelBackend` contract + `MarkovMovementBackend`
+      (order-N Markov, greedy/deterministic) + `MovementModelRegistry` in
+      `src/training/movement-model.ts`. Documented seam for a real on-device model.
+- [x] Synthetic event-stream generator to validate capture→dataset→replay
+      round-trips without real OS input (2026-07-27, run 10) — `syntheticTrajectory`
+      in the test drives the full tokenize→train→replay loop.
+- [x] Generalization eval harness (2026-07-27, run 10) —
+      `evaluateMovementModel` reports next-token accuracy, exact seeded-replay
+      rate, and held-out coverage.
+- [ ] **Second backend + model-selection tournament**: add a smoothed
+      higher-order n-gram (or tiny in-process neural policy) as a second
+      `MovementModelBackend`; use `evaluateMovementModel` to score backends on
+      held-out synthetic trajectories and auto-select the best generalizer.
+- [ ] **Wire the model into the runtime**: feed live reviewed `TrajectorySpan`s
+      through `buildMovementDataset` and expose `movement.model.train` /
+      `movement.model.generate` control-plane RPCs so a caller can replay a
+      learned movement.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
