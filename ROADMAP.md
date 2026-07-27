@@ -74,13 +74,25 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
-      deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
+- [x] **Pluggable local-model backend interface** with a deterministic mock
+      backend (2026-07-27, run 10) — `src/training/movement-model.ts`:
+      `MovementModelBackend`/`MovementModel` interfaces + `NgramMovementBackend`
+      (variable-order n-gram w/ stupid-backoff), `buildMovementDataset` bridging
+      `TrajectorySpan[]`→dataset, serialize/restore snapshots. Enables in-process
+      **replay** (`generate`) and **generalization** (back-off). mlx/axolotl
+      runner stays the documented real on-device seam.
 - [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      round-trips without real OS input. (Next: a `SimulatedMovementBackend`
+      fixture + golden "capture→dataset→train→replay→eval" round-trip test with a
+      parametric gesture generator — see run 10 idea.)
+- [x] **Generalization eval harness** (2026-07-27, run 10) — `evaluateMovementModel`
+      does teacher-forced next-step scoring on held-out sequences and splits
+      correct predictions into exact (memorized) vs. generalized (backed-off).
+      Next: feed it synthetic held-out gestures and assert accuracy ≥ threshold.
+- [ ] **Movement inference service** with a confidence gate: given a live prefix
+      of observed movements, stream the predicted continuation and only
+      auto-execute above a probability threshold, else defer to the operator —
+      the safety-first bridge from prediction to real on-device replay.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

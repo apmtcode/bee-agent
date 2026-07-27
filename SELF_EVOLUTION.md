@@ -6,6 +6,62 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-27 (run 10) — 🧠 Movement-learning: pluggable model backend + inference + eval
+
+**Audited:** Objective 2 (local-movement learning) against `src/training`. The
+subsystem could already **export** a reviewed dataset (`exporter.ts`) and build
+**external** on-device training *commands* (`runner.ts` → mlx/axolotl), but it had
+**no trainable model abstraction and no inference path**. Nothing could actually
+*repeat* a recorded movement or *generalize* to a new-but-related one in-process —
+which is precisely objective 2(c)/(d). That's the biggest capability gap in the
+movement subsystem, and (unlike the mlx/axolotl runner) it can be exercised fully
+in the cloud with synthetic streams.
+
+**Changed (additive, one new module + barrel exports):**
+- `src/training/movement-model.ts` (new):
+  - `MovementStep` / `MovementSequence` / `MovementDataset` — the replayable
+    dataset shape, plus `buildMovementDataset(spans)` bridging captured
+    `TrajectorySpan[]` → dataset (actions ordered by `ts`, empty trajectories
+    dropped).
+  - `MovementModelBackend` / `MovementModel` interfaces — **the pluggable seam**.
+    A real small local model can be dropped in behind the same interface; the
+    mlx/axolotl runner remains the on-device path.
+  - `NgramMovementBackend` — a deterministic, dependency-free reference backend:
+    a variable-order n-gram policy with stupid-backoff over fixed-length movement
+    windows. Memorizes recorded transitions (→ **exact replay** via `generate`)
+    and backs off to shorter windows for unseen prefixes (→ **generalization** to
+    related movements). No RNG → fully reproducible, safe for CI. Supports
+    `predictNext`, `predictDistribution`, `generate`, and `serialize`/`restore`
+    (portable snapshot).
+  - `evaluateMovementModel(model, heldOut)` — teacher-forced next-step
+    **generalization eval harness**: reports accuracy and splits correct
+    predictions into exact (memorized) vs. generalized (backed-off), so we can
+    tell *why* fidelity holds. Seeds ROADMAP's "generalization eval harness" item.
+- `src/index.ts`: exported the new backend, dataset builder, eval fn, and all
+  supporting types.
+- `src/training/movement-model.test.ts` (new, 8 tests): dataset ordering,
+  exact replay round-trip, back-off generalization, frequency-ranked
+  distribution, serialize/restore determinism, empty-model safety, and the two
+  eval reports.
+
+**Test results:** `npm run typecheck:src` ✅ (exit 0, source stays clean).
+`npm run build` ✅. `npm test` **182/182** (174 + 8 new), **green on two
+consecutive runs** (applied run 9's flake-sentinel idea manually). Full `tsc`
+unchanged at **125** (all in pre-existing test files; the new module + test add 0).
+
+**New idea:** a **`SimulatedMovementBackend` fixture + a "capture→dataset→train→
+replay→eval" golden round-trip test** driven by a synthetic event-stream
+generator (parametric: N gestures, branch/noise rate). It would (a) validate the
+whole loop end-to-end, (b) become the regression harness for any real backend we
+plug in later (assert accuracy ≥ threshold on held-out related gestures), and
+(c) give the eval harness real numbers to chart over time. Bigger: an
+` inference service` that, given a live prefix of observed movements, streams the
+predicted continuation with a confidence gate (only auto-execute above a
+probability threshold, else defer to the operator) — the safety-first bridge from
+prediction to actual on-device replay.
+
+---
+
 ## 2026-07-25 (run 9) — 🔴→🟢 Eliminated background-task test flakiness (verification gate restored)
 
 **Audited:** The verification gate itself. On a clean checkout `npm test` was

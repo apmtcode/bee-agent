@@ -394,6 +394,22 @@ export type {
   TrainingExecutionState,
 } from "./training/execution-service.js";
 export {
+  NgramMovementBackend,
+  buildMovementDataset,
+  evaluateMovementModel,
+} from "./training/movement-model.js";
+export type {
+  MovementDataset,
+  MovementEvalReport,
+  MovementModel,
+  MovementModelBackend,
+  MovementModelSnapshot,
+  MovementPrediction,
+  MovementSequence,
+  MovementStep,
+  MovementTrainOptions,
+} from "./training/movement-model.js";
+export {
   LocalAppleSiliconTrainingRunner,
 } from "./training/runner.js";
 export type {
