@@ -6,6 +6,62 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-27 (run 10) — 🧠 Movement-learning: pluggable model backend that trains + generalizes in-process
+
+**Audited:** The local-movement learning subsystem (standing objective 2),
+specifically the train/infer piece (2c/2d). Inventory of `src/training`: the
+pipeline covers capture → trajectory → reviewed export (`exporter.ts`) → a
+**training *plan*** (`runner.ts` emits an `mlx_lm.lora` / axolotl command) →
+execution-service state. The gap: **nothing actually learns from movements or
+predicts/generalizes them**, and the plan's external command (MLX/axolotl)
+cannot run in Anthropic's cloud, so the "post-train a model to repeat recorded
+movements and generalize to new-but-related ones" objective had **no
+cloud-testable implementation** — only a shell-out that no test could exercise.
+
+**Changed (additive) — new `src/training/movement-model.ts` + tests:**
+- **`MovementModelBackend` interface** — the pluggable seam every backend
+  implements (`name` + `train(dataset, options)`), matching the runner's
+  `LocalTrainingRuntime` naming so real on-device backends drop in later.
+- **`MarkovMovementBackend`** — the default deterministic, dependency-free
+  backend: a variable-order Markov model with **stupid-backoff**. It genuinely
+  learns transition structure and **generalizes** to unseen contexts by backing
+  off to shorter shared motifs (this is objective 2d, achieved without a GPU,
+  network, or randomness). `TrainedMovementModel` exposes `predictNext`,
+  `generate` (greedy roll-out = *repeat* recorded movements, 2c), `score`
+  (mean per-token log-prob, for the generalization-eval harness), and a stable
+  `serialize()`.
+- **`OnDeviceMovementBackendStub`** (`mlx` / `axolotl`) — documented seams that
+  **fail loudly** ("requires a local on-device runtime") in the cloud instead of
+  silently degrading; the user's local bee-agent registers a real impl.
+- **`MovementModelRegistry`** — register/get/list/train, seeded with all three,
+  so the backend is swappable by name.
+- **`tokenizeAction` + `buildMovementDataset`** — turn captured
+  `TrajectoryAction`s (preferring structured gesture metadata over free-text, so
+  semantically identical movements collapse to one token; using redacted actions
+  when a trajectory is reviewed) into `MovementSequence`s. This closes the
+  dataset half of capture→dataset→train→infer entirely in-process.
+- Exported the whole surface from `src/index.ts`.
+
+**Test results:** new `movement-model.test.ts` (14 tests) covers tokenization,
+dataset building (incl. redacted-action path), repeat-from-seed, deterministic
+prediction, **generalization via backoff**, in-vs-out-of-distribution scoring,
+stable serialization, a context-collision regression (`["a","b"]` vs `["ab"]`,
+guarded by a `0x01` context delimiter), and registry behavior incl. the
+on-device seams throwing. `npm test` **188/188** (was 174), green **twice
+consecutively** (flake sentinel). `npm run build` ✅. `npm run typecheck:src` ✅
+(source stays clean).
+
+**New idea:** add a **generalization-eval harness** that trains on a
+train-split of synthetic trajectories and reports mean `score()` on a held-out
+*related* split vs. an *unrelated* split — turning "does it generalize?" into a
+tracked metric per engine run. Pairs naturally with the queued synthetic
+event-stream generator (feed it varied-but-related routines). Bigger: a
+`replay-from-model` bridge so a `TrainedMovementModel.generate()` output feeds
+the existing `replay-service`, closing the loop from *learned* movements back
+into the executable replay engine.
+
+---
+
 ## 2026-07-25 (run 9) — 🔴→🟢 Eliminated background-task test flakiness (verification gate restored)
 
 **Audited:** The verification gate itself. On a clean checkout `npm test` was

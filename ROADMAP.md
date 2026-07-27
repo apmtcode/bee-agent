@@ -74,13 +74,24 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
-      deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
+- [x] **Pluggable local-model backend interface** for movement learning with a
+      deterministic in-process backend (so cloud/CI tests pass) and documented
+      seams for real on-device models (2026-07-27, run 10).
+      `src/training/movement-model.ts`: `MovementModelBackend` interface,
+      `MarkovMovementBackend` (variable-order + stupid-backoff — trains,
+      predicts, generates, scores, generalizes via backoff),
+      `OnDeviceMovementBackendStub` (mlx/axolotl seams that fail loudly),
+      `MovementModelRegistry`, plus `tokenizeAction`/`buildMovementDataset`.
+      14 tests; 188/188 total.
 - [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      round-trips without real OS input. (Feeds the eval harness below.)
+- [ ] Generalization eval harness: train on a split of synthetic trajectories,
+      report mean `TrainedMovementModel.score()` on held-out *related* vs.
+      *unrelated* splits, so "does it generalize?" becomes a tracked per-run
+      metric. (Backend + `score()` now exist — run 10.)
+- [ ] `replay-from-model` bridge: feed `TrainedMovementModel.generate()` output
+      into the existing `replay-service` so *learned* movements flow back into
+      the executable replay engine (closes capture→train→replay loop).
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
