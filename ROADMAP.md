@@ -74,13 +74,31 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
-      deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+- [x] **Pluggable local-model backend interface** with a deterministic mock
+      (2026-07-27, run 10) — `src/training/movement-model.ts`:
+      `MovementModelBackend`/`MovementModelInference` + registry, and a
+      `MarkovMovementBackend` (variable-order n-gram with backoff) that trains
+      and infers fully in-process. Artifact is plain JSON. Real on-device model
+      plugs in behind the same interface.
+- [x] **Synthetic event-stream generator** (2026-07-27, run 10) —
+      `generateSyntheticMovementSequences` (seeded mulberry32 hidden
+      UI-navigation grammar) validates the train→infer→eval loop with no real OS
+      input.
+- [x] **Generalization eval harness** (2026-07-27, run 10) —
+      `evaluateNextTokenAccuracy` + `evaluateGeneralization` report held-out
+      next-token accuracy and **lift over a unigram baseline** (tested `> 0.1`).
+- [ ] **`ModelReplayBackend`**: let a trained `MovementModelInference` *drive*
+      the replay engine (predict → act → observe → predict) with a confidence
+      (`prediction.probability`) divergence guard that falls back to the recorded
+      trajectory. Turns the model into a real executor; yields an online
+      steps-until-divergence metric to track generalization run over run.
+- [ ] **Second backend for benchmarking**: `"ngram-smoothed"` (Kneser–Ney) behind
+      the same interface, compared against `"markov-mock"` on the same synthetic
+      eval — the registry already supports multiple backends.
+- [ ] **Persist/version movement artifacts**: a `FileMovementModelStore`
+      (mirroring `FileTrainingJobStore`) that writes `MovementModelArtifact` JSON
+      with metadata (backend, maxOrder, eval report) so trained models are
+      reloadable and comparable across runs.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

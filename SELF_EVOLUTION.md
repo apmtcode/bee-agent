@@ -6,6 +6,68 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-27 (run 10) — 🧠 Movement subsystem: pluggable, in-process learnable model backend (train + infer + generalize)
+
+**Audited:** the local-movement learning subsystem (objective 2), specifically
+pieces (c) *post-train a local model to repeat recorded movements* and (d)
+*generalize to new-but-related movements*. `src/capture/` already had
+capture→schema→dataset→replay, and `src/training/` had exporter/job/runner — but
+the runner (`runner.ts`) only **builds external launch plans** (`mlx_lm.lora` /
+`axolotl`) that run on the user's Apple-silicon box. Nothing in the repo could
+actually *learn from a movement dataset and infer next movements in-process*, so
+the train→infer→generalize loop had **zero cloud-testable coverage**. That was
+the biggest movement-subsystem gap.
+
+**Changed (additive, one new module + tests, no edits to existing behavior):**
+- `src/training/movement-model.ts` — a complete, dependency-free
+  train/infer/eval pipeline behind a **pluggable backend interface**:
+  - `MovementModelBackend` / `MovementModelInference` interfaces + a
+    `registerMovementBackend`/`getMovementBackend`/`listMovementBackends`
+    registry, so a real on-device backend (mlx/onnx) drops in behind the same
+    seam later. `trainMovementModel(dataset, {backendId})` is the entry point.
+  - `MarkovMovementBackend` (`"markov-mock"`) — the **deterministic mock**: a
+    variable-order Markov model with **n-gram backoff**. It counts token
+    transitions at orders 0..maxOrder, then predicts by longest-matching context
+    with backoff to shorter suffixes. Backoff **is** the generalization
+    mechanism: an unseen full context still resolves through a shorter suffix it
+    has seen. Fully deterministic (argmax + lexical tie-break) → reproducible in
+    CI. Artifact is plain JSON (round-trips through `JSON.stringify`), so it
+    persists via the existing `writeJsonAtomic`.
+  - `generateSyntheticMovementSequences(...)` — a **seeded** (mulberry32) hidden
+    UI-navigation grammar (focus → move* → click → confirm) with tunable noise,
+    so the whole loop is exercised without any real OS input.
+  - `evaluateNextTokenAccuracy` + `evaluateGeneralization` — the **eval
+    harness**: trains on a split, scores held-out next-token top-1 accuracy, and
+    reports **lift over a unigram baseline**. Positive lift is direct evidence
+    the model learned transition structure that transfers to new sequences.
+  - `movementTokenFromAction` + `buildMovementDatasetFrom{Trajectories,Replays}`
+    bridge the existing `TrajectorySpan`/`ReplayManifest` types into a
+    `MovementDataset`, so recorded captures feed straight into training.
+- `src/training/movement-model.test.ts` — 15 tests: tokenization, dataset
+  builders, learned deterministic prediction, **generalization via backoff**,
+  full rollout generation stopping at the natural end, JSON artifact round-trip,
+  empty-signal handling, cross-backend artifact rejection, registry
+  pluggability, deterministic+seed-varying synthetic generation, and a
+  held-out eval asserting `modelAccuracy > baselineAccuracy` with `lift > 0.1`.
+- `src/index.ts` — barrel exports for the new public surface.
+
+**Test results:** `npm test` **189/189 passing** (was 174; +15 new).
+`npm run build` ✅. `npm run typecheck:src` ✅ (exit 0 — new source stays clean).
+Full `tsc --noEmit` **125** (unchanged — no new debt; my files typecheck clean).
+
+**New idea:** now that inference is in-process, add a **`ModelReplayBackend`**
+that plugs a trained `MovementModelInference` into the existing replay engine —
+i.e. the model *drives* replay (predict → emit action → observe → predict) with
+a divergence guard that falls back to the recorded trajectory when the model's
+confidence (`prediction.probability`) drops below a threshold. That turns the
+model from an offline evaluator into an actual **movement executor** and gives a
+natural online metric (steps-until-divergence) to track generalization quality
+run over run. Bigger: a second backend (`"ngram-smoothed"` with Kneser–Ney
+smoothing) behind the same interface to benchmark backends against each other on
+the same synthetic eval — the registry already supports it.
+
+---
+
 ## 2026-07-25 (run 9) — 🔴→🟢 Eliminated background-task test flakiness (verification gate restored)
 
 **Audited:** The verification gate itself. On a clean checkout `npm test` was
