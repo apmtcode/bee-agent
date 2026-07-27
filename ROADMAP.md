@@ -71,16 +71,33 @@ unchecked items are queued. Keep this richer than you found it each run.
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
 (exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
-      objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
-      deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+- [x] Inventory what `src/capture` + `src/training` already implement vs. the
+      objective's five pieces (2026-07-27, run 10). capture/schema/dataset/replay
+      live in `src/capture`; `src/training` had exporter + job store + the
+      on-device `LocalAppleSiliconTrainingRunner` (launch-script only). Gap was an
+      in-process, cloud-runnable **train/infer** path — now filled.
+- [x] **Pluggable local-model backend interface** with a deterministic mock
+      backend (2026-07-27, run 10) — `MovementModelBackend` seam + registry
+      (`registerMovementBackend`/`createMovementBackend`) + `NgramMovementBackend`
+      (n-gram + stupid-backoff) in `src/training/movement-model.ts`. Documented
+      seam for a real on-device small model.
+- [x] **Synthetic event-stream generator** (2026-07-27, run 10) —
+      `src/training/synthetic-stream.ts`, deterministic (mulberry32), validates
+      capture→dataset→train→infer round-trips with no real OS input.
+- [x] **Generalization eval harness** (2026-07-27, run 10) —
+      `evaluateNextTokenAccuracy` / `evaluateDatasetAccuracy` measure replay
+      fidelity on held-out related synthetic trajectories (backoff generalization
+      to a novel entry-point is asserted).
+- [ ] **Replay-fidelity promotion gate**: after a backend trains, run
+      `evaluateDatasetAccuracy` on a held-out split and refuse to promote a model
+      below a threshold (backend-agnostic "did local training learn the
+      movements?" check). Wire into the training runner / execution service.
+- [ ] **`TrajectoryFeaturizer` seam**: let a real on-device backend consume
+      richer per-event features (coordinates, timing deltas, modifier keys) than
+      the current summary token, while the mock backend keeps using tokens.
+- [ ] Persist a trained `MovementModelArtifact` as a job artifact and add an RPC
+      to run inference against it (surface the mock model through the control
+      plane so replay/generalization is reachable end-to-end).
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

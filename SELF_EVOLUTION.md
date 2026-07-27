@@ -6,6 +6,65 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-27 (run 10) — 🧠 Pluggable movement-model backend + in-process train/infer/generalize (objective #2 (c)+(d))
+
+**Audited:** The local-movement learning subsystem against the five required
+pieces (capture → schema → dataset → replay → **train/infer**). `src/capture/`
+covers capture/schema/dataset/replay; `src/training/` had the exporter, job
+store/manifest, and a `LocalAppleSiliconTrainingRunner` — but that runner only
+emits a bash launch script that shells out to **mlx/axolotl on the user's
+machine**. There was **no in-process, cloud-runnable path** for pieces (c)
+"post-train a local model to repeat recorded movements" and (d) "generalize to
+new but related movements", so those capabilities could never be exercised or
+regression-tested in CI. That was the biggest untested gap in the standing
+objective.
+
+**Changed (additive, new modules only — no existing code modified except the
+barrel):**
+- `src/training/movement-model.ts` — the **pluggable backend seam** plus a
+  deterministic reference backend:
+  - `MovementModelBackend` interface (`train` / `infer`) so call sites depend on
+    the seam, never the implementation. A real on-device small model drops in via
+    `registerMovementBackend(name, factory)` / `createMovementBackend(name)`.
+  - `NgramMovementBackend` ("ngram-mock"): a dependency-free n-gram model with
+    **stupid-backoff**. Tokenizes replay events (`tokenizeMovementEvent`, reusing
+    the existing `ReplayTimelineEvent` schema so it consumes exactly what the
+    reviewed-export pipeline emits), trains a serializable `MovementModelArtifact`
+    (contexts length 0..order), and infers the argmax next token. **Deterministic**
+    (prob desc, token asc tie-break) → safe to assert on in CI.
+  - `generateMovementSequence` — rolls the model forward from a seed context to
+    **repeat** a recorded movement chain; backoff is what lets it **generalize**
+    from a related-but-unseen starting context.
+  - `evaluateNextTokenAccuracy` / `evaluateDatasetAccuracy` — the generalization
+    eval harness (teacher-forced next-token accuracy over held-out trajectories;
+    the unconditioned opening token is treated as the seed, not scored).
+  - `movementDatasetFromReplays` — bridges reviewed-export replays → training set.
+- `src/training/synthetic-stream.ts` — deterministic (mulberry32, **no
+  Math.random**) synthetic event-stream generator over 3 workflow templates
+  (deploy/search/compose). Emits realistic observation→action streams so the full
+  capture→dataset→train→infer→generalize loop is validated **without real OS
+  input**. `truncate:false` yields full episodes for exact-reproduction fixtures;
+  the default yields mixed-length (partially-abandoned) episodes.
+- `src/index.ts` — exported the new surface.
+- Tests: `movement-model.test.ts` (13) + `synthetic-stream.test.ts` (8) prove
+  determinism, exact chain reproduction, backoff generalization to a novel
+  entry-point, frequency-weighted argmax, empty-model safety, and the registry.
+
+**Test results:** `npm test` **174 → 195 passing** (+21), **green on two
+consecutive runs** (flake sentinel). `npm run typecheck:src` ✅ (source stays
+clean). `npm run build` ✅.
+
+**New idea:** now that a trained `MovementModelArtifact` is a plain-JSON,
+in-process object, add a **replay-fidelity gate to the training runner**: after a
+(mock or real) backend trains, run `evaluateDatasetAccuracy` on a held-out split
+and refuse to promote the model below a threshold — turning "did local training
+actually learn the movements?" into an automatic, backend-agnostic check. Bigger:
+a `TrajectoryFeaturizer` seam so a real backend can consume richer per-event
+features (coordinates, timing deltas, modifier keys) than the current summary
+token, while the mock backend keeps using tokens.
+
+---
+
 ## 2026-07-25 (run 9) — 🔴→🟢 Eliminated background-task test flakiness (verification gate restored)
 
 **Audited:** The verification gate itself. On a clean checkout `npm test` was
