@@ -6,6 +6,69 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-27 (run 10) — 🧠 Pluggable local-movement model backend (train → repeat → generalize, in-process)
+
+**Audited:** The local-movement learning subsystem (standing objective #2) and
+the training pipeline. Recent runs (2–9) were all typecheck/flake debt paydown;
+the *capability* side of objective #2 hadn't advanced. Found the concrete gap:
+`src/training/runner.ts` only emits a **plan + launch script** that shells out to
+a real Apple-Silicon runtime (`mlx_lm.lora` / `axolotl`). That can *never* run in
+the cloud/CI, so objective #2's parts (c) "post-train a local model to repeat the
+recorded movements" and (d) "generalize to new but related movements" had **zero
+executable validation** — no in-process model, no repeat, no generalize, no eval.
+This is also the top queued ROADMAP item ("Pluggable local-model backend
+interface … with a deterministic mock backend so cloud/CI tests pass").
+
+**Changed (additive, new module `src/training/movement-model.ts` + tests):**
+- **Movement dataset schema** derived from replay events: `movementTokenForEvent`
+  converts an `action`/`observation` `ReplayTimelineEvent` into a discrete
+  `MovementToken` (`action:<tool>:<slug(summary)>` / `observation:<source>:…`);
+  transcript events are correctly dropped. `buildMovementDataset({ replays })`
+  groups events by trajectory, orders by `ts` with a stable tie-break, and yields
+  one `MovementSequence` per trajectory — a deterministic, replayable dataset.
+- **`MovementModelBackend` interface** — the pluggable seam. A real on-device
+  small model can implement the *same* `train(dataset) → TrainedMovementModel`
+  contract (with `predict` / `generate` / `serialize`); nothing else changes.
+- **`NgramMovementBackend`** — the deterministic reference/mock backend: an
+  order-N Markov model with **back-off**. It learns `context → next-symbol`
+  counts at every order 0..N (START/END sentinels bracket each sequence), so:
+  - **repeat**: `generate()` reproduces a recorded movement exactly (test:
+    6-step login flow round-trips symbol-for-symbol; stops at END, no infinite
+    loop);
+  - **generalize**: `predict()` on a *novel* prefix (unseen opening + shared
+    action tail) backs off to the shortest matching context and still returns the
+    plausible next action (`matchedOrder ≤ 2`), with a normalized candidate
+    distribution.
+  - `serialize()` / `NgramMovementBackend.load()` round-trip a trained model so
+    training and inference can be separate steps/processes.
+- **`evaluateMovementModel(model, heldOut)`** — a generalization/fidelity eval
+  harness (overall + action-only next-token accuracy), seeding the ROADMAP's
+  "generalization eval harness" item.
+- Exported all of the above from the `src/index.ts` barrel.
+
+**Why it's cloud-safe:** pure in-process computation — no OS input capture, no
+Python, no network. Exactly the "build the code/schema/pipelines/tests; real
+on-device training runs when the user runs bee-agent locally" split the objective
+mandates. The n-gram backend is the mock that keeps the loop green in CI; the
+interface is the seam a real model slots into.
+
+**Test results:** `npm run typecheck:src` ✅ (exit 0, source stays clean).
+`npm run build` ✅. `npm test` ✅ **181/181** (was 174; +7 new movement-model
+tests), **green on two consecutive runs** (flake-sentinel discipline from run 9).
+
+**New idea:** wire the movement-model backend into `LocalAppleSiliconTrainingRunner`
+as a **dry-run / preflight** step — before emitting the mlx/axolotl launch
+script, train the n-gram backend on the exported dataset and write its
+`evaluateMovementModel` score into `replay-eval.json`. That gives every real
+training job a cheap, deterministic *baseline fidelity number* and a smoke test
+that the reviewed dataset is actually learnable, catching empty/degenerate
+exports before the user spends GPU time. Bigger: a second backend
+(`MovementModelBackend`) that emits *generalized* action suggestions for an
+unseen UI state (kNN over token embeddings) to compare against the n-gram
+baseline via the same eval harness — turning the interface into a real A/B seam.
+
+---
+
 ## 2026-07-25 (run 9) — 🔴→🟢 Eliminated background-task test flakiness (verification gate restored)
 
 **Audited:** The verification gate itself. On a clean checkout `npm test` was

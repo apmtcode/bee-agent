@@ -74,13 +74,32 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
-      deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
+- [x] **Pluggable local-model backend interface for the training runner with a
+      deterministic mock backend** (2026-07-27, run 10) —
+      `src/training/movement-model.ts`: `MovementModelBackend` interface (the
+      seam a real on-device model implements) + `NgramMovementBackend`, an
+      order-N Markov/back-off reference backend that trains on a movement dataset
+      and **repeats** recorded movements (`generate`) + **generalizes** to novel
+      prefixes (`predict` back-off). Pure in-process → green in cloud/CI.
+      `buildMovementDataset` derives the dataset from replay events;
+      `serialize`/`load` split train from inference. +7 tests, 181/181 green.
+- [x] **Generalization / fidelity eval harness** (2026-07-27, run 10) —
+      `evaluateMovementModel(model, heldOut)` returns overall + action-only
+      next-token accuracy on held-out sequences. Next: run it on *related-but-
+      unseen* synthetic trajectories (not just held-out copies) to measure true
+      generalization, and track the score over dataset size.
+- [ ] Wire the n-gram backend into `LocalAppleSiliconTrainingRunner` as a
+      **preflight**: train it on the exported dataset and write its
+      `evaluateMovementModel` score into `replay-eval.json` before emitting the
+      mlx/axolotl launch script — a cheap deterministic baseline + a smoke test
+      that the reviewed dataset is actually learnable (catches empty/degenerate
+      exports before GPU time).
+- [ ] Second `MovementModelBackend` (e.g. kNN over token embeddings) to A/B
+      against the n-gram baseline through the shared eval harness — proving the
+      interface is a real swap seam.
 - [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      round-trips without real OS input (partially covered by the movement-model
+      tests' hand-built datasets; make it a reusable generator).
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
