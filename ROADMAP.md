@@ -74,13 +74,27 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
-      deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+- [x] **Pluggable local-model backend interface** for the training runner with a
+      deterministic mock backend (2026-07-27, run 10) — `movement-model.ts`:
+      `LocalMovementModelBackend`/`TrainedMovementModel` seam +
+      `MarkovMovementBackend` (deterministic back-off n-gram). Trains from replay
+      manifests, predicts/generates next movement, serializes. Real on-device
+      backend implements the same interface.
+- [x] **Synthetic event-stream generator** (2026-07-27, run 10) —
+      `buildSyntheticMovementReplays` in `movement-eval.ts`: deterministic replay
+      manifests from a workflow grammar over a shared movement vocabulary.
+- [x] **Generalization eval harness** (2026-07-27, run 10) —
+      `evaluateMovementModel` (next-token accuracy + `fallbackRate` isolating
+      generalization from memorization) + `scoreRolloutFidelity`. Held-out
+      recombined workflows measured >0.9 next-movement accuracy.
+- [ ] **Skill-conditioned movement policies**: train one movement model per
+      promoted skill (or add a skill-id leading-context token) so inference is
+      goal-directed ("perform skill X" → roll out that skill's movements). Gives
+      the eval a per-skill fidelity score.
+- [ ] **Replay-driven reward model** (in-process): score a candidate rollout by
+      edit-distance to the approved replay action sequence — closes the RL loop
+      the `axolotl` runner references (`--reward-model replay-manifest`) so RL
+      training can be validated in the cloud.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

@@ -6,6 +6,63 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-27 (run 10) — 🧠 In-process movement-learning model: train, infer, generalize (objective 2c/2d)
+
+**Audited:** The local-movement learning subsystem end-to-end. `src/capture`
+(recorder, adapters, replay manifests) and `src/training` (exporter, runner,
+job store) already covered capture → dataset → replay → *emit a hardware launch
+plan*. But the runner (`LocalAppleSiliconTrainingRunner`) only shells out to
+real MLX/axolotl runtimes, which **cannot run in the cloud** — so objective 2's
+parts (c) "post-train a local model to repeat recorded movements" and (d)
+"generalize to new but related movements" had **no cloud-testable
+implementation**. That was the single biggest gap in the movement subsystem.
+
+**Changed (additive, three queued roadmap items in one coherent diff):**
+- `src/training/movement-model.ts` (new): the *pluggable local-model backend*
+  seam. `LocalMovementModelBackend` / `TrainedMovementModel` interfaces +
+  `MarkovMovementBackend`, a **deterministic back-off n-gram** default backend.
+  It repeats memorized movement sequences exactly and **generalizes** to unseen
+  contexts by backing off to the longest observed suffix (the `fallback`/`order`
+  fields on each prediction expose exactly when/how it generalized). Includes
+  `buildMovementDataset(replays)` (tokenizes reviewed replay manifests into
+  per-trajectory action sequences with a sorted vocabulary; observations opt-in),
+  `serialize()`/`loadMarkovMovementModel()` for persistence, and `generate()` for
+  autoregressive rollout. Determinism (sorted tie-breaking, no RNG/wall-clock) is
+  deliberate so cloud/CI runs are reproducible. Documented seam: a real on-device
+  backend wrapping the runner's MLX artifact implements the same interface.
+- `src/training/movement-eval.ts` (new): the *synthetic event-stream generator*
+  (`buildSyntheticMovementReplays` — deterministic replay manifests from a
+  workflow grammar over a shared movement vocabulary) and the *generalization
+  eval harness* (`evaluateMovementModel` → next-token accuracy + `fallbackRate`
+  isolating generalization from memorization; `scoreRolloutFidelity` → exact
+  match + common-prefix length).
+- `src/index.ts`: exported the new backend, dataset builder, synthetic generator,
+  eval harness, and their types.
+- Tests (new, +15): `movement-model.test.ts` (tokenization, exact replay,
+  count-based prediction with deterministic tie-break, **back-off
+  generalization**, empty-model safety, serialize round-trip),
+  `movement-eval.test.ts` (deterministic synthetic streams, perfect held-out
+  replay, **generalization to recombined workflows >0.9 accuracy**, back-off as
+  the generalization signal, rollout fidelity).
+
+**Test results:** `npm run typecheck:src` ✅ (exit 0, source stays clean).
+`npm run build` ✅. `npm test` **189/189 passing** (was 174; +15 new), **2/2
+consecutive runs green** (flake sentinel). No existing test touched — purely
+additive.
+
+**New idea:** *Skill-conditioned movement policies.* The reviewed export already
+links promoted/executable skills to their `sourceTrajectoryIds`. Train one
+movement model **per promoted skill** (or add a skill-id token as a leading
+context feature) so inference can be prompted with "perform skill X" and roll out
+the learned movement sequence for that skill specifically — turning the generic
+next-movement predictor into a goal-directed one, and giving the generalization
+eval a per-skill fidelity score. Bigger: a **replay-driven reward model** — score
+a candidate rollout against the reviewed replay manifest (edit-distance to the
+approved action sequence) to close the RL loop the `axolotl` runner references
+with `--reward-model replay-manifest`, entirely in-process for testing.
+
+---
+
 ## 2026-07-25 (run 9) — 🔴→🟢 Eliminated background-task test flakiness (verification gate restored)
 
 **Audited:** The verification gate itself. On a clean checkout `npm test` was
