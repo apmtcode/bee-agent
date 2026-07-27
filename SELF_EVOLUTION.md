@@ -6,6 +6,67 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-27 (run 10) — 🧠 Pluggable local movement-model backend (train + infer + generalize, cloud-runnable)
+
+**Audited:** The local-movement learning subsystem (standing objective 2),
+specifically `src/training/`. The pipeline already had capture → schema →
+dataset → replay and an Apple-Silicon *training launch plan* emitter
+(`LocalAppleSiliconTrainingRunner`, which shells out to mlx/axolotl). But the
+**model layer itself was missing**: there was no backend abstraction, no
+in-process model that could actually *train* on a movement dataset and *infer*
+next movements, and therefore no way to validate objective 2(c) "repeat recorded
+movements" / 2(d) "generalize to new-but-related movements" in the cloud (where
+mlx/axolotl and real OS input are unavailable). This was the single biggest gap
+between the runner emitting a shell command and the objective being demonstrably
+met.
+
+**Changed (additive — three new source files, no rewrites):**
+- `src/training/movement-model.ts` — the pluggable model layer:
+  - `MovementStep` / `MovementSequence` movement schema (action verb + numeric/
+    string params for mouse/keyboard/window events).
+  - `MovementModelBackend` interface (`train` / `load`) so the backend is
+    swappable — a real on-device small model implements the same seam later.
+  - `MarkovMovementBackend`: a deterministic, dependency-free **variable-order
+    Markov next-action model**. Training fits a transition table over movement
+    tokens at every context length 0..order; inference uses **longest-suffix
+    backoff**, which is what yields *generalization* — an unseen full-order
+    context still resolves from a shorter matching suffix (or the global action
+    prior). Learns per-action **prototypes** (numeric-param mean, string-param
+    mode) so `generate()` emits replayable steps with plausible params, not bare
+    verbs. Fully `serialize()`/`load()`-able for persistence.
+  - `evaluateNextStepAccuracy` — a generalization eval harness: top-1 next-action
+    accuracy + backoff rate on held-out sequences.
+  - `MovementBackendRegistry` + `createDefaultMovementBackendRegistry()` — the
+    plug point (mock now, on-device later).
+- `src/training/synthetic-movements.ts` — deterministic (seeded mulberry32)
+  synthetic movement-stream generator over a small desktop-task grammar, so the
+  capture→train→infer round-trip is validated without real OS input. Same seed →
+  identical dataset; different seed → structurally-related, parameter-different
+  data for held-out generalization tests.
+- Exported all of the above from `src/index.ts` (public capability surface).
+- Tests: `movement-model.test.ts` (11) + `synthetic-movements.test.ts` (6).
+  Cover reproduction of a recorded sequence, full-order prediction, backoff to a
+  shorter suffix on a novel context, untrained safety, prototype mean/mode,
+  serialize/load round-trip determinism, **generalization on held-out related
+  synthetic data (accuracy 0.89, vs ~0.12 random baseline)**, registry
+  resolve/reject, and a custom pluggable backend.
+
+**Test results:** `npm run typecheck:src` ✅ (source stays clean). `npm run build`
+✅. `npm test` **191/191** (was 174/174; +17), **green on two consecutive runs**
+(the run-9 flake-sentinel discipline). Pushed to the working branch.
+
+**New idea:** wire this model layer into the runner as a **third training
+runtime** — `runtime: "local-markov"` alongside mlx/axolotl — so a
+`LocalTrainingJobManifest` can be "trained" entirely in-process against a
+reviewed export's `replays[].events` (mapping `action` timeline events →
+`MovementStep[]`), producing a `SerializedMovementModel` artifact the replay
+engine can then drive. That closes the loop end-to-end in the cloud: reviewed
+export → in-process trained model → replayed movements → generalization eval, all
+without leaving Node. A further step: a **movement-tokenizer** that lifts
+`ReplayTimelineEvent` action `summary` strings into structured `MovementStep`s
+(verb + params) so real captured trajectories — not just synthetic ones — feed
+the same backend.
+
 ## 2026-07-25 (run 9) — 🔴→🟢 Eliminated background-task test flakiness (verification gate restored)
 
 **Audited:** The verification gate itself. On a clean checkout `npm test` was

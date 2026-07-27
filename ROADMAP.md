@@ -74,13 +74,24 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
-      deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+- [x] **Pluggable local-model backend interface** with a deterministic mock
+      backend (2026-07-27, run 10) — `MovementModelBackend` interface +
+      `MarkovMovementBackend` (variable-order, longest-suffix backoff) +
+      `MovementBackendRegistry` in `src/training/movement-model.ts`. Runs fully
+      in-process/cloud; documented seam for a real on-device small model.
+- [x] **Synthetic event-stream generator** (2026-07-27, run 10) —
+      `src/training/synthetic-movements.ts`, seeded/deterministic over a desktop
+      task grammar; validates train→infer round-trips without real OS input.
+- [x] **Generalization eval harness** (2026-07-27, run 10) —
+      `evaluateNextStepAccuracy` measures top-1 next-action accuracy + backoff
+      rate on held-out related sequences (0.89 vs ~0.12 random baseline).
+- [ ] **Wire the movement model into the training runner as a `local-markov`
+      runtime** so a `LocalTrainingJobManifest` trains in-process against a
+      reviewed export's `replays[].events`, emitting a `SerializedMovementModel`
+      artifact the replay engine can drive — closes the loop end-to-end in cloud.
+- [ ] **Movement tokenizer**: lift `ReplayTimelineEvent` action `summary`
+      strings into structured `MovementStep`s (verb + params) so real captured
+      trajectories, not just synthetic ones, feed the backend.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
