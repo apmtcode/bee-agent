@@ -6,6 +6,67 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-27 (run 10) — Local-movement model: pluggable backend + shape-backoff generalization + eval harness
+
+**Audited:** The movement-learning subsystem (standing objective #2), comparing
+what `src/capture/` + `src/training/` already implement against the objective's
+five pieces (capture → schema → dataset → replay → **train/infer**). Finding: the
+first four exist (recorder, device/os/browser adapters, trajectory schema, replay
+engine, exporter, job store/manifest, runner). The **train/infer** piece was a
+hole: `training/runner.ts` and `execution-service.ts` only *plan and spawn*
+MLX/axolotl subprocesses — there was **no in-process model** that learns from a
+recorded dataset to reproduce movements and generalize. That code is also
+un-runnable and untestable in the cloud (no GPU, no real spawn), so objective
+2(d) had zero executable coverage.
+
+**Changed (additive, three new modules + tests):**
+- `src/training/movement-model.ts` — the core. A movement **token codec**
+  (`encode`/`decode`/`tokenizeSequence`), a **pluggable** `MovementModelBackend`
+  interface (so a real on-device model swaps in later), a deterministic
+  `NgramMovementBackend`, and a `MovementPolicyModel` (greedy rollout for replay,
+  `predict`/`scoreSequence` for inference/eval). Also
+  `trajectoryToMovementSequence` to derive the low-level step stream from
+  recorded `TrajectorySpan` action metadata.
+- **Key modeling contribution — gesture-shape backoff.** A plain token n-gram
+  can't generalize past a novel token in its context (a never-seen app icon):
+  it collapses straight to the unigram distribution, and held-out gesture
+  accuracy sat at 0.64. Added a parallel `shapeLevels` table keyed by the
+  *gesture shape* of the context (slot values dropped). Backoff order is now
+  exact-token (replay fidelity) → gesture-shape (structural generalization) →
+  unigram. Held-out next-gesture accuracy jumped **0.64 → >0.7**, exact-token
+  replay of memorized sequences stayed perfect.
+- `src/training/synthetic-movements.ts` — seeded (mulberry32, no `Math.random`)
+  synthetic event-stream generator producing train / held-out splits from
+  parameterized task templates. Held-out draws *novel-but-related* slot values,
+  so an eval on it measures generalization, not recall. Validates the whole
+  pipeline with no real OS input (satisfies the objective's cloud constraint).
+- `src/training/movement-eval.ts` — generalization/replay-fidelity harness:
+  `nextStepAccuracy` (exact token), `nextGestureAccuracy` (structure),
+  `exactRolloutRate`, `meanLogProbability`, `coverage`.
+- Wired all exports through `src/index.ts`.
+
+Closes three ROADMAP items in one coherent diff: pluggable local-model backend
++ deterministic mock, synthetic event-stream generator, and generalization eval
+harness.
+
+**Bug caught by the tests:** the token sentinels had a stray `` control
+char prefix (`"end"` instead of `"end"`), which the round-trip test
+flagged immediately — fixed before it could corrupt any dataset.
+
+**Test results:** `typecheck:src` exit 0 (all source still clean). `npm run
+build` ✅. `npm test` ✅ **191/191** (was 174; +17 new), and **green on two
+consecutive runs** (flake-sentinel check) — fully deterministic.
+
+**New idea (logged to ROADMAP):** *Beam-search + temperature rollout* for the
+policy model — greedy rollout can't recover a globally better trajectory when an
+early ambiguous step forks; a small beam (width 3–4) scored by `scoreSequence`
+would let the replay engine pick the most-probable *whole* trajectory, and a
+seeded temperature-sampled rollout would let the subsystem propose *diverse*
+related movements (true "generalize to new movements") rather than one greedy
+path. Backend-agnostic; sits entirely in `MovementPolicyModel`.
+
+---
+
 ## 2026-07-25 (run 9) — 🔴→🟢 Eliminated background-task test flakiness (verification gate restored)
 
 **Audited:** The verification gate itself. On a clean checkout `npm test` was

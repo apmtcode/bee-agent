@@ -71,16 +71,29 @@ unchecked items are queued. Keep this richer than you found it each run.
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
 (exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
-      objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
-      deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+- [x] Inventory what `src/capture` + `src/training` already implement vs. the
+      objective's five pieces (2026-07-27, run 10). Gap found: capture → schema →
+      dataset → replay all existed; **train/infer had no in-process model** (only
+      MLX/axolotl subprocess *planning*). Runs 10 filled the train/infer hole.
+- [x] Pluggable local-model backend interface (2026-07-27, run 10) —
+      `MovementModelBackend` in `training/movement-model.ts` with a deterministic
+      `NgramMovementBackend` (cloud/CI-safe) and a documented seam for a real
+      on-device model. `MovementPolicyModel` wraps any backend.
+- [x] Synthetic event-stream generator (2026-07-27, run 10) —
+      `training/synthetic-movements.ts`, seeded/reproducible, train + held-out
+      splits with novel-but-related slot values.
+- [x] Generalization eval harness (2026-07-27, run 10) —
+      `training/movement-eval.ts` (`nextStepAccuracy`, `nextGestureAccuracy`,
+      `exactRolloutRate`, `meanLogProbability`, `coverage`). Drove the
+      gesture-shape-backoff improvement (held-out gesture acc 0.64 → >0.7).
+- [ ] **Beam-search + temperature rollout** for `MovementPolicyModel`: greedy
+      rollout can't recover from an early ambiguous fork. A small beam (width
+      3–4) scored by `scoreSequence` picks the most-probable *whole* trajectory
+      (better replay); a seeded temperature-sampled rollout proposes *diverse*
+      related movements (true generalization to new movements). Backend-agnostic.
+- [ ] Persist trained `MovementModelWeights` alongside a training job manifest in
+      `FileTrainingJobStore`, and add a control-plane RPC to train-from-dataset
+      and roll out, so the movement model is reachable from the operator surface.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
