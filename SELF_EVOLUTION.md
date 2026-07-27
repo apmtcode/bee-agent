@@ -6,6 +6,70 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-27 (run 10) — 🧠 Movement learning: pluggable model backend + train/infer/generalize
+
+**Audited:** Standing objective #2 (local-movement learning) end-to-end. The
+capture→trajectory→export→training pipeline existed, but the training
+`runner.ts` only *emits a shell plan + launch script* for a real Apple-Silicon
+box (`mlx_lm.lora` / `axolotl`). There was **no backend that actually trains a
+model, and no inference/generalization path at all** — so objective #2(c)
+("post-train a local model to repeat the recorded movements") and #2(d)
+("generalize to new but related movements") were unreachable in the cloud/CI.
+This was the top item under the roadmap's "Local-movement learning subsystem".
+
+**Changed (additive — three new source modules + tests, nothing touched):**
+- `src/training/movement-model.ts` — the **pluggable model backend seam**:
+  `MovementModelBackend` interface (`train(dataset) → TrainedMovementModel`),
+  `TrainedMovementModel` (`predictNext` / `generate` / `toJSON`), a
+  `MovementBackendRegistry` for runtime backend selection, and the default
+  **deterministic mock backend** `MarkovMovementBackend` — an order-k Markov
+  model with **Katz-style backoff**. Backoff is the generalization mechanism:
+  an unseen full-order context falls back to shorter suffixes, so a *new*
+  movement sequence assembled from familiar sub-steps still gets a sensible
+  next-move. No native code / GPU / network → trains & infers in-process.
+  Serializable (`toJSON`/`fromJSON`) for a portable, backend-agnostic model
+  envelope. The registry gives a documented seam for a real on-device small
+  model later (`registry.register(new RealMlxBackend())`) with zero call-site
+  churn.
+- `src/training/movement-dataset.ts` — the **dataset layer**: builds the
+  structured, replayable `MovementDataset` from captured `TrajectorySpan`s
+  (`buildMovementDatasetFromTrajectories`) or exported replay events
+  (`buildMovementDatasetFromReplays`); canonical token schema
+  `${kind}:${channel}:${verb}` (verb normalized from the summary, so surface
+  text varies but tokens stay stable). Plus **`evaluateMovementGeneralization`**
+  — a held-out eval harness measuring next-token accuracy (teacher-forced),
+  backoff-driven correct rate, and exact-sequence reproduction.
+- `src/training/movement-synth.ts` — a **seeded, deterministic synthetic
+  movement-stream generator** (32-bit LCG, no `Math.random`) over a small UI
+  task grammar (open-and-submit-form / browse-and-scroll / keyboard-shortcut).
+  We have no access to the user's real machine, so this validates the whole
+  capture→dataset→train→infer→generalize loop without real OS input. Same seed
+  ⇒ same streams (resume-safe, reproducible).
+- Exported the full surface from `src/index.ts`.
+
+**Test results:** two new test files, **+14 tests (174 → 188)**. Full suite
+**188/188, green on both back-to-back runs** (flake sentinel). `npm run build`
+✅. `npm run typecheck:src` ✅ (exit 0 — new source is clean). Full `tsc`
+**125 (unchanged)** — new code adds zero debt. A key test trains on 40 synthetic
+streams and evals on 16 disjoint-seed streams from the *same* grammar,
+asserting held-out next-token accuracy **> 0.8** — generalization, measured, not
+asserted by hand.
+
+**Debugging note:** the first `movement-model.ts` write smuggled in stray
+control bytes (`` in the START/END sentinels, a NUL in the context
+separator) — caught by a `toContain("start")` failure, traced with `grep -naP`,
+stripped with `perl`. Cheap, but a reminder that generated files deserve a
+control-char scan.
+
+**New idea:** add a **`ModelBackedReplayService`** that closes the loop — take a
+`TrainedMovementModel`, `generate()` a movement sequence, and feed it back
+through the existing `replay-service.ts` so a trained model can *drive* a replay
+(not just be scored offline). Bigger: a **"movement-skill" promotion path** —
+when the generalization eval for a task template clears a fidelity threshold,
+auto-promote it to an executable skill (mirroring the existing
+promoted-skill/executable-skill machinery), so learned movements become
+first-class, invocable capabilities rather than passive datasets.
+
 ## 2026-07-25 (run 9) — 🔴→🟢 Eliminated background-task test flakiness (verification gate restored)
 
 **Audited:** The verification gate itself. On a clean checkout `npm test` was

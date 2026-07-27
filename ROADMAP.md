@@ -71,16 +71,33 @@ unchecked items are queued. Keep this richer than you found it each run.
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
 (exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
-      objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
-      deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+- [x] Inventory what `src/capture` + `src/training` already implement vs. the
+      objective's five pieces (2026-07-27, run 10) — capture/schema/dataset/replay
+      existed; the missing pieces were an actual train + infer + generalize path
+      (runner only emitted a shell plan). Filled by the three items below.
+- [x] **Pluggable local-model backend interface** with a deterministic mock
+      backend (2026-07-27, run 10) — `src/training/movement-model.ts`:
+      `MovementModelBackend`/`TrainedMovementModel` interfaces, a
+      `MovementBackendRegistry`, and `MarkovMovementBackend` (order-k Markov with
+      backoff → generalization). Serializable; documented seam for a real
+      on-device small model with zero call-site churn.
+- [x] **Synthetic event-stream generator** (2026-07-27, run 10) —
+      `src/training/movement-synth.ts`, seeded LCG over a UI-task grammar;
+      validates capture→dataset→train→infer without real OS input.
+- [x] **Generalization eval harness** (2026-07-27, run 10) —
+      `evaluateMovementGeneralization` in `movement-dataset.ts`: next-token
+      accuracy (teacher-forced), backoff-correct rate, exact-sequence match on
+      held-out disjoint-seed streams (test asserts accuracy > 0.8).
+- [ ] **`ModelBackedReplayService`**: bridge a `TrainedMovementModel` to the
+      existing `replay-service.ts` so a trained model can *drive* a replay
+      (generate → replay), closing the record→train→act loop.
+- [ ] **Movement-skill promotion path**: when a task template's generalization
+      eval clears a fidelity threshold, auto-promote it to an executable skill
+      (mirror the promoted-skill/executable-skill machinery) so learned movements
+      become invocable capabilities.
+- [ ] **Real on-device backend adapter**: implement a `MovementModelBackend`
+      that shells out to the existing `runner.ts` mlx/axolotl plan and loads the
+      resulting artifact for `predictNext`/`generate`, behind the registry.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
