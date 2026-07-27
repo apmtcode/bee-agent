@@ -71,16 +71,31 @@ unchecked items are queued. Keep this richer than you found it each run.
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
 (exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
-      objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
-      deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+- [x] Inventory what `src/capture` + `src/training` already implement vs. the
+      objective's five pieces (2026-07-27, run 10). Had: capture, trajectory
+      schema, replay-manifest builder, reviewed-export dataset builder, external
+      mlx/axolotl training-plan builder. Gap: no in-process, testable model that
+      learns from recorded movements to repeat/generalize them — now filled.
+- [x] Pluggable local-model backend interface with a deterministic mock backend
+      (2026-07-27, run 10) — `MovementModelBackend` + `CountingMovementBackend`
+      (count-based Markov policy) in `src/training/movement-model.ts`; documented
+      seam for a real on-device small model.
+- [x] Synthetic event-stream generator (2026-07-27, run 10) —
+      `synthesizeMovementTrajectory` builds deterministic observe→act
+      trajectories (no `Date.now()`), validating capture→dataset→train→replay.
+- [x] Generalization eval harness (2026-07-27, run 10) —
+      `evaluateMovementModel` reports tool/exact accuracy + generalization rate on
+      held-out related trajectories; backoff drives generalization.
+- [ ] **Integrate the movement-policy backend with `training/runner.ts`**: today
+      the runner emits an external mlx/axolotl plan and `movement-model.ts` is a
+      separate in-process policy. Add a `runtime:"in-process"` plan variant (or a
+      backend field on the job manifest) so a job can select the count-based
+      policy for cloud/CI dry-runs and the real on-device model locally, behind
+      one interface.
+- [ ] **Closed-loop rollout replayer**: drive the model itself — start
+      observation → predicted action → synthesized next observation (world-model
+      stub) → repeat — to score *multi-step* replay fidelity and detect
+      compounding drift, beyond the current teacher-forced eval.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

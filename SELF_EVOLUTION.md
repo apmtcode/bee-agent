@@ -6,6 +6,69 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-27 (run 10) — 🧠 In-process movement-policy model: replay + generalization (objective #2 c+d)
+
+**Audited:** The local-movement learning subsystem (`src/capture/` + `src/training/`)
+against the objective's five pieces (capture → schema → dataset → replay →
+train/infer). Findings: capture (recorder/adapters/consent/ingestion), the
+trajectory **schema**, replay-manifest builder, a reviewed-export **dataset**
+builder, and an **external** on-device training-plan builder (`runner.ts` →
+mlx/axolotl launch script) all existed. The **gap**: there was no in-process,
+*testable* model that closes the loop — nothing that actually learns from
+recorded movements to (c) *repeat* them or (d) *generalize* to new-but-related
+ones. The runner only emits a command plan that runs on the user's real machine;
+in the cloud there was nothing to train or evaluate. This is also roadmap
+movement-item #1 (pluggable backend + mock) and #3/#4 (synthetic generator +
+generalization eval).
+
+**Changed (additive — one new source module + tests, zero edits to existing
+logic):** `src/training/movement-model.ts`:
+- **Pluggable backend seam** — `MovementModelBackend` interface (`train(dataset)
+  → TrainedMovementModel`), so a real on-device small model can drop in behind
+  the same contract. Default `CountingMovementBackend` is a deterministic,
+  dependency-free count-based (Markov) policy suitable for CI.
+- **Dataset builder** — `buildMovementDataset(trajectories)` walks each
+  trajectory's ts-ordered observe/act timeline and emits `(context → action)`
+  samples. Context = `{lastObservationSource, lastActionTool,
+  lastObservationToken}`; sample **weight** derives from trajectory reward
+  (`reward+1`, clamped ≥0.1) and penalizes failure/abort (0.25) so higher-value
+  demos win ties.
+- **Replay (c)** — exact-context lookup replays the recorded next action;
+  prediction reports `source:"exact"`, `backoffLevel:0`, `confidence`.
+- **Generalization (d)** — 5-level context **backoff** (drop the summary token,
+  then the prior action, … down to source-only / prior-action-only, then a global
+  prior). An unseen exact context still resolves to a related action, flagged
+  `source:"generalized"`.
+- **Eval harness** — `evaluateMovementModel(model, heldOut)` does teacher-forced
+  scoring → `{toolAccuracy, exactAccuracy, generalizationRate,
+  generalizedToolAccuracy}`, measuring replay fidelity AND generalization on
+  held-out synthetic trajectories.
+- **Synthetic generator** — `synthesizeMovementTrajectory({steps,startTs,stepMs})`
+  builds deterministic observe→act trajectories (no `Date.now()`; ts derived from
+  `startTs`) to validate the whole capture→dataset→train→replay round-trip
+  without real OS input.
+- Serializable model (`toJSON()`) for inspection/persistence; exported the whole
+  surface from `src/index.ts`.
+
+**Test results:** new `movement-model.test.ts` — **13/13**, 6/6 consecutive green
+(fully deterministic: no timers, no subprocesses). `npm run build` ✅.
+`npm run typecheck:src` ✅ (exit 0 — source stays clean). Full `npm test`
+**187/187** (was 174; +13). Full `tsc` **125** (unchanged; the new module adds
+**0** typecheck errors — all 125 remain in pre-existing test files). Note: one
+isolated failure surfaced on a single suite run in a *pre-existing* flaky test
+(not the new module — confirmed green on 3 repeat full-suite runs and 6 repeat
+module runs); it is the residual flake the run-9 "flake sentinel" roadmap item
+still tracks.
+
+**New idea:** a **closed-loop rollout replayer** — instead of teacher-forced
+eval, let the model drive: feed it a start observation, take its predicted
+action, synthesize the resulting observation from a lightweight world-model stub,
+and repeat, so we can score *multi-step* replay fidelity and detect compounding
+drift (the classic behavioral-cloning failure mode). Pairs naturally with the
+count-based policy now in place and with the future real on-device backend.
+
+---
+
 ## 2026-07-25 (run 9) — 🔴→🟢 Eliminated background-task test flakiness (verification gate restored)
 
 **Audited:** The verification gate itself. On a clean checkout `npm test` was
