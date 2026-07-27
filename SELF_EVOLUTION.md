@@ -6,6 +6,64 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-27 (run 10) — 🧠 In-process pluggable movement-model backend (train + repeat + generalize)
+
+**Audited:** Standing objective #2, pieces **(c) post-train a local model** and
+**(d) generalize to related movements** — and the matching ROADMAP item
+"Pluggable local-model backend interface … with a deterministic mock backend."
+Found the training subsystem only had `LocalAppleSiliconTrainingRunner`, which
+*emits a shell launch plan* for external `mlx`/`axolotl` and **cannot run in the
+cloud/CI** — so there was no way to actually train or infer, and the capture →
+dataset → **train → infer** loop was untested end-to-end. The recorded data model
+(reviewed trajectories → `ReplayManifest` timelines of observation/action events)
+was already in place but had no learner consuming it.
+
+**Changed (additive, dependency-free) — new `src/training/movement-model.ts`:**
+- **Pluggable backend seam:** `MovementModelBackend` interface (`train(dataset) →
+  TrainedMovementModel`) so a heavier on-device learner can drop in later;
+  `TrainedMovementModel` exposes `predict`, `rollout`, and `toJSON`.
+- **Deterministic backend `NgramSimilarityBackend`** that genuinely learns two
+  ways: (1) a **BOS-augmented back-off n-gram** over prior-action tool sequences —
+  reproduces a recorded movement sequence **exactly** (fidelity 1.0) when
+  following a known trajectory; (2) **IDF-weighted cosine similarity** over
+  observation-context tokens — **generalizes** an unseen-but-related context to
+  the right action family. Falls back to the globally most-frequent action.
+  All tie-breaks are lexicographic → fully deterministic, no `Math.random`/`Date`.
+- **Dataset builder** `buildMovementDataset(replays)` turns reviewed
+  `ReplayManifest`s into `(context, priorActions) → action` examples with a
+  rolling context window — connects the existing replay pipeline to the learner.
+- **Serialization** (`toJSON`/`loadMovementModel`) so a trained model persists and
+  rehydrates identically. **Generalization eval** `measureReplayFidelity(model,
+  replay)` scores held-out trajectories (rollout vs recorded action order).
+- Convenience `trainMovementModel(replays)` (build+train in one call) and a
+  reusable `tokenizeMovementText`. All 12 public names exported via `src/index.ts`.
+
+**Why this is the on-device seam, not the on-device impl:** the engine runs in
+Anthropic's cloud with no real OS input or GPU, so this is the *code, schema,
+pipeline, and eval* — validated with **synthetic event streams** — while the
+heavy real backend stays behind the same interface (`mlx`/`axolotl` runner).
+
+**Test results (`src/training/movement-model.test.ts`, 9 new tests):** exact
+replay (fidelity 1.0), deterministic n-gram next-action, similarity
+generalization to two disjoint action families, fallback, empty-model, JSON
+round-trip, and held-out fidelity < 1. `npm test` **183/183** (was 174; +9),
+**deterministic across 2 back-to-back runs**. `npm run build` ✅.
+`npm run typecheck:src` ✅ exit 0. Full `tsc` **125** (unchanged — new source +
+test files add zero errors).
+
+**New idea:** add an **online/continual-learning path** — `TrainedMovementModel`
+is currently immutable; give the n-gram backend an `observe(example)` method so a
+running bee-agent can update the model incrementally from newly-approved
+trajectories without a full retrain, and log a rolling `measureReplayFidelity`
+trend to the metrics file (the innovation-backlog telemetry item) so drift is
+visible. Bigger: a **feature-based generalization backend** (hash observation
+tokens + prior-action embedding into a small logistic/perceptron head trained by
+deterministic gradient descent) behind the same `MovementModelBackend` interface,
+so we can measure a real generalization lift over the n-gram baseline on the
+held-out eval — the first genuinely *learned* (not memorized) local model.
+
+---
+
 ## 2026-07-25 (run 9) — 🔴→🟢 Eliminated background-task test flakiness (verification gate restored)
 
 **Audited:** The verification gate itself. On a clean checkout `npm test` was

@@ -74,13 +74,33 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
-      deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+- [x] **Pluggable local-model backend interface** with a deterministic in-process
+      backend (2026-07-27, run 10) — `src/training/movement-model.ts`.
+      `MovementModelBackend` interface + `NgramSimilarityBackend` (BOS back-off
+      n-gram for exact replay + IDF-similarity for generalization), dataset
+      builder from `ReplayManifest`s, JSON serialization, `measureReplayFidelity`
+      eval. Runs anywhere (no GPU/OS); real mlx/axolotl runner stays behind the
+      same seam.
+- [~] Synthetic event-stream generator to validate capture→dataset→replay
+      round-trips without real OS input. Partial: run 10's tests build synthetic
+      replay manifests inline (`syntheticReplay`). Next: promote to a reusable
+      `src/capture/synthetic.ts` generator (parameterized noise, branching,
+      timing jitter) usable by both capture and training tests.
+- [~] Generalization eval harness: `measureReplayFidelity` (run 10) scores replay
+      fidelity on held-out trajectories. Next: a held-out split + aggregate
+      report (mean fidelity, per-family accuracy) and a second learned backend to
+      beat the n-gram baseline on it.
+- [ ] **Online/continual learning:** add `observe(example)` to the movement
+      backend so a running agent updates the model from newly-approved
+      trajectories without a full retrain; log a rolling fidelity trend.
+- [ ] **Feature-based generalization backend** behind `MovementModelBackend`:
+      hash observation tokens + prior-action context into a small
+      logistic/perceptron head trained by deterministic gradient descent, to
+      measure a real learned lift over the memorized n-gram baseline.
+- [ ] Wire the movement model into the training job lifecycle: have
+      `LocalTrainingExecutionService` optionally run the in-process backend as a
+      cloud-executable "dry-run" that produces a real (mock) model artifact +
+      fidelity report alongside the mlx/axolotl launch plan.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
