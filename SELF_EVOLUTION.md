@@ -6,6 +6,60 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-28 (run 10) — 🧠 In-process movement learner: recall + generalization (objectives 2c/2d)
+
+**Audited:** The local-movement learning subsystem (`src/capture` + `src/training`).
+Capture → dataset → replay existed, and the training *runner* emits mlx/axolotl
+launch scripts — but nothing actually **learns from recorded movements in-process**
+or **generalizes to new-but-related movements**. Objectives 2(c) "post-train a local
+model to repeat recorded movements" and 2(d) "generalize" had no runnable, cloud-
+testable implementation; the only "training" was shelling out to external Python we
+can't run here. That is the highest-value parity gap in the charter's flagship
+subsystem, and it maps to two open roadmap items (pluggable local-model backend +
+generalization eval harness).
+
+**Changed (additive, no edits to existing behavior):**
+- `src/training/movement-model.ts` (new): the always-available, deterministic
+  counterpart to the external runner.
+  - `MovementToken`/`MovementSequence`/`MovementDataset` schema + `buildMovementDataset`
+    that extracts normalized, app-independent movement tokens
+    (`tool|gesture|target|direction`) from `TrajectorySpan` actions, ordered by ts,
+    with app context resolved from observation metadata.
+  - `MovementModelBackend` **pluggable seam** (`train(dataset) → TrainedMovementModel`)
+    so a real on-device small model can drop in without touching call sites.
+  - `DeterministicMovementBackend` — a **back-off Markov learner** conditioned on
+    (app, previous token) with progressively looser fallbacks
+    (same-motion-any-app → same-gesture-this-app → same-gesture-any-app → priors).
+    Exact-tier hits = recall (2c); back-off hits = transfer to new-but-related
+    contexts (2d). Fully deterministic (no wall-clock/RNG) → reproducible in CI.
+  - `evaluateMovementGeneralization` eval harness: teacher-forced top-1 next-step
+    accuracy (split by recall vs. generalized source) **and** greedy-rollout fidelity,
+    per held-out sequence.
+- `src/training/synthetic-trajectories.ts` (new): deterministic synthetic trajectory
+  generator (`SEARCH_AND_OPEN`/`COMPOSE_AND_SEND` templates,
+  `generateSyntheticTrajectory[Family]`) so the whole pipeline is validated without
+  any real OS input — the cloud-safe stand-in for on-device capture.
+- `src/training/movement-model.test.ts` (new, 9 tests): extraction/ordering; recall
+  (train→greedily reproduce a trajectory at fidelity 1.0); generalization (train on a
+  task in 3 apps, hold out a 4th app → 0 exact hits but ≥0.75 generalized accuracy &
+  rollout fidelity); negative control (unrelated task → <0.5 accuracy, no
+  hallucinated match); custom-backend seam; empty-model handling.
+- `src/index.ts`: exported the new surface.
+
+**Test results:** `npm run typecheck:src` ✅ (exit 0, source stays clean).
+`npm run build` ✅. `npm test` **183/183 passing** (was 174; +9), **2/2 consecutive
+runs green** (applied the run-9 flake-sentinel practice before pushing).
+
+**New idea:** a **replay-execution bridge** — feed a `TrainedMovementModel`'s
+predicted token stream into the existing `ReplayManifest`/device-adapter path so a
+learned motion can be *dry-run* (simulated) end-to-end and scored against the
+recorded trajectory, giving one closed loop: capture → learn → replay → measure. Add
+a per-token *confidence gate* so low-confidence generalized steps pause for operator
+confirmation instead of firing blindly on the real machine — the safety analogue of
+the plan-approval workflow, applied to autonomous movement.
+
+---
+
 ## 2026-07-25 (run 9) — 🔴→🟢 Eliminated background-task test flakiness (verification gate restored)
 
 **Audited:** The verification gate itself. On a clean checkout `npm test` was

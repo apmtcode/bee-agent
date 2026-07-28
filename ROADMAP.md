@@ -74,13 +74,30 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Pluggable local-model backend interface for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      for a real on-device small model. (2026-07-28, run 10) —
+      `src/training/movement-model.ts`: `MovementModelBackend` interface +
+      `DeterministicMovementBackend` (back-off Markov learner). Delivers objective
+      2(c) recall as an in-process, CI-safe counterpart to the external mlx/axolotl
+      runner.
+- [x] Synthetic event-stream generator to validate capture→dataset→replay
+      round-trips without real OS input. (2026-07-28, run 10) —
+      `src/training/synthetic-trajectories.ts` (templates + family generator).
+- [x] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories. (2026-07-28, run 10) —
+      `evaluateMovementGeneralization` (teacher-forced next-step accuracy split by
+      recall/transfer source + greedy-rollout fidelity). Delivers objective 2(d):
+      train on a task in N apps, hold out another app, score transfer.
+- [ ] **Replay-execution bridge + confidence gate**: feed a `TrainedMovementModel`'s
+      predicted token stream through the `ReplayManifest`/device-adapter path to
+      dry-run a learned motion end-to-end and score it against the recording (one
+      closed loop: capture→learn→replay→measure). Gate low-confidence generalized
+      steps for operator confirmation before they fire on a real machine.
+- [ ] **Real on-device backend** implementing `MovementModelBackend` (small local
+      model, e.g. an mlx-served policy) behind the existing seam — wire it so
+      `trainMovementModel` can select backend by config while the deterministic one
+      stays the CI default.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
