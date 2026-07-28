@@ -6,6 +6,64 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-28 (run 10) — 🧠 Pluggable movement-model backend: local training + inference in-process (objective #2 c/d)
+
+**Audited:** The local-movement learning subsystem (`src/capture/` + `src/training/`)
+against objective #2's five pieces (capture → schema → dataset → replay →
+train/infer). Found the first four exist (recorder, trajectory schema, reviewed
+export, replay manifest) but the **train/infer piece had no cloud-runnable
+implementation**: `runner.ts` only emits mlx/axolotl launch *scripts + plans*
+for the user's Apple-silicon machine. Nothing could actually post-train a model
+on the recorded dataset and run inference to (c) repeat recorded movements or
+(d) generalize — the exact top item queued under "Local-movement learning
+subsystem" in ROADMAP.
+
+**Changed (additive, new module `src/training/movement-model.ts`):**
+- **`MovementModelBackend` interface** — the pluggable seam: `train(dataset,
+  opts) → MovementModel` + `load(serialized)`. A registry
+  (`registerMovementBackend`/`getMovementBackend`/`listMovementBackends`) lets a
+  real on-device small model be dropped in later; `loadMovementModel` dispatches
+  by backend name so serialized artifacts are portable.
+- **`DeterministicMovementBackend`** (name `deterministic-markov`) — a *real*
+  statistical model, not a stub: an order-k Markov chain over the movement-token
+  grammar with add-α smoothing and **stateless backoff** to the longest seen
+  suffix. Fully deterministic (lexicographic tie-break, no RNG) so cloud/CI runs
+  are reproducible. `predictNext` returns a normalized distribution + the
+  `backoffOrder` actually used; `rollout` autoregressively generates a movement
+  sequence (stops at the `MOVEMENT_END` sentinel).
+- **Dataset builders** `buildMovementDatasetFromReplays` (one action sequence
+  per trajectory, ts-ordered, observations dropped) and
+  `buildMovementDatasetFromTrajectories`, feeding straight off the existing
+  `ReplayManifest` / `TrajectorySpan` schemas — no new capture format.
+- **`evaluateMovementFidelity`** — the generalization eval harness: top-1
+  next-token accuracy + exact-reproduction rate (seeded rollout == recorded
+  sequence), with per-sequence detail. On held-out-but-related sequences this
+  *is* the generalization score.
+- **Persistence** `saveMovementModel`/`readMovementModel` (via the atomic-write
+  helpers) so a trained model is a JSON artifact that fits the file-based
+  training pipeline. Exported the whole surface from `src/index.ts`.
+
+**Test results:** new `movement-model.test.ts` (12 tests) proves reproduction
+(2c: seeded rollout replays the recorded drag, fidelity 1.0), correct-next
+prediction, **generalization via backoff** (2d: an unseen 3-gram prefix ending
+in a known token still predicts the right continuation, `backoffOrder` 1–2),
+determinism, serialize/load + disk round-trip, and empty-dataset safety.
+`npm test` **186/186** (was 174), **green twice** (flake sentinel). Source
+typecheck (`typecheck:src`) ✅ exit 0. Build ✅. Full `tsc` **125** (unchanged —
+new source + test files add 0 errors).
+
+**New idea:** a **movement-token vocabulary layer** so generalization spans
+*related* gestures rather than only re-composing exact recorded tokens: tokenize
+each action into `(verb, target-class)` features (e.g. `mouse.down` on a
+`button` vs a `slider`) and let the Markov backend condition on the coarser
+feature, then re-specialize on emit. That lifts objective 2d from "new orderings
+of seen movements" to "seen movements applied to new targets". Pairs naturally
+with a second backend (`registerMovementBackend`) — e.g. a tiny logistic
+next-action classifier — validated head-to-head by the same
+`evaluateMovementFidelity` harness on held-out synthetic streams.
+
+---
+
 ## 2026-07-25 (run 9) — 🔴→🟢 Eliminated background-task test flakiness (verification gate restored)
 
 **Audited:** The verification gate itself. On a clean checkout `npm test` was
