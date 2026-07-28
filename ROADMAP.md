@@ -74,13 +74,25 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
-      deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+- [x] **Pluggable local-model backend interface** for the movement subsystem with
+      a deterministic mock backend (so cloud/CI tests pass) and a documented seam
+      for a real on-device small model (2026-07-28, run 10). `src/training/
+      movement-model.ts`: `MovementModelBackend` interface +
+      `MarkovMovementBackend` (order-k backoff + smoothing) that trains, repeats
+      recorded movements, generalises, generates (greedy/seeded), and
+      serialises. The mlx/axolotl `runner.ts` remains the on-device route.
+- [x] **Generalization eval harness** — `evaluateMovementModel` scores held-out
+      sequences (top-1/top-K accuracy + mean log-loss) (2026-07-28, run 10).
+- [ ] **Movement-model training service**: wire `MarkovMovementBackend` into the
+      `LocalTrainingJobManifest` flow, selecting the backend by `runtime`
+      (`"markov"` → in-process cloud/CI path; `"mlx"`/`"axolotl"` → shell-out) so
+      one job manifest trains either locally or on-device, and the in-process
+      backend doubles as a pre-GPU dry-run gate.
+- [ ] Synthetic event-stream generator (grammar of UI flows → trajectories) to
+      validate capture→dataset→train→eval at volume without real OS input.
+- [ ] Temporal/coordinate-aware movement tokens (bucketed dwell time, screen
+      region) so the model captures *how* a movement is performed, not just which
+      action — richer generalisation.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

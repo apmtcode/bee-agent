@@ -6,6 +6,64 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-28 (run 10) — 🧠 Pluggable local movement-model backend (train → infer → generalise, in-process)
+
+**Audited:** The local-movement learning subsystem (`src/capture/` + `src/training/`)
+against objective 2(c)/(d): *post-train a local model on the recorded dataset to
+repeat the movements, and generalise to new-but-related movements.* Found that
+`src/training/runner.ts` only **builds shell-out plans** for real Apple-Silicon
+runtimes (`mlx_lm.lora`, `axolotl`) — those cannot execute in Anthropic's cloud,
+so nothing actually closed the train→infer→generalise loop in CI. The dataset
+side was already there (exporter emits reviewed replay manifests; replay/
+trajectory/device schemas define the movement events), but there was **no
+in-process model** to consume it. This is exactly the top queued movement item on
+the roadmap: *"pluggable local-model backend with a deterministic mock backend so
+cloud/CI tests pass."*
+
+**Change made (additive, reversible):** New module `src/training/movement-model.ts`
++ 15 tests, exported from the barrel.
+- **Pluggable seam** — `MovementModelBackend` interface (`train`, `restore`) and
+  `TrainedMovementModel` (`predictNext`, `generate`, `serialize`). A real neural
+  backend drops in here without touching call sites; the runner's mlx/axolotl
+  path remains the on-device production route.
+- **Deterministic backend** — `MarkovMovementBackend`: an order-k Markov model
+  with **stupid-backoff + additive (Laplace) smoothing**. Seen contexts reproduce
+  the recorded continuation exactly (**repeat**); unseen higher-order contexts
+  back off to the longest matching suffix and smoothing keeps the whole
+  vocabulary reachable (**generalise**). Fully in-process, no GPU, no OS input.
+- **Tokenisation from the real schema** — `tokenizeReplayEvents`,
+  `sequencesFromReplays`, `sequenceFromTrajectory`, `movementTokenFromAction`
+  turn `ReplayTimelineEvent` / `TrajectorySpan` action events into normalised
+  `tool::summary` movement tokens. Sequences are framed with collision-proof
+  `\x02start\x03` / `\x02end\x03` sentinels so the model learns starts/ends.
+- **Generation** — greedy by default (deterministic), or seeded LCG sampling for
+  reproducible variety (no `Math.random`, so cloud-safe & replayable).
+- **Generalisation eval harness** — `evaluateMovementModel` scores held-out
+  sequences (top-1 / top-K accuracy + mean log-loss), the metric the roadmap
+  wanted for measuring replay fidelity on unseen-but-related trajectories.
+- **Persistence** — `serialize()`/`restore()` round-trip to a JSON snapshot for
+  hand-off to a device runtime; a mismatched-backend snapshot is rejected.
+
+**Test results:** source typecheck (`typecheck:src`) ✅ exit 0 (all `src/**`
+non-test still clean). Build ✅ (tsdown, 5 files, 545 kB). Tests ✅ **189/189**
+(was 174; +15 new), **green on two consecutive runs** (flake-sentinel principle).
+Covers: tokenisation, exact-repeat generation, seen-context prediction, backoff
+generalisation, smoothing reachability, novel recombination, determinism, seeded
+reproducibility, serialize/restore round-trip, backend-mismatch rejection, and
+the eval harness (perfect-repeat + above-chance held-out generalisation).
+
+**New idea (logged to ROADMAP):** A **movement-model training service** that
+wires this backend into the existing `LocalTrainingJobManifest` flow — pick the
+backend by `runtime` (`"markov"` → in-process cloud/CI path; `"mlx"`/`"axolotl"`
+→ shell-out), so the *same* job manifest trains either locally or on-device, and
+the in-process backend doubles as a fast dry-run/CI gate before a real GPU run.
+Follow-on: a **synthetic movement-stream generator** (grammar of UI flows →
+trajectories) to stress the capture→dataset→train→eval loop with volume, and a
+**temporal/coordinate-aware token** (bucketed dwell time, screen region) so the
+model captures *how* a movement is performed, not just *which* action.
+
+---
+
 ## 2026-07-25 (run 9) — 🔴→🟢 Eliminated background-task test flakiness (verification gate restored)
 
 **Audited:** The verification gate itself. On a clean checkout `npm test` was
