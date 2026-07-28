@@ -74,13 +74,23 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
-      deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+- [x] **Pluggable local-model backend + deterministic mock** (2026-07-28, run
+      10) — `src/training/movement-model.ts`: `MovementModelBackend` interface +
+      `MarkovMovementBackend` (back-off n-gram, native-dep-free, deterministic).
+      `createMovementModelBackend(kind)` registry with a documented seam for a
+      real on-device model. Trains from existing `ReplayManifest`/`TrajectorySpan`.
+- [x] **Synthetic event-stream generator** (2026-07-28, run 10) —
+      `synthesizeMovementSequences` (RNG-free, related-but-distinct task
+      variants) + `partitionSequences` for leak-free train/held-out splits.
+- [x] **Generalization eval harness** (2026-07-28, run 10) —
+      `evaluateReplayFidelity` scores held-out next-movement accuracy with a
+      per-backoff-order breakdown; test asserts >0.5 on never-trained sequences.
+- [ ] **`MovementReplayEngine` bridge** (next): feed a generated `MovementToken[]`
+      back through `ReplayRuntimeService`/device-adapter in dry-run mode to close
+      capture→train→infer→act(sim) and score *executed* end-state fidelity, not
+      just next-token accuracy.
+- [ ] **Second movement backend** (`frequency-prior` or embedding-NN) so the
+      eval harness can rank backends on the same held-out set (bake-off).
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
