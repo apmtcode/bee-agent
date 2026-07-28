@@ -6,6 +6,64 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-28 (run 10) — 🧠 In-cloud trainable movement policy (objective 2c/2d)
+
+**Audited:** The local-movement learning subsystem (standing objective #2) end to
+end — `src/capture/` (trajectory spans, replay manifests, device/os/browser
+adapters, consent, ingestion) and `src/training/` (exporter → reviewed-export
+manifest → job manifest → runner → execution service). **Gap found:** the whole
+pipeline covers capture → schema → dataset → reviewed export → *shell plan for an
+external trainer*. `runner.ts` only emits `mlx_lm.lora` / `axolotl` **command
+plans** for a real Apple-silicon machine; nothing could **actually train a policy
+or run inference in the cloud**, so objective 2's parts **(c) post-train a model
+to repeat recorded movements** and **(d) generalize to new-but-related movements**
+had zero runnable, testable implementation. That is the single highest-value hole
+in the most-emphasized standing objective, and a queued ROADMAP item.
+
+**Changed (additive, two new modules + barrel exports):**
+- `src/training/movement-policy.ts` — the lightweight, dependency-free training
+  seam that complements the heavyweight `runner.ts` shell seam:
+  - **Pluggable backend interface** `MovementPolicyBackend` / `MovementPolicy`
+    plus a registry `createMovementPolicyBackend(id)` — a real on-device
+    small-model backend can be registered later behind the same types.
+  - **`MarkovMovementBackend`** — a deterministic n-gram backend with Katz-style
+    **backoff**: trains transition counts for every context length `0..order`,
+    predicts from the longest observed context suffix and backs off when the full
+    window is unseen. Argmax with a lexicographic tie-break → fully reproducible.
+    The backoff is precisely what yields **generalization** (2d): a never-seen
+    full sequence still predicts from its learned sub-patterns.
+  - **`buildMovementDataset`** — frames each trajectory's timestamp-ordered
+    actions into a BOS/EOS token stream (optional per-trajectory goal token) and
+    emits sliding `(context → next)` examples. `defaultMovementTokenizer`
+    abstracts coordinates/ids (`click at (120,340)` and `(88,12)` → one token) so
+    related movements share tokens.
+  - **`evaluateMovementPolicy`** — generalization eval harness reporting
+    teacher-forced next-token accuracy **and** free-rollout fidelity over
+    held-out sequences. `serialize()`/`MarkovMovementBackend.load()` persist a
+    trained policy.
+- `src/training/synthetic-trajectories.ts` — deterministic (seeded mulberry32,
+  no `Math.random`/`Date.now`) synthetic movement-stream generator with two
+  families (`desktop-file-edit`, `web-form-submit`) and a `noveltyRate` knob that
+  toggles optional steps to produce **related-but-structurally-different**
+  trajectories — the train/held-out splits the generalization eval needs, without
+  any real OS input (we run in the cloud).
+- `src/index.ts` — exported the new public surface.
+
+**Test results:** +2 test files, **+20 tests**. `npm test` **194/194 passing**
+(was 174) — **2/2 consecutive green** (flake sentinel). `typecheck:src` ✅ exit 0
+(source stays clean). `npm run build` ✅. Full `tsc` **125** (unchanged — no new
+test-file debt). The eval tests prove both objectives concretely: exact
+single-sequence **reproduction** (2c) and **>0.7 next-token accuracy / >0.5
+rollout fidelity on unseen related trajectories** (2d).
+
+**New idea:** an **observation-conditioned policy** — extend the dataset builder
+to interleave `TrajectoryObservation` tokens into the stream so the backend
+learns *observation → action* mappings (react to on-screen state), not just
+action n-grams. Combined with a **reward-weighted training mode** (bias
+transition counts by `outcome.reward`, mirroring the RL job manifest) this turns
+the mock backend into a genuine behavior-cloning + preference baseline that a
+real on-device model can be benchmarked against with the same eval harness.
+
 ## 2026-07-25 (run 9) — 🔴→🟢 Eliminated background-task test flakiness (verification gate restored)
 
 **Audited:** The verification gate itself. On a clean checkout `npm test` was

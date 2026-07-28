@@ -74,13 +74,28 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] **Pluggable local-model backend interface** for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      for a real on-device small model (2026-07-28, run 10). `MovementPolicyBackend`
+      / `MovementPolicy` + `createMovementPolicyBackend(id)` registry;
+      `MarkovMovementBackend` is the deterministic n-gram-with-backoff mock.
+- [x] **Synthetic event-stream generator** to validate capture→dataset→train→eval
+      round-trips without real OS input (2026-07-28, run 10) —
+      `generateSyntheticTrajectories` (seeded, two families, `noveltyRate` knob).
+- [x] **Generalization eval harness**: measure replay fidelity on held-out but
+      related synthetic trajectories (2026-07-28, run 10) —
+      `evaluateMovementPolicy` (teacher-forced next-token accuracy + free-rollout
+      fidelity). Held-out related sequences score >0.7 acc / >0.5 fidelity.
+- [ ] **Observation-conditioned + reward-weighted training mode**: interleave
+      `TrajectoryObservation` tokens into the movement dataset so the backend
+      learns observation→action (react to on-screen state), and bias transition
+      counts by `outcome.reward` (mirroring the RL job manifest) — turns the mock
+      backend into a behavior-cloning + preference baseline benchmarkable against
+      a real on-device model via the same `evaluateMovementPolicy` harness.
+- [ ] Wire the movement policy into the control-plane RPC surface
+      (`trajectories.*` / a new `policies.*` family) + a `job-store` mode so a
+      trained mock policy can be requested, persisted, and replayed like the
+      existing training jobs.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
