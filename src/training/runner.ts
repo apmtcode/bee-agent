@@ -1,22 +1,23 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { ensureParentDir, readJsonFile, writeJsonAtomic } from "../shared/fs.js";
+import {
+  defaultTrainingBackendRegistry,
+  type TrainingBackendRegistry,
+} from "./backend.js";
 import type { TrainingExecutionState } from "./execution-service.js";
-import type {
-  LocalTrainingExecution,
-  LocalTrainingJobManifest,
-  RlTrainingConfig,
-  SftTrainingConfig,
-} from "./job-manifest.js";
+import type { LocalTrainingExecution, LocalTrainingJobManifest } from "./job-manifest.js";
 
-export type LocalTrainingRuntime = "mlx" | "axolotl";
+export type LocalTrainingRuntime = "mlx" | "axolotl" | "mock";
 
 export type TrainingJobPlan = {
   version: 1;
   jobId: string;
   mode: LocalTrainingJobManifest["mode"];
-  targetPlatform: "apple-silicon";
-  runtime: LocalTrainingRuntime;
+  /** Platform the plan targets. `apple-silicon` for the built-ins; backend-defined otherwise. */
+  targetPlatform: string;
+  /** Runtime identifier chosen by the selected backend (e.g. `mlx`, `axolotl`, `mock`). */
+  runtime: string;
   datasetPath: string;
   outputPath: string;
   replayEvalPath: string;
@@ -25,80 +26,37 @@ export type TrainingJobPlan = {
   environment: Record<string, string>;
 };
 
+export type LocalTrainingRunnerOptions = {
+  /** Backend registry; defaults to the Apple-Silicon mlx + axolotl backends. */
+  backends?: TrainingBackendRegistry;
+  /** Force a specific backend id (e.g. `mock-local`) regardless of mode default. */
+  preferredBackendId?: string;
+};
+
 export class LocalAppleSiliconTrainingRunner {
-  constructor(private readonly rootDir: string) {}
+  private readonly backends: TrainingBackendRegistry;
+  private readonly preferredBackendId?: string;
+
+  constructor(private readonly rootDir: string, options: LocalTrainingRunnerOptions = {}) {
+    this.backends = options.backends ?? defaultTrainingBackendRegistry();
+    this.preferredBackendId = options.preferredBackendId;
+  }
 
   buildPlan(job: LocalTrainingJobManifest, execution: LocalTrainingExecution): TrainingJobPlan {
-    if (job.mode === "sft") {
-      const config = job.config as SftTrainingConfig;
-      return {
-        version: 1,
-        jobId: job.id,
-        mode: job.mode,
-        targetPlatform: "apple-silicon",
-        runtime: "mlx",
-        datasetPath: execution.datasetDir,
-        outputPath: path.posix.join(execution.artifactDir, "model.gguf"),
-        replayEvalPath: execution.replayEvalFile,
-        statePath: execution.stateFile,
-        command: [
-          "python3",
-          "-m",
-          "mlx_lm.lora",
-          "--train",
-          "--data",
-          execution.datasetDir,
-          "--adapter-path",
-          execution.artifactDir,
-          "--learning-rate",
-          String(config.learningRate),
-          "--batch-size",
-          String(config.batchSize),
-          "--iters",
-          String(config.epochs * 1000),
-        ],
-        environment: {
-          OPENCLAW_TRAINING_JOB_ID: job.id,
-          OPENCLAW_TRAINING_MODE: job.mode,
-          OPENCLAW_TARGET_PLATFORM: job.targetPlatform,
-          OPENCLAW_TRAINING_RUNTIME: "mlx",
-          OPENCLAW_REVIEWED_EXPORT_REQUIRED: "true",
-          OPENCLAW_RAW_CAPTURE_ALLOWED: "false",
-        },
-      };
-    }
-
-    const config = job.config as RlTrainingConfig;
+    const backend = this.backends.select(job.mode, this.preferredBackendId);
+    const backendPlan = backend.buildPlan({ job, execution });
     return {
       version: 1,
       jobId: job.id,
       mode: job.mode,
-      targetPlatform: "apple-silicon",
-      runtime: "axolotl",
+      targetPlatform: backendPlan.targetPlatform,
+      runtime: backendPlan.runtime,
       datasetPath: execution.datasetDir,
-      outputPath: path.posix.join(execution.artifactDir, "policy.gguf"),
+      outputPath: path.posix.join(execution.artifactDir, backendPlan.outputArtifact),
       replayEvalPath: execution.replayEvalFile,
       statePath: execution.stateFile,
-      command: [
-        "python3",
-        "-m",
-        "axolotl.cli.train",
-        execution.planFile,
-        "--reward-model",
-        "replay-manifest",
-        "--rollouts",
-        String(config.rolloutCount),
-        "--kl-penalty",
-        String(config.klPenalty),
-      ],
-      environment: {
-        OPENCLAW_TRAINING_JOB_ID: job.id,
-        OPENCLAW_TRAINING_MODE: job.mode,
-        OPENCLAW_TARGET_PLATFORM: job.targetPlatform,
-        OPENCLAW_TRAINING_RUNTIME: "axolotl",
-        OPENCLAW_REVIEWED_EXPORT_REQUIRED: "true",
-        OPENCLAW_RAW_CAPTURE_ALLOWED: "false",
-      },
+      command: backendPlan.command,
+      environment: backendPlan.environment,
     };
   }
 

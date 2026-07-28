@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createLocalTrainingExecution, createLocalTrainingJobManifest } from "./job-manifest.js";
 import { LocalAppleSiliconTrainingRunner } from "./runner.js";
+import { mockTrainingBackendRegistry } from "./backend.js";
 import type { ReviewedExportManifest } from "./export-manifest.js";
 
 const tempDirs: string[] = [];
@@ -152,5 +153,28 @@ describe("LocalAppleSiliconTrainingRunner", () => {
         OPENCLAW_REVIEWED_EXPORT_REQUIRED: "true",
       },
     });
+  });
+
+  it("routes through a pluggable mock backend for portable dry runs", async () => {
+    const rootDir = await makeTempDir();
+    const runner = new LocalAppleSiliconTrainingRunner(rootDir, {
+      backends: mockTrainingBackendRegistry(),
+      preferredBackendId: "mock-local",
+    });
+    const job = createLocalTrainingJobManifest({ id: "job-mock", exportManifest, mode: "sft" });
+    const execution = createLocalTrainingExecution({ jobId: job.id, mode: job.mode });
+
+    const plan = await runner.writeArtifacts(job, execution);
+    expect(plan).toMatchObject({
+      jobId: job.id,
+      runtime: "mock",
+      targetPlatform: "portable",
+      outputPath: `training-jobs/${job.id}/artifacts/movement-model.json`,
+    });
+    expect(plan.command[0]).toBe("node");
+    expect(plan.environment.OPENCLAW_TRAINING_RUNTIME).toBe("mock");
+
+    const script = await runner.readLaunchScript({ ...job, execution });
+    expect(script).toContain("node");
   });
 });

@@ -397,9 +397,39 @@ export {
   LocalAppleSiliconTrainingRunner,
 } from "./training/runner.js";
 export type {
+  LocalTrainingRunnerOptions,
   LocalTrainingRuntime,
   TrainingJobPlan,
 } from "./training/runner.js";
+export {
+  AxolotlRlBackend,
+  MlxSftBackend,
+  MockLocalBackend,
+  TrainingBackendRegistry,
+  defaultTrainingBackendRegistry,
+  mockDatasetFile,
+  mockTrainingBackendRegistry,
+  runMockTrainingJob,
+} from "./training/backend.js";
+export type {
+  RunMockTrainingJobParams,
+  TrainingBackend,
+  TrainingBackendInput,
+  TrainingBackendPlan,
+} from "./training/backend.js";
+export {
+  inferMovementSequence,
+  scoreSequenceLikelihood,
+  tokenizeReplayEvent,
+  trainMockMovementModel,
+} from "./training/mock-model.js";
+export type {
+  InferMovementOptions,
+  MockMovementModel,
+  MovementDataset,
+  MovementSequence,
+  MovementToken,
+} from "./training/mock-model.js";
 export type {
   ExportedMemoryReference,
   ExportedPromotedSkill,

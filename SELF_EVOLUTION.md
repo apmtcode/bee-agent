@@ -6,6 +6,72 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-28 (run 10) — 🧩 Pluggable training backends + deterministic mock movement model
+
+**Audited:** The local-movement learning subsystem (standing objective 2),
+specifically the train/infer piece. `src/training/runner.ts` **hard-wired**
+Apple-Silicon runtimes: SFT → `mlx_lm.lora`, RL → `axolotl`, `targetPlatform`
+always `"apple-silicon"`. That meant (a) the pipeline could only run on a Mac
+with those ML deps installed, and (b) the whole train→infer loop was
+**un-runnable and unvalidatable in the cloud/CI** — the exact gap the objective
+says to close with *code, schema, pipelines, simulations, and tests*. The
+roadmap's top movement item was "pluggable local-model backend interface … with
+a deterministic mock backend."
+
+**Changed (all additive; default behavior unchanged):**
+- **`src/training/mock-model.ts` (new)** — a dependency-free, fully deterministic
+  first-order **Markov movement model**: `trainMockMovementModel(sequences)`
+  counts token→token transitions + start distribution; `inferMovementSequence`
+  greedily emits the most-likely continuation (this is objective 2c — *repeat
+  recorded movements*); an unseen start token **backs off to its namespace**
+  (`action:*`) so the model produces a plausible related continuation instead of
+  dead-ending (objective 2d — *generalize to new-but-related movements*), while a
+  *known terminal* token correctly ends the sequence. `scoreSequenceLikelihood`
+  (Laplace-smoothed avg log-prob) seeds a future generalization eval harness.
+  `tokenizeReplayEvent` maps exported replay events → movement tokens. No clocks,
+  no RNG — same input yields byte-identical model.
+- **`src/training/backend.ts` (new)** — a pluggable `TrainingBackend` seam:
+  `interface TrainingBackend { id; supportsMode; buildPlan }` returning the
+  runtime-specific plan slice (`runtime`, `targetPlatform`, `outputArtifact`,
+  `command`, `environment`). Extracted the two existing runtimes verbatim into
+  `MlxSftBackend` / `AxolotlRlBackend` (byte-identical command/env), plus a new
+  **`MockLocalBackend`** (runtime `mock`, `targetPlatform "portable"`, artifact
+  `movement-model.json`) whose command runs `runMockTrainingJob` via `node` — no
+  mlx/axolotl/GPU. `TrainingBackendRegistry` (register / select-by-mode /
+  preferred-id) with `defaultTrainingBackendRegistry()` (mlx+axolotl) and
+  `mockTrainingBackendRegistry()`. `runMockTrainingJob({datasetFile,outputPath})`
+  reads a `MovementDataset` JSON, trains, and atomically writes the model — a
+  real, runnable, in-process-testable trainer.
+- **`src/training/runner.ts`** — `LocalAppleSiliconTrainingRunner` now takes
+  optional `{ backends, preferredBackendId }` and delegates the runtime slice to
+  the selected backend; the default path reproduces the old plan **exactly**
+  (existing runner tests pass unchanged). Widened `TrainingJobPlan.runtime` and
+  `.targetPlatform` to `string` (was `"mlx"|"axolotl"` / `"apple-silicon"`
+  literals) so third-party/mock backends fit; added `"mock"` to
+  `LocalTrainingRuntime`.
+- **`src/index.ts`** — exported the backend + mock-model surface.
+- **Tests (+20):** `mock-model.test.ts` (train counts, determinism, repeat,
+  namespace generalization, terminal-stop, cycle-termination, likelihood
+  scoring), `backend.test.ts` (backend mode support, registry select/duplicate/
+  preferred/unsupported, mock plan shape, `runMockTrainingJob` round-trip +
+  error paths), and a runner case routing SFT through `mock-local`.
+
+**Test results:** `npm test` **194/194 passing** (was 174), **green on two
+consecutive runs** (flake-sentinel discipline). `npm run build` ✅.
+`npm run typecheck:src` ✅ (exit 0 — source stays clean).
+
+**New idea:** now that a portable trainer exists, add a **generalization eval
+harness** that trains on N synthetic sequences, holds out related-but-unseen
+ones, and asserts `scoreSequenceLikelihood`/replay-fidelity thresholds — turning
+"does the model generalize?" into a CI-gated number. Pairs naturally with a
+**synthetic movement-stream generator** (parameterized grammars over
+`action:*`/`observation:*` tokens) so the whole capture→dataset→train→infer→eval
+loop runs with zero real OS input. Bigger: teach the **exporter** to emit
+`movement-dataset.json` from reviewed replays so `MockLocalBackend` consumes real
+recorded data, closing the loop end-to-end.
+
+---
+
 ## 2026-07-25 (run 9) — 🔴→🟢 Eliminated background-task test flakiness (verification gate restored)
 
 **Audited:** The verification gate itself. On a clean checkout `npm test` was

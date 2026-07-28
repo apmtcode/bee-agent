@@ -74,13 +74,25 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] **Pluggable local-model backend interface** for the training runner with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
+      for a real on-device small model. **(2026-07-28, run 10)** —
+      `src/training/backend.ts`: `TrainingBackend` interface + `TrainingBackendRegistry`;
+      `MlxSftBackend`/`AxolotlRlBackend` (extracted verbatim, default path unchanged)
+      + portable dependency-free `MockLocalBackend`. `src/training/mock-model.ts`:
+      deterministic first-order Markov movement model (train/infer/score) that
+      repeats recorded movements and generalizes unseen starts via namespace
+      back-off. `runMockTrainingJob` reads a `MovementDataset` and writes the model.
+      Runner takes `{ backends, preferredBackendId }`. +20 tests, 194/194 green.
+- [ ] **Teach the exporter to emit `movement-dataset.json`** from reviewed
+      replays (tokenized via `tokenizeReplayEvent`) so `MockLocalBackend` trains
+      on real recorded data — closes capture→dataset→train end-to-end.
 - [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      round-trips without real OS input. (Now unblocked: emit `MovementSequence`s
+      from a parameterized token grammar and feed `trainMockMovementModel`.)
+- [ ] Generalization eval harness: train on synthetic sequences, hold out
+      related-but-unseen ones, and assert `scoreSequenceLikelihood`/replay-fidelity
+      thresholds so "does it generalize?" becomes a CI-gated number.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
