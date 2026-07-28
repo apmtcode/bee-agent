@@ -74,13 +74,30 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [ ] Inventory what `src/capture` + `src/training` already implement vs. the
       objective's five pieces (capture → schema → dataset → replay → train/infer)
       and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
+- [x] Pluggable local-model backend interface for the movement model with a
       deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+      for a real on-device small model — DONE run 10 (`src/movement/`:
+      `MovementModelBackend` + registry + `ngram` backend). A real MLX/torch
+      backend implements the same interface and returns the same JSON artifact.
+- [x] Synthetic event-stream generator to validate capture→dataset→replay
+      round-trips without real OS input — DONE run 10 (`synthetic.ts`, seedable
+      mulberry32, deterministic).
+- [x] Generalization eval harness: measure replay fidelity on held-out but
+      related synthetic trajectories — DONE run 10 (`eval.ts`
+      `evaluateReplayFidelity`: LCS overlap + exact-step accuracy + backoff level).
+- [ ] Wire the movement model into `src/training/`: have the exporter emit a
+      `MovementDataset` alongside the reviewed export, and add a control-plane
+      RPC (`movement.train` / `movement.predict`) so the CLI can train + roll out
+      a model. The pieces exist (run 10) but aren't reachable from the RPC surface.
+- [ ] **Timing/dwell head** on the movement model — learn inter-step `ts`-delta
+      distributions so replay reproduces human pacing, not just action order.
+- [ ] **Position-aware target table** — condition predicted targets on history
+      position (not just the action token) so repeated actions (`tap`→menu,
+      `tap`→save) recover distinct targets instead of the argmax collapse the
+      current n-gram makes.
+- [ ] Second movement backend (e.g. a prefix-tree / suffix-automaton or a tiny
+      logistic policy) behind the same interface, to prove the seam is real and
+      compare fidelity against `ngram` via the eval harness.
 
 ## Innovation backlog
 - [ ] Self-check telemetry: each engine run records build/test timing + pass

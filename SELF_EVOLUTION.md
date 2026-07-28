@@ -6,6 +6,64 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-07-28 (run 10) — 🧠 Movement-learning: pluggable local model backend + train/infer/generalize
+
+**Audited:** Standing objective 2 (local-movement learning subsystem). The
+capture side is mature — `src/capture/` has device/os/browser adapters, a
+consent-gated recorder, trajectory storage, ingestion, and a replay-manifest
+builder — and `src/training/` can *build a training plan and spawn* an external
+runtime (mlx/axolotl). But the two pieces the objective actually names as the
+payoff were **entirely missing**: (2c) *post-train a local model on the dataset*
+and (2d) *generalize to new-but-related movements*. There was no model artifact,
+no inference, no pluggable backend, and — critically — no way to validate any of
+it in the cloud (the existing runner only shells out to a real machine's
+GPU/Neural-Engine runtime, which can't run in CI).
+
+**Changed (additive, new `src/movement/` module — no existing code modified):**
+- `movement-model.ts` — the schema (`MovementContext`/`MovementStep`/
+  `MovementTrajectory`/`MovementDataset`), a serializable backend-tagged
+  `MovementModel` artifact, and the **pluggable `MovementModelBackend`
+  interface** (`train` → model, `predict` → sequence) plus a name→factory
+  registry. `movementContextKeys()` defines the four-level specificity ladder
+  (screen → app → platform → global) that drives generalization.
+- `ngram-backend.ts` — a **deterministic, in-process statistical backend**
+  (`ngram`): hierarchical n-gram transition tables learned at every context
+  level, argmax inference with lexicographic tie-breaks (no `Math.random`, no
+  I/O), and **backoff-based generalization** — an unseen screen in a known app
+  is served by the app-level statistics, and each predicted step reports the
+  `backoffLevel` it needed so generalization is *observable*. This is the
+  default/mock backend; a real on-device MLX/torch model implements the same
+  interface and returns the same JSON artifact, so callers never depend on which
+  backend trained the model.
+- `dataset-builder.ts` — bridges capture → dataset: `buildMovementDataset()`
+  turns `TrajectorySpan[]` into a `MovementDataset`, deriving canonical action
+  tokens (gesture kind + direction folded in) and context from the exact
+  metadata keys the device adapter emits, with `approvedOnly` consent gating.
+- `synthetic.ts` — a **seedable deterministic** (mulberry32) synthetic
+  movement-stream generator so the whole capture→train→infer→replay pipeline is
+  testable without any real OS input (the engine has no machine access).
+- `eval.ts` — `evaluateReplayFidelity()`: LCS action overlap + exact-step
+  accuracy + max backoff level for a held-out trajectory — the **generalization
+  eval harness** from the roadmap.
+- Exported the whole surface from `src/index.ts`.
+
+**Test results:** new `movement-model.test.ts` — **11 tests**, incl. exact-context
+reproduction (backoff 0), **generalization to a brand-new screen via app-level
+backoff (overlap 1.0, backoff 1)**, cross-backend model rejection, capture-bridge
+derivation + consent filtering, generator determinism, and the fidelity eval.
+`npm test` **185/185** (was 174; +11), **green twice consecutively**. Build ✅.
+`typecheck:src` ✅ (exit 0). Full `tsc` **125** (unchanged — zero new type debt).
+
+**New idea (logged to ROADMAP):** a **delay/timing head** on the movement model —
+learn inter-step dwell-time distributions (already captured as `ts` deltas) so
+replay reproduces human-like pacing, not just action order; and a
+**target-position–aware** target table (condition targets on history position,
+not just the action token) so repeated actions like two consecutive `tap`s
+recover distinct targets (`menu` then `save`) instead of the argmax collapse the
+n-gram currently makes.
+
+---
+
 ## 2026-07-25 (run 9) — 🔴→🟢 Eliminated background-task test flakiness (verification gate restored)
 
 **Audited:** The verification gate itself. On a clean checkout `npm test` was

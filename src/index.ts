@@ -285,6 +285,39 @@ export {
   type TrajectorySpan,
 } from "./capture/trajectory.js";
 export {
+  MOVEMENT_END_TOKEN,
+  createMovementModelBackend,
+  listMovementModelBackends,
+  movementContextKeys,
+  registerMovementModelBackend,
+  type MovementContext,
+  type MovementDataset,
+  type MovementModel,
+  type MovementModelBackend,
+  type MovementPrediction,
+  type MovementStep,
+  type MovementTrajectory,
+  type PredictRequest,
+  type PredictedMovementStep,
+  type TrainOptions,
+} from "./movement/movement-model.js";
+export { NgramMovementBackend } from "./movement/ngram-backend.js";
+export {
+  buildMovementDataset,
+  deriveActionToken,
+  type BuildMovementDatasetOptions,
+} from "./movement/dataset-builder.js";
+export {
+  generateSyntheticDataset,
+  type MovementTemplate,
+  type SyntheticContextSpec,
+  type SyntheticDatasetSpec,
+} from "./movement/synthetic.js";
+export {
+  evaluateReplayFidelity,
+  type ReplayFidelity,
+} from "./movement/eval.js";
+export {
   FileMemoryStore,
   type MemoryStoreShape,
 } from "./memory/memory-store.js";
