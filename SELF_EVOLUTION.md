@@ -6,6 +6,53 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-10-22 (run 11, local) — 🆕 Local-movement learning: schema → record → train → generalize → replay
+
+**Audited:** Standing objective #2, which had received zero increments in runs
+1–10 (all spent on typecheck debt / flakiness). Inventoried `src/capture` +
+`src/training`: capture records only *human-readable summaries* ("tapped
+Deploy") and training only plans MLX/axolotl LLM fine-tunes. **Missing:** a raw
+pointer/keyboard/window event schema, a replayable movement dataset, a movement
+model, and a replay engine.
+
+**Changed (purely additive, new `src/movement/`, barrel-exported):**
+- `events.ts` — versioned `MovementEvent` union (`pointer.move/down/up`,
+  `scroll`, `key.down/up`, `window.focus`; `t` = ms since episode start),
+  `MovementEpisode`, validators, and a **JSONL dataset format** (header line +
+  one episode/line; bad lines are rejected individually, not fatal).
+- `source.ts` — `InputEventSource` interface (OS hooks plug in here) +
+  deterministic `SimulatedInputEventSource`; `recordEpisode()` rebases time,
+  caps by events/duration, and **drops keystrokes while a sensitive app is
+  focused** (reuses capture's `DEFAULT_SENSITIVE_APP_DENYLIST`) with optional
+  key redaction. `synthesizeDrag()` = seeded minimum-jerk, bowed, jittered
+  synthetic drags for tests and data augmentation.
+- `model.ts` — pluggable `MovementModel` interface + `TemplateMovementModel`:
+  per label, maps demonstrations into a canonical start→end frame, picks the
+  **medoid** demonstration (outlier-robust), and **generalizes** to new
+  endpoints via similarity transform (rotate/scale/translate); in-place
+  gestures (clicks) retarget by translation; duration scales with
+  √(distance ratio); output clamped to screen. JSON-serializable artifact
+  (`toJSON`/`fromJSON`). `evaluateMovementModel()` = held-out generalization
+  harness (resampled path error, px + chord-normalized).
+- `replay.ts` — `InputActuator` interface + `RecordingActuator` mock;
+  `replayEpisode()` preserves timing with speed scaling, abort signal,
+  `allowTypes`, `maxEvents` brake, coordinate clamping, and **always releases
+  held buttons/keys** on abort/cap so a machine is never left mid-drag.
+
+**Test results:** +13 tests (`src/movement/movement.test.ts`), incl. held-out
+generalization to unseen rotated/scaled drags at **<2% normalized error**.
+Suite **187/187** ✅, build ✅, `typecheck:src` clean, full `tsc` unchanged (69,
+no new errors). Also committed + pushed the interrupted run-10 work (result map
+125→69) after resolving a SELF_EVOLUTION.md merge conflict with cloud run 9.
+
+**New idea:** *Stuck-input watchdog as a first-class safety primitive* — the
+release-on-abort logic in `replayEpisode` should become a reusable
+`SafeActuator` wrapper that tracks held state across *any* caller (model
+generation, skills, remote control) and auto-releases on process signal/
+timeout. Added to ROADMAP.
+
+---
+
 ## 2026-10-22 (run 10, local) — Result map → capture/skills/push families: total 125→69
 
 **Audited:** The remaining 118 `server.test.ts` errors. Confirmed still the same

@@ -431,3 +431,50 @@ export type {
   FailTrainingJobParams,
   TrainingJobStoreShape,
 } from "./training/job-store.js";
+export {
+  MOVEMENT_DATASET_VERSION,
+  decodeMovementDataset,
+  encodeMovementDataset,
+  episodeDuration,
+  isPointerEvent,
+  pointerAnchors,
+  validateMovementEpisode,
+  validateMovementEvent,
+} from "./movement/events.js";
+export type {
+  DecodedMovementDataset,
+  KeyModifier,
+  MovementDatasetHeader,
+  MovementEpisode,
+  MovementEvent,
+  MovementEventType,
+  Point as MovementPoint,
+  PointerButton,
+  ScreenSize as MovementScreenSize,
+} from "./movement/events.js";
+export {
+  SimulatedInputEventSource,
+  recordEpisode,
+  seededRandom,
+  synthesizeDrag,
+} from "./movement/source.js";
+export type {
+  InputEventSource,
+  RawInputEvent,
+  RecordEpisodeOptions,
+  SynthesizeDragOptions,
+} from "./movement/source.js";
+export { TemplateMovementModel, evaluateMovementModel } from "./movement/model.js";
+export type {
+  MovementEvalResult,
+  MovementGenerateRequest,
+  MovementModel,
+  MovementTrainingReport,
+  SerializedTemplateModel,
+} from "./movement/model.js";
+export { RecordingActuator, replayEpisode } from "./movement/replay.js";
+export type {
+  InputActuator,
+  ReplayOptions as MovementReplayOptions,
+  ReplayResult as MovementReplayResult,
+} from "./movement/replay.js";

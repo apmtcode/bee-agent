@@ -76,18 +76,37 @@ unchecked items are queued. Keep this richer than you found it each run.
 Existing scaffolding lives in `src/capture/` (recorder, replay, trajectory,
 device/os/browser adapters, consent store, ingestion) and `src/training/`
 (exporter, job store/manifest, runner, execution service). Next increments:
-- [ ] Inventory what `src/capture` + `src/training` already implement vs. the
-      objective's five pieces (capture → schema → dataset → replay → train/infer)
-      and write the gap list here before adding code.
-- [ ] Pluggable local-model backend interface for the training runner with a
-      deterministic mock backend (so cloud/CI tests pass) and a documented seam
-      for a real on-device small model.
-- [ ] Synthetic event-stream generator to validate capture→dataset→replay
-      round-trips without real OS input.
-- [ ] Generalization eval harness: measure replay fidelity on held-out but
-      related synthetic trajectories.
+- [x] Inventory (run 11): capture = summaries only; training = LLM fine-tune
+      plans only. Gap was the whole raw-movement pipeline → built `src/movement/`.
+- [x] Raw event schema + JSONL dataset format (`movement/events.ts`) — run 11.
+- [x] `InputEventSource` interface + simulated source + privacy-aware
+      `recordEpisode` (`movement/source.ts`) — run 11.
+- [x] Pluggable `MovementModel` + `TemplateMovementModel` (medoid template,
+      similarity-transform generalization, JSON artifact) — run 11.
+- [x] Synthetic event generator `synthesizeDrag` (seeded minimum-jerk) — run 11.
+- [x] Generalization eval harness `evaluateMovementModel` — run 11.
+- [x] Replay engine + `InputActuator`/`RecordingActuator` mock — run 11.
+- [ ] Persist datasets/models: `FileMovementDatasetStore` (append episodes to
+      `~/.openclaw/movement/<label>.jsonl`, model artifacts alongside), gated by
+      the existing `FileCaptureConsentStore` grant + `allowTrainingExport`.
+- [ ] Wire into control plane: `movement.record.start/stop`, `movement.train`,
+      `movement.generate`, `movement.replay` (dry-run via RecordingActuator by
+      default; real actuation needs explicit opt-in) + CLI `movement` command.
+- [ ] Real OS adapters behind the interfaces: macOS `CGEventTap` source /
+      `CGEventPost` actuator via a small helper binary; keep out of tests.
+- [ ] Segmentation: split long recordings into labelled sub-gestures (drag,
+      move-to, typing burst, scroll) so one session yields many demonstrations.
+- [ ] Learned model #2: small MLP/GRU over resampled canonical paths conditioned
+      on (Δx, Δy, label embedding), trained in-process (pure TS) or exported to
+      MLX via `src/training`; must beat `TemplateMovementModel` on the eval harness.
+- [ ] Context-conditioned generalization: condition generation on target
+      `window.focus` bounds so "click Save" retargets when the window moves.
 
 ## Innovation backlog
+- [ ] **`SafeActuator` stuck-input watchdog**: wrap any `InputActuator`, track
+      held buttons/keys globally, auto-release on abort, timeout (no event for N
+      ms while held), SIGINT/SIGTERM, or uncaught error. Generalizes the
+      release-on-abort logic in `replayEpisode` into a reusable safety primitive.
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in
       project health over time.
