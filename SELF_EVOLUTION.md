@@ -6,6 +6,36 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-10-22 (run 10, local) — Result map → capture/skills/push families: total 125→69
+
+**Audited:** The remaining 118 `server.test.ts` errors. Confirmed still the same
+unmapped-RPC → `{}` pattern, traced the specific methods from the failing lines
+(background.tasks.*, subagents.list, trajectories.*, replays.*,
+skills.executable.*, push.subscriptions.*).
+
+**Changed (additive) in `src/control-plane/server.ts`:** mapped 17 more methods,
+all via `Awaited<ReturnType<…>>` of the source method (`NonNullable<>` for the
+`ok(x) : notFound` cases):
+- `background.tasks.start/get/active/sync/list`, `subagents.list`.
+- `trajectories.list/review/reviewed`, `replays.get/list`.
+- `skills.executable.list/run/runs`.
+- `push.subscriptions.create/list` via `FilePushStore["upsert/listSubscriptions"]`.
+
+**Deliberately skipped (documented):** `notifications.send`,
+`push.subscriptions.delete`, `push.test` return *composed* `ok({ … })` objects,
+so they need a named result type rather than a `ReturnType<>` reference.
+
+**Test results:** full `tsc` **125 → 69** (server.test.ts 118 → 62). The map now
+covers ~54 RPC methods. `typecheck:src` stayed CLEAN. Build ✅. Tests ✅
+**174/174**. Remaining 69: ~3 composed-return methods, a cluster of `.result`
+accessed on `ControlPlaneResponse<T>` unions *without* an `if (response.ok)`
+guard (genuine test-only fix — narrow before access), and a few stray test
+typings (`gateway-transport` 4, others 1 each).
+
+**New idea:** the composed-return methods are the last structural gap — extract
+their inline `ok({...})` shapes into exported named types (e.g.
+`SendNotificationResult`, `PushTestResult`) in server.ts, which both finishes the
+map AND documents the RPC response contract for any external client.
 ## 2026-07-25 (run 9) — 🔴→🟢 Eliminated background-task test flakiness (verification gate restored)
 
 **Audited:** The verification gate itself. On a clean checkout `npm test` was
@@ -55,6 +85,9 @@ treat green as green unless *both* pass. Cheap insurance that a newly-introduced
 race can't slip through a single lucky run, exactly the failure mode this run
 paid down. Bigger: a lint that flags `startBackgroundTask`/real-`spawn` calls in
 `*.test.ts` that don't inject a spawn stub, so this class of flake can't return.
+
+---
+
 
 ---
 

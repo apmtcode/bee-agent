@@ -138,6 +138,25 @@ export interface ControlPlaneResultMap {
   "teams.teammates.get": NonNullable<Awaited<ReturnType<StandaloneOperatorRuntime["getTeammate"]>>>;
   "teams.teammates.update": NonNullable<Awaited<ReturnType<StandaloneOperatorRuntime["updateTeammateStatus"]>>>;
   "teams.teammates.message": Awaited<ReturnType<StandaloneOperatorRuntime["sendTeammateMessage"]>>;
+  "subagents.list": Awaited<ReturnType<StandaloneOperatorRuntime["listSubagents"]>>;
+  "background.tasks.start": Awaited<ReturnType<StandaloneOperatorRuntime["startBackgroundTask"]>>;
+  "background.tasks.get": NonNullable<Awaited<ReturnType<StandaloneOperatorRuntime["getBackgroundTask"]>>>;
+  "background.tasks.active": NonNullable<Awaited<ReturnType<StandaloneOperatorRuntime["getActiveBackgroundTask"]>>>;
+  "background.tasks.sync": NonNullable<Awaited<ReturnType<StandaloneOperatorRuntime["syncBackgroundTask"]>>>;
+  "background.tasks.list": Awaited<ReturnType<StandaloneOperatorRuntime["listBackgroundTasks"]>>;
+  "trajectories.list": Awaited<ReturnType<StandaloneOperatorRuntime["listTrajectories"]>>;
+  "trajectories.review": NonNullable<Awaited<ReturnType<StandaloneOperatorRuntime["reviewTrajectory"]>>>;
+  "trajectories.reviewed": Awaited<ReturnType<StandaloneOperatorRuntime["listReviewedTrajectories"]>>;
+  "replays.get": NonNullable<Awaited<ReturnType<StandaloneOperatorRuntime["getReplay"]>>>;
+  "replays.list": Awaited<ReturnType<StandaloneOperatorRuntime["listReplays"]>>;
+  "skills.executable.list": Awaited<ReturnType<StandaloneOperatorRuntime["listExecutableSkills"]>>;
+  "skills.executable.run": NonNullable<Awaited<ReturnType<StandaloneOperatorRuntime["runExecutableSkill"]>>>;
+  "skills.executable.runs": Awaited<ReturnType<StandaloneOperatorRuntime["listExecutableSkillRuns"]>>;
+  "push.subscriptions.create": Awaited<ReturnType<FilePushStore["upsertSubscription"]>>;
+  "push.subscriptions.list": Awaited<ReturnType<FilePushStore["listSubscriptions"]>>;
+  // NOTE: notifications.send, push.subscriptions.delete, push.test return
+  // composed `ok({ … })` objects (not a single store/runtime result); they need
+  // a dedicated named result type — left as `unknown` for now (tracked).
 }
 
 /** Resolve the typed result for a method, defaulting to `unknown` when unmapped. */

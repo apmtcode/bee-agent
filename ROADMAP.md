@@ -21,10 +21,10 @@ unchecked items are queued. Keep this richer than you found it each run.
 - [ ] **Test-spawn lint**: flag `startBackgroundTask` / real `spawn` in `*.test.ts`
       that don't inject a spawn stub, so subprocess-race flakiness can't return.
 - [ ] **Pay down typecheck debt** (surfaced by the `typecheck` script). Full
-      `tsc --noEmit` count was **397** on 2026-06-22; now **125**. 🎯 ALL source
-      (`src/**` non-test) files typecheck clean since run 7; remaining 125 errors
-      are entirely in test files (run 8 cleared 104 by extending the result map).
-      Fix per file, no mass-rewrite:
+      `tsc --noEmit` count was **397** on 2026-06-22; now **69**. 🎯 ALL source
+      (`src/**` non-test) files typecheck clean since run 7; remaining 69 errors
+      are entirely in test files (runs 8–9 cleared 160 by extending the result
+      map to ~54 RPC methods). Fix per file, no mass-rewrite:
   - [x] `src/capture/` (trajectory-store.ts, replay-service.ts) — DONE run 2.
   - [x] `src/index.ts` (6) — DONE run 3 (barrel alias for cross-module dupes).
   - [x] `src/cli/config.ts` (6) — DONE run 3 (`resolveMergedConfig` helper).
@@ -43,13 +43,18 @@ unchecked items are queued. Keep this richer than you found it each run.
 - [ ] Typed client facade `createControlPlaneClient(server)`: one method per
     mapped RPC with inferred params/results, so call sites read
     `client.cronList()` and unmapped methods are a compile error, not `unknown`.
-  - [~] Test files: `server.test.ts` (234→118), `app.test.ts` (41→1),
+  - [~] Test files: `server.test.ts` (234→62), `app.test.ts` (41→1),
     `gateway-transport.test.ts` (4), `session-stream.test.ts` (1),
     `status-line.test.ts` (1). Most cleared by extending the result map (runs
-    5–8). Remaining server.test.ts errors trace to still-unmapped methods —
-    `skills.executable.*`, `push.subscriptions.*`, `trajectories.*`, `replays.*`,
-    `cron.runs`/misc — plus a few genuine test-only typings. Map the rest, then
-    fix residual test-only typings.
+    5–9; ~54 methods mapped). Remaining ~69:
+    - [ ] Composed-return methods still `unknown`: `notifications.send`,
+      `push.subscriptions.delete`, `push.test`. Extract their inline `ok({...})`
+      shapes into exported named types and map them.
+    - [ ] Test-only: `.result` accessed on `ControlPlaneResponse<T>` unions
+      without an `if (response.ok)` guard — add the guard (or an `expectOk`
+      helper) before access.
+    - [ ] Stray test typings: `gateway-transport.test.ts` (4),
+      `session-stream.test.ts` (1), `status-line.test.ts` (1), `app.test.ts` (1).
 - [ ] Add a `verify` npm script (`typecheck && build && test`) and have the
       engine run it as a pre-push self-check each cycle.
 - [x] Interim **source-only typecheck gate** — DONE run 7. `tsconfig.src.json`
