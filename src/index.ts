@@ -483,6 +483,12 @@ export type {
   MovementConsentSource,
   MovementDatasetSummary,
 } from "./movement/store.js";
+export { segmentEpisode } from "./movement/segment.js";
+export type {
+  MovementSegmentKind,
+  SegmentEpisodeOptions,
+  SegmentEpisodeResult,
+} from "./movement/segment.js";
 export { RecordingActuator, replayEpisode } from "./movement/replay.js";
 export type {
   InputActuator,

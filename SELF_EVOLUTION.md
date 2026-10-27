@@ -6,6 +6,41 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-10-27 (run 13, local) — Movement segmentation: one session → many demonstrations
+
+**Audited:** ROADMAP local-movement backlog. The store (run 12) can persist
+episodes, but a real capture session is one long mixed stream (moves, clicks,
+drags, scrolls, typing); training on it whole gives one useless "demonstration".
+Segmentation was the missing step between recording and training.
+
+**Changed (additive, new `src/movement/segment.ts`, barrel-exported):**
+- `segmentEpisode(episode, options)` → `{ segments, counts, droppedEvents }`.
+  Press→matching release becomes `drag` (displacement > `dragThresholdPx`) or
+  `click`; pointer-move runs split on `idleGapMs`, become `move-to` when they end
+  right before a press (the targeting motion) else `move`, and are dropped as
+  jitter under `minMoveDistancePx`; scroll bursts → `scroll`; key bursts →
+  `typing`, extended while any key is held so shift-click stays one balanced
+  `chord`. Unreleased presses are dropped (never train on stuck buttons).
+- Each segment is a valid, time-rebased `MovementEpisode` (`<id>#<n>`, label
+  `<label>/<kind>` or custom) with the active `window.focus` prepended at t=0
+  so app context is preserved. `kinds` filter for e.g. drag-only datasets.
+
+**Test results:** +5 tests (`segment.test.ts`) incl. end-to-end: one session
+with 3 drags → segment → train `TemplateMovementModel` → retargeted generate.
+Movement suite 26/26. First full runs hit a **load-dependent flake** unrelated
+to this change: `gateway-transport.test.ts` "replays only missed events…" gave
+its reconnect a 20ms real-timer heartbeat timeout, which expired before the
+pong under a slow (172s) suite. It passes alone with and without this diff.
+Widened that test's timeout to 2s (it asserts health-after-pong, not
+timeouts). After that, two consecutive full runs passed **200/200** (flake
+sentinel). Build ✅, `typecheck:src` clean, full `tsc` unchanged at 69.
+
+**New idea (logged to ROADMAP):** *Segment boundary confidence* — score each
+segment by minimum-jerk velocity-profile fit and pause sharpness so training
+can skip low-confidence fragments.
+
+---
+
 ## 2026-10-27 (run 12, local) — Movement datasets persist: consent-gated `FileMovementDatasetStore`
 
 **Audited:** ROADMAP's local-movement backlog. Run 11 built schema → record →

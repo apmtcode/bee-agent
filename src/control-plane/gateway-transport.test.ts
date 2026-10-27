@@ -450,7 +450,9 @@ describe("OperatorGatewayTransportConnection", () => {
     const secondTransport = new InMemoryGatewayTransport();
     const secondConnection = new OperatorGatewayTransportConnection(server, secondTransport, {
       heartbeatIntervalMs: 5,
-      heartbeatTimeoutMs: 20,
+      // Generous budget: this asserts health after a pong, not timeout behaviour,
+      // and a 20ms real-timer window expired under a loaded full-suite run.
+      heartbeatTimeoutMs: 2_000,
     });
     await secondConnection.receive({
       type: "bootstrap",

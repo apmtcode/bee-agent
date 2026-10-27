@@ -101,8 +101,17 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
       default; real actuation needs explicit opt-in) + CLI `movement` command.
 - [ ] Real OS adapters behind the interfaces: macOS `CGEventTap` source /
       `CGEventPost` actuator via a small helper binary; keep out of tests.
-- [ ] Segmentation: split long recordings into labelled sub-gestures (drag,
-      move-to, typing burst, scroll) so one session yields many demonstrations.
+- [x] Segmentation: `segmentEpisode` (`movement/segment.ts`) — run 13. Splits a
+      long recording into `drag`/`click`/`move-to`/`move`/`scroll`/`typing`/
+      `chord` sub-episodes (idle-gap + drag-threshold + jitter filter), carries
+      the active `window.focus` as context, drops unreleased presses, keeps
+      modifier+pointer chords balanced; output trains `TemplateMovementModel`.
+- [ ] **Segment-aware recording sessions**: `movement.record.stop` should run
+      `segmentEpisode` and append each kind to its own dataset label via the
+      store, so "record 10 minutes of desk work" yields per-gesture datasets.
+- [ ] **Segment boundary confidence**: score each segment (e.g. velocity
+      profile vs minimum-jerk fit, pause sharpness) and let training skip
+      low-confidence fragments; expose `minConfidence` in `SegmentEpisodeOptions`.
 - [ ] Learned model #2: small MLP/GRU over resampled canonical paths conditioned
       on (Δx, Δy, label embedding), trained in-process (pure TS) or exported to
       MLX via `src/training`; must beat `TemplateMovementModel` on the eval harness.
