@@ -86,9 +86,16 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
 - [x] Synthetic event generator `synthesizeDrag` (seeded minimum-jerk) — run 11.
 - [x] Generalization eval harness `evaluateMovementModel` — run 11.
 - [x] Replay engine + `InputActuator`/`RecordingActuator` mock — run 11.
-- [ ] Persist datasets/models: `FileMovementDatasetStore` (append episodes to
-      `~/.openclaw/movement/<label>.jsonl`, model artifacts alongside), gated by
-      the existing `FileCaptureConsentStore` grant + `allowTrainingExport`.
+- [x] Persist datasets/models: `FileMovementDatasetStore` (`movement/store.ts`)
+      — run 12. Per-label JSONL (`<root>/datasets/<slug>-<hash>.jsonl`, single
+      header, serialized appends), model artifacts in `<root>/models/`. Writes
+      need an active grant at tier `app`/`full`; training reads need
+      `allowTrainingExport`; `prune()` enforces `retainRawDays` and never deletes
+      unparseable files.
+- [ ] **Consent-provenance purge**: stamp each stored episode with the
+      authorizing `grantId` (store returns it today but doesn't persist it) and
+      add `purgeByGrant(grantId)` so revoking a consent grant can erase exactly
+      the data it authorized — the hook `consent.revoke` should call.
 - [ ] Wire into control plane: `movement.record.start/stop`, `movement.train`,
       `movement.generate`, `movement.replay` (dry-run via RecordingActuator by
       default; real actuation needs explicit opt-in) + CLI `movement` command.

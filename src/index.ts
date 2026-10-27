@@ -472,6 +472,17 @@ export type {
   MovementTrainingReport,
   SerializedTemplateModel,
 } from "./movement/model.js";
+export {
+  FileMovementDatasetStore,
+  MovementConsentError,
+  movementLabelFileStem,
+} from "./movement/store.js";
+export type {
+  AppendEpisodesResult,
+  FileMovementDatasetStoreOptions,
+  MovementConsentSource,
+  MovementDatasetSummary,
+} from "./movement/store.js";
 export { RecordingActuator, replayEpisode } from "./movement/replay.js";
 export type {
   InputActuator,

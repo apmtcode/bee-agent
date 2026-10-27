@@ -6,6 +6,41 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-10-27 (run 12, local) — Movement datasets persist: consent-gated `FileMovementDatasetStore`
+
+**Audited:** ROADMAP's local-movement backlog. Run 11 built schema → record →
+train → replay, but everything was in-memory: nothing could accumulate
+demonstrations across sessions, and the privacy controls in `src/capture`
+(consent grants, `allowTrainingExport`, `retainRawDays`) did not apply to raw
+movement data at all. That blocked the next step (control-plane `movement.*` RPCs).
+
+**Changed (additive, new `src/movement/store.ts`, barrel-exported):**
+- `FileMovementDatasetStore`: one JSONL dataset per label under
+  `<root>/datasets/` (file stem = slug + sha256 prefix, so "Drag File" vs
+  "drag-file" never collide and labels can't path-traverse), header written once,
+  appends serialized through a write queue (no interleaved lines).
+- **Consent gates:** `append` requires an active, unexpired, unrevoked grant at
+  tier `app`/`full` (configurable) and reports which `grantId` authorized it;
+  `loadTrainingEpisodes` throws `MovementConsentError` unless the policy's
+  `allowTrainingExport` is true. Invalid episodes are rejected individually.
+- `prune()` drops episodes older than `retainRawDays`, removes emptied files,
+  and **never deletes a file it cannot parse**.
+- `saveModel`/`loadModel` persist `TemplateMovementModel` artifacts (model names
+  validated against path escape).
+
+**Test results:** +8 tests (`store.test.ts`): consent refusal (no grant /
+wrong tier / expired), single-header multi-append, partial rejection, 5-way
+concurrent append, training gate → train → save/load → generate, retention
+prune, corrupt-file safety, slug collisions. Suite **195/195** ✅ on two
+consecutive runs (manual flake sentinel), build ✅, `typecheck:src` clean, full
+`tsc` unchanged at 69.
+
+**New idea (logged to ROADMAP):** *Consent-provenance purge* — persist the
+authorizing `grantId` on every stored episode and add `purgeByGrant`, so
+revoking a consent grant erases exactly the data it authorized.
+
+---
+
 ## 2026-10-22 (run 11, local) — 🆕 Local-movement learning: schema → record → train → generalize → replay
 
 **Audited:** Standing objective #2, which had received zero increments in runs
