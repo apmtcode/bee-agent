@@ -490,6 +490,14 @@ export type {
   SegmentEpisodeResult,
 } from "./movement/segment.js";
 export { RecordingActuator, replayEpisode } from "./movement/replay.js";
+export { SafeActuator } from "./movement/safe-actuator.js";
+export type {
+  HeldInputs,
+  SafeActuatorOptions,
+  SafeActuatorReleaseReason,
+  SafeActuatorReleaseReport,
+  SignalTarget,
+} from "./movement/safe-actuator.js";
 export type {
   InputActuator,
   ReplayOptions as MovementReplayOptions,

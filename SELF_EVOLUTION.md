@@ -6,6 +6,35 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-10-28 (run 14, local) — `SafeActuator`: stuck-input watchdog for real actuation
+
+**Audited:** ROADMAP local-movement + innovation backlogs. Before any real OS
+actuator (CGEventPost) or `movement.replay` RPC can ship, there must be a safety
+layer: `replayEpisode` releases held input only for its own run, so a hung
+caller, a crash, Ctrl-C, or two callers sharing an actuator could leave a mouse
+button or modifier key physically held down.
+
+**Changed (additive, new `src/movement/safe-actuator.ts`, barrel-exported):**
+- `SafeActuator` decorator over any `InputActuator`: tracks held buttons/keys
+  globally (marked held *before* forwarding, so a press the inner actuator threw
+  on is still released), releases at the last known pointer position.
+- Release triggers: `AbortSignal`, idle watchdog (`idleTimeoutMs`, armed only
+  while something is held, injectable timers), `installSignalGuard()` for
+  SIGINT/SIGTERM (release-only, returns detach), `guard(fn)` on throw, `dispose()`.
+- Concurrent releases share one pass; `perform` waits for an in-flight release;
+  release failures are reported (`failed`), never thrown; disposed actuators
+  refuse input and aborted ones refuse new presses.
+
+**Test results:** +8 tests (`safe-actuator.test.ts`), incl. drop-in use with
+`replayEpisode`. Movement suite 34/34. Full suite **208/208 twice in a row**
+(flake sentinel). Build ✅, `typecheck:src` clean, full `tsc` unchanged at 69.
+
+**New idea (logged to ROADMAP):** *Actuation rate governor* — a stacking
+decorator capping events/sec, pointer velocity, and a screen-region allow-list,
+so `Governor(SafeActuator(os))` is the default stack for `movement.replay`.
+
+---
+
 ## 2026-10-27 (run 13, local) — Movement segmentation: one session → many demonstrations
 
 **Audited:** ROADMAP local-movement backlog. The store (run 12) can persist

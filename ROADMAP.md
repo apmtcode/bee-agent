@@ -119,10 +119,18 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
       `window.focus` bounds so "click Save" retargets when the window moves.
 
 ## Innovation backlog
-- [ ] **`SafeActuator` stuck-input watchdog**: wrap any `InputActuator`, track
-      held buttons/keys globally, auto-release on abort, timeout (no event for N
-      ms while held), SIGINT/SIGTERM, or uncaught error. Generalizes the
-      release-on-abort logic in `replayEpisode` into a reusable safety primitive.
+- [x] **`SafeActuator` stuck-input watchdog** (`movement/safe-actuator.ts`) —
+      run 14. Wraps any `InputActuator`, tracks held buttons/keys across all
+      callers, auto-releases on abort, idle timeout, SIGINT/SIGTERM
+      (`installSignalGuard`, injectable target), errors in `guard()`, or
+      `dispose()`; refuses input after dispose and new presses after abort.
+      Tracks presses *before* forwarding so an inner throw still gets released.
+- [ ] **Actuation rate governor**: a second `InputActuator` decorator that caps
+      events/sec and max pointer velocity (px/ms) and enforces a screen-region
+      allow-list (e.g. only inside the focused window's bounds), rejecting or
+      clamping violations. Stack as `Governor(SafeActuator(os))` so a generated
+      episode can never teleport/spam outside the intended window; the
+      `movement.replay` RPC should construct this stack by default.
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in
       project health over time.
