@@ -491,6 +491,14 @@ export type {
 } from "./movement/segment.js";
 export { RecordingActuator, replayEpisode } from "./movement/replay.js";
 export { SafeActuator } from "./movement/safe-actuator.js";
+export { GovernedActuator, GovernorViolationError } from "./movement/governor.js";
+export type {
+  GovernedActuatorOptions,
+  GovernorStats,
+  GovernorViolation,
+  GovernorViolationKind,
+  ScreenRegion,
+} from "./movement/governor.js";
 export type {
   HeldInputs,
   SafeActuatorOptions,

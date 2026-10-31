@@ -6,6 +6,44 @@ least one new idea. Newest entries first.
 
 ---
 
+## 2026-10-31 (run 15, local) — `GovernedActuator`: rate / velocity / region governor
+
+**Audited:** ROADMAP innovation backlog + `movement/replay.ts` / `safe-actuator.ts`.
+`SafeActuator` guarantees nothing stays *held*, but nothing bounded *what* a
+generated episode may do: spam thousands of events, teleport the pointer, or
+click outside the target window. That is the last safety layer needed before a
+real OS actuator or a `movement.replay` RPC.
+
+**Changed (additive, new `src/movement/governor.ts`, barrel-exported):**
+- `GovernedActuator` decorator over any `InputActuator` with rolling 1s
+  `maxEventsPerSecond`, wall-clock `maxPointerSpeedPxPerMs`, and a `regions`
+  allow-list (nearest-region clamping; `followFocus` confines input to the
+  bounds of the last forwarded `window.focus`).
+- `mode: "reject"` (default) throws `GovernorViolationError` before the event
+  reaches the inner actuator; `mode: "clamp"` scales over-speed moves along the
+  same direction, clamps out-of-region points, and delays rate-limited events.
+- Releases (`pointer.up`/`key.up`) are never rejected or rate-limited (only
+  clamped into the region), so the governor can never cause stuck input.
+- Injectable `now`/`sleep`; `stats()`, `onViolation`, config validation.
+
+**Test results:** +8 tests (`governor.test.ts`), incl. stacked over
+`SafeActuator` + `replayEpisode`: a runaway mid-drag move is rejected, never
+reaches the OS, and the left button is still released. Movement suite 42/42.
+Build ✅, `typecheck:src` clean, full `tsc` unchanged at 69. Full suite
+**216/216 on 3 of 4 runs**; the first run (machine under heavy load, the
+batch took >400s) had 6 failures in 6 files that I could not reproduce or
+capture. The movement tests use fake clocks, so this looks like the known
+load-dependent flake class (see run 13), not this change. Follow-up: have the
+flake sentinel save failing test names on every run.
+
+**New idea (logged to ROADMAP):** *Default actuation stack factory*
+(`createActuationStack`) giving `movement.replay` a single audited entry point
+with strict/assisted profiles; plus an offline human-plausibility check that
+rejects generated episodes whose velocity/jerk profile is an outlier vs. the
+training data.
+
+---
+
 ## 2026-10-28 (run 14, local) — `SafeActuator`: stuck-input watchdog for real actuation
 
 **Audited:** ROADMAP local-movement + innovation backlogs. Before any real OS

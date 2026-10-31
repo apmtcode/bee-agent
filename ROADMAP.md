@@ -125,12 +125,21 @@ device/os/browser adapters, consent store, ingestion) and `src/training/`
       (`installSignalGuard`, injectable target), errors in `guard()`, or
       `dispose()`; refuses input after dispose and new presses after abort.
       Tracks presses *before* forwarding so an inner throw still gets released.
-- [ ] **Actuation rate governor**: a second `InputActuator` decorator that caps
-      events/sec and max pointer velocity (px/ms) and enforces a screen-region
-      allow-list (e.g. only inside the focused window's bounds), rejecting or
-      clamping violations. Stack as `Governor(SafeActuator(os))` so a generated
-      episode can never teleport/spam outside the intended window; the
-      `movement.replay` RPC should construct this stack by default.
+- [x] **Actuation rate governor** (`movement/governor.ts`) — run 15.
+      `GovernedActuator` decorator: rolling-window `maxEventsPerSecond`,
+      wall-clock `maxPointerSpeedPxPerMs`, screen-region allow-list
+      (`followFocus` retargets it to `window.focus` bounds). `reject` mode throws
+      `GovernorViolationError`; `clamp` mode rewrites coordinates / delays.
+      Releases are never rejected or delayed. Stack: `Governor(SafeActuator(os))`.
+- [ ] **Default actuation stack factory**: `createActuationStack(os, { window,
+      profile: "strict" | "assisted" })` returning `Governor(SafeActuator(os))`
+      with signal guard installed + sane defaults (e.g. 120 ev/s, 8 px/ms,
+      idle 2s), so `movement.replay` and any future OS actuator get one audited
+      entry point instead of hand-assembled decorators.
+- [ ] **Human-plausibility check on generated episodes**: before replay, score a
+      generated episode against the dataset's velocity/jerk distribution (from
+      `TemplateMovementModel` training data) and refuse outliers — catches model
+      bugs offline, complementing the governor's online limits.
 - [ ] Self-check telemetry: each engine run records build/test timing + pass
       counts to a small append-only metrics file to detect regressions in
       project health over time.
